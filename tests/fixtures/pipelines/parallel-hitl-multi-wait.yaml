@@ -1,0 +1,9 @@
+id: parallel-hitl-multi-wait
+stages:
+  - id: clarify
+  - id: branch-a
+    needs: clarify
+  - id: branch-b
+    needs: clarify
+  - id: branch-c
+    needs: clarify

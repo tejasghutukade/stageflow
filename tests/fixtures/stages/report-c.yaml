@@ -1,0 +1,3 @@
+id: report-c
+system_prompt: Report branch C.
+model: anthropic/claude-sonnet-4-5

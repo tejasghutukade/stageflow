@@ -1,0 +1,11 @@
+id: prove-hitl-four-kinds
+goal: Manually prove all four ask_operator kinds in one stage
+context: |
+  Operator-console proving task for the hitl-four-kinds-proving pipeline. The
+  single stage must call ask_operator once each for free_text, confirm,
+  multi_question, and artifact_backed (in that order), waiting for each answer
+  before continuing. The final artifact_backed turn reviews a summary artifact
+  written from earlier answers; emit only after that accept.
+constraints: |
+  Do not skip any kind. Do not reorder kinds. Do not emit_stage_envelope before
+  artifact_backed accept. Prefer the Reply Zone for every answer.

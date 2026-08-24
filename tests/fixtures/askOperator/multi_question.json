@@ -1,0 +1,32 @@
+{
+  "prompt": {
+    "id": "ae3-clarifications",
+    "kind": "multi_question",
+    "questions": [
+      {
+        "id": "q-module",
+        "kind": "free_text",
+        "message": "What is the module name?"
+      },
+      {
+        "id": "q-owner",
+        "kind": "free_text",
+        "message": "Who owns this module?"
+      },
+      {
+        "id": "q-deadline",
+        "kind": "free_text",
+        "message": "What is the target date?"
+      }
+    ]
+  },
+  "answer": {
+    "promptId": "ae3-clarifications",
+    "kind": "multi_question",
+    "answers": {
+      "q-module": { "kind": "free_text", "text": "payments" },
+      "q-owner": { "kind": "free_text", "text": "platform-team" },
+      "q-deadline": { "kind": "free_text", "text": "2026-09-01" }
+    }
+  }
+}

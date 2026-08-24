@@ -1,0 +1,3 @@
+id: recon
+system_prompt: Recon stage.
+model: anthropic/claude-sonnet-4-5

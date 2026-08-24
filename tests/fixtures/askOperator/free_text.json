@@ -1,0 +1,12 @@
+{
+  "prompt": {
+    "id": "ae1-module-name",
+    "kind": "free_text",
+    "message": "What should the module name be?"
+  },
+  "answer": {
+    "promptId": "ae1-module-name",
+    "kind": "free_text",
+    "text": "billing"
+  }
+}

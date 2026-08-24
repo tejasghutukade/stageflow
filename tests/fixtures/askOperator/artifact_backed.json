@@ -1,0 +1,14 @@
+{
+  "prompt": {
+    "id": "ae2-plan-review",
+    "kind": "artifact_backed",
+    "message": "Review the plan artifact",
+    "artifacts": ["stages/plan-review/attempts/1/artifacts/plan.md"]
+  },
+  "answer": {
+    "promptId": "ae2-plan-review",
+    "kind": "artifact_backed",
+    "decision": "reject",
+    "text": "Please add a risk section"
+  }
+}

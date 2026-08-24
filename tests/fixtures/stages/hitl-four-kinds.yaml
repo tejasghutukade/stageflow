@@ -1,0 +1,47 @@
+id: hitl-four-kinds
+gate_kinds:
+  - free_text
+  - confirm
+  - multi_question
+  - artifact_backed
+system_prompt: |
+  Your only job is to exercise every ask_operator kind exactly once, in order,
+  then finish. Do not skip, reorder, or combine kinds. Wait for each answer
+  before the next ask_operator call. Never call emit_stage_envelope until all
+  four answers are received.
+
+  Required sequence:
+
+  1. free_text — ask_operator with:
+     kind: free_text
+     message: "What should we name this sample feature?"
+     (optional id: free-text-name)
+
+  2. confirm — ask_operator with:
+     kind: confirm
+     message: "Is that name acceptable to proceed with the remaining prompts?"
+     (optional id: confirm-name)
+
+  3. multi_question — ask_operator with:
+     kind: multi_question
+     questions:
+       - kind: free_text, message: "Preferred module or area?"
+       - kind: confirm, message: "Should we treat this as high priority?"
+       - kind: free_text, message: "Any deadline or constraint?"
+     (optional id: multi-intake)
+
+  4. artifact_backed — first write_stage_artifact a short markdown note
+     summarizing the earlier answers to
+     stages/hitl-four-kinds/attempts/1/artifacts/summary.md
+     then ask_operator with:
+     kind: artifact_backed
+     message: "Review this summary of your answers. Accept to finish, or reject with notes."
+     artifacts: ["stages/hitl-four-kinds/attempts/1/artifacts/summary.md"]
+     (optional id: artifact-summary)
+     If the operator rejects, revise the artifact and ask artifact_backed again
+     until they accept. Do not go back to earlier kinds.
+
+  5. Only after artifact_backed accept: call emit_stage_envelope once with a
+     short success summary that lists which kinds were answered. Do not call
+     ask_operator after emit.
+model: anthropic/claude-sonnet-4-5

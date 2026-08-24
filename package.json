@@ -1,0 +1,72 @@
+{
+  "name": "stageflow",
+  "version": "0.1.0",
+  "description": "Stageflow — personal CLI pipeline runtime for configurable SDLC stages on Pi",
+  "type": "module",
+  "bin": {
+    "sf": "./dist/cli.js",
+    "stageflow": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tejasghutukade/stageflow.git"
+  },
+  "homepage": "https://github.com/tejasghutukade/stageflow#readme",
+  "bugs": {
+    "url": "https://github.com/tejasghutukade/stageflow/issues"
+  },
+  "keywords": [
+    "cli",
+    "pipeline",
+    "pi",
+    "sdlc",
+    "agent"
+  ],
+  "workspaces": [
+    "ui"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "ui:dev": "npm run dev -w ui",
+    "ui:build": "npm run build -w ui && npm run copy:ui-dist",
+    "ui:test": "npm run test -w ui",
+    "ui:astryx": "npm run astryx -w ui",
+    "copy:ui-dist": "tsx scripts/copy-ui-dist.ts",
+    "verify:pack": "tsx scripts/verify-pack.ts",
+    "prepublishOnly": "npm run build && npm run ui:build && npm run copy:ui-dist",
+    "providers:list-login-capable": "tsx scripts/list-login-capable-providers.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "^0.84.1",
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "better-sqlite3": "^13.0.3",
+    "typebox": "^1.3.7",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.3": true
+  }
+}

@@ -1,0 +1,5 @@
+id: duplicate-stage
+stages:
+  - clarify
+  - design-doc
+  - clarify

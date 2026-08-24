@@ -1,0 +1,7 @@
+id: parallel-after-clarify
+stages:
+  - id: clarify
+  - id: design-doc
+    needs: clarify
+  - id: implementation-plan
+    needs: clarify

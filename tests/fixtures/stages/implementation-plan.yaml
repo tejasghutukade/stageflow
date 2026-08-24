@@ -1,0 +1,3 @@
+id: implementation-plan
+system_prompt: Write an implementation plan from the design doc.
+model: anthropic/claude-sonnet-4-5

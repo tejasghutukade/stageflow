@@ -1,0 +1,6 @@
+id: plan-review-followup
+system_prompt: |
+  Acknowledge that the prior plan-review stage completed with operator acceptance
+  of the plan. Call emit_stage_envelope once with a short summary. Do not call
+  ask_operator. Do not perform further HITL.
+model: anthropic/claude-sonnet-4-5

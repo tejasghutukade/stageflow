@@ -1,0 +1,9 @@
+id: prove-plan-review
+goal: Prove plan-review HITL through artifact-backed accept/reject then follow-up
+context: |
+  Operator-console proving task for the plan-review-proving pipeline. The first
+  stage must write a plan artifact, gate on ask_operator kind artifact_backed,
+  and emit only after accept. The follow-up stage only acknowledges acceptance.
+constraints: |
+  Do not skip ask_operator. Do not emit_stage_envelope before plan accept.
+  Follow-up must not call ask_operator.

@@ -1,0 +1,3 @@
+id: clarify
+system_prompt: Clarify the task into crisp requirements.
+model: anthropic/claude-sonnet-4-5

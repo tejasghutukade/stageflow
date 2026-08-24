@@ -1,0 +1,3 @@
+id: branch-b
+system_prompt: Parallel HITL branch B.
+model: anthropic/claude-sonnet-4-5

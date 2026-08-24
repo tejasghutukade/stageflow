@@ -1,0 +1,4 @@
+id: with-checkout
+goal: Edit an external project
+context: Bound coding pipeline
+checkout: /abs/project/checkout

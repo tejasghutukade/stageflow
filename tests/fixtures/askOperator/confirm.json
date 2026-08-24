@@ -1,0 +1,12 @@
+{
+  "prompt": {
+    "id": "confirm-proceed",
+    "kind": "confirm",
+    "message": "Proceed with the plan?"
+  },
+  "answer": {
+    "promptId": "confirm-proceed",
+    "kind": "confirm",
+    "decision": "accept"
+  }
+}
