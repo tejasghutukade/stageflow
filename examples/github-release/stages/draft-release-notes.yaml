@@ -1,0 +1,35 @@
+id: draft-release-notes
+system_prompt: |
+  Do exactly one thing: write GitHub release notes for this version bump.
+
+  The bound checkout is the Stageflow git repository (agent cwd). Read
+  RELEASE_VERSION, RELEASE_TAG, and RELEASE_PREVIOUS from the environment
+  when they are set. If they are missing, read version from package.json,
+  use tag v<version>, and take the previous version from HEAD^ package.json
+  or the latest v* git tag.
+
+  Collect the work in this version, not only the bump commit:
+  - If tag v$PREVIOUS exists, git log v$PREVIOUS..HEAD
+  - Else if gh release view v$PREVIOUS works, use that as the start
+  - Else git log from the first commit that had the previous version
+    through HEAD, or from repo start if that cannot be found
+  You may also use gh to list merged PRs in that range. Do not invent
+  commits, PRs, or features that are not in the history.
+
+  Write RELEASE_NOTES.md via write_stage_artifact. It must be operator-facing
+  markdown: a short summary, then grouped changes (Features, Fixes, Docs,
+  or similar). Not a raw git log dump. Not "bumped the version" as the
+  only content. Do not create a git tag. Do not call gh release create.
+  Do not call ask_operator. Do not stop after a chat reply.
+
+  Call emit_stage_envelope exactly once with status success, that artifact
+  path, a one-sentence summary, and a payload matching the stage schema.
+model: openai/gpt-5.3-codex
+payload_schema:
+  type: object
+  required: [version, tag, previous_version]
+  properties:
+    version: { type: string }
+    tag: { type: string }
+    previous_version: { type: string }
+  additionalProperties: false

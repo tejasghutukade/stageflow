@@ -1,6 +1,0 @@
-id: ping
-system_prompt: |
-  Complete this stage by calling emit_stage_envelope exactly once.
-  Use status success, artifacts as an empty list, and a one-sentence
-  summary that restates the task goal. Do not stop after a chat reply.
-model: openai/gpt-5.3-codex
