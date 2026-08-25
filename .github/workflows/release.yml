@@ -1,16 +1,20 @@
 name: Release
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      version:
+        description: stageflow version to install from npm (default: package.json)
+        required: false
+        type: string
 
 permissions:
   contents: write
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   release:
@@ -23,11 +27,14 @@ jobs:
           fetch-tags: true
 
       - id: gate
-        name: Detect package.json version bump
+        name: Detect unpublished GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CURRENT="$(node -p "require('./package.json').version")"
+          CURRENT="${{ inputs.version }}"
+          if [ -z "${CURRENT}" ]; then
+            CURRENT="$(node -p "require('./package.json').version")"
+          fi
           if [[ ! "${CURRENT}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid version '${CURRENT}'; expected x.y.z" >&2
             exit 1
@@ -43,31 +50,12 @@ jobs:
             echo "tag=${TAG}"
             echo "previous=${PREVIOUS}"
           } >> "${GITHUB_OUTPUT}"
-          if [[ -n "${PREVIOUS}" && "${CURRENT}" == "${PREVIOUS}" ]]; then
-            echo "Version did not change (${CURRENT}); skip"
-            echo "release=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if [[ -n "${PREVIOUS}" ]]; then
-            if ! node -e '
-              const [a, b] = process.argv.slice(1).map((v) => v.split(".").map(Number));
-              for (let i = 0; i < 3; i++) {
-                if ((a[i] ?? 0) > (b[i] ?? 0)) process.exit(0);
-                if ((a[i] ?? 0) < (b[i] ?? 0)) process.exit(1);
-              }
-              process.exit(1);
-            ' "${CURRENT}" "${PREVIOUS}"; then
-              echo "Version ${CURRENT} is not greater than ${PREVIOUS}; skip"
-              echo "release=false" >> "${GITHUB_OUTPUT}"
-              exit 0
-            fi
-          fi
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "Release ${TAG} already exists; skip"
             echo "release=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          echo "Version bumped; Stageflow should draft notes and publish ${TAG}"
+          echo "Stageflow should draft notes and publish ${TAG} using stageflow@${CURRENT} from npm"
           echo "release=true" >> "${GITHUB_OUTPUT}"
 
       - name: Require OPENAI_API_KEY
@@ -85,13 +73,29 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Build and install Stageflow from this checkout
+      - name: Install Stageflow from npm
         if: steps.gate.outputs.release == 'true'
         run: |
-          npm ci
-          npm run build
-          npm pack
-          npm i -g ./stageflow-*.tgz
+          VERSION="${{ steps.gate.outputs.version }}"
+          ok=0
+          for i in $(seq 1 24); do
+            if npm i -g "stageflow@${VERSION}"; then
+              ok=1
+              break
+            fi
+            echo "waiting for npm (${i}/24)"
+            sleep 10
+          done
+          if [ "${ok}" != 1 ]; then
+            echo "failed to install stageflow@${VERSION} from npm" >&2
+            exit 1
+          fi
+          INSTALLED="$(node -p "require(require('child_process').execSync('npm root -g',{encoding:'utf8'}).trim() + '/stageflow/package.json').version")"
+          echo "installed stageflow@${INSTALLED}"
+          if [ "${INSTALLED}" != "${VERSION}" ]; then
+            echo "expected stageflow@${VERSION}" >&2
+            exit 1
+          fi
           command -v sf
 
       - name: Generate notes and publish GitHub Release via Stageflow
