@@ -1,0 +1,44 @@
+name: CI guest
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/ci-guest]
+
+permissions:
+  contents: read
+
+jobs:
+  guest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Require OPENAI_API_KEY
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is empty. Add it as a repository Actions secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - name: Build and install Stageflow from this checkout
+        run: |
+          npm ci
+          npm run build
+          npm pack
+          npm i -g ./stageflow-*.tgz
+          command -v sf
+
+      - name: Validate and run no-HITL pipeline
+        working-directory: examples/ci-guest
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          sf providers login openai --type api_key --api-key-env OPENAI_API_KEY
+          sf validate --strict --json
+          sf run --task tasks/ci-guest.yaml --pipeline ci-guest --json

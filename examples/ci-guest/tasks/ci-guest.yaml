@@ -1,0 +1,2 @@
+id: ci-guest
+goal: Confirm Stageflow can run as a guest CLI in GitHub Actions.

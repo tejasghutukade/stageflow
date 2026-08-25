@@ -1,0 +1,3 @@
+id: ci-guest
+stages:
+  - ping

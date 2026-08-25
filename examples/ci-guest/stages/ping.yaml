@@ -1,0 +1,5 @@
+id: ping
+system_prompt: >
+  You are a CI smoke stage. Write one sentence that restates the task goal.
+  Do not ask the operator anything. Finish by emitting the stage envelope.
+model: openai/gpt-4o-mini
