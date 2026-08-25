@@ -61,8 +61,11 @@ import {
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
-import { mapSessionEventToActivity, type StageActivityEvent } from "./activity.js";
-import { createStageActivityObserver } from "./activityObserver.js";
+import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
+import {
+  createStageActivityObserver,
+  type StageActivityObserver,
+} from "./activityObserver.js";
 import type {
   AgentPort,
   OpaqueAnswer,
@@ -340,6 +343,102 @@ export function createConnectedAskWaitStageHandle(
 }
 
 /**
+ * Extract display text from a Pi tool_execution_update partialResult.
+ * Prefers content[].text blocks; otherwise JSON-stringifies.
+ */
+export function extractPartialResultText(partialResult: unknown): string {
+  if (partialResult === undefined || partialResult === null) {
+    return "";
+  }
+  if (typeof partialResult === "string") {
+    return partialResult;
+  }
+  if (typeof partialResult === "object") {
+    const content = (partialResult as { content?: unknown }).content;
+    if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const b = block as { type?: string; text?: string };
+        if (b.type === "text" && typeof b.text === "string") {
+          parts.push(b.text);
+        }
+      }
+      if (parts.length > 0) {
+        return parts.join("");
+      }
+    }
+    try {
+      return JSON.stringify(partialResult);
+    } catch {
+      return String(partialResult);
+    }
+  }
+  return String(partialResult);
+}
+
+export type RouteSessionEventToProgressOptions = {
+  observer: StageActivityObserver;
+  verbose: boolean;
+};
+
+/**
+ * Adapter-edge routing: stream deltas to the observer, map milestones to
+ * StageActivityEvent. Verbose thinking / live tool partials stay stderr-only.
+ */
+export function routeSessionEventToProgress(
+  event: Record<string, unknown>,
+  options: RouteSessionEventToProgressOptions,
+): void {
+  const { observer, verbose } = options;
+
+  if (event.type === "message_update") {
+    const ame = event.assistantMessageEvent;
+    if (ame && typeof ame === "object") {
+      const update = ame as { type?: string; delta?: string };
+      if (update.type === "text_delta") {
+        observer.onAssistantTextDelta(update.delta ?? "");
+        return;
+      }
+      if (verbose && update.type === "thinking_delta") {
+        observer.onThinkingDelta(update.delta ?? "");
+        return;
+      }
+    }
+    return;
+  }
+
+  if (
+    verbose &&
+    event.type === "tool_execution_update"
+  ) {
+    const text = extractPartialResultText(event.partialResult);
+    if (text) {
+      observer.onToolPartialResult(text);
+    }
+    return;
+  }
+
+  if (event.type === "message_end" || event.type === "agent_end") {
+    observer.onStreamBoundary();
+  }
+
+  if (
+    event.type === "agent_start" ||
+    event.type === "turn_start" ||
+    event.type === "tool_execution_start"
+  ) {
+    observer.onStreamBoundary();
+  }
+
+  const activity = mapSessionEventToActivity(event);
+  if (!activity) {
+    return;
+  }
+  observer.onActivity(activity);
+}
+
+/**
  * Map Pi session events to StageActivityEvent at the adapter edge, then
  * forward to the activity observer (stderr + onActivity).
  */
@@ -348,35 +447,13 @@ function attachStageProgress(
   onActivity?: (event: StageActivityEvent) => void,
 ): () => void {
   const observer = createStageActivityObserver({ onActivity, writeStderr: true });
+  const verbose = readActivityVerbose();
 
   const unsubscribe = session.subscribe((event) => {
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      observer.onAssistantTextDelta(event.assistantMessageEvent.delta ?? "");
-      return;
-    }
-
-    if (event.type === "message_end" || event.type === "agent_end") {
-      observer.onStreamBoundary();
-    }
-
-    if (
-      event.type === "agent_start" ||
-      event.type === "turn_start" ||
-      event.type === "tool_execution_start"
-    ) {
-      observer.onStreamBoundary();
-    }
-
-    const activity = mapSessionEventToActivity(
-      event as unknown as Record<string, unknown>,
-    );
-    if (!activity) {
-      return;
-    }
-    observer.onActivity(activity);
+    routeSessionEventToProgress(event as unknown as Record<string, unknown>, {
+      observer,
+      verbose,
+    });
   });
 
   return () => {

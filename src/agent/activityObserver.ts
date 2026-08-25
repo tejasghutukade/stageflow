@@ -2,6 +2,8 @@ import type { StageActivityEvent } from "./activity.js";
 
 export type StageActivityObserver = {
   onAssistantTextDelta(delta: string): void;
+  onThinkingDelta(delta: string): void;
+  onToolPartialResult(accumulatedText: string): void;
   onStreamBoundary(): void;
   onActivity(activity: StageActivityEvent): void;
   dispose(): void;
@@ -12,7 +14,18 @@ export type CreateStageActivityObserverOptions = {
   writeStderr?: boolean;
 };
 
-function writeActivityStderr(activity: StageActivityEvent): void {
+type OpenStream = "none" | "assistant" | "thinking" | "tool";
+
+function writeIndentedPreview(preview: string): void {
+  for (const line of preview.split("\n")) {
+    process.stderr.write(`    ${line}\n`);
+  }
+}
+
+function writeActivityStderr(
+  activity: StageActivityEvent,
+  skipAssistantMessage: boolean,
+): void {
   switch (activity.event) {
     case "agent_start":
       process.stderr.write("  … agent started\n");
@@ -25,13 +38,27 @@ function writeActivityStderr(activity: StageActivityEvent): void {
       return;
     case "tool_start":
       process.stderr.write(`  → ${activity.toolName}\n`);
+      if (activity.argsPreview) {
+        writeIndentedPreview(activity.argsPreview);
+      }
       return;
     case "tool_end":
       if (activity.isError) {
         process.stderr.write(`  ✕ ${activity.toolName}\n`);
+      } else if (activity.resultPreview) {
+        process.stderr.write(`  ← ${activity.toolName}\n`);
+      }
+      if (activity.resultPreview) {
+        writeIndentedPreview(activity.resultPreview);
       }
       return;
     case "message":
+      if (activity.role === "assistant" && skipAssistantMessage) {
+        return;
+      }
+      if (activity.text) {
+        writeIndentedPreview(activity.text);
+      }
       return;
   }
 }
@@ -45,16 +72,18 @@ export function createStageActivityObserver(
   options: CreateStageActivityObserverOptions = {},
 ): StageActivityObserver {
   const writeStderr = options.writeStderr !== false;
-  let inAssistantText = false;
+  let openStream: OpenStream = "none";
+  let assistantStreamedForMessage = false;
+  let lastToolPartial = "";
 
-  const endTextLine = () => {
-    if (!inAssistantText) {
+  const endOpenStream = () => {
+    if (openStream === "none") {
       return;
     }
     if (writeStderr) {
       process.stderr.write("\n");
     }
-    inAssistantText = false;
+    openStream = "none";
   };
 
   return {
@@ -62,24 +91,70 @@ export function createStageActivityObserver(
       if (!writeStderr || !delta) {
         return;
       }
-      if (!inAssistantText) {
+      assistantStreamedForMessage = true;
+      if (openStream !== "assistant") {
+        endOpenStream();
         process.stderr.write("  ");
-        inAssistantText = true;
+        openStream = "assistant";
+      }
+      process.stderr.write(delta);
+    },
+    onThinkingDelta(delta: string) {
+      if (!writeStderr || !delta) {
+        return;
+      }
+      if (openStream !== "thinking") {
+        endOpenStream();
+        process.stderr.write("  ∴ ");
+        openStream = "thinking";
+      }
+      process.stderr.write(delta);
+    },
+    onToolPartialResult(accumulatedText: string) {
+      if (!writeStderr || !accumulatedText) {
+        return;
+      }
+      const delta = accumulatedText.startsWith(lastToolPartial)
+        ? accumulatedText.slice(lastToolPartial.length)
+        : accumulatedText;
+      lastToolPartial = accumulatedText;
+      if (!delta) {
+        return;
+      }
+      if (openStream !== "tool") {
+        endOpenStream();
+        process.stderr.write("  │ ");
+        openStream = "tool";
       }
       process.stderr.write(delta);
     },
     onStreamBoundary() {
-      endTextLine();
+      endOpenStream();
+      lastToolPartial = "";
     },
     onActivity(activity: StageActivityEvent) {
-      endTextLine();
+      endOpenStream();
+      lastToolPartial = "";
+      if (activity.event === "turn_start") {
+        assistantStreamedForMessage = false;
+      }
+      const skipAssistantMessage =
+        activity.event === "message" &&
+        activity.role === "assistant" &&
+        assistantStreamedForMessage;
+      if (
+        activity.event === "message" &&
+        activity.role === "assistant"
+      ) {
+        assistantStreamedForMessage = false;
+      }
       options.onActivity?.(activity);
       if (writeStderr) {
-        writeActivityStderr(activity);
+        writeActivityStderr(activity, skipAssistantMessage);
       }
     },
     dispose() {
-      endTextLine();
+      endOpenStream();
     },
   };
 }
