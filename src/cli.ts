@@ -11,6 +11,7 @@ import {
 } from "./cli/validateOutput.js";
 import { createRunStore } from "./runstore/createStore.js";
 import { PipelineValidationError } from "./runtime/pipelineRunner.js";
+import { completeCliRun } from "./cli/runCommand.js";
 import { RunManager } from "./runtime/runManager.js";
 import { readStageExecutionMode } from "./runtime/stageConcurrency.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
@@ -277,16 +278,7 @@ async function main(argv: string[]): Promise<number> {
       return started.status ?? 1;
     }
 
-    const result = await started.done;
-
-    if (result.ok) {
-      console.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
-      return 0;
-    }
-
-    console.error(`Pipeline failed: ${result.reason}`);
-    console.error(`Run folder: ${result.runDir}`);
-    return 1;
+    return completeCliRun(started);
   } catch (err) {
     if (err instanceof PipelineValidationError) {
       console.error(formatValidationHuman(err.result));

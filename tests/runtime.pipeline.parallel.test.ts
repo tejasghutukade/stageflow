@@ -12,7 +12,10 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
 import { runPipeline } from "../src/runtime/pipelineRunner.js";
-import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
+import {
+  resumeRun,
+  runPipelineDag,
+} from "../src/runtime/pipelineScheduler.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
@@ -195,6 +198,7 @@ describe("parallel pipeline scheduler process mode", () => {
     release();
     const result = await runPromise;
 
+    expect(result.outcome).toBe("succeeded");
     expect(result.ok).toBe(true);
     expect(launch).toHaveBeenCalledWith(
       expect.objectContaining({ stageId: "design-doc" }),
@@ -248,12 +252,92 @@ describe("parallel pipeline scheduler process mode", () => {
 
     expect(launched).toContain("design-doc");
     expect(launched).toContain("implementation-plan");
-    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("waiting");
+    expect(result.ok).toBe(false);
 
     const detail = await store.readRun(prepared.run.runId);
+    expect(detail.status).toBe("running");
     expect(
       detail.stages.find((s) => s.stage_id === "design-doc")?.status,
     ).toBe("waiting_for_input");
+  });
+
+  it("waiting plus scheduling halt is failed not waiting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-parallel-halt-wait-"));
+    const { prepared, store } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+
+    const launch = vi.fn(
+      async ({
+        runId,
+        stageId,
+      }: {
+        runId: string;
+        stageId: string;
+      }) => {
+        if (stageId === "design-doc") {
+          await store.appendStageEvent(runId, stageId, {
+            event: "waiting_for_input",
+          });
+          return { type: "waiting" as const };
+        }
+        if (stageId === "implementation-plan") {
+          return { type: "failed" as const, reason: "sibling exploded" };
+        }
+        await store.writeEnvelope(runId, stageId, okEnvelope(stageId));
+        return { type: "succeeded" as const };
+      },
+    );
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("sibling exploded");
+  });
+
+  it("resumeRun hasActive early return is waiting not succeeded", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-resume-active-"));
+    const { prepared, store } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+    const runId = prepared.run.runId;
+
+    await store.createStageExecution(runId, "clarify");
+    await store.appendStageEvent(runId, "clarify", { event: "started" });
+    await store.writeEnvelope(runId, "clarify", okEnvelope("clarify"));
+    await store.appendStageEvent(runId, "clarify", { event: "succeeded" });
+
+    await store.createStageExecution(runId, "design-doc");
+    await store.appendStageEvent(runId, "design-doc", { event: "started" });
+    await store.appendStageEvent(runId, "design-doc", {
+      event: "waiting_for_input",
+    });
+
+    await store.createStageExecution(runId, "implementation-plan");
+    await store.appendStageEvent(runId, "implementation-plan", {
+      event: "started",
+    });
+
+    const result = await resumeRun({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      resumeFromStageId: "design-doc",
+      initialPrior: okEnvelope("design-doc"),
+      executionMode: "process",
+    });
+
+    expect(result.outcome).toBe("waiting");
+    expect(result.ok).toBe(false);
   });
 });
 
@@ -481,7 +565,9 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
 
     releaseC();
     const result = await runPromise;
+    expect(result.outcome).toBe("failed");
     expect(result.ok).toBe(false);
+    expect(result.reason).toBe("branch-b failed");
 
     const runId = result.runId;
     await expect(store.readEnvelope(runId, "clarify")).resolves.toBeDefined();

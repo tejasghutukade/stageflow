@@ -191,9 +191,10 @@ export async function reconstructAndContinue(
       executionMode: ctx.executionMode,
       stageProcessLauncher: ctx.stageProcessLauncher,
     });
-    return rest.ok
-      ? { ok: true }
-      : { ok: false, reason: rest.reason };
+    if (rest.outcome === "failed") {
+      return { ok: false, reason: rest.reason };
+    }
+    return { ok: true };
   } catch (err) {
     const reason =
       err instanceof Error

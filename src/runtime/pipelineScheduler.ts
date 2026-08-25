@@ -224,7 +224,8 @@ export async function resumeRun(
   const hasActive = [...hydrated.states.values()].some((s) => s === "active");
   if (hasActive) {
     return {
-      ok: true,
+      ok: false,
+      outcome: "waiting",
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
     };
@@ -245,6 +246,7 @@ export async function resumeRun(
     );
     return {
       ok: allSucceeded,
+      outcome: allSucceeded ? "succeeded" : "failed",
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
       ...(allSucceeded
@@ -702,7 +704,12 @@ export async function runPipelineDag(
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
   if (hasWaiting && !schedulingHalted) {
-    return { ok: true, runDir: run.workspaceDir, runId: run.runId };
+    return {
+      ok: false,
+      outcome: "waiting",
+      runDir: run.workspaceDir,
+      runId: run.runId,
+    };
   }
 
   if (schedulingHalted) {
@@ -712,6 +719,7 @@ export async function runPipelineDag(
     }
     return {
       ok: false,
+      outcome: "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason,
@@ -727,6 +735,7 @@ export async function runPipelineDag(
     }
     return {
       ok: false,
+      outcome: "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason ?? "pipeline incomplete",
@@ -736,5 +745,10 @@ export async function runPipelineDag(
   if (retryContext === undefined) {
     await store.updateRunStatus(run.runId, "succeeded");
   }
-  return { ok: true, runDir: run.workspaceDir, runId: run.runId };
+  return {
+    ok: true,
+    outcome: "succeeded",
+    runDir: run.workspaceDir,
+    runId: run.runId,
+  };
 }

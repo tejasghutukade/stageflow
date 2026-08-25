@@ -23,8 +23,11 @@ import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
+export type PipelineRunOutcome = "succeeded" | "failed" | "waiting";
+
 export type PipelineRunResult = {
   ok: boolean;
+  outcome: PipelineRunOutcome;
   runDir: string;
   runId: string;
   reason?: string;
@@ -247,6 +250,7 @@ export async function startPipeline(options: {
     await prepared.store.updateRunStatus(prepared.run.runId, "failed").catch(() => undefined);
     return {
       ok: false as const,
+      outcome: "failed" as const,
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
       reason: err instanceof Error ? err.message : String(err),

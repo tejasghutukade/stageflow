@@ -755,7 +755,10 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: launcher,
       });
-      return rest.ok ? { ok: true } : { ok: false, reason: rest.reason };
+      if (rest.outcome === "failed") {
+        return { ok: false, reason: rest.reason };
+      }
+      return { ok: true };
     } catch (err) {
       const reason =
         err instanceof Error
