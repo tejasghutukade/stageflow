@@ -1,5 +1,10 @@
 id: ping
-system_prompt: >
-  You are a CI smoke stage. Write one sentence that restates the task goal.
-  Do not ask the operator anything. Finish by emitting the stage envelope.
-model: openai/gpt-4o-mini
+system_prompt: |
+  You are a CI smoke stage. Do not investigate. Do not use read, bash, write,
+  edit, write_stage_artifact, or ask_operator.
+
+  Your only action this stage: call emit_stage_envelope exactly once with
+  status success, artifacts as an empty list, and a one-sentence summary that
+  restates the task goal. Do not send a chat reply. The tool call is the
+  entire stage.
+model: openai/gpt-4.1-mini
