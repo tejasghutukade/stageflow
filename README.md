@@ -88,14 +88,45 @@ context: Domain-neutral hello-world run
 constraints: Docs only; no implementation code
 ```
 
-Run:
+Run (after connecting a provider — see below):
 
 ```bash
 sf ui                          # operator console at http://127.0.0.1:3847
 sf run --task tasks/my-task.yaml --pipeline hello
 ```
 
-Connect model providers in the console (**Settings → Providers**) or via `sf providers …`. Stageflow is a thin Pi shell: reuse an existing Pi login or store credentials in an SF-owned file. You do not need Pi CLI `/login` as a hard prerequisite.
+## Connect a model provider
+
+Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-4-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
+
+**Operator console** (easiest for local setup):
+
+```bash
+sf ui
+```
+
+Open **Settings → Providers** (or **Connect** from the rail when nothing is configured) and sign in with API key or OAuth.
+
+**CLI** (works headless and in CI):
+
+```bash
+sf providers list
+sf providers login anthropic --type api_key
+sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
+```
+
+Use `sf providers list` to see provider ids and supported auth types (`api_key`, `oauth`).
+
+**Credential storage:** reuse Pi's shared auth file (`pi_home`) or keep credentials in a Stageflow-owned file (`sf_owned`):
+
+```bash
+sf providers detect
+sf providers source set pi_home    # or sf_owned
+```
+
+Stageflow is a thin Pi shell — you do not need Pi CLI `/login` as a hard prerequisite if you configure providers via the console or `sf providers`.
+
+Full reference: [docs/providers.md](docs/providers.md)
 
 ## Operator console
 

@@ -195,6 +195,9 @@ export class StageProcessLauncher {
     if (input.sessionFilePath !== undefined) {
       args.push("--session-file", input.sessionFilePath);
     }
+    if (input.operatorCatalog?.cwd !== undefined) {
+      args.push("--operator-cwd", input.operatorCatalog.cwd);
+    }
     if (input.operatorCatalog?.agentDir !== undefined) {
       args.push("--operator-agent-dir", input.operatorCatalog.agentDir);
     }

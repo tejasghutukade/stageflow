@@ -1,4 +1,3 @@
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { PiAgentAdapter } from "../agent/piAdapter.js";
 import { createRunStore } from "../runstore/createStore.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
@@ -9,6 +8,8 @@ import {
   type CliRunReportIo,
 } from "./runOutput.js";
 import { resolveCiIdentity } from "./ciIdentity.js";
+import { resolveOperatorCatalog } from "./operatorCatalog.js";
+import type { OperatorCatalog } from "../runtime/stageAttemptBootstrap.js";
 import {
   exitCodeForValidation,
   formatValidationHuman,
@@ -16,7 +17,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]`;
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 
@@ -35,6 +36,8 @@ type ParsedRunArgs = {
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
+  operatorCwd?: string;
+  operatorAgentDir?: string;
 };
 
 export type StartRunFn = (input: {
@@ -61,6 +64,8 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let gitSha: string | undefined;
   let ciPrUrl: string | undefined;
   let ciJobUrl: string | undefined;
+  let operatorCwd: string | undefined;
+  let operatorAgentDir: string | undefined;
   let json = false;
   let skipGates = false;
   let help = false;
@@ -105,6 +110,18 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
         throw new Error("Missing value for --ci-job-url");
       }
       ciJobUrl = value;
+    } else if (arg === "--operator-cwd") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --operator-cwd");
+      }
+      operatorCwd = value;
+    } else if (arg === "--operator-agent-dir") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --operator-agent-dir");
+      }
+      operatorAgentDir = value;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "--skip-gates") {
@@ -116,17 +133,29 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
     }
   }
 
-  return { help, json, skipGates, task, pipeline, checkout, gitSha, ciPrUrl, ciJobUrl };
+  return {
+    help,
+    json,
+    skipGates,
+    task,
+    pipeline,
+    checkout,
+    gitSha,
+    ciPrUrl,
+    ciJobUrl,
+    operatorCwd,
+    operatorAgentDir,
+  };
 }
 
-function defaultStartRun(cwd: string): StartRunFn {
+function defaultStartRun(cwd: string, operatorCatalog: OperatorCatalog): StartRunFn {
   return async (input) => {
     const store = createRunStore({ rootDir: cwd });
     const manager = new RunManager({
       agent: new PiAgentAdapter(),
       store,
       cwd,
-      operatorCatalog: { cwd, agentDir: getAgentDir() },
+      operatorCatalog,
       executionMode: readStageExecutionMode(process.env, "process"),
     });
     return manager.startRun(input);
@@ -175,7 +204,15 @@ export async function runRunCommand(
     return 1;
   }
 
-  const startRun = options.startRun ?? defaultStartRun(cwd);
+  const operatorCatalog = resolveOperatorCatalog({
+    flags: {
+      operatorCwd: parsed.operatorCwd,
+      operatorAgentDir: parsed.operatorAgentDir,
+    },
+    env: options.env ?? process.env,
+    defaultCwd: cwd,
+  });
+  const startRun = options.startRun ?? defaultStartRun(cwd, operatorCatalog);
   const identity = resolveCiIdentity({
     flags: {
       gitSha: parsed.gitSha,
