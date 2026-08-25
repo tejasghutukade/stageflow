@@ -103,6 +103,7 @@ export async function runStageWorker(
         attemptCtx,
         factoryCwd: input.rootDir,
         operatorCatalog: input.operatorCatalog,
+        skipGates: input.skipGates,
       });
       return outcome;
     }
@@ -121,6 +122,7 @@ export async function runStageWorker(
       attemptCtx,
       factoryCwd: input.rootDir,
       operatorCatalog: input.operatorCatalog,
+      skipGates: input.skipGates,
     });
   } finally {
     unbindAgentDir();

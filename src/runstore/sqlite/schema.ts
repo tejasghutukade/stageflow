@@ -8,7 +8,10 @@ CREATE TABLE IF NOT EXISTS runs (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   checkout_root TEXT,
-  pipeline_dag_json TEXT
+  pipeline_dag_json TEXT,
+  git_sha TEXT,
+  ci_pr_url TEXT,
+  ci_job_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stages (

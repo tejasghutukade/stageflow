@@ -19,6 +19,7 @@ export type StageLaunchInput = {
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 };
 
 export type StageLaunchResult =
@@ -196,6 +197,9 @@ export class StageProcessLauncher {
     }
     if (input.operatorCatalog?.agentDir !== undefined) {
       args.push("--operator-agent-dir", input.operatorCatalog.agentDir);
+    }
+    if (input.skipGates) {
+      args.push("--skip-gates");
     }
 
     const child = fork(this.cliEntry, args, {

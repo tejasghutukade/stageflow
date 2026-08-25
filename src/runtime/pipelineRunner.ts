@@ -23,8 +23,11 @@ import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
+export type PipelineRunOutcome = "succeeded" | "failed" | "waiting";
+
 export type PipelineRunResult = {
   ok: boolean;
+  outcome: PipelineRunOutcome;
   runDir: string;
   runId: string;
   reason?: string;
@@ -48,6 +51,7 @@ export type PreparedPipeline = {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 };
 
 let defaultStageProcessLauncher: StageProcessLauncher | undefined;
@@ -76,10 +80,14 @@ async function preparePipeline(options: {
   pipeline: string;
   cwd: string;
   checkoutOverride?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
@@ -113,6 +121,9 @@ async function preparePipeline(options: {
     taskYaml,
     taskId: task.id,
     checkoutRoot,
+    gitSha: options.gitSha,
+    ciPrUrl: options.ciPrUrl,
+    ciJobUrl: options.ciJobUrl,
     pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
   });
   const executionMode = readStageExecutionMode(
@@ -135,6 +146,7 @@ async function preparePipeline(options: {
     executionMode,
     stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   };
 }
 
@@ -188,6 +200,7 @@ export async function runPipeline(options: {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<PipelineRunResult> {
   const cwd = options.cwd ?? process.cwd();
   const prepared = await preparePipeline({
@@ -202,6 +215,7 @@ export async function runPipeline(options: {
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   });
   return executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
@@ -219,11 +233,15 @@ export async function startPipeline(options: {
   pipeline: string;
   cwd?: string;
   checkoutOverride?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const prepared = await preparePipeline({
@@ -234,10 +252,14 @@ export async function startPipeline(options: {
     pipeline: options.pipeline,
     cwd,
     checkoutOverride: options.checkoutOverride,
+    gitSha: options.gitSha,
+    ciPrUrl: options.ciPrUrl,
+    ciJobUrl: options.ciJobUrl,
     hitl: options.hitl,
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   });
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
@@ -247,6 +269,7 @@ export async function startPipeline(options: {
     await prepared.store.updateRunStatus(prepared.run.runId, "failed").catch(() => undefined);
     return {
       ok: false as const,
+      outcome: "failed" as const,
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
       reason: err instanceof Error ? err.message : String(err),

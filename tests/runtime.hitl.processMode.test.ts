@@ -66,6 +66,7 @@ describe("runtime HITL deliverAnswer process mode", () => {
       .spyOn(pipelineScheduler, "resumeRun")
       .mockResolvedValue({
         ok: true,
+        outcome: "succeeded",
         runDir: run.workspaceDir,
         runId: run.runId,
       });
@@ -166,6 +167,65 @@ describe("runtime HITL deliverAnswer process mode", () => {
     ).toBe("failed");
   });
 
+  it("resumeRun waiting after answer is deliverAnswer ok", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-process-wait-"));
+    const { store, run } = await createWaitingRun(root);
+    const envelope = okEnvelope();
+    await store.createStageExecution(run.runId, "clarify");
+    await store.writeEnvelope(run.runId, "clarify", envelope);
+
+    const launch = vi.fn().mockResolvedValue({ type: "succeeded" });
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+    vi.spyOn(pipelineScheduler, "resumeRun").mockResolvedValue({
+      ok: false,
+      outcome: "waiting",
+      runDir: run.workspaceDir,
+      runId: run.runId,
+    });
+
+    const manager = new RunManager({
+      agent: { openStage: vi.fn(), runStage: vi.fn() },
+      store,
+      cwd: fixtures,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    const result = await manager.deliverAnswer(run.runId, "clarify", answer);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("resumeRun failed after answer is deliverAnswer not ok", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-process-fail-"));
+    const { store, run } = await createWaitingRun(root);
+    const envelope = okEnvelope();
+    await store.createStageExecution(run.runId, "clarify");
+    await store.writeEnvelope(run.runId, "clarify", envelope);
+
+    const launch = vi.fn().mockResolvedValue({ type: "succeeded" });
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+    vi.spyOn(pipelineScheduler, "resumeRun").mockResolvedValue({
+      ok: false,
+      outcome: "failed",
+      runDir: run.workspaceDir,
+      runId: run.runId,
+      reason: "downstream stage failed",
+    });
+
+    const manager = new RunManager({
+      agent: { openStage: vi.fn(), runStage: vi.fn() },
+      store,
+      cwd: fixtures,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    const result = await manager.deliverAnswer(run.runId, "clarify", answer);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("downstream stage failed");
+  });
+
   it("resumeInProcess prepared keeps the operator catalog pair", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-process-cat-"));
     const { store, run } = await createWaitingRun(root);
@@ -179,6 +239,7 @@ describe("runtime HITL deliverAnswer process mode", () => {
       .spyOn(pipelineScheduler, "resumeRun")
       .mockResolvedValue({
         ok: true,
+        outcome: "succeeded",
         runDir: run.workspaceDir,
         runId: run.runId,
       });

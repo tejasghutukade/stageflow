@@ -59,6 +59,7 @@ export type RunStageOptions = {
   factoryCwd?: string;
   operatorCatalog?: OperatorCatalog;
   completedEnvelopes?: Map<string, StageEnvelope>;
+  skipGates?: boolean;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -159,12 +160,19 @@ export async function runStageYieldLoop(options: {
   workerMode?: boolean;
   store?: RunStore;
   attemptCtx?: StageAttemptContext;
+  skipGates?: boolean;
 }): Promise<RunStageYieldLoopResult> {
-  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx } = options;
+  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx, skipGates } = options;
 
   while (true) {
     const event = await handle.next();
     if (event.status === "waiting_for_input") {
+      if (skipGates) {
+        return {
+          ok: false,
+          reason: "skip-gates: stage requested wait",
+        };
+      }
       if (workerMode) {
         if (!store) {
           return {
@@ -216,6 +224,7 @@ export async function runStage(
     factoryCwd,
     operatorCatalog,
     completedEnvelopes,
+    skipGates,
   } = options;
   const attemptOpt = attemptCtx?.eventOptions();
   const baseRoots =
@@ -303,6 +312,7 @@ export async function runStage(
       workerMode,
       store: workerMode ? store : undefined,
       attemptCtx,
+      skipGates,
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

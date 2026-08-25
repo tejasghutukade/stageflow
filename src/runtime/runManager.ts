@@ -477,6 +477,10 @@ export class RunManager {
       pipeline: string;
       task?: string | TaskFile;
       checkoutOverride?: string;
+      skipGates?: boolean;
+      gitSha?: string;
+      ciPrUrl?: string;
+      ciJobUrl?: string;
     },
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
@@ -516,6 +520,12 @@ export class RunManager {
       `task file ${label}`,
       cwd,
       input.checkoutOverride,
+      input.skipGates,
+      {
+        gitSha: input.gitSha,
+        ciPrUrl: input.ciPrUrl,
+        ciJobUrl: input.ciJobUrl,
+      },
     );
   }
 
@@ -755,7 +765,10 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: launcher,
       });
-      return rest.ok ? { ok: true } : { ok: false, reason: rest.reason };
+      if (rest.outcome === "failed") {
+        return { ok: false, reason: rest.reason };
+      }
+      return { ok: true };
     } catch (err) {
       const reason =
         err instanceof Error
@@ -811,6 +824,12 @@ export class RunManager {
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,
+    skipGates?: boolean,
+    ciIdentity?: {
+      gitSha?: string;
+      ciPrUrl?: string;
+      ciJobUrl?: string;
+    },
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -843,11 +862,15 @@ export class RunManager {
         pipeline: pipelineId,
         cwd,
         checkoutOverride,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
         hitl: this.hitl,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
+        skipGates,
       });
       this.track(reserved.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };

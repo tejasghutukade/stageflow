@@ -1,25 +1,21 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
+import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
-import {
-  exitCodeForValidation,
-  formatValidationHuman,
-} from "./cli/validateOutput.js";
 import { createRunStore } from "./runstore/createStore.js";
-import { PipelineValidationError } from "./runtime/pipelineRunner.js";
-import { RunManager } from "./runtime/runManager.js";
-import { readStageExecutionMode } from "./runtime/stageConcurrency.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>]
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]
   sf validate [--pipeline <name-or-path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
@@ -33,6 +29,8 @@ const USAGE = `Usage:
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
 Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+
+${RUN_USAGE}
 
 ${VALIDATE_USAGE}
 
@@ -58,7 +56,11 @@ function parseArgs(argv: string[]): {
   }
 
   const command = args[0];
-  if (command === "providers" || command === "validate") {
+  if (
+    command === "providers" ||
+    command === "validate" ||
+    command === "run"
+  ) {
     return { help: false, command };
   }
 
@@ -92,7 +94,7 @@ function parseArgs(argv: string[]): {
   return { help: false, command, task, pipeline, port, checkout };
 }
 
-function parseRunStageArgs(argv: string[]): {
+export function parseRunStageArgs(argv: string[]): {
   runId: string;
   stageId: string;
   mode?: "run" | "resume";
@@ -100,6 +102,7 @@ function parseRunStageArgs(argv: string[]): {
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 } {
   let runId: string | undefined;
   let stageId: string | undefined;
@@ -108,6 +111,7 @@ function parseRunStageArgs(argv: string[]): {
   let attempt: number | undefined;
   let sessionFilePath: string | undefined;
   let operatorAgentDir: string | undefined;
+  let skipGates = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--run-id") {
       runId = argv[++i];
@@ -149,6 +153,8 @@ function parseRunStageArgs(argv: string[]): {
       if (operatorAgentDir === undefined) {
         throw new Error("Missing value for --operator-agent-dir");
       }
+    } else if (argv[i] === "--skip-gates") {
+      skipGates = true;
     }
   }
   if (!runId || !stageId) {
@@ -161,6 +167,7 @@ function parseRunStageArgs(argv: string[]): {
     resumeAnswer,
     attempt,
     sessionFilePath,
+    skipGates,
     ...(operatorAgentDir !== undefined
       ? { operatorCatalog: { cwd: process.cwd(), agentDir: operatorAgentDir } }
       : {}),
@@ -183,6 +190,7 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
     attempt: parsed.attempt,
     sessionFilePath: parsed.sessionFilePath,
     operatorCatalog: parsed.operatorCatalog,
+    skipGates: parsed.skipGates,
   });
   exitForOutcome(outcome);
 }
@@ -210,6 +218,10 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "validate") {
       return runValidateCommand(argv.slice(3), { cwd: rootDir });
+    }
+
+    if (parsed.command === "run") {
+      return runRunCommand(argv.slice(3), { cwd: rootDir });
     }
 
     if (parsed.command === "providers") {
@@ -241,65 +253,31 @@ async function main(argv: string[]): Promise<number> {
       return handleInternalRunStage(subArgs.slice(1));
     }
 
-    if (parsed.command !== "run") {
-      console.error(`Unknown command: ${parsed.command}`);
-      console.error(USAGE);
-      return 1;
-    }
-
-    if (!parsed.task || !parsed.pipeline) {
-      console.error("Missing --task and/or --pipeline");
-      console.error(USAGE);
-      return 1;
-    }
-
-    const manager = new RunManager({
-      agent: new PiAgentAdapter(),
-      store,
-      cwd: rootDir,
-      operatorCatalog: { cwd: rootDir, agentDir: getAgentDir() },
-      executionMode: readStageExecutionMode(process.env, "process"),
-    });
-    const started = await manager.startRun({
-      task: parsed.task,
-      pipeline: parsed.pipeline,
-      checkoutOverride: parsed.checkout,
-    });
-    if (!started.ok) {
-      const code = started.code ?? "error";
-      console.error(`${code}: ${started.reason}`);
-      if (started.conflictingRunId !== undefined) {
-        console.error(`conflictingRunId: ${started.conflictingRunId}`);
-      }
-      if (started.conflictingCheckout !== undefined) {
-        console.error(`conflictingCheckout: ${started.conflictingCheckout}`);
-      }
-      return started.status ?? 1;
-    }
-
-    const result = await started.done;
-
-    if (result.ok) {
-      console.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
-      return 0;
-    }
-
-    console.error(`Pipeline failed: ${result.reason}`);
-    console.error(`Run folder: ${result.runDir}`);
+    console.error(`Unknown command: ${parsed.command}`);
+    console.error(USAGE);
     return 1;
   } catch (err) {
-    if (err instanceof PipelineValidationError) {
-      console.error(formatValidationHuman(err.result));
-      return exitCodeForValidation(err.result);
-    }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
 }
 
-main(process.argv)
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+function isDirectCliInvocation(): boolean {
+  const self = fileURLToPath(import.meta.url);
+  return process.argv.slice(1).some((arg) => {
+    try {
+      return realpathSync(path.resolve(arg)) === realpathSync(self);
+    } catch {
+      return false;
+    }
   });
+}
+
+if (isDirectCliInvocation()) {
+  main(process.argv)
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+}

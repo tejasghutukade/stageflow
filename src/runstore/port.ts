@@ -52,6 +52,9 @@ export type RunMeta = {
   task_id?: string;
   updated_at?: string;
   checkout_root?: string;
+  git_sha?: string;
+  ci_pr_url?: string;
+  ci_job_url?: string;
   pipeline_dag?: RunPipelineDagSnapshot;
 };
 
@@ -133,6 +136,9 @@ export type CreateRunInput = {
   taskYaml: string;
   taskId?: string;
   checkoutRoot?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   pipelineDag?: RunPipelineDagSnapshot;
 };
 

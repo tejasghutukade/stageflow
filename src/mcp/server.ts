@@ -8,7 +8,7 @@ export type { McpToolDeps };
 export function createStageflowMcpServer(deps: McpToolDeps): McpServer {
   const server = new McpServer({
     name: "stageflow",
-    version: "0.1.0",
+    version: "0.2.0",
   });
   registerMcpTools(server, deps);
   return server;

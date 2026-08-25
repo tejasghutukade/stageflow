@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateCatalog } from "../src/config/validateCatalog.js";
-import { formatValidationHuman } from "../src/cli/validateOutput.js";
+import {
+  formatValidationHuman,
+  formatValidationJson,
+} from "../src/cli/validateOutput.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -69,5 +72,35 @@ describe("sf run validation gate", { timeout: 30_000 }, () => {
     expect(validateResult.stdout.trim() + validateResult.stderr.trim()).toBe(
       expected.trim(),
     );
+  });
+
+  it("AE5: --json on a validation-gate reject prints validate-shaped JSON, no runId", async () => {
+    const validation = await validateCatalog({
+      scope: "pipeline",
+      cwd: fixtures,
+      pipeline: "broken",
+    });
+    const result = runCli([
+      "run",
+      "--json",
+      "--task",
+      "tasks/sample.yaml",
+      "--pipeline",
+      "broken",
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(formatValidationJson(validation).trim());
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: unknown;
+      runId?: string;
+      outcome?: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed).not.toHaveProperty("runId");
+    expect(parsed).not.toHaveProperty("outcome");
+    expect(Array.isArray(parsed.findings)).toBe(true);
+    expect(result.stdout).not.toMatch(/Pipeline succeeded|Pipeline failed/);
   });
 });

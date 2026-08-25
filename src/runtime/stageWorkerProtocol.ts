@@ -19,6 +19,7 @@ export type StageWorkerInput = {
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 };
 
 export type StageWorkerResult =

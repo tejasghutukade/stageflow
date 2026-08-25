@@ -1,0 +1,4 @@
+id: github-release
+stages:
+  - draft-release-notes
+  - publish-github-release
