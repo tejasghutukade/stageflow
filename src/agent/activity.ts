@@ -82,6 +82,12 @@ export type StageActivityEvent =
       resultPreview?: string;
     }
   | {
+      event: "tool_progress";
+      toolName: string;
+      toolCallId?: string;
+      textPreview?: string;
+    }
+  | {
       event: "message";
       role: string;
       text?: string;

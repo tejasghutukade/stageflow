@@ -67,6 +67,8 @@ export function formatActivityLabel(event: StageLogEvent): string {
       return event.isError
         ? `✕ ${event.toolName ?? "tool"}`
         : `✓ ${event.toolName ?? "tool"}`;
+    case "tool_progress":
+      return `│ ${event.toolName ?? "tool"}`;
     case "message": {
       const role = event.role ?? "message";
       if (event.text) return `${role}: ${event.text}`;
@@ -88,6 +90,7 @@ export function formatActivityLabel(event: StageLogEvent): string {
 export function formatActivityDescription(event: StageLogEvent): string | undefined {
   if (event.event === "tool_start" && event.argsPreview) return event.argsPreview;
   if (event.event === "tool_end" && event.resultPreview) return event.resultPreview;
+  if (event.event === "tool_progress" && event.textPreview) return event.textPreview;
   if (event.event === "failed" && event.reason) return event.reason;
   if (event.event === "operator_prompt") return describeOperatorPrompt(event);
   if (event.event === "operator_answer") return describeOperatorAnswer(event);

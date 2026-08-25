@@ -350,6 +350,7 @@ describe("activity text limit env", () => {
 describe("activity verbose routing", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("readActivityVerbose gates on env values", () => {
@@ -394,22 +395,36 @@ describe("activity verbose routing", () => {
       },
       { observer, verbose: false },
     );
+    observer.onStreamBoundary();
     expect(stderr.text()).not.toContain("secret");
     expect(stderr.text()).not.toContain("partial");
     expect(seen).toEqual([]);
     stderr.restore();
   });
 
-  it("verbose on streams thinking with distinct prefix", () => {
+  it("verbose on streams thinking with distinct prefix and coalesces persist", () => {
     const stderr = captureStderr();
-    const observer = createStageActivityObserver({ writeStderr: true });
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: true,
+    });
     routeSessionEventToProgress(
       {
         type: "message_update",
-        assistantMessageEvent: { type: "thinking_delta", delta: "ponder" },
+        assistantMessageEvent: { type: "thinking_delta", delta: "pon" },
       },
       { observer, verbose: true },
     );
+    routeSessionEventToProgress(
+      {
+        type: "message_update",
+        assistantMessageEvent: { type: "thinking_delta", delta: "der" },
+      },
+      { observer, verbose: true },
+    );
+    expect(seen).toEqual([]);
+    observer.onStreamBoundary();
     routeSessionEventToProgress(
       {
         type: "message_update",
@@ -421,15 +436,56 @@ describe("activity verbose routing", () => {
     expect(text).toContain("∴ ");
     expect(text).toContain("ponder");
     expect(text).toContain("answer");
+    expect(text.indexOf("ponder")).toBe(text.lastIndexOf("ponder"));
+    expect(seen).toEqual([
+      { event: "message", role: "thinking", text: "ponder" },
+    ]);
     stderr.restore();
   });
 
-  it("verbose on suffix-diffs partialResult between tool_start and tool_end", () => {
+  it("verbose thinking skips empty buffer and truncates long text", () => {
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: false,
+    });
+    observer.onThinkingDelta("   ");
+    observer.onStreamBoundary();
+    expect(seen).toEqual([]);
+
+    const long = "t".repeat(ACTIVITY_TEXT_LIMIT + 40);
+    observer.onThinkingDelta(long);
+    observer.onStreamBoundary();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ event: "message", role: "thinking" });
+    if (seen[0]?.event === "message") {
+      expect(seen[0].text?.endsWith("…")).toBe(true);
+      expect(seen[0].text!.length).toBe(ACTIVITY_TEXT_LIMIT + 1);
+    }
+  });
+
+  it("dispose flushes non-empty thinking once", () => {
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: false,
+    });
+    observer.onThinkingDelta("leftover");
+    observer.dispose();
+    expect(seen).toEqual([
+      { event: "message", role: "thinking", text: "leftover" },
+    ]);
+    observer.dispose();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("verbose on suffix-diffs partialResult and flushes tool_progress before tool_end", () => {
     const stderr = captureStderr();
     const seen: StageActivityEvent[] = [];
     const observer = createStageActivityObserver({
       onActivity: (e) => seen.push(e),
       writeStderr: true,
+      toolProgressThrottleMs: 10_000,
     });
     routeSessionEventToProgress(
       {
@@ -460,6 +516,7 @@ describe("activity verbose routing", () => {
       },
       { observer, verbose: true },
     );
+    expect(seen.map((e) => e.event)).toEqual(["tool_start"]);
     routeSessionEventToProgress(
       {
         type: "tool_execution_end",
@@ -476,8 +533,75 @@ describe("activity verbose routing", () => {
     expect(text).toContain("ab");
     expect(text).toContain("cd");
     expect(text.match(/abcd/g)?.length ?? 0).toBeLessThanOrEqual(2);
-    expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_end"]);
+    expect(seen.map((e) => e.event)).toEqual([
+      "tool_start",
+      "tool_progress",
+      "tool_end",
+    ]);
+    expect(seen[1]).toEqual({
+      event: "tool_progress",
+      toolName: "bash",
+      toolCallId: "c1",
+      textPreview: "abcd",
+    });
+    if (seen[2]?.event === "tool_end") {
+      expect(seen[2].resultPreview).toContain("abcd");
+    }
     stderr.restore();
+  });
+
+  it("throttles tool_progress to at most one append per window", () => {
+    vi.useFakeTimers();
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: false,
+      toolProgressThrottleMs: 250,
+    });
+    observer.onActivity({
+      event: "tool_start",
+      toolName: "bash",
+      toolCallId: "c1",
+    });
+    for (let i = 1; i <= 20; i++) {
+      observer.onToolPartialResult("x".repeat(i));
+    }
+    expect(seen.map((e) => e.event)).toEqual(["tool_start"]);
+    vi.advanceTimersByTime(250);
+    expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_progress"]);
+    expect(seen[1]).toMatchObject({
+      event: "tool_progress",
+      toolName: "bash",
+      toolCallId: "c1",
+      textPreview: "x".repeat(20),
+    });
+    observer.onToolPartialResult("x".repeat(30));
+    observer.onToolPartialResult("x".repeat(40));
+    expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_progress"]);
+    vi.advanceTimersByTime(250);
+    expect(seen.map((e) => e.event)).toEqual([
+      "tool_start",
+      "tool_progress",
+      "tool_progress",
+    ]);
+    expect(seen[2]).toMatchObject({ textPreview: "x".repeat(40) });
+  });
+
+  it("does not emit empty tool_progress rows", () => {
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: false,
+      toolProgressThrottleMs: 10_000,
+    });
+    observer.onActivity({ event: "tool_start", toolName: "bash" });
+    observer.onToolPartialResult("   ");
+    observer.onActivity({
+      event: "tool_end",
+      toolName: "bash",
+      resultPreview: "done",
+    });
+    expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_end"]);
   });
 
   it("extractPartialResultText prefers content text blocks", () => {

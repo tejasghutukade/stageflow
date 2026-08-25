@@ -384,7 +384,8 @@ export type RouteSessionEventToProgressOptions = {
 
 /**
  * Adapter-edge routing: stream deltas to the observer, map milestones to
- * StageActivityEvent. Verbose thinking / live tool partials stay stderr-only.
+ * StageActivityEvent. Verbose thinking / live tool partials go to observer
+ * hooks (stderr streams + coalesced/throttled persist via onActivity).
  */
 export function routeSessionEventToProgress(
   event: Record<string, unknown>,

@@ -13,11 +13,12 @@ import { relativeTime } from "../catalogJoin";
 
 const TOOL_VISIBLE_LIMIT = 4;
 
-type ToolCallView = {
+export type ToolCallView = {
   name: string;
   status: "running" | "complete" | "error";
   args?: string;
   result?: string;
+  progressPreview?: string;
   at?: string;
 };
 
@@ -53,12 +54,21 @@ function asAnswer(value: unknown): StageAnswer | null {
   return null;
 }
 
-function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
+export function isToolBatchEvent(event: string): boolean {
+  return (
+    event === "tool_start" ||
+    event === "tool_end" ||
+    event === "tool_progress"
+  );
+}
+
+export function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
   const pending: {
     name: string;
     args?: string;
     at?: string;
     id: string;
+    progressPreview?: string;
   }[] = [];
   const rows: ToolCallView[] = [];
 
@@ -71,6 +81,24 @@ function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
         at: ev.at,
         id: ev.toolCallId ?? `start-${i}`,
       });
+      continue;
+    }
+    if (ev.event === "tool_progress") {
+      let matchIdx = -1;
+      if (ev.toolCallId) {
+        matchIdx = pending.findIndex((p) => p.id === ev.toolCallId);
+      }
+      if (matchIdx < 0) {
+        matchIdx = pending.length > 0 ? pending.length - 1 : -1;
+      }
+      if (matchIdx < 0) {
+        continue;
+      }
+      const preview =
+        typeof ev.textPreview === "string" ? ev.textPreview : undefined;
+      if (preview !== undefined) {
+        pending[matchIdx].progressPreview = preview;
+      }
       continue;
     }
     if (ev.event === "tool_end") {
@@ -93,6 +121,7 @@ function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
       name: start.name,
       status: "running",
       args: start.args,
+      progressPreview: start.progressPreview,
       at: start.at,
     });
   }
@@ -135,20 +164,26 @@ function ToolGroup({ calls }: { calls: ToolCallView[] }) {
 
   return (
     <div className="tools">
-      {visible.map((call, i) => (
-        <div
-          key={`${call.name}-${call.at ?? i}`}
-          className={call.status === "error" ? "tool tool--error" : "tool"}
-        >
-          <span>
-            {call.status === "error" ? "✕" : call.status === "running" ? "▸" : "⚙"}{" "}
-            {call.name}
-            {call.args ? ` ${call.args}` : ""}
-            {call.result ? ` · ${call.result}` : ""}
-          </span>
-          <TurnWhen at={call.at} />
-        </div>
-      ))}
+      {visible.map((call, i) => {
+        const detail =
+          call.status === "running"
+            ? call.progressPreview
+            : call.result;
+        return (
+          <div
+            key={`${call.name}-${call.at ?? i}`}
+            className={call.status === "error" ? "tool tool--error" : "tool"}
+          >
+            <span>
+              {call.status === "error" ? "✕" : call.status === "running" ? "▸" : "⚙"}{" "}
+              {call.name}
+              {call.args ? ` ${call.args}` : ""}
+              {detail ? ` · ${detail}` : ""}
+            </span>
+            <TurnWhen at={call.at} />
+          </div>
+        );
+      })}
       {hidden > 0 ? (
         <button type="button" className="tools__more" onClick={() => setExpanded(true)}>
           Show {hidden} more
@@ -256,6 +291,56 @@ function SystemTurn({ event }: { event: StageLogEvent }) {
   );
 }
 
+export type TranscriptTurnKind =
+  | "tools"
+  | "message"
+  | "operator_prompt"
+  | "operator_answer"
+  | "system";
+
+export type TranscriptTurnModel =
+  | { kind: "tools"; calls: ToolCallView[] }
+  | { kind: "message"; event: StageLogEvent }
+  | { kind: "operator_prompt"; event: StageLogEvent }
+  | { kind: "operator_answer"; event: StageLogEvent }
+  | { kind: "system"; event: StageLogEvent };
+
+export function buildTranscriptTurns(
+  events: StageLogEvent[],
+): TranscriptTurnModel[] {
+  const turns: TranscriptTurnModel[] = [];
+  let i = 0;
+  while (i < events.length) {
+    const ev = events[i];
+    if (isToolBatchEvent(ev.event)) {
+      const batch: StageLogEvent[] = [];
+      while (i < events.length && isToolBatchEvent(events[i].event)) {
+        batch.push(events[i]);
+        i += 1;
+      }
+      const calls = pairToolEvents(batch);
+      if (calls.length > 0) {
+        turns.push({ kind: "tools", calls });
+      }
+      continue;
+    }
+
+    if (ev.event === "message") {
+      if (ev.text?.trim()) {
+        turns.push({ kind: "message", event: ev });
+      }
+    } else if (ev.event === "operator_prompt") {
+      turns.push({ kind: "operator_prompt", event: ev });
+    } else if (ev.event === "operator_answer") {
+      turns.push({ kind: "operator_answer", event: ev });
+    } else {
+      turns.push({ kind: "system", event: ev });
+    }
+    i += 1;
+  }
+  return turns;
+}
+
 export function TranscriptTurns({
   events,
   inboundEnvelope,
@@ -271,36 +356,28 @@ export function TranscriptTurns({
     );
   }
 
-  let i = 0;
-  while (i < events.length) {
-    const ev = events[i];
-    if (ev.event === "tool_start" || ev.event === "tool_end") {
-      const batch: StageLogEvent[] = [];
-      const start = i;
-      while (
-        i < events.length &&
-        (events[i].event === "tool_start" || events[i].event === "tool_end")
-      ) {
-        batch.push(events[i]);
-        i += 1;
-      }
-      const calls = pairToolEvents(batch);
-      if (calls.length > 0) {
-        nodes.push(<ToolGroup key={`tools-${start}`} calls={calls} />);
-      }
+  const turns = buildTranscriptTurns(events);
+  for (let t = 0; t < turns.length; t++) {
+    const turn = turns[t];
+    if (turn.kind === "tools") {
+      nodes.push(<ToolGroup key={`tools-${t}`} calls={turn.calls} />);
       continue;
     }
-
-    if (ev.event === "message") {
-      nodes.push(<MessageTurn key={eventKey(ev, i)} event={ev} />);
-    } else if (ev.event === "operator_prompt") {
-      nodes.push(<AskTurn key={eventKey(ev, i)} event={ev} />);
-    } else if (ev.event === "operator_answer") {
-      nodes.push(<AnswerTurn key={eventKey(ev, i)} event={ev} />);
-    } else {
-      nodes.push(<SystemTurn key={eventKey(ev, i)} event={ev} />);
+    if (turn.kind === "message") {
+      nodes.push(<MessageTurn key={eventKey(turn.event, t)} event={turn.event} />);
+      continue;
     }
-    i += 1;
+    if (turn.kind === "operator_prompt") {
+      nodes.push(<AskTurn key={eventKey(turn.event, t)} event={turn.event} />);
+      continue;
+    }
+    if (turn.kind === "operator_answer") {
+      nodes.push(
+        <AnswerTurn key={eventKey(turn.event, t)} event={turn.event} />,
+      );
+      continue;
+    }
+    nodes.push(<SystemTurn key={eventKey(turn.event, t)} event={turn.event} />);
   }
 
   if (nodes.length === 0) {

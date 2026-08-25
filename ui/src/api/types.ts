@@ -8,6 +8,7 @@ export type StageLogEvent = {
   toolCallId?: string;
   argsPreview?: string;
   resultPreview?: string;
+  textPreview?: string;
   isError?: boolean;
   role?: string;
   text?: string;
