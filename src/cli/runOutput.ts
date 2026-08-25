@@ -1,6 +1,14 @@
 import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import type { BusyCode, StartRunResult } from "../runtime/runManager.js";
-import { STAGE_WORKER_EXIT } from "../runtime/stageWorkerProtocol.js";
+
+export type CliRunReportIo = {
+  log: (line: string) => void;
+  error: (line: string) => void;
+};
+
+export type CliRunReportEvent =
+  | { kind: "start-failure"; started: Extract<StartRunResult, { ok: false }> }
+  | { kind: "completion"; result: PipelineRunResult };
 
 function stringify(payload: Record<string, unknown>): string {
   return JSON.stringify(payload, null, 2);
@@ -10,7 +18,7 @@ function isBusyCode(code: string | undefined): code is BusyCode {
   return code === "busy_capacity" || code === "busy_checkout";
 }
 
-export function formatRunBusyJson(
+function formatRunBusyJson(
   started: Extract<StartRunResult, { ok: false }>,
 ): string {
   const payload: Record<string, unknown> = {
@@ -35,7 +43,7 @@ export function formatRunBusyJson(
   return stringify(payload);
 }
 
-export function formatRunStartFailedJson(
+function formatRunStartFailedJson(
   started: Extract<StartRunResult, { ok: false }>,
 ): string {
   const payload: Record<string, unknown> = {
@@ -47,7 +55,7 @@ export function formatRunStartFailedJson(
   return stringify(payload);
 }
 
-export function formatStartFailureJson(
+function formatStartFailureJson(
   started: Extract<StartRunResult, { ok: false }>,
 ): string {
   if (isBusyCode(started.code)) {
@@ -56,7 +64,7 @@ export function formatStartFailureJson(
   return formatRunStartFailedJson(started);
 }
 
-export function formatRunCompletionJson(result: PipelineRunResult): string {
+function formatRunCompletionJson(result: PipelineRunResult): string {
   if (result.outcome === "succeeded") {
     return stringify({
       ok: true,
@@ -83,15 +91,67 @@ export function formatRunCompletionJson(result: PipelineRunResult): string {
   return stringify(payload);
 }
 
-export function exitCodeForRunOutcome(
-  outcome: PipelineRunResult["outcome"],
-): number {
+function writeStartFailureHuman(
+  started: Extract<StartRunResult, { ok: false }>,
+  io: CliRunReportIo,
+): void {
+  const code = started.code ?? "error";
+  io.error(`${code}: ${started.reason}`);
+  if (started.conflictingRunId !== undefined) {
+    io.error(`conflictingRunId: ${started.conflictingRunId}`);
+  }
+  if (started.conflictingCheckout !== undefined) {
+    io.error(`conflictingCheckout: ${started.conflictingCheckout}`);
+  }
+}
+
+function writeCompletionHuman(
+  result: PipelineRunResult,
+  io: CliRunReportIo,
+): void {
+  switch (result.outcome) {
+    case "waiting":
+      io.error(
+        `Pipeline waiting. Run folder: ${result.runDir} (${result.runId})`,
+      );
+      return;
+    case "failed":
+      io.error(`Pipeline failed: ${result.reason}`);
+      io.error(`Run folder: ${result.runDir}`);
+      return;
+    case "succeeded":
+      io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
+      return;
+  }
+}
+
+function exitCodeForRunOutcome(outcome: PipelineRunResult["outcome"]): number {
   switch (outcome) {
     case "succeeded":
-      return STAGE_WORKER_EXIT.SUCCEEDED;
+      return 0;
     case "waiting":
-      return STAGE_WORKER_EXIT.WAITING;
+      return 2;
     case "failed":
-      return STAGE_WORKER_EXIT.FAILED;
+      return 1;
   }
+}
+
+export function reportCliRun(
+  event: CliRunReportEvent,
+  options: { json?: boolean; io: CliRunReportIo },
+): number {
+  if (event.kind === "start-failure") {
+    if (options.json) {
+      options.io.log(formatStartFailureJson(event.started));
+    } else {
+      writeStartFailureHuman(event.started, options.io);
+    }
+    return 1;
+  }
+  if (options.json) {
+    options.io.log(formatRunCompletionJson(event.result));
+  } else {
+    writeCompletionHuman(event.result, options.io);
+  }
+  return exitCodeForRunOutcome(event.result.outcome);
 }

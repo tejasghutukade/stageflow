@@ -230,4 +230,53 @@ describe("run manager re-run", () => {
       await new Promise((r) => setTimeout(r, 20));
     }
   });
+
+  it("rerun does not copy CI identity onto the new run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-ci-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = scriptedFakeAgent([
+      successEnvelope("1"),
+      successEnvelope("2"),
+      successEnvelope("3"),
+      successEnvelope("1b"),
+      successEnvelope("2b"),
+      successEnvelope("3b"),
+    ]);
+    const manager = new RunManager({ agent, cwd: fixtures, store });
+
+    const started = await manager.startRun({
+      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: "docs-only",
+      gitSha: "deadbeef",
+      ciPrUrl: "https://github.com/acme/repo/pull/42",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/99",
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    while (manager.getActiveCount() > 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    const source = await store.readRunMeta(started.runId);
+    expect(source.git_sha).toBe("deadbeef");
+    expect(source.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(source.ci_job_url).toBe(
+      "https://github.com/acme/repo/actions/runs/99",
+    );
+
+    const result = await manager.rerun(started.runId);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.runId).not.toBe(started.runId);
+
+    const copy = await store.readRunMeta(result.runId);
+    expect(copy.git_sha).toBeUndefined();
+    expect(copy.ci_pr_url).toBeUndefined();
+    expect(copy.ci_job_url).toBeUndefined();
+
+    while (manager.getActiveCount() > 0) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  });
 });

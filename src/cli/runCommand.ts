@@ -1,17 +1,12 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { PiAgentAdapter } from "../agent/piAdapter.js";
 import { createRunStore } from "../runstore/createStore.js";
-import {
-  PipelineValidationError,
-  type PipelineRunResult,
-} from "../runtime/pipelineRunner.js";
+import { PipelineValidationError } from "../runtime/pipelineRunner.js";
 import { RunManager, type StartRunResult } from "../runtime/runManager.js";
 import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
-import { STAGE_WORKER_EXIT } from "../runtime/stageWorkerProtocol.js";
 import {
-  exitCodeForRunOutcome,
-  formatRunCompletionJson,
-  formatStartFailureJson,
+  reportCliRun,
+  type CliRunReportIo,
 } from "./runOutput.js";
 import { resolveCiIdentity } from "./ciIdentity.js";
 import {
@@ -23,10 +18,7 @@ import {
 export const RUN_USAGE = `Usage:
   sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]`;
 
-export type RunCommandIo = {
-  log: (line: string) => void;
-  error: (line: string) => void;
-};
+export type RunCommandIo = CliRunReportIo;
 
 const defaultIo: RunCommandIo = {
   log: (line) => console.log(line),
@@ -141,37 +133,13 @@ function defaultStartRun(cwd: string): StartRunFn {
   };
 }
 
-export function exitForPipelineRunResult(
-  result: PipelineRunResult,
-  io: RunCommandIo = defaultIo,
-): number {
-  switch (result.outcome) {
-    case "waiting":
-      io.error(
-        `Pipeline waiting. Run folder: ${result.runDir} (${result.runId})`,
-      );
-      return STAGE_WORKER_EXIT.WAITING;
-    case "failed":
-      io.error(`Pipeline failed: ${result.reason}`);
-      io.error(`Run folder: ${result.runDir}`);
-      return STAGE_WORKER_EXIT.FAILED;
-    case "succeeded":
-      io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
-      return STAGE_WORKER_EXIT.SUCCEEDED;
-  }
-}
-
 export async function completeCliRun(
   started: Extract<StartRunResult, { ok: true }>,
   io: RunCommandIo = defaultIo,
   options: { json?: boolean } = {},
 ): Promise<number> {
   const result = await started.done;
-  if (options.json) {
-    io.log(formatRunCompletionJson(result));
-    return exitCodeForRunOutcome(result.outcome);
-  }
-  return exitForPipelineRunResult(result, io);
+  return reportCliRun({ kind: "completion", result }, { json: options.json, io });
 }
 
 export async function runRunCommand(
@@ -226,19 +194,10 @@ export async function runRunCommand(
       ...identity,
     });
     if (!started.ok) {
-      if (parsed.json) {
-        out.log(formatStartFailureJson(started));
-        return 1;
-      }
-      const code = started.code ?? "error";
-      out.error(`${code}: ${started.reason}`);
-      if (started.conflictingRunId !== undefined) {
-        out.error(`conflictingRunId: ${started.conflictingRunId}`);
-      }
-      if (started.conflictingCheckout !== undefined) {
-        out.error(`conflictingCheckout: ${started.conflictingCheckout}`);
-      }
-      return 1;
+      return reportCliRun(
+        { kind: "start-failure", started },
+        { json: parsed.json, io: out },
+      );
     }
     return completeCliRun(started, out, { json: parsed.json });
   } catch (err) {
