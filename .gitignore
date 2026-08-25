@@ -24,6 +24,7 @@ docs/explainers/
 # Public docs (planning subtrees above stay ignored)
 !docs/
 docs/*
+!docs/_config.yml
 !docs/*.md
 !docs/img/
 !docs/img/**
