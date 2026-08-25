@@ -163,10 +163,10 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 
 | Example | Description |
 |---------|-------------|
-| [hello-world](examples/hello-world/) | Single stage, domain-neutral (planned) |
-| [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** (planned) |
+| [hello-world](examples/hello-world/) | Single stage, domain-neutral |
+| [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
-| [ci-validate](examples/ci-validate/) | Strict validate in CI (planned) |
+| [ci-validate](examples/ci-validate/) | Strict validate in CI |
 
 Index: [examples/README.md](examples/README.md)
 

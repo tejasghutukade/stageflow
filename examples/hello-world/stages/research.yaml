@@ -1,0 +1,3 @@
+id: research
+system_prompt: Summarize the task goal and list open questions.
+model: anthropic/claude-sonnet-4-5

@@ -1,0 +1,3 @@
+id: ci-demo
+stages:
+  - check

@@ -1,0 +1,4 @@
+id: my-task
+goal: Draft a one-page brief on a topic of your choice
+context: Domain-neutral hello-world run
+constraints: Docs only; no implementation code
