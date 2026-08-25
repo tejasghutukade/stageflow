@@ -27,6 +27,7 @@ describe("CLI stub", { timeout: 10_000 }, () => {
     expect(result.stdout).toMatch(/Usage:/);
     expect(result.stdout).toMatch(/sf ui/);
     expect(result.stdout).toMatch(/--checkout/);
+    expect(result.stdout).toMatch(/sf run[^\n]*--json/);
     expect(result.stdout).toMatch(/sf validate/);
     expect(result.stdout).toMatch(/--pipeline/);
     expect(result.stdout).toMatch(/--strict/);
@@ -90,6 +91,22 @@ describe("CLI stub", { timeout: 10_000 }, () => {
     const out = result.stdout + result.stderr;
     expect(out).toMatch(/Unknown flag: --nope/);
     expect(out).toMatch(/sf validate/);
+    expect(out).not.toMatch(/stack|at Object|Error: /i);
+  });
+
+  it("run --help mentions --json", () => {
+    const result = runCli(["run", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf run[^\n]*--json/);
+  });
+
+  it("run unknown flag exits non-zero with usage", () => {
+    const result = runCli(["run", "--nope"]);
+    expect(result.status).not.toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/Unknown flag: --nope/);
+    expect(out).toMatch(/sf run/);
     expect(out).not.toMatch(/stack|at Object|Error: /i);
   });
 });

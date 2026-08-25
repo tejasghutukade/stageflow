@@ -1,26 +1,18 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
+import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
-import {
-  exitCodeForValidation,
-  formatValidationHuman,
-} from "./cli/validateOutput.js";
 import { createRunStore } from "./runstore/createStore.js";
-import { PipelineValidationError } from "./runtime/pipelineRunner.js";
-import { completeCliRun } from "./cli/runCommand.js";
-import { RunManager } from "./runtime/runManager.js";
-import { readStageExecutionMode } from "./runtime/stageConcurrency.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>]
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json]
   sf validate [--pipeline <name-or-path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
@@ -34,6 +26,8 @@ const USAGE = `Usage:
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
 Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+
+${RUN_USAGE}
 
 ${VALIDATE_USAGE}
 
@@ -59,7 +53,11 @@ function parseArgs(argv: string[]): {
   }
 
   const command = args[0];
-  if (command === "providers" || command === "validate") {
+  if (
+    command === "providers" ||
+    command === "validate" ||
+    command === "run"
+  ) {
     return { help: false, command };
   }
 
@@ -213,6 +211,10 @@ async function main(argv: string[]): Promise<number> {
       return runValidateCommand(argv.slice(3), { cwd: rootDir });
     }
 
+    if (parsed.command === "run") {
+      return runRunCommand(argv.slice(3), { cwd: rootDir });
+    }
+
     if (parsed.command === "providers") {
       return runProvidersCommand(argv.slice(3), rootDir);
     }
@@ -242,48 +244,10 @@ async function main(argv: string[]): Promise<number> {
       return handleInternalRunStage(subArgs.slice(1));
     }
 
-    if (parsed.command !== "run") {
-      console.error(`Unknown command: ${parsed.command}`);
-      console.error(USAGE);
-      return 1;
-    }
-
-    if (!parsed.task || !parsed.pipeline) {
-      console.error("Missing --task and/or --pipeline");
-      console.error(USAGE);
-      return 1;
-    }
-
-    const manager = new RunManager({
-      agent: new PiAgentAdapter(),
-      store,
-      cwd: rootDir,
-      operatorCatalog: { cwd: rootDir, agentDir: getAgentDir() },
-      executionMode: readStageExecutionMode(process.env, "process"),
-    });
-    const started = await manager.startRun({
-      task: parsed.task,
-      pipeline: parsed.pipeline,
-      checkoutOverride: parsed.checkout,
-    });
-    if (!started.ok) {
-      const code = started.code ?? "error";
-      console.error(`${code}: ${started.reason}`);
-      if (started.conflictingRunId !== undefined) {
-        console.error(`conflictingRunId: ${started.conflictingRunId}`);
-      }
-      if (started.conflictingCheckout !== undefined) {
-        console.error(`conflictingCheckout: ${started.conflictingCheckout}`);
-      }
-      return started.status ?? 1;
-    }
-
-    return completeCliRun(started);
+    console.error(`Unknown command: ${parsed.command}`);
+    console.error(USAGE);
+    return 1;
   } catch (err) {
-    if (err instanceof PipelineValidationError) {
-      console.error(formatValidationHuman(err.result));
-      return exitCodeForValidation(err.result);
-    }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
