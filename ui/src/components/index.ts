@@ -1,4 +1,6 @@
 export { AppRail, defaultRailItems } from "./AppRail";
+export { StageflowIcon } from "./StageflowIcon";
+export type { StageflowIconProps } from "./StageflowIcon";
 export type { AppRailProps, RailItem } from "./AppRail";
 
 export { ArtifactAside } from "./ArtifactAside";

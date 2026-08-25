@@ -57,20 +57,10 @@ body {
 }
 
 .rail__mark {
-  display: grid;
+  display: flex;
   flex: none;
-  grid-template-columns: repeat(2, 5px);
-  gap: 2px;
+  color: var(--color-accent);
 }
-
-.rail__mark i {
-  width: 5px;
-  height: 5px;
-  border-radius: 1px;
-  background: var(--color-accent);
-}
-
-.rail__mark i:nth-child(3) { opacity: 0.35; }
 
 .rail__item {
   display: flex;
