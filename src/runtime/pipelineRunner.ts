@@ -80,6 +80,9 @@ async function preparePipeline(options: {
   pipeline: string;
   cwd: string;
   checkoutOverride?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
@@ -118,6 +121,9 @@ async function preparePipeline(options: {
     taskYaml,
     taskId: task.id,
     checkoutRoot,
+    gitSha: options.gitSha,
+    ciPrUrl: options.ciPrUrl,
+    ciJobUrl: options.ciJobUrl,
     pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
   });
   const executionMode = readStageExecutionMode(
@@ -227,6 +233,9 @@ export async function startPipeline(options: {
   pipeline: string;
   cwd?: string;
   checkoutOverride?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
@@ -243,6 +252,9 @@ export async function startPipeline(options: {
     pipeline: options.pipeline,
     cwd,
     checkoutOverride: options.checkoutOverride,
+    gitSha: options.gitSha,
+    ciPrUrl: options.ciPrUrl,
+    ciJobUrl: options.ciJobUrl,
     hitl: options.hitl,
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,

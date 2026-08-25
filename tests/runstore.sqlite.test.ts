@@ -42,6 +42,9 @@ describe("sqlite run store", () => {
 
     const meta = await store.readRunMeta(run.runId);
     expect(meta.checkout_root).toBeUndefined();
+    expect(meta.git_sha).toBeUndefined();
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
   });
 
   it("persists checkout_root on create and returns it from readRunMeta", async () => {
@@ -56,6 +59,51 @@ describe("sqlite run store", () => {
     });
     const meta = await store.readRunMeta(run.runId);
     expect(meta.checkout_root).toBe(checkout);
+  });
+
+  it("persists CI identity on create and returns it from readRunMeta", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      gitSha: "abc123def",
+      ciPrUrl: "https://github.com/acme/repo/pull/42",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/99",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("abc123def");
+    expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/99");
+  });
+
+  it("omits CI identity from readRunMeta when createRun does not set it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-omit-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBeUndefined();
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
+  });
+
+  it("omits unset CI fields when only gitSha is set", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-sha-only-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      gitSha: "deadbeef",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("deadbeef");
+    expect(meta.ci_pr_url).toBeUndefined();
+    expect(meta.ci_job_url).toBeUndefined();
   });
 
   it("adds stage_events.attempt via ALTER on legacy DB", async () => {
@@ -160,6 +208,66 @@ CREATE TABLE stage_events (
     const cols = probe.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
     probe.close();
     expect(cols.some((c) => c.name === "checkout_root")).toBe(true);
+  });
+
+  it("adds CI identity columns via ALTER on existing DB missing them", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-alter-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stages (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  status TEXT,
+  summary TEXT,
+  envelope_json TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  PRIMARY KEY (run_id, stage_id),
+  FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+CREATE TABLE stage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload_json TEXT,
+  FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+`);
+    legacy.close();
+
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      gitSha: "cafe1234",
+      ciPrUrl: "https://github.com/acme/repo/pull/7",
+      ciJobUrl: "https://github.com/acme/repo/actions/runs/11",
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.git_sha).toBe("cafe1234");
+    expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/7");
+    expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/11");
+
+    const probe = new Database(dbPath);
+    const cols = probe.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+    probe.close();
+    expect(cols.some((c) => c.name === "git_sha")).toBe(true);
+    expect(cols.some((c) => c.name === "ci_pr_url")).toBe(true);
+    expect(cols.some((c) => c.name === "ci_job_url")).toBe(true);
   });
 
   it("rejects kind disk and SF_STORE=disk", async () => {

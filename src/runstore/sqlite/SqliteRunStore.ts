@@ -40,6 +40,9 @@ type RunRow = {
   updated_at: string;
   checkout_root: string | null;
   pipeline_dag_json: string | null;
+  git_sha: string | null;
+  ci_pr_url: string | null;
+  ci_job_url: string | null;
 };
 
 type StageRow = {
@@ -88,6 +91,16 @@ function ensureCheckoutRootColumn(db: Database.Database): void {
   const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
   if (!cols.some((c) => c.name === "checkout_root")) {
     db.exec(`ALTER TABLE runs ADD COLUMN checkout_root TEXT`);
+  }
+}
+
+function ensureCiIdentityColumns(db: Database.Database): void {
+  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  for (const name of ["git_sha", "ci_pr_url", "ci_job_url"] as const) {
+    if (!names.has(name)) {
+      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
+    }
   }
 }
 
@@ -154,6 +167,7 @@ export class SqliteRunStore implements RunStore {
     this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
     this.db.exec(SCHEMA_SQL);
     ensureCheckoutRootColumn(this.db);
+    ensureCiIdentityColumns(this.db);
     ensurePipelineDagColumn(this.db);
     ensureStageExecutionsTable(this.db);
     ensureStageEventsAttemptColumn(this.db);
@@ -179,9 +193,9 @@ export class SqliteRunStore implements RunStore {
     this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url)`,
       )
       .run({
         run_id: runId,
@@ -195,6 +209,9 @@ export class SqliteRunStore implements RunStore {
         pipeline_dag_json: input.pipelineDag
           ? JSON.stringify(input.pipelineDag)
           : null,
+        git_sha: input.gitSha ?? null,
+        ci_pr_url: input.ciPrUrl ?? null,
+        ci_job_url: input.ciJobUrl ?? null,
       });
 
     return { runId, workspaceDir };
@@ -550,7 +567,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url
          FROM runs ORDER BY created_at DESC`,
       )
       .all() as RunRow[];
@@ -591,13 +608,16 @@ export class SqliteRunStore implements RunStore {
       task_id: row.task_id ?? undefined,
       updated_at: row.updated_at,
       ...(row.checkout_root != null ? { checkout_root: row.checkout_root } : {}),
+      ...(row.git_sha != null ? { git_sha: row.git_sha } : {}),
+      ...(row.ci_pr_url != null ? { ci_pr_url: row.ci_pr_url } : {}),
+      ...(row.ci_job_url != null ? { ci_job_url: row.ci_job_url } : {}),
     };
   }
 
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

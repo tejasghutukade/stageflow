@@ -15,7 +15,7 @@ import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates]
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]
   sf validate [--pipeline <name-or-path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list

@@ -13,6 +13,7 @@ import {
   formatRunCompletionJson,
   formatStartFailureJson,
 } from "./runOutput.js";
+import { resolveCiIdentity } from "./ciIdentity.js";
 import {
   exitCodeForValidation,
   formatValidationHuman,
@@ -20,7 +21,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates]`;
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]`;
 
 export type RunCommandIo = {
   log: (line: string) => void;
@@ -39,6 +40,9 @@ type ParsedRunArgs = {
   task?: string;
   pipeline?: string;
   checkout?: string;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
 };
 
 export type StartRunFn = (input: {
@@ -46,6 +50,9 @@ export type StartRunFn = (input: {
   pipeline: string;
   checkoutOverride?: string;
   skipGates?: boolean;
+  gitSha?: string;
+  ciPrUrl?: string;
+  ciJobUrl?: string;
 }) => Promise<StartRunResult>;
 
 function parseRunArgs(args: string[]): ParsedRunArgs {
@@ -59,6 +66,9 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let task: string | undefined;
   let pipeline: string | undefined;
   let checkout: string | undefined;
+  let gitSha: string | undefined;
+  let ciPrUrl: string | undefined;
+  let ciJobUrl: string | undefined;
   let json = false;
   let skipGates = false;
   let help = false;
@@ -85,6 +95,24 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
         throw new Error("Missing value for --checkout");
       }
       checkout = value;
+    } else if (arg === "--git-sha") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --git-sha");
+      }
+      gitSha = value;
+    } else if (arg === "--ci-pr-url") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --ci-pr-url");
+      }
+      ciPrUrl = value;
+    } else if (arg === "--ci-job-url") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --ci-job-url");
+      }
+      ciJobUrl = value;
     } else if (arg === "--json") {
       json = true;
     } else if (arg === "--skip-gates") {
@@ -96,7 +124,7 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
     }
   }
 
-  return { help, json, skipGates, task, pipeline, checkout };
+  return { help, json, skipGates, task, pipeline, checkout, gitSha, ciPrUrl, ciJobUrl };
 }
 
 function defaultStartRun(cwd: string): StartRunFn {
@@ -152,6 +180,7 @@ export async function runRunCommand(
     cwd?: string;
     io?: Partial<RunCommandIo>;
     startRun?: StartRunFn;
+    env?: Record<string, string | undefined>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
@@ -179,6 +208,14 @@ export async function runRunCommand(
   }
 
   const startRun = options.startRun ?? defaultStartRun(cwd);
+  const identity = resolveCiIdentity({
+    flags: {
+      gitSha: parsed.gitSha,
+      ciPrUrl: parsed.ciPrUrl,
+      ciJobUrl: parsed.ciJobUrl,
+    },
+    env: options.env ?? process.env,
+  });
 
   try {
     const started = await startRun({
@@ -186,6 +223,7 @@ export async function runRunCommand(
       pipeline: parsed.pipeline,
       checkoutOverride: parsed.checkout,
       ...(parsed.skipGates ? { skipGates: true } : {}),
+      ...identity,
     });
     if (!started.ok) {
       if (parsed.json) {
