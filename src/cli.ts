@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
@@ -265,7 +266,7 @@ function isDirectCliInvocation(): boolean {
   const self = fileURLToPath(import.meta.url);
   return process.argv.slice(1).some((arg) => {
     try {
-      return path.resolve(arg) === self;
+      return realpathSync(path.resolve(arg)) === realpathSync(self);
     } catch {
       return false;
     }

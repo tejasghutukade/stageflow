@@ -12,6 +12,8 @@ Requires **Node.js ≥ 20**.
 npm i -g stageflow
 # or
 npx stageflow
+# or, from a packed tarball
+npm i -g ./stageflow-*.tgz
 ```
 
 `better-sqlite3` ships prebuilds for common platforms. `--ignore-scripts` is fine when a prebuild exists. Benign `node-gyp` warnings during install can be ignored if `require("better-sqlite3")` works.
