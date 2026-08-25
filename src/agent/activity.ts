@@ -16,7 +16,53 @@ import type {
   AskOperatorPrompt,
 } from "../tools/askOperator.js";
 
-export const ACTIVITY_TEXT_LIMIT = 500;
+export const ACTIVITY_TEXT_LIMIT = 2000;
+
+export const ACTIVITY_TEXT_LIMIT_ENV = "STAGEFLOW_ACTIVITY_TEXT_LIMIT";
+
+export const ACTIVITY_VERBOSE_ENV = "STAGEFLOW_ACTIVITY_VERBOSE";
+
+export function readActivityTextLimit(
+  env: Record<string, string | undefined> = process.env,
+  override?: number,
+): number {
+  if (override !== undefined) {
+    if (Number.isFinite(override) && override >= 1) return Math.floor(override);
+    return ACTIVITY_TEXT_LIMIT;
+  }
+  const raw = env[ACTIVITY_TEXT_LIMIT_ENV];
+  if (raw === undefined || raw.trim() === "") {
+    return ACTIVITY_TEXT_LIMIT;
+  }
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) {
+    return ACTIVITY_TEXT_LIMIT;
+  }
+  return n;
+}
+
+export function readActivityVerbose(
+  env: Record<string, string | undefined> = process.env,
+  override?: boolean,
+): boolean {
+  if (override !== undefined) {
+    return override;
+  }
+  const raw = env[ACTIVITY_VERBOSE_ENV];
+  if (raw === undefined || raw.trim() === "") {
+    return false;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "off" ||
+    normalized === "no"
+  ) {
+    return false;
+  }
+  return true;
+}
 
 export type StageActivityEvent =
   | { event: "agent_start" }
@@ -34,6 +80,12 @@ export type StageActivityEvent =
       toolCallId?: string;
       isError?: boolean;
       resultPreview?: string;
+    }
+  | {
+      event: "tool_progress";
+      toolName: string;
+      toolCallId?: string;
+      textPreview?: string;
     }
   | {
       event: "message";
@@ -72,7 +124,7 @@ export type StageLogLine = StageActivityEvent | StageLifecycleEvent;
 
 export function truncateActivityText(
   value: unknown,
-  limit = ACTIVITY_TEXT_LIMIT,
+  limit = readActivityTextLimit(),
 ): string | undefined {
   if (value === undefined || value === null) return undefined;
   let text: string;

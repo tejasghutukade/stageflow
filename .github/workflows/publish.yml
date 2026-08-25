@@ -1,8 +1,6 @@
 name: Publish
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +13,6 @@ concurrency:
 
 jobs:
   publish:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,6 +21,12 @@ jobs:
       published: ${{ steps.gate.outputs.publish }}
       version: ${{ steps.gate.outputs.version }}
     steps:
+      - name: Require main branch
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "Publish is manual and only allowed on main (got ${GITHUB_REF})." >&2
+          exit 1
+
       - uses: actions/checkout@v4
 
       - id: gate
