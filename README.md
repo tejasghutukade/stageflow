@@ -202,6 +202,6 @@ Run tests: `npm test` and `npm run ui:test`. Typecheck: `npm run typecheck`.
 
 MIT © Tejas G
 
-**Support:** [GitHub Issues](https://github.com/tejasghutukade/stageflow/issues) · [SUPPORT.md](SUPPORT.md) (planned)
+**Support:** [GitHub Issues](https://github.com/tejasghutukade/stageflow/issues) · [SUPPORT.md](SUPPORT.md)
 
-**Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) (planned)
+**Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
