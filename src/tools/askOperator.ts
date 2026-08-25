@@ -155,6 +155,19 @@ export const askOperatorParamsSchema = Type.Union([
   }),
 ]);
 
+const askOperatorToolParametersSchema = Type.Object({
+  kind: Type.Union([
+    Type.Literal("free_text"),
+    Type.Literal("confirm"),
+    Type.Literal("multi_question"),
+    Type.Literal("artifact_backed"),
+  ]),
+  message: Type.Optional(Type.String()),
+  questions: Type.Optional(Type.Array(multiQuestionItemSchema)),
+  artifacts: Type.Optional(Type.Array(Type.String())),
+  id: Type.Optional(Type.String()),
+});
+
 const decisionSchema = Type.Union([
   Type.Literal("accept"),
   Type.Literal("reject"),
@@ -588,7 +601,7 @@ export function createAskOperatorTool(options: AskOperatorToolOptions) {
     label: "Ask operator",
     description:
       "Ask the operator a question and wait for their answer. Supports free_text, confirm, multi_question, and artifact_backed prompts. Does not complete the stage — call emit_stage_envelope when finished.",
-    parameters: askOperatorParamsSchema,
+    parameters: askOperatorToolParametersSchema,
     execute: async (_toolCallId: string, params: unknown) => {
       let prompt: AskOperatorPrompt;
       try {

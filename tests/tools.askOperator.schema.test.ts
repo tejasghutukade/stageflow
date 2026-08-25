@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 import {
   AskOperatorError,
   assertAnswerMatchesPrompt,
+  createAskOperatorTool,
   normalizePromptIds,
   parseAskOperatorAnswer,
   parseAskOperatorParams,
 } from "../src/tools/askOperator.js";
 
 describe("askOperator schema", () => {
+  it("exposes object-typed tool parameters so OpenAI Responses will accept ask_operator", () => {
+    const tool = createAskOperatorTool({
+      requestWait: async () => {
+        throw new Error("unused");
+      },
+    });
+    const schema = JSON.parse(JSON.stringify(tool.parameters)) as {
+      type?: string;
+    };
+    expect(schema.type).toBe("object");
+  });
+
   it("parses each of the four kinds and round-trips after ID normalization", () => {
     const freeText = normalizePromptIds(
       parseAskOperatorParams({
