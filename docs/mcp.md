@@ -1,3 +1,8 @@
+---
+layout: default
+title: Mcp
+---
+
 # MCP
 
 When `sf ui` is running, Stageflow serves a **Streamable HTTP** MCP endpoint at:

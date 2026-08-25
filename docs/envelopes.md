@@ -1,3 +1,8 @@
+---
+layout: default
+title: Envelopes
+---
+
 # Envelopes
 
 When a stage finishes, it hands off structured state to the pipeline via an **envelope**. The next stage (and the operator console) read this contract instead of scraping chat transcripts.

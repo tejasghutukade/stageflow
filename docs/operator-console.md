@@ -1,3 +1,8 @@
+---
+layout: default
+title: Operator Console
+---
+
 # Operator console
 
 The operator console is a local web UI started by `sf ui`. Default URL: **`http://127.0.0.1:3847`**.

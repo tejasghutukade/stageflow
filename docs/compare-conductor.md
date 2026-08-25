@@ -1,3 +1,8 @@
+---
+layout: default
+title: Compare Conductor
+---
+
 # Stageflow vs Conductor
 
 [Conductor](https://github.com/microsoft/conductor) and Stageflow both address **multi-step agent workflows**. They differ in orchestration model, runtime, and the unit of composition.

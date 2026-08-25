@@ -1,3 +1,8 @@
+---
+layout: default
+title: Cli Reference
+---
+
 # CLI reference
 
 The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for the full usage string.
@@ -28,6 +33,8 @@ sf run --task <path> --pipeline <name-or-path> [options]
 | `--git-sha` | Record git SHA on the run (CI identity) |
 | `--ci-pr-url` | Record PR URL on the run |
 | `--ci-job-url` | Record CI job URL on the run |
+| `--operator-cwd` | Operator catalog root for skill resolution (default: process cwd) |
+| `--operator-agent-dir` | Pi agent directory for user/runner skills (default: Pi `getAgentDir()`) |
 
 **Exit codes:**
 
@@ -134,6 +141,8 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode (`process` default) |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT` | Transcript text truncation |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
+| `STAGEFLOW_OPERATOR_CWD` | Operator catalog root for skill resolution in CI |
+| `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills in CI |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Hitl
+---
+
 # Human-in-the-loop (HITL)
 
 Stages can pause for **operator input** via the `ask_operator` Pi tool. The operator console (or a resumed worker) supplies answers; the stage continues until it calls `emit_stage_envelope`.

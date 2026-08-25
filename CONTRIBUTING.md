@@ -14,6 +14,7 @@ git clone https://github.com/tejasghutukade/stageflow.git
 cd stageflow
 npm i
 npm run build && npm run ui:build
+npm run validate:examples   # sf validate --strict on each examples/* catalog
 ```
 
 Run the operator console locally:

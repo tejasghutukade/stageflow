@@ -3,6 +3,7 @@
 CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono), with a local operator console.
 
 [![npm version](https://img.shields.io/npm/v/stageflow)](https://www.npmjs.com/package/stageflow)
+[![npm downloads](https://img.shields.io/npm/dm/stageflow)](https://www.npmjs.com/package/stageflow)
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub issues](https://img.shields.io/github/issues/tejasghutukade/stageflow)](https://github.com/tejasghutukade/stageflow/issues)
@@ -39,6 +40,14 @@ The same pipeline runs three ways without rewriting anything:
 ## Installation
 
 Requires **Node.js ≥ 20**.
+
+**Quick install (macOS / Linux):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tejasghutukade/stageflow/main/install.sh | bash
+```
+
+**npm:**
 
 ```bash
 npm i -g stageflow
@@ -171,6 +180,8 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 Index: [examples/README.md](examples/README.md)
 
 ## Documentation
+
+Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.io/stageflow/)** (GitHub Pages — live after merge to `main` and Pages enabled). Source in [`docs/`](docs/).
 
 | Doc | Description |
 |-----|-------------|

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Ci
+---
+
 # CI / headless
 
 Stageflow is designed to run the same YAML catalog locally, in the operator console, and in CI. The **guest actor in CI is the CLI** — `sf ui` and MCP are not required in the job.
@@ -90,6 +95,19 @@ Optional flags on `sf run` (auto-detected on GitHub Actions when omitted):
 
 Recorded on the run for operator triage in the console.
 
+## Skills in CI
+
+Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator catalog** `{ cwd, agentDir }`:
+
+- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the catalog directory (where your `pipelines/` and `stages/` live). Run `sf run` from that directory, or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`.
+- **User/runner skills:** install under the Pi agent directory (`~/.pi/agent/skills/<name>/SKILL.md`), or pass `--operator-agent-dir <path>` / set `STAGEFLOW_OPERATOR_AGENT_DIR` to point at a Pi agent dir that contains a `skills/` subtree.
+
+The guest CLI defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }`. Override when the job checkout is not the catalog root or when skills live in a shared agent dir on the runner.
+
+## Extensions in CI
+
+Only provider-level hooks are supported today — for example `STAGEFLOW_CURSOR_EXTENSION` for Cursor-backed models. Per-stage extension YAML in the catalog is not supported in headless CI yet.
+
 ## GitHub Actions recipe
 
 ```yaml
@@ -126,6 +144,8 @@ jobs:
         run: sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
       - name: Run pipeline
         run: sf run --task tasks/my-task.yaml --pipeline hello --json --skip-gates
+        # If pipelines/stages live in a subdirectory, add:
+        # --operator-cwd path/to/catalog
 ```
 
 Adjust task, pipeline, and secrets for your catalog. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/).
@@ -137,6 +157,8 @@ Adjust task, pipeline, and secrets for your catalog. Dogfood release automation 
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel runs (busy exit if full) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Parallel stages within one run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
+| `STAGEFLOW_OPERATOR_CWD` | Operator catalog root for skill resolution (see [Skills in CI](#skills-in-ci)) |
+| `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills |
 
 ## State in CI
 

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Yaml Catalog
+---
+
 # YAML catalog
 
 Stageflow reads a **project-local catalog** — no hosted config service. Three directories define what can run:

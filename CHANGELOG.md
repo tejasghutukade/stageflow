@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `install.sh` quick install (curl \| bash → npm global)
+- GitHub Pages workflow (`docs.yml`) and Jekyll config for `docs/`
+- `npm run validate:examples` — strict validate all example catalogs
+- npm downloads badge; OG/social SVG template at `docs/img/stageflow-og.svg`
 - Public `docs/` reference tree (CLI, YAML catalog, MCP, CI, providers, HITL)
 - Examples gallery: hello-world, plan-review, github-release, ci-validate
 - GitHub Actions CI workflow (build, test, typecheck) and README badge

@@ -1,3 +1,9 @@
+---
+layout: default
+title: Documentation
+permalink: /
+---
+
 # Stageflow documentation
 
 Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono). You author YAML in your project — pipelines, stages, and tasks — and Stageflow runs each stage in a fresh Pi agent session with structured handoffs between steps.

@@ -1,3 +1,8 @@
+---
+layout: default
+title: Providers
+---
+
 # Providers
 
 Stageflow runs stages on **Pi** (`@earendil-works/pi-coding-agent`). Model provider authentication is Pi-compatible — reuse an existing Pi login or store credentials in a Stageflow-owned file.

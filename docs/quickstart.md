@@ -1,3 +1,8 @@
+---
+layout: default
+title: Quickstart
+---
+
 # Quick start
 
 This guide walks through a minimal Stageflow project: one pipeline, one stage, one task. The example is **domain-neutral** — you define what each stage does via `system_prompt` and YAML; Stageflow does not ship built-in stage types.
