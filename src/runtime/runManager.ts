@@ -477,6 +477,7 @@ export class RunManager {
       pipeline: string;
       task?: string | TaskFile;
       checkoutOverride?: string;
+      skipGates?: boolean;
     },
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
@@ -516,6 +517,7 @@ export class RunManager {
       `task file ${label}`,
       cwd,
       input.checkoutOverride,
+      input.skipGates,
     );
   }
 
@@ -814,6 +816,7 @@ export class RunManager {
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,
+    skipGates?: boolean,
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -851,6 +854,7 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
+        skipGates,
       });
       this.track(reserved.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };

@@ -31,6 +31,7 @@ type SchedulerPreparedPipeline = {
   checkoutRoot?: string;
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 };
 
 export type { SchedulerPreparedPipeline };
@@ -580,6 +581,7 @@ export async function runPipelineDag(
         ...(prepared.operatorCatalog !== undefined
           ? { operatorCatalog: prepared.operatorCatalog }
           : {}),
+        ...(prepared.skipGates ? { skipGates: true } : {}),
       });
       if (launchResult.type === "succeeded") {
         try {
@@ -613,6 +615,7 @@ export async function runPipelineDag(
       factoryCwd: cwd,
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
+      skipGates: prepared.skipGates,
     });
 
     if (isRunStageWaiting(result)) {

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -12,7 +14,7 @@ import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json]
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates]
   sf validate [--pipeline <name-or-path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
@@ -91,7 +93,7 @@ function parseArgs(argv: string[]): {
   return { help: false, command, task, pipeline, port, checkout };
 }
 
-function parseRunStageArgs(argv: string[]): {
+export function parseRunStageArgs(argv: string[]): {
   runId: string;
   stageId: string;
   mode?: "run" | "resume";
@@ -99,6 +101,7 @@ function parseRunStageArgs(argv: string[]): {
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 } {
   let runId: string | undefined;
   let stageId: string | undefined;
@@ -107,6 +110,7 @@ function parseRunStageArgs(argv: string[]): {
   let attempt: number | undefined;
   let sessionFilePath: string | undefined;
   let operatorAgentDir: string | undefined;
+  let skipGates = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--run-id") {
       runId = argv[++i];
@@ -148,6 +152,8 @@ function parseRunStageArgs(argv: string[]): {
       if (operatorAgentDir === undefined) {
         throw new Error("Missing value for --operator-agent-dir");
       }
+    } else if (argv[i] === "--skip-gates") {
+      skipGates = true;
     }
   }
   if (!runId || !stageId) {
@@ -160,6 +166,7 @@ function parseRunStageArgs(argv: string[]): {
     resumeAnswer,
     attempt,
     sessionFilePath,
+    skipGates,
     ...(operatorAgentDir !== undefined
       ? { operatorCatalog: { cwd: process.cwd(), agentDir: operatorAgentDir } }
       : {}),
@@ -182,6 +189,7 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
     attempt: parsed.attempt,
     sessionFilePath: parsed.sessionFilePath,
     operatorCatalog: parsed.operatorCatalog,
+    skipGates: parsed.skipGates,
   });
   exitForOutcome(outcome);
 }
@@ -253,9 +261,22 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
-main(process.argv)
-  .then((code) => process.exit(code))
-  .catch((err) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
+function isDirectCliInvocation(): boolean {
+  const self = fileURLToPath(import.meta.url);
+  return process.argv.slice(1).some((arg) => {
+    try {
+      return path.resolve(arg) === self;
+    } catch {
+      return false;
+    }
   });
+}
+
+if (isDirectCliInvocation()) {
+  main(process.argv)
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+}

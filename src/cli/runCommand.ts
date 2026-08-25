@@ -20,7 +20,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json]`;
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates]`;
 
 export type RunCommandIo = {
   log: (line: string) => void;
@@ -35,6 +35,7 @@ const defaultIo: RunCommandIo = {
 type ParsedRunArgs = {
   help: boolean;
   json: boolean;
+  skipGates: boolean;
   task?: string;
   pipeline?: string;
   checkout?: string;
@@ -44,20 +45,22 @@ export type StartRunFn = (input: {
   task: string;
   pipeline: string;
   checkoutOverride?: string;
+  skipGates?: boolean;
 }) => Promise<StartRunResult>;
 
 function parseRunArgs(args: string[]): ParsedRunArgs {
   if (args.length === 0) {
-    return { help: false, json: false };
+    return { help: false, json: false, skipGates: false };
   }
   if (args[0] === "--help" || args[0] === "-h") {
-    return { help: true, json: false };
+    return { help: true, json: false, skipGates: false };
   }
 
   let task: string | undefined;
   let pipeline: string | undefined;
   let checkout: string | undefined;
   let json = false;
+  let skipGates = false;
   let help = false;
 
   for (let i = 0; i < args.length; i++) {
@@ -84,6 +87,8 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
       checkout = value;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--skip-gates") {
+      skipGates = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else {
@@ -91,7 +96,7 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
     }
   }
 
-  return { help, json, task, pipeline, checkout };
+  return { help, json, skipGates, task, pipeline, checkout };
 }
 
 function defaultStartRun(cwd: string): StartRunFn {
@@ -180,6 +185,7 @@ export async function runRunCommand(
       task: parsed.task,
       pipeline: parsed.pipeline,
       checkoutOverride: parsed.checkout,
+      ...(parsed.skipGates ? { skipGates: true } : {}),
     });
     if (!started.ok) {
       if (parsed.json) {

@@ -51,6 +51,7 @@ export type PreparedPipeline = {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 };
 
 let defaultStageProcessLauncher: StageProcessLauncher | undefined;
@@ -83,6 +84,7 @@ async function preparePipeline(options: {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
@@ -138,6 +140,7 @@ async function preparePipeline(options: {
     executionMode,
     stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   };
 }
 
@@ -191,6 +194,7 @@ export async function runPipeline(options: {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<PipelineRunResult> {
   const cwd = options.cwd ?? process.cwd();
   const prepared = await preparePipeline({
@@ -205,6 +209,7 @@ export async function runPipeline(options: {
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   });
   return executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
@@ -227,6 +232,7 @@ export async function startPipeline(options: {
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
+  skipGates?: boolean;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const prepared = await preparePipeline({
@@ -241,6 +247,7 @@ export async function startPipeline(options: {
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
+    skipGates: options.skipGates,
   });
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
