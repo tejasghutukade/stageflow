@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Stageflow — personal CLI pipeline runtime for configurable SDLC stages on Pi",
   "type": "module",
   "bin": {
