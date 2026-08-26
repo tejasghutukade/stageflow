@@ -7,7 +7,14 @@ title: Cli Reference
 
 The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for the full usage string.
 
-Runtime state lives under **`.stageflow/`** (SQLite store + per-run workspaces). Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected.
+## Storage locations
+
+| Path | Purpose |
+|------|---------|
+| `<git-root>/.stageflow/` | Run store (SQLite) and per-run workspaces when inside a git repo |
+| `~/.stageflow/` | Global home — `sf_owned` auth (`agent/auth.json`), global settings |
+
+Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected.
 
 ## Global
 
@@ -15,25 +22,43 @@ Runtime state lives under **`.stageflow/`** (SQLite store + per-run workspaces).
 sf --help
 ```
 
+## `sf init`
+
+Scaffold a new Stageflow project at the git root (or current directory when not in git).
+
+```bash
+sf init
+```
+
+Creates (skipping files that already exist):
+
+| File | Purpose |
+|------|---------|
+| `stageflow.yaml` | Manifest with `pipelines/` and `tasks/` roots |
+| `pipelines/hello.pipeline.yaml` | Inline single-stage pipeline |
+| `tasks/hello.task.yaml` | Sample task |
+
+Also ensures `~/.stageflow/` exists for global config.
+
 ## `sf run`
 
 Run a pipeline against a task file.
 
 ```bash
-sf run --task <path> --pipeline <path> [options]
+sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--task` | Path to a task YAML file (required) |
-| `--pipeline` | Pipeline id or path (required) |
+| `--pipeline` | Filesystem path to a pipeline YAML file (required) |
 | `--checkout` | Override task `checkout` with a working tree path |
 | `--json` | Print one JSON document to stdout |
 | `--skip-gates` | Fail the stage instead of waiting on HITL (see [HITL](hitl.md)) |
 | `--git-sha` | Record git SHA on the run (CI identity) |
 | `--ci-pr-url` | Record PR URL on the run |
 | `--ci-job-url` | Record CI job URL on the run |
-| `--operator-cwd` | Operator catalog root for skill resolution (default: process cwd) |
+| `--operator-cwd` | Operator checkout root for skill resolution (default: process cwd) |
 | `--operator-agent-dir` | Pi agent directory for user/runner skills (default: Pi `getAgentDir()`) |
 
 **Exit codes:**
@@ -63,21 +88,26 @@ sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pi
 
 ## `sf validate`
 
-Validate pipeline and stage YAML in the current directory.
+Validate pipeline and stage YAML.
 
 ```bash
 sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
 ```
 
+With no flags, validates all pipelines and tasks declared in `stageflow.yaml` (manifest-all).
+
 | Flag | Description |
 |------|-------------|
-| `--pipeline` | Validate one pipeline (default: full catalog) |
-| `--strict` | Treat orphan stages as errors |
+| `--pipeline` | Validate one pipeline file (includes `uses:` / `include:` transitively) |
+| `--task` | Validate one task file |
+| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors |
 | `--json` | Machine-readable findings |
+
+Use at most one of `--pipeline` or `--task`.
 
 **Exit codes:** `0` pass, `1` fail. Validate never exits `2` — no waiting state.
 
-Scope: pipeline and stage YAML only. Does not prove provider auth, task shape, or checkout paths.
+Scope: pipeline and stage YAML only. Does not prove provider auth, task shape beyond `--task` scope, or checkout paths.
 
 Example:
 
@@ -98,11 +128,11 @@ Prints:
 - Operator console URL (default `http://127.0.0.1:3847`)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted. See [Operator console](operator-console.md) and [MCP](mcp.md).
+Opens the default browser. Process runs until interrupted. The run store resolves to `<git-root>/.stageflow/` even when started from a subdirectory. See [Operator console](operator-console.md) and [MCP](mcp.md).
 
 ## `sf providers`
 
-Manage Pi model provider authentication. All subcommands run from the project directory (factory cwd).
+Manage Pi model provider authentication.
 
 ```bash
 sf providers list
@@ -141,7 +171,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode (`process` default) |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT` | Transcript text truncation |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
-| `STAGEFLOW_OPERATOR_CWD` | Operator catalog root for skill resolution in CI |
+| `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills in CI |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).

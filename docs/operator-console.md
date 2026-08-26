@@ -9,6 +9,8 @@ The operator console is a local web UI started by `sf ui`. Default URL: **`http:
 
 It is the primary surface for triaging runs, connecting providers, answering HITL gates, and inspecting stage transcripts and envelopes. The same process also serves MCP at `/mcp`.
 
+The run store and catalog browse resolve to the **project git root** — starting `sf ui` from a subdirectory still uses `<git-root>/.stageflow/` and the repo's `stageflow.yaml` manifest.
+
 ## Starting the console
 
 ```bash
@@ -26,13 +28,13 @@ Left rail items (`ui/src/components/AppRail.tsx`):
 |---------|-------|---------|
 | **Today** | `#/today` | Triage home — waiting runs, capacity, quick actions |
 | **Runs** | `#/runs` | All runs list |
-| **Pipelines** | `#/pipelines` | Browse pipeline definitions |
-| **Tasks** | `#/tasks` | Browse task files |
+| **Pipelines** | `#/pipelines` | Browse manifest-declared pipeline files |
+| **Tasks** | `#/tasks` | Browse manifest-declared task files |
 | **Skills** | `#/skills` | Pi skills available to stages |
 | **Extensions** | `#/extensions` | Pi extensions (user and project scope) |
 | **Settings** | `#/settings` | App settings including providers |
 
-**Start a run** — primary button in the rail → `#/new` (optional `?pipeline=` and `?task=` query params).
+**Start a run** — primary button in the rail → `#/new` (optional `?pipeline=` and `?task=` query params with filesystem paths).
 
 Brand click returns to Today.
 
@@ -50,7 +52,7 @@ Hash-based routing (`ui/src/routes.ts`):
 | `#/runs/<runId>/stages/<stageId>/envelope` | Envelope inspector for a stage |
 | `#/runs/<runId>/artifacts?path=…` | Artifact viewer |
 | `#/new` | Start run form |
-| `#/pipelines` | Pipeline catalog |
+| `#/pipelines` | Pipeline catalog (manifest paths) |
 | `#/pipelines/<id>` | Single pipeline detail |
 | `#/tasks` | Task catalog |
 | `#/tasks/<id>` | Single task detail |
@@ -60,6 +62,8 @@ Hash-based routing (`ui/src/routes.ts`):
 | `#/extensions/files/<path>` | Extension file viewer |
 | `#/settings` | Settings (providers, theme, etc.) |
 | `#/connect` | Provider connect flow |
+
+Recent runs show stored **`pipeline_path`** and **`task_path`** locators when present on the run record.
 
 ## Run detail
 

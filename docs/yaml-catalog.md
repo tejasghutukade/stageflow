@@ -51,7 +51,6 @@ Each stage is an object with `id` and one of:
 |------|--------|----------|
 | External | `uses: <path>` | Stage body lives in another YAML file |
 | Inline | `system_prompt`, `model`, … | Single-file pipeline |
-| Fragment | `include: <path>` | Merge stage list from another file (local paths only) |
 
 Optional on any entry: `needs`, `fork`, `gate_kinds`, `payload_schema`, `skill`.
 
@@ -99,6 +98,24 @@ stages:
 ```
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
+
+### Pipeline fragments (`include:`)
+
+At the **pipeline top level** (not inside a stage entry), merge stage lists from fragment files:
+
+```yaml
+id: include-merge
+include:
+  - local: ./fragments/gates.yaml
+stages:
+  - id: finish
+    uses: ./finish.yaml
+    needs: gate
+```
+
+Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory.
+
+Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml).
 
 ### Fork pipelines
 
@@ -170,7 +187,7 @@ catalog:
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
 
-Scaffold a new project: **`sf init`**.
+Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/` — not a global `stages/` pool.
 
 ## Validation
 

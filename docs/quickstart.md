@@ -16,36 +16,56 @@ This guide walks through a minimal Stageflow project: one pipeline, one stage, o
 npm i -g stageflow
 ```
 
-## 1. Create the catalog
+## 1. Scaffold the catalog
 
-In an empty project directory, add three files.
+In an empty project directory (preferably a git repo), run:
 
-**`pipelines/hello.yaml`**
+```bash
+sf init
+```
+
+This creates:
+
+| File | Purpose |
+|------|---------|
+| `stageflow.yaml` | Manifest — declares which directories to browse and validate |
+| `pipelines/hello.pipeline.yaml` | Single inline stage pipeline |
+| `tasks/hello.task.yaml` | Task file |
+
+**Manual alternative** — same shape without `sf init`:
+
+**`stageflow.yaml`**
+
+```yaml
+version: 1
+catalog:
+  pipelines:
+    - pipelines
+  tasks:
+    - tasks
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+```
+
+**`pipelines/hello.pipeline.yaml`**
 
 ```yaml
 id: hello
 stages:
-  - research
+  - id: hello
+    system_prompt: Say hello and emit a success envelope.
+    model: anthropic/claude-sonnet-4-5
 ```
 
-**`stages/research.yaml`**
+**`tasks/hello.task.yaml`**
 
 ```yaml
-id: research
-system_prompt: Summarize the task goal and list open questions.
-model: anthropic/claude-sonnet-4-5
+id: hello
+goal: Run the hello pipeline scaffold.
 ```
 
-**`tasks/my-task.yaml`**
-
-```yaml
-id: my-task
-goal: Draft a one-page brief on a topic of your choice
-context: Domain-neutral hello-world run
-constraints: Docs only; no implementation code
-```
-
-The stage filename must match `id` (`research.yaml` for `id: research`). Pipeline `stages[]` entries reference stage ids defined under `stages/`.
+Stages are **object entries** with inline bodies or `uses:` paths — not bare string ids. See [YAML catalog](yaml-catalog.md) for the full schema.
 
 ## 2. Validate the catalog
 
@@ -53,7 +73,9 @@ The stage filename must match `id` (`research.yaml` for `id: research`). Pipelin
 sf validate --strict
 ```
 
-Validation checks pipeline and stage YAML only — not task files, provider auth, or checkout paths. See [YAML catalog](yaml-catalog.md) for the full schema.
+With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all). `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors.
+
+Validation checks pipeline and stage YAML only — not task files, provider auth, or checkout paths.
 
 ## 3. Connect a provider
 
@@ -75,10 +97,12 @@ See [Providers](providers.md) for `pi_home` vs `sf_owned` credential storage.
 ## 4. Run the pipeline
 
 ```bash
-sf run --task tasks/my-task.yaml --pipeline hello
+sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 ```
 
-Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under `.stageflow/`.
+`--pipeline` and `--task` require **filesystem paths** — there is no bare-id fallback.
+
+Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under **`<git-root>/.stageflow/`** regardless of which subdirectory you run from.
 
 ## 5. Operate via the console
 
@@ -92,25 +116,27 @@ If a stage calls `ask_operator`, the run pauses until you reply in the console. 
 
 ## Multi-stage pipelines
 
-Add more stages under `stages/` and list them in the pipeline. For explicit ordering:
+Add more stage entries to the pipeline. Use `uses:` for external stage files or inline `system_prompt` / `model`. Order with explicit `needs`:
 
 ```yaml
 id: linear
 stages:
   - id: clarify
+    uses: ../stages/clarify.yaml
   - id: design-doc
+    uses: ../stages/design-doc.yaml
     needs: clarify
 ```
 
-Canonical example: [`tests/fixtures/pipelines/linear-explicit.yaml`](../tests/fixtures/pipelines/linear-explicit.yaml).
+Canonical example: [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-Parallel fan-out uses the same `needs` field — see [`tests/fixtures/pipelines/parallel-five-fork.yaml`](../tests/fixtures/pipelines/parallel-five-fork.yaml) and [YAML catalog](yaml-catalog.md).
+Parallel fan-out uses the same `needs` field — see [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog](yaml-catalog.md).
 
 ## Headless / CI
 
 ```bash
 sf validate --strict --json
-sf run --task tasks/my-task.yaml --pipeline hello --json
+sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml --json
 ```
 
 Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / headless](ci.md).

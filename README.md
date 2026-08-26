@@ -9,13 +9,13 @@ CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badl
 [![GitHub issues](https://img.shields.io/github/issues/tejasghutukade/stageflow)](https://github.com/tejasghutukade/stageflow/issues)
 [![CI](https://img.shields.io/github/actions/workflow/status/tejasghutukade/stageflow/ci.yml?branch=main)](https://github.com/tejasghutukade/stageflow/actions/workflows/ci.yml)
 
-Author YAML pipelines, stages, and tasks in a project directory. Stageflow runs each stage in a fresh Pi agent session, writes a structured handoff envelope, and keeps run state under `.stageflow/`. Bins: **`sf`** and **`stageflow`**.
+Author pipeline-owned YAML in your project. Stageflow runs each stage in a fresh Pi agent session, writes a structured handoff envelope, and keeps run state under `.stageflow/`. Bins: **`sf`** and **`stageflow`**.
 
 ## Why Stageflow?
 
 Multi-step agent work breaks down when every handoff is ad hoc — a shell script here, a chat transcript there, no shared contract between steps. You end up re-explaining context, losing artifacts, and unable to run the same flow locally and in CI.
 
-Stageflow treats **stages as the unit of composition**. You author a YAML catalog — pipelines, stages, tasks — and define whatever workflow fits your domain: release automation, research pipelines, content review, SDLC, ops runbooks, or something entirely custom. Each stage runs in a **fresh Pi session**, emits a typed **envelope** for the next stage, and can pause on **human-in-the-loop (HITL)** gates when you need an operator in the loop.
+Stageflow treats **stages as the unit of composition**. You author pipeline-owned YAML — `*.pipeline.yaml`, `*.task.yaml`, optional `stageflow.yaml` manifest — and define whatever workflow fits your domain: release automation, research pipelines, content review, SDLC, ops runbooks, or something entirely custom. Each stage runs in a **fresh Pi session**, emits a typed **envelope** for the next stage, and can pause on **human-in-the-loop (HITL)** gates when you need an operator in the loop.
 
 The same pipeline runs three ways without rewriting anything:
 
@@ -27,15 +27,16 @@ The same pipeline runs three ways without rewriting anything:
 
 ## Features
 
-- **YAML catalog** — `pipelines/`, `stages/`, `tasks/` live in your project; no hosted config service
-- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; reuse an existing Pi login (`pi_home`) or store credentials in an SF-owned file (`sf_owned`)
+- **Pipeline-owned YAML** — `*.pipeline.yaml` with inline stages or `uses:` refs; separate `*.task.yaml` files; optional repo-root `stageflow.yaml` manifest
+- **Path-based CLI** — `--pipeline` and `--task` take filesystem paths (no bare-id lookup)
+- **Pi-native** — runs on `@earendil-works/pi-coding-agent`; reuse an existing Pi login (`pi_home`) or store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` is running
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
-- **SQLite run store** — `.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
+- **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
 
 ## Installation
 
@@ -61,39 +62,22 @@ npm i -g ./stageflow-*.tgz
 
 ## Quick start
 
-In a project directory, create three files:
+In a project directory (preferably a git repo):
 
-**`pipelines/hello.yaml`**
-
-```yaml
-id: hello
-stages:
-  - research
+```bash
+sf init
 ```
 
-**`stages/research.yaml`**
-
-```yaml
-id: research
-system_prompt: Summarize the task goal and list open questions.
-model: anthropic/claude-sonnet-4-5
-```
-
-**`tasks/my-task.yaml`**
-
-```yaml
-id: my-task
-goal: Draft a one-page brief on a topic of your choice
-context: Domain-neutral hello-world run
-constraints: Docs only; no implementation code
-```
+This scaffolds `stageflow.yaml`, `pipelines/hello.pipeline.yaml` (inline stage), and `tasks/hello.task.yaml`.
 
 Run (after connecting a provider — see below):
 
 ```bash
 sf ui                          # operator console at http://127.0.0.1:3847
-sf run --task tasks/my-task.yaml --pipeline hello
+sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 ```
+
+Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
 ## Connect a model provider
 
@@ -117,7 +101,7 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 
 Use `sf providers list` to see provider ids and supported auth types (`api_key`, `oauth`).
 
-**Credential storage:** reuse Pi's shared auth file (`pi_home`) or keep credentials in a Stageflow-owned file (`sf_owned`):
+**Credential storage:** reuse Pi's shared auth file (`pi_home`) or keep credentials in Stageflow's global store (`sf_owned`):
 
 ```bash
 sf providers detect
@@ -135,7 +119,7 @@ Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 - **Runs** — active and recent pipeline runs, capacity, and status at a glance
 - **Run detail** — stage timeline, transcripts, envelope payloads, and artifact paths
 - **HITL reply** — answer operator gates (`ask_operator`) without leaving the browser
-- **Pipelines** — browse authored pipeline and stage definitions
+- **Pipelines** — browse manifest-declared pipeline definitions
 - **Settings → Providers** — connect model providers (`pi_home` or `sf_owned` credential storage)
 
 *Screenshot coming soon — capture after console polish lands (see `docs/img/`).*
@@ -157,7 +141,7 @@ sf providers login <providerId> --api-key-env <VAR>
 If the provider also supports OAuth, pass `--type api_key`.
 
 ```bash
-sf run --task tasks/my-task.yaml --pipeline hello --json
+sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml --json
 ```
 
 The process exits `0` when the Run succeeded, `1` when it failed (including a busy start), and `2` when waiting. `sf run --json` prints one stdout document. `ok` is true only for `succeeded`. Busy has no `runId`.
@@ -173,13 +157,13 @@ On a mixed Pipeline, default wait parks the Run (exit `2`). `--skip-gates` fails
 
 ## State
 
-Runtime state lives in **`.stageflow/`** (SQLite + per-run workspaces under `.stageflow/runs/`). If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
+Runtime state lives in **`<git-root>/.stageflow/`** when inside a git repository (SQLite + per-run workspaces under `.stageflow/runs/`). Global config and `sf_owned` auth live under **`~/.stageflow/`**. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
 
 ## MCP
 
 `sf ui` also serves a Streamable HTTP MCP endpoint at `http://127.0.0.1:3847/mcp` (URL printed on boot). Point a Cursor (or other) MCP client at that URL.
 
-Available tools: `list_pipelines`, `list_runs`, `get_health`, `start_run`, `get_run`, `read_artifact`.
+Available tools: `list_pipelines`, `list_tasks`, `list_runs`, `get_health`, `start_run`, `get_run`, `read_artifact`.
 
 Full reference: [docs/mcp.md](docs/mcp.md)
 
@@ -189,7 +173,7 @@ Both projects address multi-step agent workflows. They differ in orchestration m
 
 | | **Stageflow** | **Conductor** |
 |---|---------------|---------------|
-| **Model** | Configurable **stages** on Pi; YAML catalog (any domain) | Multi-**agent** workflow graph |
+| **Model** | Configurable **stages** on Pi; pipeline-owned YAML (any domain) | Multi-**agent** workflow graph |
 | **Orchestration** | Pipeline DAG + stage worker | Jinja routing, no LLM in router |
 | **Unit of work** | Task → Pipeline → Stage attempts | Workflow → Agents |
 | **Handoff** | Typed **envelope** + artifacts | Agent output → context |
