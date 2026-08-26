@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { listPipelines, listTasks } from "../config/listConfig.js";
-import { resolveCatalogContext } from "../config/resolveCatalogContext.js";
+import { browseCatalog } from "../config/browseCatalog.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -48,15 +47,8 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
       inputSchema: z.object({}),
     },
     async () => {
-      const catalogCtx = await resolveCatalogContext(cwd);
-      const pipelines =
-        catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
-          ? await listPipelines({
-              projectRoot: catalogCtx.projectRoot,
-              manifest: catalogCtx.manifest,
-            })
-          : [];
-      return textResult({ pipelines });
+      const catalog = await browseCatalog(cwd);
+      return textResult({ pipelines: catalog.pipelines });
     },
   );
 
@@ -67,15 +59,8 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
       inputSchema: z.object({}),
     },
     async () => {
-      const catalogCtx = await resolveCatalogContext(cwd);
-      const tasks =
-        catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
-          ? await listTasks({
-              projectRoot: catalogCtx.projectRoot,
-              manifest: catalogCtx.manifest,
-            })
-          : [];
-      return textResult({ tasks });
+      const catalog = await browseCatalog(cwd);
+      return textResult({ tasks: catalog.tasks });
     },
   );
 

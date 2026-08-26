@@ -278,6 +278,7 @@ describe("parallel pipeline runs (U1)", () => {
 
     const source = await store.createRun({
       pipelineId: "docs-only",
+      pipelinePath: DOCS_ONLY_PIPELINE,
       taskYaml: `id: snap\ngoal: from copy\ncheckout: ${checkout}\n`,
       taskId: "snap",
       checkoutRoot: checkout,

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectContext } from "../project/resolveProjectContext.js";
+import type { StageflowContext } from "../project/resolveStageflowContext.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { storeRootFor } from "../runstore/paths.js";
 
@@ -24,7 +25,7 @@ export function globalSettingsFilePath(): string {
   return path.join(globalStageflowHome(), SETTINGS_FILE_NAME);
 }
 
-export function settingsFilePathForContext(ctx: ProjectContext): string {
+export function settingsFilePathForContext(ctx: ProjectContext | StageflowContext): string {
   if (ctx.isGitProject) {
     return path.join(storeRootFor(ctx.projectRoot), SETTINGS_FILE_NAME);
   }

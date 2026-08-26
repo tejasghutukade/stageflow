@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
-import { loadPipelineForRun } from "./loadPipelineForRun.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import { loadRunContext } from "./resumeReconstruct.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -553,13 +554,20 @@ export class RunManager {
     let rerunProjectRoot: string | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      if (meta.pipeline_path) {
-        pipeline = meta.pipeline_path;
-        rerunCwd = meta.project_root ?? cwd;
-        rerunProjectRoot = meta.project_root;
-      } else {
-        pipeline = meta.pipeline_id;
+      if (!meta.pipeline_path) {
+        return {
+          ok: false,
+          reason: `Run ${runId} is missing pipeline_path; re-run requires stored catalog locators.`,
+          status: 400,
+        };
       }
+      pipeline = normalizeCatalogPath(meta.pipeline_path);
+      rerunCwd = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : cwd;
+      rerunProjectRoot = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : undefined;
       taskYaml = await this.options.store.readTaskYaml(runId);
     } catch {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
@@ -768,10 +776,11 @@ export class RunManager {
         // downstream resume may read envelope from store
       }
 
-      const meta = await store.readRunMeta(runId);
-      const taskYaml = await store.readTaskYaml(runId);
-      const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-      const loaded = await loadPipelineForRun(meta, this.cwd);
+      const { meta, task, loaded } = await loadRunContext(
+        store,
+        runId,
+        this.cwd,
+      );
 
       const rest = await resumeRun({
         prepared: {

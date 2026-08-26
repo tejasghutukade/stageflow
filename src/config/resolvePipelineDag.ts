@@ -309,12 +309,11 @@ function validateForkFields(
   }
 }
 
-export function resolvePipelineDag(
-  rawStages: unknown,
+export function resolvePipelineDagFromRefs(
+  refs: PipelineStageRef[],
   ctx: ResolvePipelineDagContext,
 ): { stages: string[]; dag: ResolvedPipelineDag } {
-  const entries = parsePipelineStageEntries(rawStages, ctx);
-  const edges = normalizeToEdges(entries);
+  const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
   validateNeedsTargets(edges, ctx);
   detectCycle(edges, ctx);
@@ -327,6 +326,14 @@ export function resolvePipelineDag(
   validateForkFields(edges, dag, ctx);
 
   return { stages, dag };
+}
+
+export function resolvePipelineDag(
+  rawStages: unknown,
+  ctx: ResolvePipelineDagContext,
+): { stages: string[]; dag: ResolvedPipelineDag } {
+  const entries = parsePipelineStageEntries(rawStages, ctx);
+  return resolvePipelineDagFromRefs(entries, ctx);
 }
 
 export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPipelineDag): boolean {

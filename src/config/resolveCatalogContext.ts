@@ -1,13 +1,12 @@
-import { access } from "node:fs/promises";
-import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import {
-  loadStageflowManifestOutcome,
-  manifestPathForProject,
-} from "./loadStageflowManifest.js";
+  resolveStageflowContext,
+  type CatalogManifestStatus,
+  type StageflowContext,
+} from "../project/resolveStageflowContext.js";
 
-export type CatalogManifestStatus = "ok" | "missing" | "invalid" | "not_git";
+export type { CatalogManifestStatus };
 
 export type CatalogContext = {
   projectRoot: string | null;
@@ -16,45 +15,18 @@ export type CatalogContext = {
   issues: LoadIssue[];
 };
 
+export function catalogContextFromStageflow(ctx: StageflowContext): CatalogContext {
+  return {
+    projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+    manifest: ctx.manifest,
+    manifestStatus: ctx.manifestStatus,
+    issues: ctx.manifestIssues,
+  };
+}
+
+/** @deprecated Prefer resolveStageflowContext */
 export async function resolveCatalogContext(
   invocationCwd: string,
 ): Promise<CatalogContext> {
-  const projectRoot = findProjectRoot(invocationCwd);
-  if (projectRoot === null) {
-    return {
-      projectRoot: null,
-      manifest: null,
-      manifestStatus: "not_git",
-      issues: [],
-    };
-  }
-
-  const manifestPath = manifestPathForProject(projectRoot);
-  try {
-    await access(manifestPath);
-  } catch {
-    return {
-      projectRoot,
-      manifest: null,
-      manifestStatus: "missing",
-      issues: [],
-    };
-  }
-
-  const outcome = await loadStageflowManifestOutcome(projectRoot);
-  if (!outcome.ok) {
-    return {
-      projectRoot,
-      manifest: null,
-      manifestStatus: "invalid",
-      issues: outcome.issues,
-    };
-  }
-
-  return {
-    projectRoot,
-    manifest: outcome.value,
-    manifestStatus: "ok",
-    issues: [],
-  };
+  return catalogContextFromStageflow(await resolveStageflowContext(invocationCwd));
 }

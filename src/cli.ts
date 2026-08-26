@@ -11,7 +11,7 @@ import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
-import { resolveProjectContext } from "./project/resolveProjectContext.js";
+import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
@@ -230,7 +230,7 @@ async function main(argv: string[]): Promise<number> {
       return argv.slice(2).length === 0 ? 1 : 0;
     }
 
-    const ctx = resolveProjectContext(process.cwd());
+    const ctx = await resolveStageflowContext(process.cwd());
 
     if (parsed.command === "init") {
       return runInitCommand(argv.slice(3), { cwd: ctx.invocationCwd });

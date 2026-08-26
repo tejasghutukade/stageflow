@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import * as loadPipelineModule from "../src/config/loadPipeline.js";
+import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import {
   PipelineValidationError,
   runPipeline,
@@ -37,7 +37,7 @@ describe("preparePipeline validation gate", () => {
   });
 
   it("AE-S3-1: broken pipeline rejects before task read and createRun", async () => {
-    const loadSpy = vi.spyOn(loadPipelineModule, "loadPipelineValidated");
+    const loadSpy = vi.spyOn(validateCatalogModule, "loadPipelineValidated");
     const root = await mkdtemp(path.join(tmpdir(), "sf-val-gate-"));
     const store = createRunStore({ rootDir: root });
     const createRunSpy = vi.spyOn(store, "createRun");
@@ -94,7 +94,7 @@ describe("preparePipeline validation gate", () => {
   });
 
   it("AE-S3-2: docs-only succeeds despite broken sibling pipeline", async () => {
-    const loadSpy = vi.spyOn(loadPipelineModule, "loadPipelineValidated");
+    const loadSpy = vi.spyOn(validateCatalogModule, "loadPipelineValidated");
     const root = await mkdtemp(path.join(tmpdir(), "sf-val-gate-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([

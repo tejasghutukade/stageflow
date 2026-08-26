@@ -1,8 +1,13 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
-import { loadPipelineForRun } from "./loadPipelineForRun.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import {
+  reloadPipelineForRun,
+  reloadTaskForRun,
+} from "./reloadRunCatalog.js";
 import type { RunStore, RunMeta } from "../runstore/port.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
@@ -48,9 +53,20 @@ export async function loadRunContext(
   cwd: string,
 ): Promise<LoadedRunContext> {
   const meta = await store.readRunMeta(runId);
-  const taskYaml = await store.readTaskYaml(runId);
-  const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-  const loaded = await loadPipelineForRun(meta, cwd);
+  const reloadMeta: RunMeta = {
+    ...meta,
+    project_root: meta.project_root ?? normalizeCatalogPath(cwd),
+  };
+  const loaded = await reloadPipelineForRun(reloadMeta);
+  let taskYaml: string;
+  let task: TaskFile;
+  if (meta.task_path) {
+    task = await reloadTaskForRun(meta);
+    taskYaml = await readFile(normalizeCatalogPath(meta.task_path), "utf8");
+  } else {
+    taskYaml = await store.readTaskYaml(runId);
+    task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
+  }
   const workspaceDir = store.getWorkspaceDir(runId);
   return { meta, taskYaml, task, loaded, workspaceDir };
 }

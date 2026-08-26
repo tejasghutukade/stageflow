@@ -4,7 +4,6 @@ import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import {
   BODY_KEYS,
   isAllowedPipelineStageEntryKey,
-  WIRING_KEYS,
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 
@@ -40,6 +39,17 @@ function hasBodyKey(raw: Record<string, unknown>): boolean {
   return Object.keys(raw).some((key) => BODY_KEYS.has(key));
 }
 
+function stringStageRefMessage(
+  index: number,
+  declaringPath: string,
+  entry: string,
+): string {
+  const hint = entry
+    ? `bare string stage refs are not supported; use { id: "${entry}", uses: "./${entry}.yaml" } or inline body`
+    : `bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`;
+  return `Invalid stage entry at index ${index} in ${declaringPath}: ${hint}`;
+}
+
 export function normalizePipelineStageEntries(
   rawEntries: RawMergedEntry[],
   ctx: { pipelineId: string; path: string },
@@ -49,11 +59,22 @@ export function normalizePipelineStageEntries(
   for (let index = 0; index < rawEntries.length; index++) {
     const { raw, declaringPath } = rawEntries[index];
 
-    if (!isPlainObject(raw)) {
+    if (typeof raw === "string") {
       return loadFailure([
         {
           code: "pipeline.string_stage_ref",
-          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`,
+          message: stringStageRefMessage(index, declaringPath, raw),
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+
+    if (!isPlainObject(raw)) {
+      return loadFailure([
+        {
+          code: "pipeline.invalid_shape",
+          message: `Invalid stage entry at index ${index} in ${declaringPath}: expected object`,
           category: "pipeline",
           pipelineId: ctx.pipelineId,
         },
@@ -196,12 +217,4 @@ export function toWiringRefs(
     ...(entry.needs !== undefined ? { needs: entry.needs } : {}),
     ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
   }));
-}
-
-export function wiringKeysOnly(raw: Record<string, unknown>): Record<string, unknown> {
-  const wiring: Record<string, unknown> = {};
-  for (const key of WIRING_KEYS) {
-    if (raw[key] !== undefined) wiring[key] = raw[key];
-  }
-  return wiring;
 }

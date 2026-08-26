@@ -218,13 +218,15 @@ export function NewPipelinePanel({
     if (Object.keys(errors).length > 0) return;
 
     setSubmitting(true);
-    const stagesPayload =
-      compositionMode === "linear"
-        ? selectedStageIds
-        : selectedStageIds.map((stageId) => {
-            const needs = stageNeeds[stageId];
-            return needs ? { id: stageId, needs } : { id: stageId };
-          });
+    const stagesPayload = selectedStageIds.map((stageId) => {
+      if (compositionMode === "dependencies") {
+        const needs = stageNeeds[stageId];
+        return needs
+          ? { id: stageId, uses: `./${stageId}.yaml`, needs }
+          : { id: stageId, uses: `./${stageId}.yaml` };
+      }
+      return { id: stageId, uses: `./${stageId}.yaml` };
+    });
     const result = await createPipelineWithDetails({
       directory: trimmedDirectory,
       id: trimmedId,

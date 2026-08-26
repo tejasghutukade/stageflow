@@ -19,18 +19,13 @@ import {
 } from "./providerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
-import {
-  listModels,
-  listPipelines,
-  listTasks,
-} from "../config/listConfig.js";
-import { resolveCatalogContext } from "../config/resolveCatalogContext.js";
+import { browseCatalog } from "../config/browseCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
 import { handleMcpHttpRequest } from "../mcp/server.js";
 import { createRunStore, type RunStoreKind } from "../runstore/createStore.js";
-import { resolveProjectContext } from "../project/resolveProjectContext.js";
+import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
 import {
@@ -276,7 +271,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   store: RunStore;
 }> {
   const invocationCwd = options.cwd ?? process.cwd();
-  const ctx = resolveProjectContext(invocationCwd);
+  const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
   const agentDir = options.agentDir ?? getAgentDir();
   const rootDir = options.rootDir ?? ctx.projectRoot;
@@ -494,25 +489,14 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/tasks") {
-        const catalogCtx = await resolveCatalogContext(cwd);
-        const tasks =
-          catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
-            ? await listTasks({ projectRoot: catalogCtx.projectRoot, manifest: catalogCtx.manifest })
-            : [];
-        json(res, 200, { tasks });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { tasks: catalog.tasks });
         return;
       }
 
       if (method === "GET" && pathname === "/api/pipelines") {
-        const catalogCtx = await resolveCatalogContext(cwd);
-        const pipelines =
-          catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
-            ? await listPipelines({
-                projectRoot: catalogCtx.projectRoot,
-                manifest: catalogCtx.manifest,
-              })
-            : [];
-        json(res, 200, { pipelines });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { pipelines: catalog.pipelines });
         return;
       }
 
@@ -536,12 +520,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const catalogCtx = await resolveCatalogContext(cwd);
-        if (!catalogCtx.projectRoot) {
+        const ctx = await resolveStageflowContext(cwd);
+        if (!ctx.isGitProject) {
           json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
           return;
         }
-        const result = await createStage(catalogCtx.projectRoot, parsed);
+        const result = await createStage(ctx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -563,12 +547,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const catalogCtx = await resolveCatalogContext(cwd);
-        if (!catalogCtx.projectRoot) {
+        const ctx = await resolveStageflowContext(cwd);
+        if (!ctx.isGitProject) {
           json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
           return;
         }
-        const result = await createPipeline(catalogCtx.projectRoot, parsed);
+        const result = await createPipeline(ctx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -578,8 +562,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/models") {
-        const catalogCtx = await resolveCatalogContext(cwd);
-        json(res, 200, { models: await listModels(catalogCtx) });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { models: catalog.models });
         return;
       }
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import { mergePipelineStages } from "../src/config/mergePipelineIncludes.js";
+import { normalizePipelineStageEntries } from "../src/config/normalizePipelineStageEntry.js";
 
 const owned = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -44,11 +46,27 @@ describe("mergePipelineStages", () => {
   });
 
   it("rejects invalid include shape", async () => {
-    const outcome = await mergePipelineStages(
+    const outcome = await loadPipelineOutcome(
       path.join(owned, "negative/string-refs.pipeline.yaml"),
     );
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues[0]?.code).toBe("pipeline.string_stage_ref");
+  });
+
+  it("defers string ref rejection to normalization", async () => {
+    const mergeOutcome = await mergePipelineStages(
+      path.join(owned, "negative/string-refs.pipeline.yaml"),
+    );
+    expect(mergeOutcome.ok).toBe(true);
+    if (!mergeOutcome.ok) return;
+
+    const normalizeOutcome = normalizePipelineStageEntries(mergeOutcome.value.entries, {
+      pipelineId: mergeOutcome.value.pipelineId,
+      path: path.join(owned, "negative/string-refs.pipeline.yaml"),
+    });
+    expect(normalizeOutcome.ok).toBe(false);
+    if (normalizeOutcome.ok) return;
+    expect(normalizeOutcome.issues[0]?.code).toBe("pipeline.string_stage_ref");
   });
 });

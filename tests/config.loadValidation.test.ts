@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPipeline, loadPipelineOutcome, loadPipelineValidated } from "../src/config/loadPipeline.js";
+import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js";
+import { loadPipelineValidated } from "../src/config/validateCatalog.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
 
 const owned = path.resolve(

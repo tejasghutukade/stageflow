@@ -428,7 +428,10 @@ describe("localhost HTTP API", () => {
         body: JSON.stringify({
           directory: "pipelines",
           id: "fresh-pipeline",
-          stages: ["alpha", "beta"],
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "beta", uses: "./beta.yaml" },
+          ],
         }),
       });
       expect(created.status).toBe(201);
@@ -451,7 +454,10 @@ describe("localhost HTTP API", () => {
         body: JSON.stringify({
           directory: "pipelines",
           id: "missing-ref",
-          stages: ["alpha", "gone"],
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "gone", uses: "./gone.yaml" },
+          ],
         }),
       });
       expect(missingStage.status).toBe(422);

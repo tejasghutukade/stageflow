@@ -1,10 +1,12 @@
 import path from "node:path";
-import { loadPipelineValidated, resolvePipelinePath } from "./loadPipeline.js";
+import type { LoadedPipeline } from "../types/pipeline.js";
+import { loadPipelineOutcome, resolvePipelinePath } from "./loadPipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
+import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
-import { scanCatalogPaths } from "./scanCatalogPaths.js";
+import { getCatalogScanPaths } from "./browseCatalog.js";
 import { manifestPathForProject } from "./loadStageflowManifest.js";
 
 export type ValidationSeverity = "error" | "warning";
@@ -298,6 +300,134 @@ export function findingStageIdFilenameMismatch(
   );
 }
 
+async function checkStageIdFilename(
+  cwd: string,
+  stagePath: string,
+): Promise<ValidationFinding | null> {
+  const fileStem = path.basename(stagePath, ".yaml");
+  try {
+    const raw = await readYamlObject(stagePath);
+    if (typeof raw?.id === "string" && raw.id !== fileStem) {
+      return findingStageIdFilenameMismatch(cwd, stagePath, fileStem, raw.id);
+    }
+  } catch {
+    // loadStageOutcome will report read errors
+  }
+  return null;
+}
+
+async function validateStageFile(
+  cwd: string,
+  stagePath: string,
+): Promise<ValidationFinding[]> {
+  const findings: ValidationFinding[] = [];
+  const mismatch = await checkStageIdFilename(cwd, stagePath);
+  if (mismatch) findings.push(mismatch);
+
+  const outcome = await loadStageOutcome(stagePath);
+  if (!outcome.ok) {
+    findings.push(...findingsFromLoadIssues(cwd, stagePath, outcome.issues));
+    return findings;
+  }
+
+  if (!mismatch && path.basename(stagePath, ".yaml") !== outcome.value.id) {
+    findings.push(
+      findingStageIdFilenameMismatch(
+        cwd,
+        stagePath,
+        path.basename(stagePath, ".yaml"),
+        outcome.value.id,
+      ),
+    );
+  }
+
+  return findings;
+}
+
+type PipelineValidationCoreResult =
+  | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
+  | { ok: false; findings: ValidationFinding[] };
+
+async function runPipelineValidation(
+  nameOrPath: string,
+  options: { cwd: string; validateStages: boolean },
+): Promise<PipelineValidationCoreResult> {
+  const { cwd, validateStages } = options;
+
+  let pipelinePath: string;
+  try {
+    pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
+        {
+          code: "pipeline.load_error",
+          message,
+          category: "pipeline",
+        },
+      ]),
+    };
+  }
+
+  const outcome = await loadPipelineOutcome(pipelinePath, { cwd });
+  const findings: ValidationFinding[] = [];
+
+  if (!outcome.ok) {
+    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
+    return { ok: false, findings };
+  }
+
+  if (validateStages && outcome.value.stageSources) {
+    for (const source of Object.values(outcome.value.stageSources)) {
+      if (source.kind === "file") {
+        findings.push(...(await validateStageFile(cwd, source.path)));
+      }
+    }
+  }
+
+  if (findings.some((finding) => finding.severity === "error")) {
+    return { ok: false, findings };
+  }
+
+  return { ok: true, loaded: outcome.value, findings };
+}
+
+export type ValidatePipelineOptions = {
+  cwd?: string;
+  validateStages?: boolean;
+  strict?: boolean;
+};
+
+export async function validatePipeline(
+  nameOrPath: string,
+  options: ValidatePipelineOptions = {},
+): Promise<ValidationResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const validateStages = options.validateStages ?? true;
+  const strict = options.strict ?? false;
+  const core = await runPipelineValidation(nameOrPath, { cwd, validateStages });
+  return buildValidationResult("pipeline", core.findings, strict);
+}
+
+export type LoadPipelineValidatedResult =
+  | { ok: true; loaded: LoadedPipeline }
+  | { ok: false; findings: ValidationFinding[] };
+
+export async function loadPipelineValidated(
+  nameOrPath: string,
+  options: { cwd?: string; validateStages?: boolean } = {},
+): Promise<LoadPipelineValidatedResult> {
+  const cwd = options.cwd ?? process.cwd();
+  const validateStages = options.validateStages ?? true;
+  const core = await runPipelineValidation(nameOrPath, { cwd, validateStages });
+  if (core.ok) {
+    return { ok: true, loaded: core.loaded };
+  }
+  return { ok: false, findings: core.findings };
+}
+
 function findingCatalogDuplicatePipelineId(
   cwd: string,
   absPath: string,
@@ -421,16 +551,19 @@ async function validateManifestAll(
     findings.push(findingEmptyCatalog(invocationCwd, manifest.path, "tasks"));
   }
 
-  const pipelinePaths = await scanCatalogPaths(manifest, "pipeline");
-  const taskPaths = await scanCatalogPaths(manifest, "task");
+  const scanPaths = await getCatalogScanPaths(ctx);
+  if (!scanPaths) {
+    return findings;
+  }
+  const { pipelinePaths, taskPaths } = scanPaths;
 
   for (const pipelinePath of pipelinePaths) {
-    const result = await loadPipelineValidated(pipelinePath, {
+    const core = await runPipelineValidation(pipelinePath, {
       cwd: projectRoot,
       validateStages: true,
     });
-    if (!result.ok) {
-      findings.push(...result.findings);
+    if (!core.ok) {
+      findings.push(...core.findings);
     }
   }
 
@@ -477,29 +610,11 @@ export async function validateCatalog(
   const allFindings: ValidationFinding[] = [];
 
   if (options.scope === "pipeline") {
-    let pipelinePath: string;
-    try {
-      pipelinePath = await resolvePipelinePath(options.pipeline!, cwd);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      allFindings.push(
-        ...findingsFromLoadIssues(cwd, path.resolve(cwd, options.pipeline!), [
-          {
-            code: "pipeline.load_error",
-            message,
-            category: "pipeline",
-          },
-        ]),
-      );
-      return buildValidationResult(options.scope, allFindings, strict);
-    }
-    const result = await loadPipelineValidated(pipelinePath, {
+    return validatePipeline(options.pipeline!, {
       cwd,
       validateStages: true,
+      strict,
     });
-    if (!result.ok) {
-      allFindings.push(...result.findings);
-    }
   } else if (options.scope === "task") {
     allFindings.push(...(await validateSingleTask(cwd, options.task!)));
   } else {

@@ -1,31 +1,17 @@
-import path from "node:path";
 import type { StageGateKind } from "../types/stage.js";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
-import type { PipelineStageSource } from "../types/pipeline.js";
-import { resolveCatalogContext, type CatalogContext } from "./resolveCatalogContext.js";
-import { listModelsFromManifest } from "./listModelsFromManifest.js";
-import { loadPipeline } from "./loadPipeline.js";
-import { loadTask } from "./loadTask.js";
-import { scanCatalogPaths } from "./scanCatalogPaths.js";
+import {
+  listModelsForContext,
+  listPipelinesForContext,
+  listTasksForContext,
+  type PipelineListing,
+  type PipelineStageListing,
+  type TaskListing,
+} from "./browseCatalog.js";
+import { resolveStageflowContext, type StageflowContext } from "../project/resolveStageflowContext.js";
+import { catalogContextFromStageflow, type CatalogContext } from "./resolveCatalogContext.js";
 
-export type TaskListing = {
-  path: string;
-  id: string;
-  goal: string;
-};
-
-export type PipelineStageListing = {
-  id: string;
-  gate_kinds?: StageGateKind[];
-  uses_path?: string;
-  inline?: boolean;
-};
-
-export type PipelineListing = {
-  path: string;
-  id: string;
-  stages: PipelineStageListing[];
-};
+export type { PipelineListing, PipelineStageListing, TaskListing } from "./browseCatalog.js";
 
 export type ValidStageListing = {
   path: string;
@@ -49,89 +35,36 @@ export type CatalogListOptions = {
   manifest: LoadedManifest;
 };
 
-function repoRelPath(projectRoot: string, absPath: string): string {
-  return path.relative(projectRoot, absPath).replace(/\\/g, "/");
-}
-
-function mapStageListing(
-  stage: { id: string; gate_kinds?: StageGateKind[] },
-  source: PipelineStageSource | undefined,
-  projectRoot: string,
-): PipelineStageListing {
-  const listing: PipelineStageListing = {
-    id: stage.id,
-    ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
-  };
-  if (source?.kind === "inline") {
-    listing.inline = true;
-  } else if (source?.kind === "file") {
-    listing.uses_path = repoRelPath(projectRoot, source.path);
-  }
-  return listing;
-}
-
 export async function listTasks(options: CatalogListOptions): Promise<TaskListing[]> {
-  const { projectRoot, manifest } = options;
-  const filePaths = await scanCatalogPaths(manifest, "task");
-  const listings: TaskListing[] = [];
-
-  for (const filePath of filePaths) {
-    try {
-      const task = await loadTask(filePath);
-      listings.push({
-        path: repoRelPath(projectRoot, filePath),
-        id: task.id,
-        goal: task.goal,
-      });
-    } catch {
-      // skip invalid
-    }
-  }
-
-  listings.sort((a, b) => {
-    const pathCmp = a.path.localeCompare(b.path);
-    if (pathCmp !== 0) return pathCmp;
-    return a.id.localeCompare(b.id);
+  return listTasksForContext({
+    projectRoot: options.projectRoot,
+    manifest: options.manifest,
+    manifestStatus: "ok",
+    issues: [],
   });
-  return listings;
 }
 
 export async function listPipelines(options: CatalogListOptions): Promise<PipelineListing[]> {
-  const { projectRoot, manifest } = options;
-  const filePaths = await scanCatalogPaths(manifest, "pipeline");
-  const listings: PipelineListing[] = [];
-
-  for (const filePath of filePaths) {
-    try {
-      const loaded = await loadPipeline(filePath, { cwd: projectRoot });
-      listings.push({
-        path: repoRelPath(projectRoot, filePath),
-        id: loaded.pipeline.id,
-        stages: loaded.stages.map((stage) =>
-          mapStageListing(stage, loaded.stageSources?.[stage.id], projectRoot),
-        ),
-      });
-    } catch {
-      // skip invalid
-    }
-  }
-
-  listings.sort((a, b) => {
-    const pathCmp = a.path.localeCompare(b.path);
-    if (pathCmp !== 0) return pathCmp;
-    return a.id.localeCompare(b.id);
+  return listPipelinesForContext({
+    projectRoot: options.projectRoot,
+    manifest: options.manifest,
+    manifestStatus: "ok",
+    issues: [],
   });
-  return listings;
 }
 
 export async function listStages(_options?: unknown): Promise<StageListing[]> {
   return [];
 }
 
-export async function listModels(cwdOrContext: string | CatalogContext): Promise<string[]> {
+export async function listModels(
+  cwdOrContext: string | CatalogContext | StageflowContext,
+): Promise<string[]> {
   const ctx =
     typeof cwdOrContext === "string"
-      ? await resolveCatalogContext(cwdOrContext)
-      : cwdOrContext;
-  return listModelsFromManifest(ctx);
+      ? catalogContextFromStageflow(await resolveStageflowContext(cwdOrContext))
+      : "manifestIssues" in cwdOrContext
+        ? catalogContextFromStageflow(cwdOrContext)
+        : cwdOrContext;
+  return listModelsForContext(ctx);
 }

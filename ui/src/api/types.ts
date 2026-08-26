@@ -262,7 +262,7 @@ export type CreatePipelineStageRef = {
 export type CreatePipelineInput = {
   directory: string;
   id: string;
-  stages: CreatePipelineStageRef[] | string[];
+  stages: CreatePipelineStageRef[];
 };
 
 export type CreatePipelineResult =

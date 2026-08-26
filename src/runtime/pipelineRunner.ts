@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort } from "../agent/port.js";
-import { loadPipelineValidated } from "../config/loadPipeline.js";
+import { loadPipelineValidated } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import { buildValidationResult } from "../config/validateCatalog.js";
 import type { RunStore } from "../runstore/port.js";

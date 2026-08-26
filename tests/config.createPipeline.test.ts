@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPipeline,
@@ -11,18 +10,24 @@ import {
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 
+function stageRef(id: string, needs?: string) {
+  return needs
+    ? { id, uses: `./${id}.yaml`, needs }
+    : { id, uses: `./${id}.yaml` };
+}
+
 describe("parseCreatePipelineBody", () => {
-  it("accepts valid input and rejects invalid shape", () => {
+  it("accepts valid object stage entries and rejects invalid shape", () => {
     expect(
       parseCreatePipelineBody({
         directory: "pipelines",
         id: "plan-review-proving",
-        stages: ["plan-review", "plan-review-followup"],
+        stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
       }),
     ).toEqual({
       directory: "pipelines",
       id: "plan-review-proving",
-      stages: ["plan-review", "plan-review-followup"],
+      stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
     });
 
     expect(parseCreatePipelineBody(null)).toEqual({
@@ -43,12 +48,27 @@ describe("parseCreatePipelineBody", () => {
     expect(parseCreatePipelineBody({ directory: "pipelines", id: "ok", stages: [1] })).toEqual({
       ok: false,
       status: 400,
-      error: "stages must be an array of strings",
+      error: "stages[0] must be an object with id",
     });
-    expect(parseCreatePipelineBody({ directory: "pipelines", id: "Bad", stages: ["a"] })).toEqual({
+    expect(parseCreatePipelineBody({ directory: "pipelines", id: "Bad", stages: [stageRef("a")] })).toEqual({
       ok: false,
       status: 400,
       error: "id must be lowercase kebab-case",
+    });
+  });
+
+  it("rejects bare string stage refs", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "linear",
+        stages: ["plan-review"],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error:
+        'stages[0]: bare string stage refs are not supported; use { id: "plan-review", uses: "./plan-review.yaml" } or inline body',
     });
   });
 
@@ -57,12 +77,12 @@ describe("parseCreatePipelineBody", () => {
       parseCreatePipelineBody({
         directory: "pipelines",
         id: "fan-out",
-        stages: [{ id: "a" }, { id: "b", needs: "a" }],
+        stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
       }),
     ).toEqual({
       directory: "pipelines",
       id: "fan-out",
-      stages: [{ id: "a" }, { id: "b", needs: "a" }],
+      stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
     });
   });
 
@@ -71,12 +91,13 @@ describe("parseCreatePipelineBody", () => {
       parseCreatePipelineBody({
         directory: "pipelines",
         id: "mixed",
-        stages: ["a", { id: "b" }],
+        stages: ["a", { id: "b", uses: "./b.yaml" }],
       }),
     ).toEqual({
       ok: false,
       status: 400,
-      error: "stages must be either all strings or all objects",
+      error:
+        'stages[0]: bare string stage refs are not supported; use { id: "a", uses: "./a.yaml" } or inline body',
     });
   });
 
@@ -97,7 +118,7 @@ describe("parseCreatePipelineBody", () => {
       parseCreatePipelineBody({
         directory: "pipelines",
         id: "bad-needs",
-        stages: [{ id: "a", needs: 1 }],
+        stages: [{ id: "a", uses: "./a.yaml", needs: 1 }],
       }),
     ).toEqual({
       ok: false,
@@ -108,8 +129,8 @@ describe("parseCreatePipelineBody", () => {
 });
 
 describe("normalizeCreatePipelineStages", () => {
-  it("maps string arrays to stage refs with default uses paths", () => {
-    expect(normalizeCreatePipelineStages(["a", "b"])).toEqual([
+  it("defaults uses paths for object refs without inline bodies", () => {
+    expect(normalizeCreatePipelineStages([{ id: "a" }, { id: "b" }])).toEqual([
       { id: "a", uses: "./a.yaml" },
       { id: "b", uses: "./b.yaml" },
     ]);
@@ -190,7 +211,7 @@ describe("createPipeline", () => {
       const created = await createPipeline(root, {
         directory,
         id: "new-pipeline",
-        stages: ["alpha", "beta"],
+        stages: [stageRef("alpha"), stageRef("beta")],
       });
       expect(created).toEqual({
         ok: true,
@@ -214,7 +235,7 @@ describe("createPipeline", () => {
       const pathCollision = await createPipeline(root, {
         directory,
         id: "new-pipeline",
-        stages: ["alpha"],
+        stages: [stageRef("alpha")],
       });
       expect(pathCollision.ok).toBe(false);
       if (pathCollision.ok) return;
@@ -234,18 +255,17 @@ describe("createPipeline", () => {
       const duplicate = await createPipeline(root, {
         directory,
         id: "dup-stages",
-        stages: ["alpha", "alpha"],
+        stages: [stageRef("alpha"), stageRef("alpha")],
       });
-      expect(duplicate).toEqual({
-        ok: false,
-        status: 422,
-        error: "Pipeline stages must not contain duplicates",
-      });
+      expect(duplicate.ok).toBe(false);
+      if (duplicate.ok) return;
+      expect(duplicate.status).toBe(422);
+      expect(duplicate.error).toContain('Duplicate stage id "alpha"');
 
       const missing = await createPipeline(root, {
         directory,
         id: "missing-stage",
-        stages: ["alpha", "gone"],
+        stages: [stageRef("alpha"), stageRef("gone")],
       });
       expect(missing.ok).toBe(false);
       if (missing.ok) return;
@@ -292,7 +312,7 @@ describe("createPipeline", () => {
       const result = await createPipeline(root, {
         directory: "../outside",
         id: "nope",
-        stages: ["a"],
+        stages: [stageRef("a")],
       });
       expect(result).toEqual({
         ok: false,

@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import {
   loadPipeline,
   loadPipelineOutcome,
-  loadPipelineValidated,
 } from "../src/config/loadPipeline.js";
+import { loadPipelineValidated } from "../src/config/validateCatalog.js";
 
 const owned = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),

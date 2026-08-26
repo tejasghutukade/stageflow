@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
-import { loadPipelineValidated } from "../src/config/loadPipeline.js";
 import {
   buildValidationResult,
+  loadPipelineValidated,
   validateCatalog,
   type ValidationFinding,
 } from "../src/config/validateCatalog.js";

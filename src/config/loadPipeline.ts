@@ -13,20 +13,10 @@ import {
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
-import { readYamlObject } from "./readYamlObject.js";
-import type { ValidationFinding } from "./validateCatalog.js";
-import {
-  findingStageIdFilenameMismatch,
-  findingsFromLoadIssues,
-} from "./validateCatalog.js";
-import { resolvePipelineDag } from "./resolvePipelineDag.js";
+import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
-
-export type LoadPipelineValidatedResult =
-  | { ok: true; loaded: LoadedPipeline }
-  | { ok: false; findings: ValidationFinding[] };
 
 export async function resolvePipelinePath(
   pipelinePath: string,
@@ -43,26 +33,9 @@ export async function resolvePipelinePath(
   }
 }
 
-export async function loadPipelineOutcome(
-  nameOrPath: string,
-  options: { cwd?: string } = {},
+async function loadPipelineFromPath(
+  pipelinePath: string,
 ): Promise<LoadOutcome<LoadedPipeline>> {
-  const cwd = options.cwd ?? process.cwd();
-
-  let pipelinePath: string;
-  try {
-    pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return loadFailure([
-      {
-        code: "pipeline.load_error",
-        message,
-        category: "pipeline",
-      },
-    ]);
-  }
-
   const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
 
   const mergeOutcome = await mergePipelineStages(normalizedPipelinePath);
@@ -84,7 +57,7 @@ export async function loadPipelineOutcome(
   let stageIds: string[];
   let dag: LoadedPipeline["dag"];
   try {
-    const resolved = resolvePipelineDag(wiringRefs, ctx);
+    const resolved = resolvePipelineDagFromRefs(wiringRefs, ctx);
     stageIds = resolved.stages;
     dag = resolved.dag;
   } catch (err) {
@@ -171,97 +144,27 @@ export async function loadPipelineOutcome(
   });
 }
 
-async function checkStageIdFilename(
-  cwd: string,
-  stagePath: string,
-): Promise<ValidationFinding | null> {
-  const fileStem = path.basename(stagePath, ".yaml");
-  try {
-    const raw = await readYamlObject(stagePath);
-    if (typeof raw?.id === "string" && raw.id !== fileStem) {
-      return findingStageIdFilenameMismatch(cwd, stagePath, fileStem, raw.id);
-    }
-  } catch {
-    // loadStageOutcome will report read errors
-  }
-  return null;
-}
-
-async function validateStageFile(
-  cwd: string,
-  stagePath: string,
-): Promise<ValidationFinding[]> {
-  const findings: ValidationFinding[] = [];
-  const mismatch = await checkStageIdFilename(cwd, stagePath);
-  if (mismatch) findings.push(mismatch);
-
-  const outcome = await loadStageOutcome(stagePath);
-  if (!outcome.ok) {
-    findings.push(...findingsFromLoadIssues(cwd, stagePath, outcome.issues));
-    return findings;
-  }
-
-  if (!mismatch && path.basename(stagePath, ".yaml") !== outcome.value.id) {
-    findings.push(
-      findingStageIdFilenameMismatch(
-        cwd,
-        stagePath,
-        path.basename(stagePath, ".yaml"),
-        outcome.value.id,
-      ),
-    );
-  }
-
-  return findings;
-}
-
-export async function loadPipelineValidated(
+export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string; validateStages?: boolean } = {},
-): Promise<LoadPipelineValidatedResult> {
+  options: { cwd?: string } = {},
+): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
-  const validateStages = options.validateStages ?? true;
 
   let pipelinePath: string;
   try {
     pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
-        {
-          code: "pipeline.load_error",
-          message,
-          category: "pipeline",
-        },
-      ]),
-    };
+    return loadFailure([
+      {
+        code: "pipeline.load_error",
+        message,
+        category: "pipeline",
+      },
+    ]);
   }
 
-  const outcome = await loadPipelineOutcome(nameOrPath, { cwd });
-  const findings: ValidationFinding[] = [];
-
-  if (!outcome.ok) {
-    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
-    return { ok: false, findings };
-  }
-
-  if (validateStages && outcome.value.stageSources) {
-    for (const [stageId, source] of Object.entries(outcome.value.stageSources)) {
-      if (source.kind === "file") {
-        findings.push(...(await validateStageFile(cwd, source.path)));
-      } else {
-        void stageId;
-      }
-    }
-  }
-
-  if (findings.some((finding) => finding.severity === "error")) {
-    return { ok: false, findings };
-  }
-
-  return { ok: true, loaded: outcome.value };
+  return loadPipelineFromPath(pipelinePath);
 }
 
 export async function loadPipeline(

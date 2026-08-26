@@ -3,7 +3,7 @@ import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { readYamlObject } from "./readYamlObject.js";
 
 export type RawMergedEntry = {
-  raw: Record<string, unknown>;
+  raw: unknown;
   declaringPath: string;
 };
 
@@ -20,7 +20,7 @@ function formatIncludeCycle(stack: string[], nextPath: string): string {
   return chain.join(" → ");
 }
 
-async function visit(
+async function visitPipelineFile(
   filePath: string,
   stack: string[],
   idLocations: Map<string, string>,
@@ -79,46 +79,33 @@ async function visit(
       }
 
       const includePath = normalizePath(path.resolve(path.dirname(absPath), item.local));
-      const includeResult = await visit(includePath, nextStack, idLocations, entries);
+      const includeResult = await visitPipelineFile(
+        includePath,
+        nextStack,
+        idLocations,
+        entries,
+      );
       if (!includeResult.ok) return includeResult;
     }
   }
 
   if (Array.isArray(raw.stages)) {
-    for (let index = 0; index < raw.stages.length; index++) {
-      const entry = raw.stages[index];
-      if (typeof entry === "string") {
-        return loadFailure([
-          {
-            code: "pipeline.string_stage_ref",
-            message: `Invalid stage entry at index ${index} in ${absPath}: bare string stage refs are not supported; use { id: "${entry || "…"}", uses: "./${entry || "…"}.yaml" } or inline body`,
-            category: "pipeline",
-          },
-        ]);
-      }
-      if (!isPlainObject(entry)) {
-        return loadFailure([
-          {
-            code: "pipeline.invalid_shape",
-            message: `Invalid stage entry at index ${index} in ${absPath}: expected object`,
-            category: "pipeline",
-          },
-        ]);
-      }
-
-      const entryId = typeof entry.id === "string" ? entry.id : undefined;
-      if (entryId) {
-        const priorPath = idLocations.get(entryId);
-        if (priorPath) {
-          return loadFailure([
-            {
-              code: "pipeline.include_duplicate_stage",
-              message: `Duplicate stage id "${entryId}" in ${absPath} (also declared in ${priorPath})`,
-              category: "pipeline",
-            },
-          ]);
+    for (const entry of raw.stages) {
+      if (isPlainObject(entry)) {
+        const entryId = typeof entry.id === "string" ? entry.id : undefined;
+        if (entryId) {
+          const priorPath = idLocations.get(entryId);
+          if (priorPath) {
+            return loadFailure([
+              {
+                code: "pipeline.include_duplicate_stage",
+                message: `Duplicate stage id "${entryId}" in ${absPath} (also declared in ${priorPath})`,
+                category: "pipeline",
+              },
+            ]);
+          }
+          idLocations.set(entryId, absPath);
         }
-        idLocations.set(entryId, absPath);
       }
 
       entries.push({ raw: entry, declaringPath: absPath });
@@ -171,73 +158,8 @@ export async function mergePipelineStages(
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
 
-  if (raw.include !== undefined) {
-    if (!Array.isArray(raw.include)) {
-      return loadFailure([
-        {
-          code: "pipeline.include_invalid",
-          message: `Invalid include in ${absRoot}: include must be an array`,
-          category: "pipeline",
-        },
-      ]);
-    }
-
-    for (let index = 0; index < raw.include.length; index++) {
-      const item = raw.include[index];
-      if (!isPlainObject(item) || typeof item.local !== "string" || !item.local) {
-        return loadFailure([
-          {
-            code: "pipeline.include_invalid",
-            message: `Invalid include entry at index ${index} in ${absRoot}: expected { local: "<path>" }`,
-            category: "pipeline",
-          },
-        ]);
-      }
-
-      const includePath = normalizePath(path.resolve(path.dirname(absRoot), item.local));
-      const includeResult = await visit(includePath, [absRoot], idLocations, entries);
-      if (!includeResult.ok) return includeResult;
-    }
-  }
-
-  for (let index = 0; index < raw.stages.length; index++) {
-    const entry = raw.stages[index];
-    if (typeof entry === "string") {
-      return loadFailure([
-        {
-          code: "pipeline.string_stage_ref",
-          message: `Invalid stage entry at index ${index} in ${absRoot}: bare string stage refs are not supported; use { id: "${entry || "…"}", uses: "./${entry || "…"}.yaml" } or inline body`,
-          category: "pipeline",
-        },
-      ]);
-    }
-    if (!isPlainObject(entry)) {
-      return loadFailure([
-        {
-          code: "pipeline.invalid_shape",
-          message: `Invalid stage entry at index ${index} in ${absRoot}: expected object`,
-          category: "pipeline",
-        },
-      ]);
-    }
-
-    const entryId = typeof entry.id === "string" ? entry.id : undefined;
-    if (entryId) {
-      const priorPath = idLocations.get(entryId);
-      if (priorPath) {
-        return loadFailure([
-          {
-            code: "pipeline.include_duplicate_stage",
-            message: `Duplicate stage id "${entryId}" in ${absRoot} (also declared in ${priorPath})`,
-            category: "pipeline",
-          },
-        ]);
-      }
-      idLocations.set(entryId, absRoot);
-    }
-
-    entries.push({ raw: entry, declaringPath: absRoot });
-  }
+  const mergeResult = await visitPipelineFile(absRoot, [], idLocations, entries);
+  if (!mergeResult.ok) return mergeResult;
 
   if (entries.length === 0) {
     return loadFailure([

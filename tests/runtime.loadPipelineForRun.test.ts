@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPipelineForRun } from "../src/runtime/loadPipelineForRun.js";
+import {
+  reloadPipelineForRun,
+  reloadTaskForRun,
+} from "../src/runtime/reloadRunCatalog.js";
 import type { RunMeta } from "../src/runstore/port.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const owned = path.join(fixtures, "pipeline-owned", "inline-leaf");
 const pipelinePath = path.join(owned, "inline.pipeline.yaml");
+const taskPath = path.join(fixtures, "tasks", "sample.task.yaml");
 
 function meta(extra: Partial<RunMeta> = {}): RunMeta {
   return {
@@ -19,34 +21,54 @@ function meta(extra: Partial<RunMeta> = {}): RunMeta {
   };
 }
 
-describe("loadPipelineForRun", () => {
+describe("reloadRunCatalog", () => {
   it("loads pipeline from stored absolute path", async () => {
-    const loaded = await loadPipelineForRun(
+    const loaded = await reloadPipelineForRun(
       meta({ pipeline_path: pipelinePath, project_root: owned }),
-      "/wrong/cwd",
     );
     expect(loaded.pipeline.id).toBe("inline-leaf");
     expect(loaded.stages.map((s) => s.id)).toEqual(["decide", "branch-a", "branch-b"]);
   });
 
-  it("throws when stored path is missing", async () => {
+  it("throws when stored pipeline path is missing", async () => {
     const missing = path.join(owned, "missing.pipeline.yaml");
     await expect(
-      loadPipelineForRun(meta({ pipeline_path: missing }), fixtures),
+      reloadPipelineForRun(
+        meta({ pipeline_path: missing, project_root: owned }),
+      ),
     ).rejects.toThrow(`Pipeline not found at stored path: ${missing}`);
   });
 
-  it("rejects bare pipeline_id when pipeline_path is absent", async () => {
+  it("rejects runs missing pipeline_path", async () => {
     await expect(
-      loadPipelineForRun(meta({ pipeline_id: "locator-fallback" }), fixtures),
-    ).rejects.toThrow(/filesystem path/i);
+      reloadPipelineForRun(meta({ pipeline_id: "locator-fallback", project_root: owned })),
+    ).rejects.toThrow(/pipeline_path/i);
   });
 
-  it("uses project_root as loader cwd when set", async () => {
-    const loaded = await loadPipelineForRun(
+  it("rejects runs missing project_root", async () => {
+    await expect(
+      reloadPipelineForRun(meta({ pipeline_path: pipelinePath })),
+    ).rejects.toThrow(/project_root/i);
+  });
+
+  it("uses project_root as loader cwd", async () => {
+    const loaded = await reloadPipelineForRun(
       meta({ pipeline_path: pipelinePath, project_root: owned }),
-      "/wrong/cwd",
     );
     expect(loaded.pipelinePath).toBe(path.resolve(pipelinePath));
+  });
+
+  it("loads task from stored path", async () => {
+    const task = await reloadTaskForRun(
+      meta({ task_path: taskPath, project_root: fixtures }),
+    );
+    expect(task.id).toBe("sample");
+  });
+
+  it("throws when stored task path is missing", async () => {
+    const missing = path.join(fixtures, "tasks", "missing.task.yaml");
+    await expect(
+      reloadTaskForRun(meta({ task_path: missing, project_root: fixtures })),
+    ).rejects.toThrow(`Task not found at stored path: ${missing}`);
   });
 });
