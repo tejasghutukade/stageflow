@@ -1,0 +1,4 @@
+id: locator-fallback
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml

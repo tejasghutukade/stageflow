@@ -1,20 +1,54 @@
 # Examples
 
-Runnable Stageflow catalogs. Each directory is self-contained — copy it into a new project or `cd` into it and run commands from there.
+Runnable Stageflow catalogs. Each directory is **pipeline-owned** (co-located `*.pipeline.yaml`, stage YAML, `*.task.yaml`). Run commands use **paths from the repository git root**.
 
 Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types.
 
 | Example | Description | Commands |
 |---------|-------------|----------|
-| [hello-world](hello-world/) | Single stage, no HITL (domain-neutral) | `sf validate --strict`, `sf run` |
-| [plan-review](plan-review/) | Multi-stage with operator gate (SDLC-style **example**) | `sf ui`, then `sf run` |
-| [github-release](github-release/) | Dogfood: draft + publish GitHub Release (ops **example**) | Used in `.github/workflows/publish.yml` |
-| [ci-validate](ci-validate/) | Strict catalog validate in CI | `./validate.sh` or GitHub Actions snippet |
+| [hello-world](hello-world/) | Single stage, no HITL | `sf validate --strict`, `sf run` with paths below |
+| [plan-review](plan-review/) | Multi-stage with operator gate | `sf ui`, then `sf run` |
+| [conditional-fork](conditional-fork/) | Exclusive fork; operator chooses branch | `sf ui`, then `sf run` |
+| [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
+| [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |
+
+Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). **`sf ui` started from any subdirectory** still uses `<repo>/.stageflow` for run state.
 
 ## Prerequisites (all examples)
 
 - **Node.js ≥ 20**
-- Stageflow CLI: `npm i -g stageflow`
-- **Provider auth** for `sf run` (not required for `sf validate`): connect in `sf ui` → Settings → Providers, or `sf providers login …`
+- Stageflow CLI: `npm i -g stageflow` (or `npm run build` in this repo)
+- **Provider auth** for `sf run` (not required for `sf validate`)
+
+## Validate all examples
+
+From repo root after `npm run build`:
+
+```bash
+npm run validate:examples
+```
+
+## Run an example (repo root)
+
+```bash
+sf validate --strict
+sf run \
+  --pipeline examples/hello-world/hello.pipeline.yaml \
+  --task examples/hello-world/my-task.task.yaml
+```
+
+North-star fork demo:
+
+```bash
+sf run \
+  --pipeline examples/conditional-fork/fork-demo.pipeline.yaml \
+  --task examples/conditional-fork/fork-demo.task.yaml
+```
+
+Terminal 1 (optional console, from any subdirectory):
+
+```bash
+cd examples/conditional-fork && sf ui
+```
 
 See [docs/quickstart.md](../docs/quickstart.md) and [docs/providers.md](../docs/providers.md).

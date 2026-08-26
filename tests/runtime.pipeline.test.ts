@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { access, chmod, constants, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -122,8 +123,8 @@ describe("stage and pipeline runners", () => {
     const result = await runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "single",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -154,8 +155,8 @@ describe("stage and pipeline runners", () => {
     const result = await runPipeline({
       agent: wrapped,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "docs-only",
+      taskPath: SAMPLE_TASK,
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       cwd: fixtures,
     });
 
@@ -198,8 +199,8 @@ describe("stage and pipeline runners", () => {
     const result = await runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "docs-only",
+      taskPath: SAMPLE_TASK,
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -224,7 +225,7 @@ describe("stage and pipeline runners", () => {
       agent,
       store,
       taskPath,
-      pipeline: "single",
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -252,7 +253,7 @@ describe("stage and pipeline runners", () => {
       agent,
       store,
       taskPath,
-      pipeline: "single",
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
       checkoutOverride: fromCli,
     });
@@ -282,7 +283,7 @@ describe("stage and pipeline runners", () => {
         agent,
         store,
         taskPath,
-        pipeline: "single",
+        pipeline: pipelinePath("single"),
         cwd: fixtures,
       }),
     ).rejects.toThrow(/does not exist/);
@@ -312,7 +313,7 @@ describe("stage and pipeline runners", () => {
         agent,
         store,
         taskPath,
-        pipeline: "single",
+        pipeline: pipelinePath("single"),
         cwd: fixtures,
       }),
     ).rejects.toThrow(/not a directory/);
@@ -351,7 +352,7 @@ describe("stage and pipeline runners", () => {
           agent,
           store,
           taskPath,
-          pipeline: "single",
+          pipeline: pipelinePath("single"),
           cwd: fixtures,
         }),
       ).rejects.toThrow(/not readable\/writable\/searchable/);
@@ -396,7 +397,7 @@ describe("stage and pipeline runners", () => {
           agent,
           store,
           taskPath,
-          pipeline: "single",
+          pipeline: pipelinePath("single"),
           cwd: fixtures,
         }),
       ).rejects.toThrow(/not readable\/writable\/searchable/);
@@ -421,8 +422,8 @@ describe("stage and pipeline runners", () => {
       runPipeline({
         agent,
         store,
-        taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-        pipeline: "single",
+        taskPath: SAMPLE_TASK,
+        pipeline: pipelinePath("single"),
         cwd: fixtures,
         checkoutOverride: "   ",
       }),
@@ -443,8 +444,8 @@ describe("stage and pipeline runners", () => {
     const result = await runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "single",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -471,7 +472,7 @@ describe("stage and pipeline runners", () => {
       agent,
       store,
       taskPath,
-      pipeline: "single",
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -495,8 +496,8 @@ describe("stage and pipeline runners", () => {
     const result = await runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "single",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("single"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -546,7 +547,7 @@ describe("stage and pipeline runners", () => {
       agent,
       store,
       taskPath,
-      pipeline: "docs-only",
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
@@ -576,6 +577,7 @@ describe("stage and pipeline runners", () => {
     const taskYaml = `id: bound\ngoal: g\ncheckout: ${checkout}\n`;
     const source = await store.createRun({
       pipelineId: "single",
+      pipelinePath: SINGLE_PIPELINE,
       taskYaml,
       taskId: "bound",
       checkoutRoot: checkout,

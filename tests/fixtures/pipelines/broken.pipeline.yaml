@@ -1,0 +1,4 @@
+id: broken
+stages:
+  - id: missing-stage
+    uses: ../stages/missing-stage.yaml

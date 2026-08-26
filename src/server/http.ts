@@ -19,17 +19,14 @@ import {
 } from "./providerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
-import {
-  listModels,
-  listPipelines,
-  listStages,
-  listTasks,
-} from "../config/listConfig.js";
+import { browseCatalog } from "../config/browseCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
 import { handleMcpHttpRequest } from "../mcp/server.js";
 import { createRunStore, type RunStoreKind } from "../runstore/createStore.js";
+import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
 import {
   RunManager,
@@ -273,9 +270,15 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   manager: RunManager;
   store: RunStore;
 }> {
-  const cwd = options.cwd ?? process.cwd();
+  const invocationCwd = options.cwd ?? process.cwd();
+  const ctx = await resolveStageflowContext(invocationCwd);
+  const cwd = ctx.invocationCwd;
   const agentDir = options.agentDir ?? getAgentDir();
-  const rootDir = options.rootDir ?? cwd;
+  const rootDir = options.rootDir ?? ctx.projectRoot;
+  const isGitProject =
+    options.rootDir !== undefined
+      ? findProjectRoot(rootDir) !== null
+      : ctx.isGitProject;
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const providerAuthContext = options.providerAuthContext;
@@ -286,6 +289,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   const manager = new RunManager({
     agent: options.agent,
     cwd,
+    projectRoot: rootDir,
+    isGitProject,
     store,
     maxConcurrent: options.maxConcurrent,
     operatorCatalog: { cwd, agentDir },
@@ -484,17 +489,21 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/tasks") {
-        json(res, 200, { tasks: await listTasks(cwd) });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { tasks: catalog.tasks });
         return;
       }
 
       if (method === "GET" && pathname === "/api/pipelines") {
-        json(res, 200, { pipelines: await listPipelines(cwd) });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { pipelines: catalog.pipelines });
         return;
       }
 
       if (method === "GET" && pathname === "/api/stages") {
-        json(res, 200, { stages: await listStages(cwd) });
+        json(res, 404, {
+          error: "Global stage library removed; stages are pipeline-scoped",
+        });
         return;
       }
 
@@ -511,7 +520,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const result = await createStage(cwd, parsed);
+        const ctx = await resolveStageflowContext(cwd);
+        if (!ctx.isGitProject) {
+          json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
+          return;
+        }
+        const result = await createStage(ctx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -533,7 +547,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const result = await createPipeline(cwd, parsed);
+        const ctx = await resolveStageflowContext(cwd);
+        if (!ctx.isGitProject) {
+          json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
+          return;
+        }
+        const result = await createPipeline(ctx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -543,7 +562,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/models") {
-        json(res, 200, { models: await listModels(cwd) });
+        const catalog = await browseCatalog(cwd);
+        json(res, 200, { models: catalog.models });
         return;
       }
 

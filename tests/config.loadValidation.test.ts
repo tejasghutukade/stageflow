@@ -3,30 +3,57 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadPipeline, loadPipelineOutcome, loadPipelineValidated } from "../src/config/loadPipeline.js";
+import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js";
+import { loadPipelineValidated } from "../src/config/validateCatalog.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
 
-const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const fixturesStagesDir = path.join(fixtures, "stages");
+const owned = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures/pipeline-owned",
+);
 
 describe("load seam outcomes", () => {
-  it("AE-S4-1: missing stage assigns pipeline.missing_stage at rule site", async () => {
-    const outcome = await loadPipelineOutcome("broken", {
-      cwd: fixtures,
-      stagesDir: fixturesStagesDir,
-    });
+  it("missing uses target assigns pipeline.missing_stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-load-missing-"));
+    const pipelinePath = path.join(root, "broken.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: broken",
+        "stages:",
+        "  - id: missing",
+        "    uses: ./missing.yaml",
+        "",
+      ].join("\n"),
+    );
+    const outcome = await loadPipelineOutcome(pipelinePath);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    const issue = outcome.issues[0];
-    expect(issue.code).toBe("pipeline.missing_stage");
-    expect(issue.message).toMatch(/missing stage/i);
+    expect(outcome.issues.some((issue) => issue.code === "pipeline.missing_stage")).toBe(
+      true,
+    );
   });
 
-  it("AE-S4-1: dag cycle assigns pipeline.dag_error at rule site", async () => {
-    const outcome = await loadPipelineOutcome("cycle", {
-      cwd: fixtures,
-      stagesDir: fixturesStagesDir,
-    });
+  it("dag cycle assigns pipeline.dag_error", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-load-cycle-"));
+    const pipelinePath = path.join(root, "cycle.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: cycle",
+        "stages:",
+        "  - id: a",
+        "    needs: b",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: b",
+        "    needs: a",
+        "    system_prompt: x",
+        "    model: m",
+        "",
+      ].join("\n"),
+    );
+    const outcome = await loadPipelineOutcome(pipelinePath);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(true);
@@ -34,11 +61,9 @@ describe("load seam outcomes", () => {
 
   it("assigns pipeline.invalid_shape for missing id and stages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-load-shape-"));
-    const pipelinesDir = path.join(root, "pipelines");
-    await mkdir(pipelinesDir, { recursive: true });
-    const pipelinePath = path.join(pipelinesDir, "bad.yaml");
+    const pipelinePath = path.join(root, "bad.pipeline.yaml");
     await writeFile(pipelinePath, "not_a_pipeline: true\n");
-    const outcome = await loadPipelineOutcome(pipelinePath, { cwd: root });
+    const outcome = await loadPipelineOutcome(pipelinePath);
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues[0]?.code).toBe("pipeline.invalid_shape");
@@ -94,40 +119,65 @@ describe("load seam outcomes", () => {
     expect(outcome.issues[0]?.code).toBe("stage.invalid_gate_kinds");
   });
 
-  it("AE-S4-4: loadPipeline still throws for broken pipeline", async () => {
-    await expect(
-      loadPipeline("broken", {
-        cwd: fixtures,
-        stagesDir: fixturesStagesDir,
-      }),
-    ).rejects.toThrow(/missing stage/i);
+  it("loadPipeline throws for missing uses target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-load-throw-"));
+    const pipelinePath = path.join(root, "broken.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: broken",
+        "stages:",
+        "  - id: missing",
+        "    uses: ./missing.yaml",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadPipeline(pipelinePath)).rejects.toThrow(/missing stage/i);
   });
 });
 
 describe("loadPipelineValidated", () => {
   it("returns loaded pipeline on success", async () => {
-    const result = await loadPipelineValidated("docs-only", {
-      cwd: fixtures,
-      stagesDir: fixturesStagesDir,
-    });
+    const result = await loadPipelineValidated(
+      path.join(owned, "fork-uses/fork-demo.pipeline.yaml"),
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.loaded.pipeline.id).toBe("docs-only");
+    expect(result.loaded.pipeline.id).toBe("fork-demo");
     expect(result.loaded.stages.length).toBeGreaterThan(0);
   });
 
-  it("returns pipeline.missing_stage finding for broken pipeline", async () => {
-    const result = await loadPipelineValidated("broken", {
-      cwd: fixtures,
-      stagesDir: fixturesStagesDir,
-    });
+  it("returns pipeline.stage_id_mismatch finding", async () => {
+    const result = await loadPipelineValidated(
+      path.join(owned, "negative/id-mismatch.pipeline.yaml"),
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(
-      result.findings.some(
-        (finding) =>
-          finding.code === "pipeline.missing_stage" && /missing stage/i.test(finding.message),
-      ),
+      result.findings.some((finding) => finding.code === "pipeline.stage_id_mismatch"),
     ).toBe(true);
+  });
+
+  it("aggregates multiple findings sorted by path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-load-multi-"));
+    const pipelinePath = path.join(root, "multi.pipeline.yaml");
+    await mkdir(path.join(root, "stages"), { recursive: true });
+    await writeFile(
+      pipelinePath,
+      [
+        "id: multi",
+        "stages:",
+        "  - decide",
+        "  - id: bad",
+        "    uses: ./missing.yaml",
+        "",
+      ].join("\n"),
+    );
+    const result = await loadPipelineValidated(pipelinePath);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.findings.length).toBeGreaterThan(0);
+    const paths = result.findings.map((f) => f.path);
+    expect([...paths].sort()).toEqual(paths);
   });
 });

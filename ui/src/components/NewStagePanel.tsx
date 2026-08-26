@@ -3,7 +3,7 @@ import {
   createStageWithDetails,
   fetchModels,
   type StageGateKind,
-  type ValidStageListing,
+  type CreatedStageListing,
 } from "../api";
 
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -19,7 +19,8 @@ const GATE_KINDS: StageGateKind[] = [
 export type NewStagePanelProps = {
   isOpen: boolean;
   onClose: () => void;
-  onCreated: (stage: ValidStageListing) => void;
+  onCreated: (stage: CreatedStageListing) => void;
+  pipelineDirectory: string;
 };
 
 type FieldErrors = Partial<Record<"id" | "model" | "system_prompt", string>>;
@@ -63,7 +64,12 @@ const emptyForm = () => ({
   plainModel: "",
 });
 
-export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps) {
+export function NewStagePanel({
+  isOpen,
+  onClose,
+  onCreated,
+  pipelineDirectory,
+}: NewStagePanelProps) {
   const [form, setForm] = useState(emptyForm);
   const [models, setModels] = useState<string[] | null>(null);
   const [useDropdown, setUseDropdown] = useState(false);
@@ -142,6 +148,8 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
 
     setSubmitting(true);
     const result = await createStageWithDetails({
+      pipeline_directory: pipelineDirectory,
+      filename: `${form.id.trim()}.yaml`,
       ...payload,
       ...(form.gateKinds.length > 0 ? { gate_kinds: form.gateKinds } : {}),
     });
@@ -214,7 +222,11 @@ export function NewStagePanel({ isOpen, onClose, onCreated }: NewStagePanelProps
             />
             {fieldErrors.id ? (
               <p className="field-error">{fieldErrors.id}</p>
-            ) : null}
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Writes <span className="mono">{pipelineDirectory}/&lt;id&gt;.yaml</span>.
+              </p>
+            )}
           </div>
 
           <div className="form-field">

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,7 +26,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
-const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
+const sampleTask = SAMPLE_TASK;
+const singlePipeline = SINGLE_PIPELINE;
 
 function runCli(args: string[], cwd = root) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {
@@ -126,7 +128,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     const startRun = vi.fn(async () => succeededStart());
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single", "--skip-gates"],
+      ["--task", sampleTask, "--pipeline", singlePipeline, "--skip-gates"],
       { cwd: fixtures, io: cap.io, startRun },
     );
     expect(code).toBe(0);
@@ -138,7 +140,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     const startRun = vi.fn(async () => succeededStart());
     const cap = captureIo();
     await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single", "--skip-gates"],
+      ["--task", sampleTask, "--pipeline", singlePipeline, "--skip-gates"],
       { cwd: fixtures, io: cap.io, startRun },
     );
     expect(startRun).toHaveBeenCalledWith(
@@ -149,7 +151,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
   it("guest start without --skip-gates leaves the option false", async () => {
     const startRun = vi.fn(async () => succeededStart());
     const cap = captureIo();
-    await runRunCommand(["--task", sampleTask, "--pipeline", "single"], {
+    await runRunCommand(["--task", sampleTask, "--pipeline", singlePipeline], {
       cwd: fixtures,
       io: cap.io,
       startRun,
@@ -176,7 +178,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     });
     const started = await manager.startRun({
       task: sampleTask,
-      pipeline: "single",
+      pipeline: singlePipeline,
       skipGates: true,
     });
     expect(started.ok).toBe(true);
@@ -204,7 +206,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     });
     const started = await manager.startRun({
       task: sampleTask,
-      pipeline: "single",
+      pipeline: singlePipeline,
     });
     expect(started.ok).toBe(true);
     if (started.ok) await started.done;
@@ -297,7 +299,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
     });
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single", "--skip-gates"],
+      ["--task", sampleTask, "--pipeline", singlePipeline, "--skip-gates"],
       {
         cwd: fixtures,
         io: cap.io,
@@ -340,7 +342,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
     });
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single"],
+      ["--task", sampleTask, "--pipeline", singlePipeline],
       {
         cwd: fixtures,
         io: cap.io,
@@ -380,8 +382,8 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "single",
+          task: "tasks/sample.task.yaml",
+          pipeline: singlePipeline,
         }),
       });
       expect(res.status).toBe(202);

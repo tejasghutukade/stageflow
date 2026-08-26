@@ -28,6 +28,7 @@ type SchedulerPreparedPipeline = {
   agent: AgentPort;
   store: RunStore;
   cwd: string;
+  projectRoot?: string;
   checkoutRoot?: string;
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
@@ -238,9 +239,10 @@ export async function resumeRun(
   });
 
   if (allTerminal) {
-    const allSucceeded = dag.nodes.every(
-      (node) => hydrated.states.get(node.id) === "succeeded",
-    );
+    const allSucceeded = dag.nodes.every((node) => {
+      const s = hydrated.states.get(node.id);
+      return s === "succeeded" || s === "skipped";
+    });
     await prepared.store.updateRunStatus(
       prepared.run.runId,
       allSucceeded ? "succeeded" : "failed",
@@ -307,6 +309,31 @@ export async function retryRun(
     onLoopTick: options.onLoopTick,
     onRetryRootTerminal: options.onRetryRootTerminal,
   });
+}
+
+export function applyForkSkipsFromEnvelopes(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+  completedEnvelopes: Map<string, StageEnvelope>,
+): void {
+  for (const node of dag.nodes) {
+    if (!node.fork) continue;
+    const envelope = completedEnvelopes.get(node.id);
+    if (!envelope) continue;
+    const chosen = new Set(envelope.fork_choice ?? []);
+    for (const childId of dag.childrenOf[node.id] ?? []) {
+      if (!chosen.has(childId)) {
+        if (states.get(childId) === "pending") {
+          states.set(childId, "skipped");
+        }
+        for (const desc of collectDownstreamStageIds(dag, childId)) {
+          if (states.get(desc) === "pending") {
+            states.set(desc, "skipped");
+          }
+        }
+      }
+    }
+  }
 }
 
 export function applyRetryRootDelta(
@@ -418,7 +445,9 @@ export async function runPipelineDag(
     checkoutRoot,
     hitl,
     cwd,
+    projectRoot,
   } = prepared;
+  const factoryCwd = projectRoot ?? cwd ?? process.cwd();
   const dag = loaded.dag;
   const stageById = buildStageConfigById(loaded);
 
@@ -475,6 +504,8 @@ export async function runPipelineDag(
       }
     }
   }
+
+  applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
 
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
@@ -555,6 +586,19 @@ export async function runPipelineDag(
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
+    const node = dag.nodes.find((n) => n.id === stageId);
+    if (node?.fork) {
+      const chosen = new Set(envelope.fork_choice ?? []);
+      for (const childId of dag.childrenOf[stageId] ?? []) {
+        if (!chosen.has(childId)) {
+          if (states.get(childId) === "pending") {
+            states.set(childId, "skipped");
+            notifyRetryRootTerminal(childId, "skipped");
+          }
+          markBranchDownstreamSkipped(childId);
+        }
+      }
+    }
   };
 
   const launchStage = async (stageId: string): Promise<void> => {
@@ -576,7 +620,7 @@ export async function runPipelineDag(
       const launchResult = await launcher.launch({
         runId: run.runId,
         stageId,
-        rootDir: cwd,
+        rootDir: factoryCwd,
         attempt,
         ...(prepared.operatorCatalog !== undefined
           ? { operatorCatalog: prepared.operatorCatalog }
@@ -587,9 +631,11 @@ export async function runPipelineDag(
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           onStageSuccess(stageId, envelope);
-        } catch {
-          states.set(stageId, "succeeded");
-          notifyRetryRootTerminal(stageId, "succeeded");
+        } catch (err) {
+          await onStageFailure(
+            stageId,
+            err instanceof Error ? err.message : String(err),
+          );
         }
         return;
       }
@@ -612,7 +658,7 @@ export async function runPipelineDag(
       workspaceDir: run.workspaceDir,
       hitl,
       attemptCtx,
-      factoryCwd: cwd,
+      factoryCwd,
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
@@ -729,9 +775,10 @@ export async function runPipelineDag(
     };
   }
 
-  const allSucceeded = dag.nodes.every(
-    (node) => states.get(node.id) === "succeeded",
-  );
+  const allSucceeded = dag.nodes.every((node) => {
+    const s = states.get(node.id);
+    return s === "succeeded" || s === "skipped";
+  });
   if (!allSucceeded) {
     if (retryContext === undefined) {
       await store.updateRunStatus(run.runId, "failed");
@@ -745,9 +792,7 @@ export async function runPipelineDag(
     };
   }
 
-  if (retryContext === undefined) {
-    await store.updateRunStatus(run.runId, "succeeded");
-  }
+  await store.updateRunStatus(run.runId, "succeeded");
   return {
     ok: true,
     outcome: "succeeded",

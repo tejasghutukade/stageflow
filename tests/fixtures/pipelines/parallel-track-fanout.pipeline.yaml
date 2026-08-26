@@ -1,0 +1,22 @@
+id: parallel-track-fanout
+stages:
+  - id: recon
+    uses: ../stages/recon.yaml
+  - id: improve-a
+    uses: ../stages/improve-a.yaml
+    needs: recon
+  - id: improve-b
+    uses: ../stages/improve-b.yaml
+    needs: recon
+  - id: improve-c
+    uses: ../stages/improve-c.yaml
+    needs: recon
+  - id: report-a
+    uses: ../stages/report-a.yaml
+    needs: improve-a
+  - id: report-b
+    uses: ../stages/report-b.yaml
+    needs: improve-b
+  - id: report-c
+    uses: ../stages/report-c.yaml
+    needs: improve-c

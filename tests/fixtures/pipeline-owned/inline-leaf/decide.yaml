@@ -1,0 +1,3 @@
+id: decide
+system_prompt: Decide which branch runs.
+model: cursor/auto

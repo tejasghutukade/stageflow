@@ -1,0 +1,13 @@
+id: parallel-hitl-multi-wait
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: branch-a
+    uses: ../stages/branch-a.yaml
+    needs: clarify
+  - id: branch-b
+    uses: ../stages/branch-b.yaml
+    needs: clarify
+  - id: branch-c
+    uses: ../stages/branch-c.yaml
+    needs: clarify

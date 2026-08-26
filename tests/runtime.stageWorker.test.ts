@@ -28,12 +28,19 @@ async function writeSkill(dir: string, name: string, body: string): Promise<stri
 async function writeNamedSkillPipeline(
   root: string,
   skillName: string,
-): Promise<void> {
+): Promise<string> {
+  const pipelinePath = path.join(root, "pipelines", "named-skill.pipeline.yaml");
   await mkdir(path.join(root, "pipelines"), { recursive: true });
   await mkdir(path.join(root, "stages"), { recursive: true });
   await writeFile(
-    path.join(root, "pipelines", "named-skill.yaml"),
-    "id: named-skill\nstages:\n  - named-stage\n",
+    pipelinePath,
+    [
+      "id: named-skill",
+      "stages:",
+      "  - id: named-stage",
+      "    uses: ../stages/named-stage.yaml",
+      "",
+    ].join("\n"),
     "utf8",
   );
   await writeFile(
@@ -47,6 +54,7 @@ async function writeNamedSkillPipeline(
     ].join("\n"),
     "utf8",
   );
+  return pipelinePath;
 }
 
 describe("stage worker protocol", () => {
@@ -365,10 +373,11 @@ describe("operator catalog roots", () => {
       "---\nname: operator-fixture\ndescription: Operator catalog fixture.\n---\n# Operator\n",
     );
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-recon-"));
-    await writeNamedSkillPipeline(root, "operator-fixture");
+    const pipelineFile = await writeNamedSkillPipeline(root, "operator-fixture");
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -428,10 +437,11 @@ describe("operator catalog roots", () => {
 
   it("reconstruct fails before openStage when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-recon-miss-"));
-    await writeNamedSkillPipeline(root, "missing-skill");
+    const pipelineFile = await writeNamedSkillPipeline(root, "missing-skill");
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -493,10 +503,11 @@ describe("operator catalog roots", () => {
 
   it("worker resume fails before open when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-worker-miss-"));
-    await writeNamedSkillPipeline(root, "missing-skill");
+    const pipelineFile = await writeNamedSkillPipeline(root, "missing-skill");
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "named-skill",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });
@@ -523,9 +534,19 @@ describe("stage worker prior StageEnvelope", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-prior-"));
     await mkdir(path.join(root, "pipelines"), { recursive: true });
     await mkdir(path.join(root, "stages"), { recursive: true });
+    const pipelineFile = path.join(root, "pipelines", "needs-parent.pipeline.yaml");
     await writeFile(
-      path.join(root, "pipelines", "needs-parent.yaml"),
-      "id: needs-parent\nstages:\n  - parent-stage\n  - child-stage\n",
+      pipelineFile,
+      [
+        "id: needs-parent",
+        "stages:",
+        "  - id: parent-stage",
+        "    uses: ../stages/parent-stage.yaml",
+        "  - id: child-stage",
+        "    uses: ../stages/child-stage.yaml",
+        "    needs: parent-stage",
+        "",
+      ].join("\n"),
       "utf8",
     );
     await writeFile(
@@ -551,6 +572,7 @@ describe("stage worker prior StageEnvelope", () => {
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
       pipelineId: "needs-parent",
+      pipelinePath: pipelineFile,
       taskYaml: "id: t\ngoal: g\n",
       taskId: "t",
     });

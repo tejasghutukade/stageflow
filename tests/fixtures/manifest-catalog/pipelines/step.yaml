@@ -1,0 +1,4 @@
+id: step
+system_prompt: |
+  Demo stage for manifest catalog listing.
+model: cursor/auto

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -13,18 +14,23 @@ import {
 } from "../src/config/resolvePipelineDag.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const owned = path.join(fixtures, "pipeline-owned");
 const stagesDir = path.join(fixtures, "stages");
 
-const ctx = (pipelineId: string, relPath = "pipelines/test.yaml") => ({
+const ctx = (pipelineId: string, relPath = "pipelines/test.pipeline.yaml") => ({
   pipelineId,
   path: path.join(fixtures, relPath),
 });
 
 describe("resolvePipelineDag", () => {
-  it("normalizes legacy linear chain (AE1)", () => {
+  it("builds explicit linear chain", () => {
     const { stages, dag } = resolvePipelineDag(
-      ["clarify", "design-doc", "implementation-plan"],
-      ctx("docs-only", "pipelines/docs-only.yaml"),
+      [
+        { id: "clarify" },
+        { id: "design-doc", needs: "clarify" },
+        { id: "implementation-plan", needs: "design-doc" },
+      ],
+      ctx("docs-only", "pipelines/docs-only.pipeline.yaml"),
     );
 
     expect(stages).toEqual(["clarify", "design-doc", "implementation-plan"]);
@@ -71,21 +77,10 @@ describe("resolvePipelineDag", () => {
     });
   });
 
-  it("treats explicit linear as equivalent to legacy (AE6)", () => {
-    const legacy = resolvePipelineDag(
-      ["clarify", "design-doc", "implementation-plan"],
-      ctx("docs-only"),
-    );
-    const explicit = resolvePipelineDag(
-      [
-        { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "design-doc" },
-      ],
-      ctx("linear-explicit"),
-    );
-
-    expect(areResolvedDagsEquivalent(legacy.dag, explicit.dag)).toBe(true);
+  it("rejects bare string stage refs (AE7)", () => {
+    expect(() =>
+      resolvePipelineDag(["decide", "branch-a"], ctx("string-refs")),
+    ).toThrow(/bare string stage refs/i);
   });
 
   it("rejects dependency cycles (AE3)", () => {
@@ -111,7 +106,10 @@ describe("resolvePipelineDag", () => {
 
   it("rejects duplicate stage ids (AE5)", () => {
     expect(() =>
-      resolvePipelineDag(["clarify", "design-doc", "clarify"], ctx("duplicate-stage")),
+      resolvePipelineDag(
+        [{ id: "clarify" }, { id: "design-doc" }, { id: "clarify" }],
+        ctx("duplicate-stage.pipeline"),
+      ),
     ).toThrow(/duplicate stage "clarify"/i);
   });
 
@@ -135,7 +133,7 @@ describe("resolvePipelineDag", () => {
 
   it("rejects malformed stage entries", () => {
     expect(() => resolvePipelineDag([], ctx("empty"))).toThrow(/non-empty/i);
-    expect(() => resolvePipelineDag([""], ctx("blank-id"))).toThrow(/invalid stage entry/i);
+    expect(() => resolvePipelineDag([""], ctx("blank-id"))).toThrow(/bare string stage refs/i);
     expect(() => resolvePipelineDag([{ needs: "clarify" }], ctx("missing-id"))).toThrow(
       /id must be a non-empty string/i,
     );
@@ -147,11 +145,83 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/unknown key "label"/i);
   });
 
-  it("extractPipelineStageIds accepts legacy strings and object refs", () => {
-    expect(extractPipelineStageIds(["clarify", "design-doc"])).toEqual([
-      "clarify",
-      "design-doc",
-    ]);
+  it("AE1: fork select:one on a two-child stage sets fork on resolved node", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "decide", fork: { select: "one" } },
+        { id: "branch-a", needs: "decide" },
+        { id: "branch-b", needs: "decide" },
+      ],
+      ctx("fork-one"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("branch-a")?.fork).toBeUndefined();
+  });
+
+  it("AE2: fork select:subset with allow_none:true sets fork on resolved node", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "decide", fork: { select: "subset", allow_none: true } },
+        { id: "b", needs: "decide" },
+        { id: "c", needs: "decide" },
+        { id: "d", needs: "decide" },
+      ],
+      ctx("fork-subset"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("decide")?.fork).toEqual({ select: "subset", allow_none: true });
+  });
+
+  it("AE3: fork on a leaf stage is rejected", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [{ id: "decide", fork: { select: "one" } }],
+        ctx("fork-leaf"),
+      ),
+    ).toThrow(/fork on stage "decide": no children/i);
+  });
+
+  it("AE4: fork without select is rejected", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "decide", fork: { allow_none: false } as { select: "one" | "subset"; allow_none?: boolean } },
+          { id: "branch-a", needs: "decide" },
+        ],
+        ctx("fork-no-select"),
+      ),
+    ).toThrow(/select/i);
+  });
+
+  it("AE5: fork with unknown key is rejected", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "decide", fork: { select: "one", mode: "exclusive" } as unknown as { select: "one" | "subset" } },
+          { id: "branch-a", needs: "decide" },
+        ],
+        ctx("fork-unknown-key"),
+      ),
+    ).toThrow(/fork: unknown key "mode"/i);
+  });
+
+  it("AE6: existing fan-out pipeline without fork field is unaffected", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "clarify" },
+        { id: "design-doc", needs: "clarify" },
+        { id: "implementation-plan", needs: "clarify" },
+      ],
+      ctx("no-fork"),
+    );
+    for (const node of dag.nodes) {
+      expect(node.fork).toBeUndefined();
+    }
+  });
+
+  it("extractPipelineStageIds rejects string entries", () => {
+    expect(extractPipelineStageIds(["clarify", "design-doc"])).toBeNull();
     expect(
       extractPipelineStageIds([
         { id: "clarify" },
@@ -162,61 +232,104 @@ describe("resolvePipelineDag", () => {
     expect(extractPipelineStageIds([])).toBeNull();
   });
 
-  it("parsePipelineStageEntries preserves declaration order indices", () => {
+  it("parsePipelineStageEntries preserves declaration order for object refs", () => {
     const entries = parsePipelineStageEntries(
-      ["clarify", { id: "design-doc", needs: "clarify" }],
-      ctx("mixed"),
+      [{ id: "clarify" }, { id: "design-doc", needs: "clarify" }],
+      ctx("object-form"),
     );
-    expect(entries).toEqual(["clarify", { id: "design-doc", needs: "clarify" }]);
+    expect(entries).toEqual([
+      { id: "clarify" },
+      { id: "design-doc", needs: "clarify" },
+    ]);
   });
 });
 
 describe("listPipelineUsageByStage with object-form pipelines", () => {
-  it("indexes clarify usage from object-form pipeline yaml", async () => {
-    const tmpRoot = await mkdtemp(path.join(tmpdir(), "sf-dag-usage-"));
-    await mkdir(path.join(tmpRoot, "pipelines"), { recursive: true });
-    await mkdir(path.join(tmpRoot, "stages"), { recursive: true });
-    await writeFile(
-      path.join(tmpRoot, "stages", "clarify.yaml"),
-      await readFile(path.join(stagesDir, "clarify.yaml"), "utf8"),
-    );
-    await writeFile(
-      path.join(tmpRoot, "pipelines", "parallel-after-clarify.yaml"),
-      [
-        "id: parallel-after-clarify",
-        "stages:",
-        "  - id: clarify",
-        "  - id: design-doc",
-        "    needs: clarify",
-        "",
-      ].join("\n"),
-    );
-
-    const stages = await listStages(tmpRoot);
-    const clarify = stages.find((stage) => stage.id === "clarify");
-    expect(clarify && "used_by_pipeline_ids" in clarify
-      ? clarify.used_by_pipeline_ids
-      : undefined,
-    ).toEqual(["parallel-after-clarify"]);
+  it("listStages returns empty in pipeline-owned model", async () => {
+    const stages = await listStages();
+    expect(stages).toEqual([]);
   });
 });
 
 describe("loadPipeline negative DAG fixtures", () => {
-  it("rejects cycle.yaml via loadPipeline", async () => {
-    await expect(
-      loadPipeline("cycle", { cwd: fixtures, stagesDir }),
-    ).rejects.toThrow(/cycle/i);
+  it("rejects cycle via pipeline-owned temp fixture", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-cycle-"));
+    await writeFile(
+      path.join(dir, "cycle.pipeline.yaml"),
+      [
+        "id: cycle",
+        "stages:",
+        "  - id: a",
+        "    needs: b",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: b",
+        "    needs: a",
+        "    system_prompt: x",
+        "    model: m",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadPipeline(path.join(dir, "cycle.pipeline.yaml"))).rejects.toThrow(
+      /cycle/i,
+    );
   });
 
-  it("rejects unknown-needs.yaml via loadPipeline", async () => {
-    await expect(
-      loadPipeline("unknown-needs", { cwd: fixtures, stagesDir }),
-    ).rejects.toThrow(/unknown needs/i);
+  it("rejects unknown-needs via pipeline-owned temp fixture", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-unknown-"));
+    await writeFile(
+      path.join(dir, "unknown.pipeline.yaml"),
+      [
+        "id: unknown",
+        "stages:",
+        "  - id: clarify",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: design-doc",
+        "    needs: missing-stage",
+        "    system_prompt: x",
+        "    model: m",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadPipeline(path.join(dir, "unknown.pipeline.yaml"))).rejects.toThrow(
+      /unknown needs/i,
+    );
   });
 
-  it("rejects duplicate-stage.yaml via loadPipeline", async () => {
-    await expect(
-      loadPipeline("duplicate-stage", { cwd: fixtures, stagesDir }),
-    ).rejects.toThrow(/duplicate stage/i);
+  it("rejects duplicate-stage via pipeline-owned temp fixture", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-dup-"));
+    await writeFile(
+      path.join(dir, "dup.pipeline.yaml"),
+      [
+        "id: dup",
+        "stages:",
+        "  - id: clarify",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: design-doc",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: clarify",
+        "    system_prompt: x",
+        "    model: m",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadPipeline(path.join(dir, "dup.pipeline.yaml"))).rejects.toThrow(
+      /duplicate stage/i,
+    );
+  });
+});
+
+describe("loadPipeline fork fixtures", () => {
+  it("fork-uses pipeline loads and sets fork on the deciding node", async () => {
+    const { dag } = await loadPipeline(
+      path.join(owned, "fork-uses/fork-demo.pipeline.yaml"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("branch-a")?.fork).toBeUndefined();
+    expect(byId.get("branch-b")?.fork).toBeUndefined();
   });
 });

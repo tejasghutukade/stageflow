@@ -17,6 +17,7 @@ import {
 } from "../src/runtime/credentialBinding.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { runWorkspaceDir, storeRootFor } from "../src/runstore/paths.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
 describe("StageRoots", () => {
   it("buildStageRoots unbound uses run workspace as cwd", () => {
@@ -89,30 +90,31 @@ describe("StageRoots", () => {
   });
 
   it("sf_owned preference binds authPath without copying Pi-home into attempt dir", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-roots-nocopy-"));
-    const piHome = path.join(cwd, "global-auth.json");
-    writeFileSync(
-      piHome,
-      JSON.stringify({ cursor: { type: "api_key", key: "test-key" } }),
-    );
-    writeCredentialSourceToFile(cwd, "sf_owned");
-    const sfAuth = ensureSfOwnedAuthStore(cwd);
-    writeFileSync(
-      sfAuth,
-      JSON.stringify({ anthropic: { type: "api_key", key: "sf" } }),
-    );
+    await withIsolatedHome(async (home) => {
+      const piHome = path.join(home, "global-auth.json");
+      writeFileSync(
+        piHome,
+        JSON.stringify({ cursor: { type: "api_key", key: "test-key" } }),
+      );
+      writeCredentialSourceToFile(home, "sf_owned");
+      const sfAuth = ensureSfOwnedAuthStore();
+      writeFileSync(
+        sfAuth,
+        JSON.stringify({ anthropic: { type: "api_key", key: "sf" } }),
+      );
 
-    const workspaceDir = runWorkspaceDir(storeRootFor(cwd), "r1");
-    const roots = withResolvedAuthPath(
-      rootsForStageWorker(workspaceDir, "a", "openai/gpt-4"),
-      cwd,
-    );
-    const binding = resolveCredentialBinding(cwd, { piHomeAuthPath: piHome });
+      const workspaceDir = runWorkspaceDir(storeRootFor(home), "r1");
+      const roots = withResolvedAuthPath(
+        rootsForStageWorker(workspaceDir, "a", "openai/gpt-4"),
+        home,
+      );
+      const binding = resolveCredentialBinding(home, { piHomeAuthPath: piHome });
 
-    expect(roots.authPath).toBe(sfAuth);
-    expect(binding.authPath).toBe(sfAuth);
-    expect(existsSync(path.join(roots.agentDir, "auth.json"))).toBe(false);
-    mkdirSync(roots.agentDir, { recursive: true });
-    expect(existsSync(path.join(roots.agentDir, "auth.json"))).toBe(false);
+      expect(roots.authPath).toBe(sfAuth);
+      expect(binding.authPath).toBe(sfAuth);
+      expect(existsSync(path.join(roots.agentDir, "auth.json"))).toBe(false);
+      mkdirSync(roots.agentDir, { recursive: true });
+      expect(existsSync(path.join(roots.agentDir, "auth.json"))).toBe(false);
+    });
   });
 });

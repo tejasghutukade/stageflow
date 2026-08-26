@@ -12,11 +12,15 @@ import {
   isUsableAuthFile,
   parseCredentialSource,
   piHomeAuthPath,
-  readCredentialSourceFromFile,
+  readCredentialSourceFromContext,
   resolveCredentialBinding,
-  writeCredentialSourceToFile,
+  writeCredentialSourceToContext,
 } from "../runtime/credentialBinding.js";
+import {
+  readPersistedCredentialSourceFromContext,
+} from "../runtime/settingsFile.js";
 import type { CredentialSource } from "../runtime/settingsFile.js";
+import { resolveProjectContext } from "../project/resolveProjectContext.js";
 
 export type ProviderSummary = {
   id: string;
@@ -410,8 +414,9 @@ export async function logoutProvider(
 }
 
 export function detectPiHome(cwd: string): PiHomeDetectResult {
-  const binding = resolveCredentialBinding(cwd);
-  const persisted = readCredentialSourceFromFile(cwd);
+  const projectCtx = resolveProjectContext(cwd);
+  const binding = resolveCredentialBinding(projectCtx);
+  const persisted = readPersistedCredentialSourceFromContext(projectCtx);
   return {
     piHomeUsable: isUsableAuthFile(piHomeAuthPath()),
     ...(persisted !== undefined ? { credentialSource: persisted } : {}),
@@ -424,8 +429,9 @@ export function getCredentialSourceSettings(cwd: string): {
   credentialSource?: CredentialSource;
   binding: { source: CredentialSource; provisional: boolean };
 } {
-  const persisted = readCredentialSourceFromFile(cwd);
-  const binding = resolveCredentialBinding(cwd);
+  const projectCtx = resolveProjectContext(cwd);
+  const persisted = readPersistedCredentialSourceFromContext(projectCtx);
+  const binding = resolveCredentialBinding(projectCtx);
   return {
     ...(persisted !== undefined ? { credentialSource: persisted } : {}),
     binding: {
@@ -449,8 +455,9 @@ export function setCredentialSource(
       400,
     );
   }
-  writeCredentialSourceToFile(cwd, parsed);
-  const binding = resolveCredentialBinding(cwd);
+  const projectCtx = resolveProjectContext(cwd);
+  writeCredentialSourceToContext(projectCtx, parsed);
+  const binding = resolveCredentialBinding(projectCtx);
   return {
     credentialSource: parsed,
     binding: {

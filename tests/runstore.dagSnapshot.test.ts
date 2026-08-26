@@ -8,14 +8,14 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const owned = path.join(fixtures, "pipeline-owned");
 
 describe("pipeline DAG snapshot persistence", () => {
-  it("persists chain snapshot after createRun on docs-only", async () => {
+  it("persists chain snapshot after createRun on include-merge", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-dag-snap-"));
-    const loaded = await loadPipeline("docs-only", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const loaded = await loadPipeline(
+      path.join(owned, "include-merge/main.pipeline.yaml"),
+    );
     const snapshot = buildPipelineDagSnapshotFromLoaded(loaded);
     const store = createRunStore({ rootDir: root, kind: "sqlite" });
     const run = await store.createRun({
@@ -27,28 +27,19 @@ describe("pipeline DAG snapshot persistence", () => {
 
     const detail = await store.readRun(run.runId);
     expect(detail.pipeline_track.nodes.map((n) => n.stage_id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
+      "gate",
+      "finish",
     ]);
-    expect(detail.pipeline_track.edges).toEqual([
-      { from: "clarify", to: "design-doc" },
-      { from: "design-doc", to: "implementation-plan" },
-    ]);
+    expect(detail.pipeline_track.edges).toEqual([{ from: "gate", to: "finish" }]);
   });
 
-  it("persists fan-out childrenOf on parallel-track-fanout", async () => {
+  it("persists fan-out childrenOf on fork-uses", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-dag-fan-"));
-    const loaded = await loadPipeline("parallel-track-fanout", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const loaded = await loadPipeline(
+      path.join(owned, "fork-uses/fork-demo.pipeline.yaml"),
+    );
     const snapshot = buildPipelineDagSnapshotFromLoaded(loaded);
-    expect(snapshot.childrenOf.recon).toEqual([
-      "improve-a",
-      "improve-b",
-      "improve-c",
-    ]);
+    expect(snapshot.childrenOf.decide).toEqual(["branch-a", "branch-b"]);
 
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
@@ -59,9 +50,9 @@ describe("pipeline DAG snapshot persistence", () => {
     const detail = await store.readRun(run.runId);
     expect(
       detail.pipeline_track.edges
-        .filter((e) => e.from === "recon")
+        .filter((e) => e.from === "decide")
         .map((e) => e.to)
         .sort(),
-    ).toEqual(["improve-a", "improve-b", "improve-c"]);
+    ).toEqual(["branch-a", "branch-b"]);
   });
 });

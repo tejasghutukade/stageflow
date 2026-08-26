@@ -1,8 +1,13 @@
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
-import { loadPipeline } from "../config/loadPipeline.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import {
+  reloadPipelineForRun,
+  reloadTaskForRun,
+} from "./reloadRunCatalog.js";
 import type { RunStore, RunMeta } from "../runstore/port.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
@@ -29,6 +34,7 @@ export type PreparedResumeContext = {
   executionMode: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   cwd: string;
+  factoryCwd?: string;
   maxActiveStagesPerRun: number;
   operatorCatalog?: OperatorCatalog;
 };
@@ -47,9 +53,20 @@ export async function loadRunContext(
   cwd: string,
 ): Promise<LoadedRunContext> {
   const meta = await store.readRunMeta(runId);
-  const taskYaml = await store.readTaskYaml(runId);
-  const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd });
+  const reloadMeta: RunMeta = {
+    ...meta,
+    project_root: meta.project_root ?? normalizeCatalogPath(cwd),
+  };
+  const loaded = await reloadPipelineForRun(reloadMeta);
+  let taskYaml: string;
+  let task: TaskFile;
+  if (meta.task_path) {
+    task = await reloadTaskForRun(meta);
+    taskYaml = await readFile(normalizeCatalogPath(meta.task_path), "utf8");
+  } else {
+    taskYaml = await store.readTaskYaml(runId);
+    task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
+  }
   const workspaceDir = store.getWorkspaceDir(runId);
   return { meta, taskYaml, task, loaded, workspaceDir };
 }
@@ -58,6 +75,7 @@ export async function reconstructAndContinue(
   ctx: PreparedResumeContext,
 ): Promise<{ ok: boolean; reason?: string }> {
   const { runId, stageId, opaqueAnswer, agent, store, cwd } = ctx;
+  const factoryCwd = ctx.factoryCwd ?? cwd;
 
   try {
     const latestExecution = await store.getLatestStageExecution(runId, stageId);
@@ -91,7 +109,7 @@ export async function reconstructAndContinue(
         checkoutRoot,
         attemptCtx,
       ),
-      cwd,
+      factoryCwd,
     );
 
     const fakeResume = fakeHitlResumePath(roots, stageId);
@@ -120,7 +138,7 @@ export async function reconstructAndContinue(
       dag: loaded.dag,
       checkoutRoot,
       workspaceDir,
-      factoryCwd: cwd,
+      factoryCwd,
       attemptCtx,
       operatorCatalog: ctx.operatorCatalog,
       onActivity: (event) => {
@@ -156,7 +174,7 @@ export async function reconstructAndContinue(
       skipStarted: true,
       existingHandle: opened.handle,
       attemptCtx,
-      factoryCwd: cwd,
+      factoryCwd,
       operatorCatalog: ctx.operatorCatalog,
     });
 
@@ -181,6 +199,7 @@ export async function reconstructAndContinue(
         agent,
         store,
         cwd,
+        projectRoot: factoryCwd,
         checkoutRoot,
         hitl: ctx.hitl,
         operatorCatalog: ctx.operatorCatalog,

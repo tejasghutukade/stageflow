@@ -1,0 +1,7 @@
+id: include-cycle-a
+include:
+  - local: ./b.yaml
+stages:
+  - id: root
+    system_prompt: Root stage.
+    model: cursor/auto

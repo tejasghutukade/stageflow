@@ -1,0 +1,6 @@
+include:
+  - local: ./a.pipeline.yaml
+stages:
+  - id: nested
+    system_prompt: Nested stage.
+    model: cursor/auto

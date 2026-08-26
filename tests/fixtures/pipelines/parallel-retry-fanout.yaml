@@ -1,9 +1,0 @@
-id: parallel-retry-fanout
-stages:
-  - id: clarify
-  - id: design-doc
-    needs: clarify
-  - id: implementation-plan
-    needs: clarify
-  - id: join-doc
-    needs: design-doc

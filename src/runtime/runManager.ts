@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
-import { loadPipeline } from "../config/loadPipeline.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import { loadRunContext } from "./resumeReconstruct.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -28,8 +29,9 @@ import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
-  readMaxConcurrentFromFile,
-  writeMaxConcurrentToFile,
+  projectSettingsContext,
+  readMaxConcurrentFromContext,
+  writeMaxConcurrentToContext,
 } from "./settingsFile.js";
 import {
   StageHitlController,
@@ -155,12 +157,16 @@ export class RunManager {
     },
   };
   private readonly cwd: string;
+  private readonly projectRoot: string;
+  private readonly isGitProject: boolean;
 
   constructor(
     private readonly options: {
       agent: AgentPort;
       store: RunStore;
       cwd?: string;
+      projectRoot?: string;
+      isGitProject?: boolean;
       operatorCatalog?: OperatorCatalog;
       seams?: HitlSeams;
       maxConcurrent?: number;
@@ -170,9 +176,16 @@ export class RunManager {
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
+    this.projectRoot = options.projectRoot ?? this.cwd;
+    this.isGitProject = options.isGitProject ?? false;
+    const settingsCtx = projectSettingsContext(
+      this.cwd,
+      this.projectRoot,
+      this.isGitProject,
+    );
     this.maxConcurrent =
       options.maxConcurrent ??
-      readMaxConcurrentFromFile(this.cwd) ??
+      readMaxConcurrentFromContext(settingsCtx) ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
@@ -202,7 +215,10 @@ export class RunManager {
       throw new Error(INVALID_SLOT_COUNT_MESSAGE);
     }
     this.maxConcurrent = parsed;
-    writeMaxConcurrentToFile(this.cwd, parsed);
+    writeMaxConcurrentToContext(
+      projectSettingsContext(this.cwd, this.projectRoot, this.isGitProject),
+      parsed,
+    );
     return this.getHealth();
   }
 
@@ -532,11 +548,26 @@ export class RunManager {
   async rerun(runId: string): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
 
-    let pipelineId: string;
+    let pipeline: string;
     let taskYaml: string;
+    let rerunCwd = cwd;
+    let rerunProjectRoot: string | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      pipelineId = meta.pipeline_id;
+      if (!meta.pipeline_path) {
+        return {
+          ok: false,
+          reason: `Run ${runId} is missing pipeline_path; re-run requires stored catalog locators.`,
+          status: 400,
+        };
+      }
+      pipeline = normalizeCatalogPath(meta.pipeline_path);
+      rerunCwd = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : cwd;
+      rerunProjectRoot = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : undefined;
       taskYaml = await this.options.store.readTaskYaml(runId);
     } catch {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
@@ -544,9 +575,13 @@ export class RunManager {
 
     return this.reserveAndStartPipeline(
       taskYaml,
-      pipelineId,
+      pipeline,
       `run ${runId} task`,
-      cwd,
+      rerunCwd,
+      undefined,
+      undefined,
+      undefined,
+      rerunProjectRoot,
     );
   }
 
@@ -690,7 +725,6 @@ export class RunManager {
     stageId: string,
     opaqueAnswer: OpaqueAnswer,
   ): Promise<{ ok: boolean; reason?: string }> {
-    const cwd = this.options.cwd ?? process.cwd();
     const store = this.options.store;
     const launcher = this.stageProcessLauncher;
     if (!launcher) {
@@ -707,7 +741,7 @@ export class RunManager {
       const launchResult = await launcher.launch({
         runId,
         stageId,
-        rootDir: cwd,
+        rootDir: this.projectRoot,
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
@@ -742,10 +776,11 @@ export class RunManager {
         // downstream resume may read envelope from store
       }
 
-      const meta = await store.readRunMeta(runId);
-      const taskYaml = await store.readTaskYaml(runId);
-      const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-      const loaded = await loadPipeline(meta.pipeline_id, { cwd });
+      const { meta, task, loaded } = await loadRunContext(
+        store,
+        runId,
+        this.cwd,
+      );
 
       const rest = await resumeRun({
         prepared: {
@@ -754,7 +789,8 @@ export class RunManager {
           run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
           agent: this.options.agent,
           store,
-          cwd,
+          cwd: this.cwd,
+          projectRoot: this.projectRoot,
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
@@ -810,6 +846,7 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         cwd: this.cwd,
+        factoryCwd: this.projectRoot,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         operatorCatalog: this.options.operatorCatalog,
       });
@@ -820,7 +857,7 @@ export class RunManager {
 
   private async reserveAndStartPipeline(
     taskYaml: string,
-    pipelineId: string,
+    pipeline: string,
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,
@@ -830,6 +867,7 @@ export class RunManager {
       ciPrUrl?: string;
       ciJobUrl?: string;
     },
+    projectRoot?: string,
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -859,8 +897,9 @@ export class RunManager {
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
-        pipeline: pipelineId,
+        pipeline,
         cwd,
+        projectRoot: projectRoot ?? this.projectRoot,
         checkoutOverride,
         gitSha: ciIdentity?.gitSha,
         ciPrUrl: ciIdentity?.ciPrUrl,

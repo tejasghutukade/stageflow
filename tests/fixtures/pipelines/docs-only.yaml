@@ -1,5 +1,0 @@
-id: docs-only
-stages:
-  - clarify
-  - design-doc
-  - implementation-plan

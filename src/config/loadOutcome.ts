@@ -20,6 +20,11 @@ export type LoadIssue =
       message: string;
       category: "task";
       taskId?: string;
+    }
+  | {
+      code: ValidationFindingCode | string;
+      message: string;
+      category: "catalog";
     };
 
 export type LoadOutcome<T> =

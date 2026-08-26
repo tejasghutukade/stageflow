@@ -5,19 +5,22 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
+import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
+import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
-  sf validate [--pipeline <name-or-path>] [--strict] [--json]
+  sf init
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+  sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
   sf providers status [--provider <id>]
@@ -30,6 +33,8 @@ const USAGE = `Usage:
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
 Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stageflow/runs trees import when the SQLite store is empty. Data under .stageflow/.
+
+${INIT_USAGE}
 
 ${RUN_USAGE}
 
@@ -60,7 +65,8 @@ function parseArgs(argv: string[]): {
   if (
     command === "providers" ||
     command === "validate" ||
-    command === "run"
+    command === "run" ||
+    command === "init"
   ) {
     return { help: false, command };
   }
@@ -224,26 +230,36 @@ async function main(argv: string[]): Promise<number> {
       return argv.slice(2).length === 0 ? 1 : 0;
     }
 
-    const rootDir = process.cwd();
+    const ctx = await resolveStageflowContext(process.cwd());
+
+    if (parsed.command === "init") {
+      return runInitCommand(argv.slice(3), { cwd: ctx.invocationCwd });
+    }
 
     if (parsed.command === "validate") {
-      return runValidateCommand(argv.slice(3), { cwd: rootDir });
+      return runValidateCommand(argv.slice(3), { cwd: ctx.invocationCwd });
     }
 
     if (parsed.command === "run") {
-      return runRunCommand(argv.slice(3), { cwd: rootDir });
+      return runRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+        isGitProject: ctx.isGitProject,
+      });
     }
 
     if (parsed.command === "providers") {
-      return runProvidersCommand(argv.slice(3), rootDir);
+      return runProvidersCommand(argv.slice(3), ctx.invocationCwd);
     }
 
-    const store = createRunStore({ rootDir });
+    const store = createRunStore({ rootDir: ctx.projectRoot });
 
     if (parsed.command === "ui") {
       const { url, mcpUrl } = await startUiServer({
         agent: new PiAgentAdapter(),
         store,
+        cwd: ctx.invocationCwd,
+        rootDir: ctx.projectRoot,
         port: parsed.port,
       });
       console.log(`Operator console: ${url}`);
@@ -272,15 +288,24 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+function normalizeCliEntry(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  let canonical: string;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    canonical = resolved;
+  }
+  return canonical.replace(/\.(?:[cm]?[jt]s)$/i, "");
+}
+
+export function sameCliEntry(a: string, b: string): boolean {
+  return normalizeCliEntry(a) === normalizeCliEntry(b);
+}
+
 function isDirectCliInvocation(): boolean {
   const self = fileURLToPath(import.meta.url);
-  return process.argv.slice(1).some((arg) => {
-    try {
-      return realpathSync(path.resolve(arg)) === realpathSync(self);
-    } catch {
-      return false;
-    }
-  });
+  return process.argv.slice(1).some((arg) => sameCliEntry(arg, self));
 }
 
 if (isDirectCliInvocation()) {

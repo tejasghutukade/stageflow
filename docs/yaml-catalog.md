@@ -5,194 +5,206 @@ title: Yaml Catalog
 
 # YAML catalog
 
-Stageflow reads a **project-local catalog** — no hosted config service. Three directories define what can run:
+Stageflow uses a **pipeline-owned catalog**: each pipeline file lists stages as object entries with `uses:` (external YAML) or an inline body. Tasks are separate `*.task.yaml` files. A repo-root **`stageflow.yaml`** manifest declares which directories the operator console browses.
 
-| Directory | Purpose |
-|-----------|---------|
-| `pipelines/` | Ordered or DAG-linked lists of stage ids |
-| `stages/` | Pi agent config per stage (prompt, model, gates, schema) |
-| `tasks/` | Per-run input (goal, context, optional checkout) |
-
-**Stages are author-defined.** Stageflow validates shape and wiring; it does not ship domain-specific stage types. A `research` stage and a `release-draft` stage are the same mechanism — different YAML you write.
-
-Canonical examples: [`tests/fixtures/`](../tests/fixtures/).
+Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/), [`tests/fixtures/stages/`](../tests/fixtures/stages/), [`tests/fixtures/tasks/`](../tests/fixtures/tasks/).
 
 ## Layout
 
 ```
 my-project/
-  pipelines/
-    hello.yaml
-  stages/
-    research.yaml
-  tasks/
-    my-task.yaml
-  .stageflow/          # runtime state (created on first run)
+  stageflow.yaml              # manifest (browse scope)
+  hello.pipeline.yaml         # pipeline definition
+  research.yaml               # stage file (referenced by uses:)
+  my-task.task.yaml
+  .stageflow/                 # runtime state at git root
 ```
 
-## Pipelines (`pipelines/*.yaml`)
+Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml) (examples only; `tests/fixtures` excluded from browse).
 
-Required fields:
+## Filename patterns
+
+| Kind | Pattern | Example |
+|------|---------|---------|
+| Pipeline | `*.pipeline.yaml` | `hello.pipeline.yaml` |
+| Task | `*.task.yaml` | `my-task.task.yaml` |
+| Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
+
+CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
+
+## Pipelines (`*.pipeline.yaml`)
+
+Required top-level fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Pipeline identifier; should match filename stem |
-| `stages` | array | Non-empty list of stage ids or stage refs |
+| `id` | string | Pipeline identifier (should match filename stem) |
+| `stages` | array | Non-empty list of **object** stage entries |
 
-### Linear pipelines
+Bare string stage refs are rejected.
 
-List stage ids as **strings** for a simple chain — each entry implicitly `needs` the previous one (except the first):
+### Stage entries
 
-```yaml
-id: single
-stages:
-  - clarify
-```
+Each stage is an object with `id` and one of:
 
-For a multi-stage string chain, list ids in order; the runtime wires `needs` from array position.
+| Form | Fields | Use when |
+|------|--------|----------|
+| External | `uses: <path>` | Stage body lives in another YAML file |
+| Inline | `system_prompt`, `model`, … | Single-file pipeline |
 
-See [`tests/fixtures/pipelines/single.yaml`](../tests/fixtures/pipelines/single.yaml).
+Optional on any entry: `needs`, `fork`, `gate_kinds`, `payload_schema`, `skill`.
 
-### Explicit dependencies (`needs`)
+**`uses:` paths are relative to the pipeline file's directory.**
 
-Use **object entries** (`id` + optional `needs`) for parallel branches or explicit deps. Object entries without `needs` are **roots** (no implicit previous-stage dependency):
-
-```yaml
-stages:
-  - id: clarify          # root — needs: null
-  - id: design-doc
-    needs: clarify
-```
-
-Explicit linear example:
+Linear chain with external stages:
 
 ```yaml
 id: linear-explicit
 stages:
   - id: clarify
+    uses: ../stages/clarify.yaml
   - id: design-doc
+    uses: ../stages/design-doc.yaml
     needs: clarify
   - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml
     needs: design-doc
 ```
 
-See [`tests/fixtures/pipelines/linear-explicit.yaml`](../tests/fixtures/pipelines/linear-explicit.yaml).
+See [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-### Parallel fan-out
-
-Multiple stages with the same `needs` run in parallel after the dependency completes:
+Inline single stage:
 
 ```yaml
-id: parallel-five-fork
+id: hello
+stages:
+  - id: research
+    system_prompt: Summarize the task goal.
+    model: anthropic/claude-sonnet-4-5
+```
+
+Parallel fan-out: multiple stages with the same `needs` (siblings):
+
+```yaml
 stages:
   - id: clarify
-  - id: parallel-branch-a
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    uses: ../stages/design-doc.yaml
     needs: clarify
-  - id: parallel-branch-b
+  - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml
     needs: clarify
 ```
 
-See [`tests/fixtures/pipelines/parallel-five-fork.yaml`](../tests/fixtures/pipelines/parallel-five-fork.yaml).
+See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-**Constraints:**
+### Pipeline fragments (`include:`)
 
-- `needs` must reference a **single** stage id (fan-in from multiple parents is not supported)
-- Stage ids must exist as files under `stages/`
-- The DAG must be acyclic
-
-Resolve pipeline by id (`hello`) or path (`pipelines/hello.yaml`).
-
-## Stages (`stages/*.yaml`)
-
-Required fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Stage id; **must match filename** (`research.yaml` → `id: research`) |
-| `system_prompt` | string | Instructions for the Pi agent in this stage |
-| `model` | string | Provider/model id (e.g. `anthropic/claude-sonnet-4-5`) |
-
-Optional fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `gate_kinds` | string[] | Declared HITL kinds this stage may use — see [HITL](hitl.md) |
-| `payload_schema` | object | JSON Schema subset for `envelope.payload` on success |
-| `skill` | string | Pi skill name to attach for this stage |
-
-Example minimal stage:
+At the **pipeline top level** (not inside a stage entry), merge stage lists from fragment files:
 
 ```yaml
-id: clarify
-system_prompt: Clarify the task into crisp requirements.
-model: anthropic/claude-sonnet-4-5
+id: include-merge
+include:
+  - local: ./fragments/gates.yaml
+stages:
+  - id: finish
+    uses: ./finish.yaml
+    needs: gate
 ```
 
-Example with operator gate declaration:
+Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory.
+
+Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml).
+
+### Fork pipelines
+
+A fork parent sets `fork.select` (`one`, `subset`, …). Children list `needs: <parent>`. The parent emits `fork_choice` in its envelope; unchosen branches are `skipped`.
 
 ```yaml
-id: plan-review
-gate_kinds:
-  - artifact_backed
-system_prompt: |
-  Produce a plan artifact, get operator acceptance, then emit envelope.
-model: anthropic/claude-sonnet-4-5
+id: fork-demo
+stages:
+  - id: decide
+    uses: ./decide.yaml
+    fork:
+      select: one
+  - id: branch-a
+    uses: ./branch-a.yaml
+    needs: decide
+  - id: branch-b
+    uses: ./branch-b.yaml
+    needs: decide
 ```
 
-See [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
+Fixtures: [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml), [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml). Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
 
-Allowed `gate_kinds` values: `free_text`, `confirm`, `multi_question`, `artifact_backed`.
+## External stage files
 
-## Tasks (`tasks/*.yaml`)
+Stage YAML (referenced via `uses:`) requires:
 
-Tasks are **run input**, not part of the static catalog validation scope.
+| Field | Description |
+|-------|-------------|
+| `id` | Must match pipeline entry `id` |
+| `system_prompt` | Agent instructions |
+| `model` | Provider/model string |
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `id` | string | yes | Task identifier |
-| `goal` | string | yes | What the pipeline should accomplish |
-| `context` | string | no | Background for all stages |
-| `constraints` | string | no | Boundaries (e.g. docs-only) |
-| `checkout` | string | no | Path to a working tree for code tasks |
+Optional: `gate_kinds`, `payload_schema`, `skill`.
 
-Example:
+Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
+
+## Tasks (`*.task.yaml`)
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Task identifier |
+| `goal` | yes | What the run should accomplish |
+| `context` | no | Background for agents |
+| `constraints` | no | Boundaries |
+| `checkout` | no | Relative or absolute path to working tree |
+
+See [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
+
+## Manifest (`stageflow.yaml`)
+
+Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse.
 
 ```yaml
-id: sample
-goal: Design a calendar web app
-context: Personal productivity prototype
-constraints: Docs only; no implementation code
+version: 1
+catalog:
+  pipelines:
+    - examples/hello-world
+    - examples/plan-review
+  tasks:
+    - examples/hello-world
+    - examples/plan-review
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+  exclude:
+    - tests/fixtures
 ```
 
-See [`tests/fixtures/tasks/sample.yaml`](../tests/fixtures/tasks/sample.yaml).
+- **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
+- **`patterns`**: glob for directory scans (defaults shown above).
 
-Pass a task file to `sf run --task` or inline a task object via MCP `start_run`.
+Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/` — not a global `stages/` pool.
 
 ## Validation
 
 ```bash
-sf validate                  # full catalog
-sf validate --pipeline hello # single pipeline
-sf validate --strict         # orphan stages → errors
-sf validate --json
+sf validate --strict                    # manifest-all from git root
+sf validate --pipeline path/to/x.pipeline.yaml --strict
+sf validate --task path/to/x.task.yaml --strict
 ```
 
-Checks: pipeline shape, DAG, stage files, id/filename match, payload schema compile, gate kind strings, duplicate pipeline ids.
+Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), and stage file shape. It does not verify provider credentials or checkout paths.
 
-Does **not** check: task files, provider auth, checkout existence.
+## CLI run
 
-Finding codes include `pipeline.dag_error`, `pipeline.missing_stage`, `stage.id_filename_mismatch`, `catalog.orphan_stage`, and others — see `src/config/validateCatalog.ts`.
+```bash
+sf run \
+  --pipeline examples/hello-world/hello.pipeline.yaml \
+  --task examples/hello-world/my-task.task.yaml
+```
 
-## Runtime behavior (summary)
-
-1. Load pipeline + referenced stages
-2. Schedule stages per DAG (parallel when deps allow)
-3. Each stage: fresh Pi session, tools `write_stage_artifact`, `ask_operator`, `emit_stage_envelope`
-4. Pipeline advances only after a **success** envelope — see [Envelopes](envelopes.md)
-
-## See also
-
-- [Quick start](quickstart.md) — minimal end-to-end project
-- [Envelopes](envelopes.md) — handoff contract between stages
-- [HITL](hitl.md) — operator gates and `gate_kinds`
-- [CLI reference](cli-reference.md) — `sf validate` flags
+Run state is stored under **`<git-root>/.stageflow/`** regardless of which subdirectory you start `sf ui` from.

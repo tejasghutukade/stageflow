@@ -56,6 +56,9 @@ export type RunMeta = {
   ci_pr_url?: string;
   ci_job_url?: string;
   pipeline_dag?: RunPipelineDagSnapshot;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
 };
 
 export type CreatedRun = {
@@ -107,6 +110,9 @@ export type RunSummary = {
   run_id: string;
   pipeline_id: string;
   task_id?: string;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
   status: RunStatus;
   created_at: string;
   updated_at?: string;
@@ -140,6 +146,9 @@ export type CreateRunInput = {
   ciPrUrl?: string;
   ciJobUrl?: string;
   pipelineDag?: RunPipelineDagSnapshot;
+  pipelinePath?: string;
+  taskPath?: string;
+  projectRoot?: string;
 };
 
 /**

@@ -1,15 +1,15 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   fetchPipelines,
-  fetchStages,
-  isValidStageListing,
+  fetchTasks,
   type PipelineListing,
   type PipelineStageListing,
   type RunSummary,
-  type StageListing,
-  type ValidStageListing,
+  type TaskListing,
+  type CreatedStageListing,
 } from "../api";
 import { useRunCatalog } from "../catalog/useRunCatalog";
+import { displayCatalogPath, runTaskLabel } from "../catalog/displayCatalogPath";
 import { runsForPipelineView } from "../catalog/views";
 import {
   gateCount,
@@ -38,6 +38,31 @@ function definitionTrack(stages: PipelineStageListing[]): TrackStage[] {
 function gateLabel(kinds: string[] | undefined): string {
   if (!kinds || kinds.length === 0) return "none";
   return kinds.join(" · ");
+}
+
+function stageSourceLabel(stage: PipelineStageListing): string {
+  if (stage.inline) return "inline";
+  if (stage.uses_path) return stage.uses_path;
+  return "—";
+}
+
+function pipelineDirectory(pathValue: string): string {
+  const normalized = pathValue.replace(/\\/g, "/");
+  const slash = normalized.lastIndexOf("/");
+  return slash >= 0 ? normalized.slice(0, slash) : ".";
+}
+
+function defaultTaskForPipeline(
+  pipeline: PipelineListing,
+  tasks: TaskListing[],
+): string | undefined {
+  const dir = pipelineDirectory(pipeline.path);
+  const inDir = tasks.filter((task) =>
+    dir === "."
+      ? !task.path.includes("/")
+      : task.path.startsWith(`${dir}/`),
+  );
+  return inDir[0]?.path ?? tasks[0]?.path;
 }
 
 function PipelineMiniTrack({ stages }: { stages: PipelineStageListing[] }) {
@@ -72,23 +97,17 @@ export function PipelinesPage({
 }) {
   const { snapshot, error: catalogError, loading: catalogLoading } = useRunCatalog();
   const [pipelines, setPipelines] = useState<PipelineListing[]>([]);
-  const [stages, setStages] = useState<StageListing[]>([]);
+  const [tasks, setTasks] = useState<TaskListing[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [pipelinesLoading, setPipelinesLoading] = useState(true);
-  const [stagesLoading, setStagesLoading] = useState(true);
   const [stagePanelOpen, setStagePanelOpen] = useState(false);
   const [pipelinePanelOpen, setPipelinePanelOpen] = useState(false);
-  const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
-  const [createdStageId, setCreatedStageId] = useState<string | null>(null);
-  const [pipelineDraftStageId, setPipelineDraftStageId] = useState<string | null>(
-    null,
-  );
-  const stageRowRefs = useRef(new Map<string, HTMLTableRowElement>());
 
   const loadPipelines = useCallback(async () => {
     try {
-      const p = await fetchPipelines();
+      const [p, t] = await Promise.all([fetchPipelines(), fetchTasks()]);
       setPipelines(p.pipelines);
+      setTasks(t.tasks);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -97,59 +116,19 @@ export function PipelinesPage({
     }
   }, []);
 
-  const loadStages = useCallback(async () => {
-    try {
-      const { stages: listed } = await fetchStages();
-      setStages(listed);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setStagesLoading(false);
-    }
-  }, []);
-
-  const load = useCallback(async () => {
-    await Promise.all([loadPipelines(), loadStages()]);
-  }, [loadPipelines, loadStages]);
-
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadPipelines();
+  }, [loadPipelines]);
 
-  useEffect(() => {
-    if (!selectedStageId) return;
-    const row = stageRowRefs.current.get(selectedStageId);
-    row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [selectedStageId, stages]);
-
-  const loading = pipelinesLoading || stagesLoading || catalogLoading;
+  const loading = pipelinesLoading || catalogLoading;
   const displayError = error ?? catalogError;
   const selected = pipelineId
     ? (pipelines.find((p) => p.id === pipelineId) ?? null)
     : null;
-  const history = selected ? runsForPipelineView(snapshot, selected.id) : [];
-
-  function openPipelinePanel(initialStageId?: string) {
-    if (initialStageId) setPipelineDraftStageId(initialStageId);
-    setPipelinePanelOpen(true);
-  }
-
-  function closePipelinePanel() {
-    setPipelinePanelOpen(false);
-    setPipelineDraftStageId(null);
-  }
-
-  function onStageCreated(stage: ValidStageListing) {
-    setStagePanelOpen(false);
-    setSelectedStageId(stage.id);
-    setCreatedStageId(stage.id);
-    void loadStages();
-  }
+  const history = selected ? runsForPipelineView(snapshot, selected) : [];
 
   async function onPipelineCreated(pipeline: PipelineListing) {
-    closePipelinePanel();
-    setCreatedStageId(null);
+    setPipelinePanelOpen(false);
     try {
       const p = await fetchPipelines();
       setPipelines(p.pipelines);
@@ -166,10 +145,15 @@ export function PipelinesPage({
       <PipelineDetail
         pipelineId={pipelineId}
         pipeline={selected}
+        tasks={tasks}
         runs={history}
         loading={loading}
         error={displayError}
         onNew={onNew}
+        onStageCreated={() => void loadPipelines()}
+        stagePanelOpen={stagePanelOpen}
+        onOpenStagePanel={() => setStagePanelOpen(true)}
+        onCloseStagePanel={() => setStagePanelOpen(false)}
       />
     );
   }
@@ -180,14 +164,14 @@ export function PipelinesPage({
         <div>
           <h1>Pipelines</h1>
           <p>
-            A pipeline is an ordered list of stages. Each row shows its chain
-            and which stages will stop for a human.
+            Manifest-declared pipeline files and their embedded stages. Each row
+            shows its chain and which stages will stop for a human.
           </p>
         </div>
         <button
           type="button"
           className="btn btn--primary"
-          onClick={() => openPipelinePanel()}
+          onClick={() => setPipelinePanelOpen(true)}
         >
           New pipeline
         </button>
@@ -199,11 +183,14 @@ export function PipelinesPage({
       {loading ? <p className="muted">Loading pipelines…</p> : null}
       {!loading && pipelines.length === 0 ? (
         <div className="empty-hint">
-          <p style={{ margin: "0 0 var(--spacing-3)" }}>No pipelines yet.</p>
+          <p style={{ margin: "0 0 var(--spacing-3)" }}>
+            No pipelines in the manifest yet. Add a <span className="mono">stageflow.yaml</span> catalog entry or run{" "}
+            <span className="mono">sf init</span>.
+          </p>
           <button
             type="button"
             className="btn btn--primary"
-            onClick={() => openPipelinePanel()}
+            onClick={() => setPipelinePanelOpen(true)}
           >
             New pipeline
           </button>
@@ -213,11 +200,11 @@ export function PipelinesPage({
       {!loading && pipelines.length > 0 ? (
         <>
           {pipelines.map((pipeline) => {
-            const pipelineRuns = runsForPipelineView(snapshot, pipeline.id);
+            const pipelineRuns = runsForPipelineView(snapshot, pipeline);
             const gates = gateCount(pipeline.stages);
             return (
               <a
-                key={pipeline.id}
+                key={`${pipeline.path}:${pipeline.id}`}
                 className="rrow"
                 href={`#${pipelinePath(pipeline.id)}`}
               >
@@ -241,143 +228,11 @@ export function PipelinesPage({
         </>
       ) : null}
 
-      {!loading ? (
-        <section
-          className="card"
-          style={{ marginTop: "var(--spacing-6)" }}
-        >
-          <div className="card__head">
-            <h2>Stage library</h2>
-            <button
-              type="button"
-              className="btn btn--primary"
-              style={{ marginLeft: "auto" }}
-              onClick={() => setStagePanelOpen(true)}
-            >
-              New stage
-            </button>
-          </div>
-          <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: 0, marginBottom: "var(--spacing-4)" }}>
-            Stages are defined once and reused across pipelines. A gate
-            belongs to the stage, which is why the same stage always stops
-            for you wherever it appears.
-          </p>
-          {createdStageId ? (
-            <div
-              className="gate"
-              style={{
-                padding: "var(--spacing-4)",
-                marginBottom: "var(--spacing-4)",
-                borderColor: "var(--color-border-emphasized)",
-              }}
-            >
-              <div className="gate__label">Stage created</div>
-              <p className="gate__question">
-                <span className="mono">{createdStageId}</span> is in the Stage library.
-              </p>
-              <div className="form-actions" style={{ paddingTop: "var(--spacing-3)" }}>
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  onClick={() => {
-                    setCreatedStageId(null);
-                    openPipelinePanel(createdStageId);
-                  }}
-                >
-                  Create a pipeline with this stage
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  onClick={() => setCreatedStageId(null)}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          ) : null}
-          {stages.length === 0 ? (
-            <div className="empty-hint">
-              <p style={{ margin: "0 0 var(--spacing-3)" }}>No stages yet.</p>
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => setStagePanelOpen(true)}
-              >
-                New stage
-              </button>
-            </div>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Stage</th>
-                  <th>Gate</th>
-                  <th>Used by</th>
-                </tr>
-              </thead>
-              <tbody>
-                {stages.map((stage) => {
-                  const rowId = isValidStageListing(stage) ? stage.id : (stage.id ?? stage.path);
-                  const selected = selectedStageId === rowId;
-                  return (
-                    <tr
-                      key={stage.path}
-                      ref={(node) => {
-                        if (node) stageRowRefs.current.set(rowId, node);
-                        else stageRowRefs.current.delete(rowId);
-                      }}
-                      className={selected ? "is-selected" : undefined}
-                      aria-selected={selected || undefined}
-                    >
-                      <td className="mono">
-                        {isValidStageListing(stage) ? (
-                          stage.id
-                        ) : (
-                          <>
-                            {stage.id ?? stage.path}
-                            <span className="field-error" style={{ display: "block", marginTop: "var(--spacing-1)" }}>
-                              {stage.error}
-                            </span>
-                          </>
-                        )}
-                      </td>
-                      <td className="muted">
-                        {isValidStageListing(stage)
-                          ? stage.gate_kinds && stage.gate_kinds.length > 0
-                            ? stage.gate_kinds.join(" · ")
-                            : "none"
-                          : stage.gate_kinds && stage.gate_kinds.length > 0
-                            ? stage.gate_kinds.join(" · ")
-                            : "—"}
-                      </td>
-                      <td>
-                        {isValidStageListing(stage)
-                          ? stage.used_by_pipeline_ids.length === 1
-                            ? "1 pipeline"
-                            : `${stage.used_by_pipeline_ids.length} pipelines`
-                          : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </section>
-      ) : null}
-
-      <NewStagePanel
-        isOpen={stagePanelOpen}
-        onClose={() => setStagePanelOpen(false)}
-        onCreated={onStageCreated}
-      />
       <NewPipelinePanel
         isOpen={pipelinePanelOpen}
-        onClose={closePipelinePanel}
+        onClose={() => setPipelinePanelOpen(false)}
         onCreated={(pipeline) => void onPipelineCreated(pipeline)}
-        stages={stages}
-        initialStageIds={pipelineDraftStageId ? [pipelineDraftStageId] : undefined}
+        pipelines={pipelines}
       />
     </div>
   );
@@ -386,17 +241,27 @@ export function PipelinesPage({
 function PipelineDetail({
   pipelineId,
   pipeline,
+  tasks,
   runs,
   loading,
   error,
   onNew,
+  onStageCreated,
+  stagePanelOpen,
+  onOpenStagePanel,
+  onCloseStagePanel,
 }: {
   pipelineId: string;
   pipeline: PipelineListing | null;
+  tasks: TaskListing[];
   runs: RunSummary[];
   loading: boolean;
   error: string | null;
   onNew: (path: string) => void;
+  onStageCreated: () => void;
+  stagePanelOpen: boolean;
+  onOpenStagePanel: () => void;
+  onCloseStagePanel: () => void;
 }) {
   const track = useMemo(
     () => (pipeline ? definitionTrack(pipeline.stages) : []),
@@ -409,6 +274,8 @@ function PipelineDetail({
         gates === 1 ? "1 gate" : `${gates} gates`
       } · ${runs.length} ${runs.length === 1 ? "run" : "runs"}`
     : pipelineId;
+
+  const defaultTask = pipeline ? defaultTaskForPipeline(pipeline, tasks) : undefined;
 
   return (
     <div className="main__inner">
@@ -424,7 +291,14 @@ function PipelineDetail({
         {pipeline ? (
           <button
             className="btn btn--primary"
-            onClick={() => onNew(newRunPath({ pipeline: pipeline.id }))}
+            onClick={() =>
+              onNew(
+                newRunPath({
+                  pipeline: pipeline.path,
+                  ...(defaultTask ? { task: defaultTask } : {}),
+                }),
+              )
+            }
           >
             Start a run with this
           </button>
@@ -437,7 +311,7 @@ function PipelineDetail({
         {loading ? <p className="muted">Loading…</p> : null}
         {!loading && !pipeline ? (
           <p className="muted">
-            {pipelineId} is not in this project's pipelines/ catalog.
+            {pipelineId} is not in the current manifest catalog.
           </p>
         ) : null}
 
@@ -445,12 +319,18 @@ function PipelineDetail({
           <>
             <PipelineTrack stages={track} mode="definition" />
 
-            <h3 style={{ marginTop: "var(--spacing-6)" }}>Stages</h3>
+            <div className="page-head" style={{ marginTop: "var(--spacing-6)" }}>
+              <h3 style={{ margin: 0 }}>Stages</h3>
+              <button type="button" className="btn btn--sm" onClick={onOpenStagePanel}>
+                Add stage file
+              </button>
+            </div>
             <table className="table">
               <thead>
                 <tr>
                   <th>Stage</th>
                   <th>Gate</th>
+                  <th>Source</th>
                 </tr>
               </thead>
               <tbody>
@@ -458,6 +338,7 @@ function PipelineDetail({
                   <tr key={stage.id}>
                     <td className="mono">{stage.id}</td>
                     <td className="muted">{gateLabel(stage.gate_kinds)}</td>
+                    <td className="mono muted">{stageSourceLabel(stage)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -489,8 +370,13 @@ function PipelineDetail({
                     <tr key={run.run_id}>
                       <td>
                         <a href={`#${runStreamPath(run.run_id)}`}>
-                          {run.task_id ?? "unknown task"}
+                          {runTaskLabel(run)}
                         </a>
+                        {run.task_path ? (
+                          <span className="muted mono" style={{ display: "block", fontSize: "var(--font-size-xs)" }}>
+                            {displayCatalogPath(run.task_path, run.project_root)}
+                          </span>
+                        ) : null}
                       </td>
                       <td>
                         <StatusDot status={runDisplayStatus(run)} />
@@ -503,6 +389,16 @@ function PipelineDetail({
             )}
           </>
         ) : null}
+
+      <NewStagePanel
+        isOpen={stagePanelOpen}
+        onClose={onCloseStagePanel}
+        pipelineDirectory={pipeline ? pipelineDirectory(pipeline.path) : "pipelines"}
+        onCreated={(_stage: CreatedStageListing) => {
+          onCloseStagePanel();
+          onStageCreated();
+        }}
+      />
     </div>
   );
 }

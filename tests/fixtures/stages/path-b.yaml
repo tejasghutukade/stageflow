@@ -1,0 +1,3 @@
+id: path-b
+system_prompt: Path B stage.
+model: anthropic/claude-sonnet-4-5

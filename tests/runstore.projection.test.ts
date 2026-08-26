@@ -8,6 +8,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunDetail, RunMeta, RunSummary, StageSnapshot } from "../src/runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import { projectRunDetail, projectRunSummary } from "../src/runstore/runProjection.js";
+import { syncRunStatusFromStages } from "../src/runtime/stageRecovery.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -235,39 +236,25 @@ describe("run projection", () => {
   });
 
   it("projects pipeline_track as linear chain during beta running", async () => {
-    const loaded = await loadPipeline("docs-only", {
-      cwd: fixtures,
-      stagesDir: path.join(fixtures, "stages"),
-    });
+    const owned = path.join(fixtures, "pipeline-owned");
+    const loaded = await loadPipeline(
+      path.join(owned, "include-merge/main.pipeline.yaml"),
+    );
     const dag = buildPipelineDagSnapshotFromLoaded(loaded);
     const stages = [
-      snap("clarify", "succeeded"),
-      snap("design-doc", "running"),
-      snap("implementation-plan", "pending"),
+      snap("gate", "succeeded"),
+      snap("finish", "running"),
     ];
     const detail = projectRunDetail(meta(), stages, "id: t\n", dag);
-    expect(detail.stages.map((s) => s.stage_id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
-    ]);
+    expect(detail.stages.map((s) => s.stage_id)).toEqual(["gate", "finish"]);
     expect(detail.pipeline_track.nodes.map((n) => n.stage_id)).toEqual([
-      "clarify",
-      "design-doc",
-      "implementation-plan",
+      "gate",
+      "finish",
     ]);
-    expect(detail.pipeline_track.edges).toEqual([
-      { from: "clarify", to: "design-doc" },
-      { from: "design-doc", to: "implementation-plan" },
-    ]);
+    expect(detail.pipeline_track.edges).toEqual([{ from: "gate", to: "finish" }]);
     expect(
-      detail.pipeline_track.nodes.find((n) => n.stage_id === "design-doc")
-        ?.readiness,
+      detail.pipeline_track.nodes.find((n) => n.stage_id === "finish")?.readiness,
     ).toBe("running");
-    expect(
-      detail.pipeline_track.nodes.find((n) => n.stage_id === "implementation-plan")
-        ?.readiness,
-    ).toBe("blocked");
   });
 
   it("preserves per-stage pending_prompt for multi-wait detail", () => {
@@ -297,6 +284,40 @@ describe("run projection", () => {
       "Question for branch B?",
     );
     expect(detail.pipeline_track.nodes).toHaveLength(3);
+  });
+
+  it("returns succeeded when meta is succeeded and pending stages are fork-skipped with no active stage", () => {
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("design-doc", "succeeded"),
+      snap("implementation-plan", "pending"),
+      snap("join-doc", "pending"),
+    ];
+    const summary = projectRunSummary(meta({ status: "succeeded" }), stages);
+    expect(summary.status).toBe("succeeded");
+  });
+
+  it("does not apply fork-skipped guard when an active stage is present", () => {
+    const stages = [
+      snap("clarify", "running"),
+      snap("design-doc", "pending"),
+      snap("implementation-plan", "pending"),
+    ];
+    const summary = projectRunSummary(meta({ status: "succeeded" }), stages);
+    expect(summary.status).toBe("running");
+  });
+
+  it("projects locator paths from meta", () => {
+    const pipeline_path = "/abs/pipeline.yaml";
+    const task_path = "/abs/task.yaml";
+    const project_root = "/abs/project";
+    const summary = projectRunSummary(
+      meta({ pipeline_path, task_path, project_root }),
+      [],
+    );
+    expect(summary.pipeline_path).toBe(pipeline_path);
+    expect(summary.task_path).toBe(task_path);
+    expect(summary.project_root).toBe(project_root);
   });
 
   it("listRuns and readRun agree on triage fields for the same events", async () => {
@@ -329,5 +350,21 @@ describe("run projection", () => {
     expect(summary?.stages).toEqual([
       { id: "clarify", status: "waiting_for_input", attempt_count: 1 },
     ]);
+  });
+});
+
+describe("syncRunStatusFromStages", () => {
+  it("does not downgrade a succeeded run when fork-skipped stages have no store events", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-recovery-fork-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: test\n",
+      taskId: "t",
+    });
+    await store.updateRunStatus(run.runId, "succeeded");
+    await syncRunStatusFromStages(store, run.runId);
+    const runMeta = await store.readRunMeta(run.runId);
+    expect(runMeta.status).toBe("succeeded");
   });
 });

@@ -11,7 +11,10 @@ CREATE TABLE IF NOT EXISTS runs (
   pipeline_dag_json TEXT,
   git_sha TEXT,
   ci_pr_url TEXT,
-  ci_job_url TEXT
+  ci_job_url TEXT,
+  pipeline_path TEXT,
+  task_path TEXT,
+  project_root TEXT
 );
 
 CREATE TABLE IF NOT EXISTS stages (

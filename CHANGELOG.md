@@ -7,20 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `install.sh` quick install (curl \| bash → npm global)
-- GitHub Pages workflow (`docs.yml`) and Jekyll config for `docs/`
-- `npm run validate:examples` — strict validate all example catalogs
-- npm downloads badge; OG/social SVG template at `docs/img/stageflow-og.svg`
-- Public `docs/` reference tree (CLI, YAML catalog, MCP, CI, providers, HITL)
-- Examples gallery: hello-world, plan-review, github-release, ci-validate
-- GitHub Actions CI workflow (build, test, typecheck) and README badge
-- Community files: CHANGELOG, SECURITY, CODE_OF_CONDUCT, SUPPORT, CONTRIBUTING
-
 ### Changed
 
-- README rewritten as product landing page with positioning, features, and Conductor comparison
+- **BREAKING:** Pipeline-owned catalog replaces legacy `pipelines/` + `stages/` + cwd layout. Stages are object entries with `uses:` or inline bodies; filenames use `*.pipeline.yaml` / `*.task.yaml`.
+- **BREAKING:** `--pipeline` requires a filesystem path (no bare pipeline id).
+- **BREAKING:** MCP `start_run` requires a pipeline path.
+- Added: repo-root `stageflow.yaml` manifest, `sf init`, git-root `.stageflow` store, global auth under `~/.stageflow` by default.
+- Migrated repo fixtures, examples, docs, and CI workflows to pipeline-owned paths.
 
 ## [0.2.0] - 2026-08-25
 

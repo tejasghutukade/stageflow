@@ -1,6 +1,0 @@
-id: cycle
-stages:
-  - id: clarify
-    needs: design-doc
-  - id: design-doc
-    needs: clarify

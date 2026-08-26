@@ -1,0 +1,4 @@
+id: branch-b
+system_prompt: |
+  You are branch-b. Emit success envelope.
+model: cursor/auto

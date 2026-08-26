@@ -1,0 +1,7 @@
+id: duplicate-include
+include:
+  - local: ./frag.yaml
+stages:
+  - id: gate
+    system_prompt: Duplicate gate in main.
+    model: cursor/auto

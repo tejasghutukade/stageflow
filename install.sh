@@ -60,9 +60,10 @@ main() {
   install_package
   verify_install
   echo ""
-  echo "Next: cd into a project with pipelines/, stages/, tasks/ and run:"
+  echo "Next: cd into a project directory and run:"
+  echo "  sf init"
   echo "  sf ui"
-  echo "  sf run --task tasks/<task>.yaml --pipeline <pipeline-id>"
+  echo "  sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml"
   echo ""
   echo "Docs: https://github.com/tejasghutukade/stageflow/tree/main/docs"
 }

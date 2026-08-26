@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPipeline,
@@ -9,17 +8,26 @@ import {
   pipelineConfigToYaml,
 } from "../src/config/createPipeline.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
+
+function stageRef(id: string, needs?: string) {
+  return needs
+    ? { id, uses: `./${id}.yaml`, needs }
+    : { id, uses: `./${id}.yaml` };
+}
 
 describe("parseCreatePipelineBody", () => {
-  it("accepts valid input and rejects invalid shape", () => {
+  it("accepts valid object stage entries and rejects invalid shape", () => {
     expect(
       parseCreatePipelineBody({
+        directory: "pipelines",
         id: "plan-review-proving",
-        stages: ["plan-review", "plan-review-followup"],
+        stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
       }),
     ).toEqual({
+      directory: "pipelines",
       id: "plan-review-proving",
-      stages: ["plan-review", "plan-review-followup"],
+      stages: [stageRef("plan-review"), stageRef("plan-review-followup")],
     });
 
     expect(parseCreatePipelineBody(null)).toEqual({
@@ -30,48 +38,73 @@ describe("parseCreatePipelineBody", () => {
     expect(parseCreatePipelineBody({ id: "ok", stages: [] })).toEqual({
       ok: false,
       status: 400,
-      error: "stages must be a non-empty array",
+      error: "directory is required",
     });
-    expect(parseCreatePipelineBody({ id: "ok", stages: [1] })).toEqual({
+    expect(parseCreatePipelineBody({ directory: "pipelines", id: "ok", stages: [] })).toEqual({
       ok: false,
       status: 400,
-      error: "stages must be an array of strings",
+      error: "stages must be a non-empty array",
     });
-    expect(parseCreatePipelineBody({ id: "Bad", stages: ["a"] })).toEqual({
+    expect(parseCreatePipelineBody({ directory: "pipelines", id: "ok", stages: [1] })).toEqual({
+      ok: false,
+      status: 400,
+      error: "stages[0] must be an object with id",
+    });
+    expect(parseCreatePipelineBody({ directory: "pipelines", id: "Bad", stages: [stageRef("a")] })).toEqual({
       ok: false,
       status: 400,
       error: "id must be lowercase kebab-case",
     });
   });
 
+  it("rejects bare string stage refs", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "linear",
+        stages: ["plan-review"],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error:
+        'stages[0]: bare string stage refs are not supported; use { id: "plan-review", uses: "./plan-review.yaml" } or inline body',
+    });
+  });
+
   it("accepts DAG-shaped stage entries", () => {
     expect(
       parseCreatePipelineBody({
+        directory: "pipelines",
         id: "fan-out",
-        stages: [{ id: "a" }, { id: "b", needs: "a" }],
+        stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
       }),
     ).toEqual({
+      directory: "pipelines",
       id: "fan-out",
-      stages: [{ id: "a" }, { id: "b", needs: "a" }],
+      stages: [{ id: "a", uses: "./a.yaml" }, { id: "b", uses: "./b.yaml", needs: "a" }],
     });
   });
 
   it("rejects mixed string and object stage arrays", () => {
     expect(
       parseCreatePipelineBody({
+        directory: "pipelines",
         id: "mixed",
-        stages: ["a", { id: "b" }],
+        stages: ["a", { id: "b", uses: "./b.yaml" }],
       }),
     ).toEqual({
       ok: false,
       status: 400,
-      error: "stages must be either all strings or all objects",
+      error:
+        'stages[0]: bare string stage refs are not supported; use { id: "a", uses: "./a.yaml" } or inline body',
     });
   });
 
   it("rejects object entries missing id or with non-string needs", () => {
     expect(
       parseCreatePipelineBody({
+        directory: "pipelines",
         id: "bad-object",
         stages: [{}],
       }),
@@ -83,8 +116,9 @@ describe("parseCreatePipelineBody", () => {
 
     expect(
       parseCreatePipelineBody({
+        directory: "pipelines",
         id: "bad-needs",
-        stages: [{ id: "a", needs: 1 }],
+        stages: [{ id: "a", uses: "./a.yaml", needs: 1 }],
       }),
     ).toEqual({
       ok: false,
@@ -95,42 +129,26 @@ describe("parseCreatePipelineBody", () => {
 });
 
 describe("normalizeCreatePipelineStages", () => {
-  it("maps string arrays to stage refs without needs", () => {
-    expect(normalizeCreatePipelineStages(["a", "b"])).toEqual([
-      { id: "a" },
-      { id: "b" },
+  it("defaults uses paths for object refs without inline bodies", () => {
+    expect(normalizeCreatePipelineStages([{ id: "a" }, { id: "b" }])).toEqual([
+      { id: "a", uses: "./a.yaml" },
+      { id: "b", uses: "./b.yaml" },
     ]);
   });
 });
 
 describe("pipelineConfigToYaml", () => {
-  it("writes sparse YAML with ordered stages", () => {
+  it("writes pipeline-owned YAML with uses refs", () => {
     expect(
       pipelineConfigToYaml(
         {
           id: "single",
-          stages: [{ id: "clarify" }],
-        },
-        { format: "linear" },
-      ),
-    ).toBe(["id: single", "stages:", "  - clarify", ""].join("\n"));
-
-    expect(
-      pipelineConfigToYaml(
-        {
-          id: "plan-review-proving",
-          stages: [{ id: "plan-review" }, { id: "plan-review-followup" }],
+          stages: [{ id: "clarify", uses: "./clarify.yaml" }],
         },
         { format: "linear" },
       ),
     ).toBe(
-      [
-        "id: plan-review-proving",
-        "stages:",
-        "  - plan-review",
-        "  - plan-review-followup",
-        "",
-      ].join("\n"),
+      ["id: single", "stages:", "  - id: clarify", "    uses: ./clarify.yaml", ""].join("\n"),
     );
   });
 
@@ -140,10 +158,8 @@ describe("pipelineConfigToYaml", () => {
         {
           id: "recon-review",
           stages: [
-            { id: "recon" },
-            { id: "improve-a", needs: "recon" },
-            { id: "improve-b", needs: "recon" },
-            { id: "improve-c", needs: "recon" },
+            { id: "recon", uses: "./recon.yaml" },
+            { id: "improve-a", uses: "./improve-a.yaml", needs: "recon" },
           ],
         },
         { format: "dag" },
@@ -153,12 +169,10 @@ describe("pipelineConfigToYaml", () => {
         "id: recon-review",
         "stages:",
         "  - id: recon",
+        "    uses: ./recon.yaml",
         "  - id: improve-a",
         "    needs: recon",
-        "  - id: improve-b",
-        "    needs: recon",
-        "  - id: improve-c",
-        "    needs: recon",
+        "    uses: ./improve-a.yaml",
         "",
       ].join("\n"),
     );
@@ -167,13 +181,15 @@ describe("pipelineConfigToYaml", () => {
 
 describe("createPipeline", () => {
   async function writeStage(
-    cwd: string,
+    projectRoot: string,
+    directory: string,
     id: string,
     extra = "",
   ): Promise<void> {
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
+    const dir = path.join(projectRoot, directory);
+    await mkdir(dir, { recursive: true });
     await writeFile(
-      path.join(cwd, "stages", `${id}.yaml`),
+      path.join(dir, `${id}.yaml`),
       [
         `id: ${id}`,
         "system_prompt: Do the thing.",
@@ -184,232 +200,127 @@ describe("createPipeline", () => {
     );
   }
 
-  it("creates pipeline file, rejects collisions, and round-trips through loadPipeline", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-"));
+  it("creates pipeline file with uses refs and rejects collisions", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const directory = "pipelines";
 
     try {
-      await writeStage(cwd, "alpha");
-      await writeStage(cwd, "beta", "gate_kinds:\n  - confirm");
+      await writeStage(root, directory, "alpha");
+      await writeStage(root, directory, "beta", "gate_kinds:\n  - confirm");
 
-      const created = await createPipeline(cwd, {
+      const created = await createPipeline(root, {
+        directory,
         id: "new-pipeline",
-        stages: ["alpha", "beta"],
+        stages: [stageRef("alpha"), stageRef("beta")],
       });
       expect(created).toEqual({
         ok: true,
         pipeline: {
-          path: "pipelines/new-pipeline.yaml",
+          path: "pipelines/new-pipeline.pipeline.yaml",
           id: "new-pipeline",
-          stages: [{ id: "alpha" }, { id: "beta", gate_kinds: ["confirm"] }],
+          stages: [
+            { id: "alpha", uses_path: "pipelines/alpha.yaml" },
+            { id: "beta", gate_kinds: ["confirm"], uses_path: "pipelines/beta.yaml" },
+          ],
         },
       });
 
-      const yaml = await readFile(path.join(cwd, "pipelines", "new-pipeline.yaml"), "utf8");
-      expect(yaml).toBe(
-        ["id: new-pipeline", "stages:", "  - alpha", "  - beta", ""].join("\n"),
+      const yaml = await readFile(
+        path.join(root, directory, "new-pipeline.pipeline.yaml"),
+        "utf8",
       );
-      await expect(loadPipeline(path.join(cwd, "pipelines", "new-pipeline.yaml"), { cwd })).resolves.toMatchObject({
-        pipeline: { id: "new-pipeline", stages: ["alpha", "beta"] },
-      });
+      expect(yaml).toContain("uses: ./alpha.yaml");
+      expect(yaml).toContain("uses: ./beta.yaml");
 
-      const pathCollision = await createPipeline(cwd, {
+      const pathCollision = await createPipeline(root, {
+        directory,
         id: "new-pipeline",
-        stages: ["alpha"],
+        stages: [stageRef("alpha")],
       });
-      expect(pathCollision).toEqual({
-        ok: false,
-        status: 409,
-        error: "Pipeline id already exists (pipelines/new-pipeline.yaml)",
-      });
-
-      await writeFile(
-        path.join(cwd, "pipelines", "alias.yaml"),
-        ["id: other-id", "stages:", "  - alpha", ""].join("\n"),
-      );
-      const yamlIdCollision = await createPipeline(cwd, {
-        id: "other-id",
-        stages: ["alpha"],
-      });
-      expect(yamlIdCollision).toEqual({
-        ok: false,
-        status: 409,
-        error: "Pipeline id already exists (pipelines/alias.yaml)",
-      });
+      expect(pathCollision.ok).toBe(false);
+      if (pathCollision.ok) return;
+      expect(pathCollision.status).toBe(409);
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
-  it("returns 422 for duplicate or missing stage references", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-422-"));
+  it("returns 422 for duplicate or missing stage files", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const directory = "pipelines";
 
     try {
-      await writeStage(cwd, "alpha");
+      await writeStage(root, directory, "alpha");
 
-      const duplicate = await createPipeline(cwd, {
+      const duplicate = await createPipeline(root, {
+        directory,
         id: "dup-stages",
-        stages: ["alpha", "alpha"],
+        stages: [stageRef("alpha"), stageRef("alpha")],
       });
-      expect(duplicate).toEqual({
-        ok: false,
-        status: 422,
-        error: "Pipeline stages must not contain duplicates",
-      });
+      expect(duplicate.ok).toBe(false);
+      if (duplicate.ok) return;
+      expect(duplicate.status).toBe(422);
+      expect(duplicate.error).toContain('Duplicate stage id "alpha"');
 
-      const missing = await createPipeline(cwd, {
+      const missing = await createPipeline(root, {
+        directory,
         id: "missing-stage",
-        stages: ["alpha", "gone"],
+        stages: [stageRef("alpha"), stageRef("gone")],
       });
-      expect(missing).toEqual({
-        ok: false,
-        status: 422,
-        error: "one or more selected Stages no longer exist",
-      });
+      expect(missing.ok).toBe(false);
+      if (missing.ok) return;
+      expect(missing.status).toBe(422);
+      expect(missing.error).toContain("missing stage file");
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
-  it("creates pipelines directory when missing", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-empty-"));
+  it("supports inline single-stage scaffold", async () => {
+    const { root, cleanup } = await initTempGitRepo();
 
     try {
-      await writeStage(cwd, "only");
-
-      const created = await createPipeline(cwd, {
-        id: "first",
-        stages: ["only"],
-      });
-      expect(created.ok).toBe(true);
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it("creates fan-out DAG pipeline with object-form YAML (AE1)", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-dag-"));
-
-    try {
-      await writeStage(cwd, "recon");
-      await writeStage(cwd, "improve-a");
-      await writeStage(cwd, "improve-b");
-      await writeStage(cwd, "improve-c");
-
-      const created = await createPipeline(cwd, {
-        id: "recon-review",
+      const created = await createPipeline(root, {
+        directory: "pipelines",
+        id: "hello",
         stages: [
-          { id: "recon" },
-          { id: "improve-a", needs: "recon" },
-          { id: "improve-b", needs: "recon" },
-          { id: "improve-c", needs: "recon" },
+          {
+            id: "hello",
+            inline: {
+              system_prompt: "Say hello.",
+              model: "anthropic/claude-sonnet-4-5",
+            },
+          },
         ],
       });
       expect(created.ok).toBe(true);
-
-      const yaml = await readFile(path.join(cwd, "pipelines", "recon-review.yaml"), "utf8");
-      expect(yaml).toBe(
-        [
-          "id: recon-review",
-          "stages:",
-          "  - id: recon",
-          "  - id: improve-a",
-          "    needs: recon",
-          "  - id: improve-b",
-          "    needs: recon",
-          "  - id: improve-c",
-          "    needs: recon",
-          "",
-        ].join("\n"),
-      );
-
-      const loaded = await loadPipeline(path.join(cwd, "pipelines", "recon-review.yaml"), { cwd });
-      expect(loaded.dag.roots).toEqual(["recon"]);
-      expect(loaded.pipeline.stages).toEqual([
-        "recon",
-        "improve-a",
-        "improve-b",
-        "improve-c",
-      ]);
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects dependency cycles without writing a file (AE2)", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-cycle-"));
-
-    try {
-      await writeStage(cwd, "a");
-      await writeStage(cwd, "b");
-
-      const result = await createPipeline(cwd, {
-        id: "cycle",
-        stages: [{ id: "a", needs: "b" }, { id: "b", needs: "a" }],
-      });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.status).toBe(422);
-      expect(result.error).toContain("dependency cycle detected");
-
+      if (!created.ok) return;
+      expect(created.pipeline.stages[0]?.inline).toBe(true);
       await expect(
-        access(path.join(cwd, "pipelines", "cycle.yaml")),
-      ).rejects.toThrow();
+        loadPipeline(path.join(root, "pipelines/hello.pipeline.yaml"), { cwd: root }),
+      ).resolves.toMatchObject({
+        pipeline: { id: "hello", stages: ["hello"] },
+      });
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
-  it("rejects needs targeting a stage not in the pipeline (AE3)", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-bad-needs-"));
-
+  it("rejects directory outside project root", async () => {
+    const { root, cleanup } = await initTempGitRepo();
     try {
-      await writeStage(cwd, "a");
-      await writeStage(cwd, "b");
-
-      const result = await createPipeline(cwd, {
-        id: "bad-needs",
-        stages: [{ id: "a" }, { id: "b", needs: "missing" }],
+      const result = await createPipeline(root, {
+        directory: "../outside",
+        id: "nope",
+        stages: [stageRef("a")],
       });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.status).toBe(422);
-      expect(result.error).toContain("unknown needs");
-
-      await expect(
-        access(path.join(cwd, "pipelines", "bad-needs.yaml")),
-      ).rejects.toThrow();
-    } finally {
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
-
-  it("creates linear pipeline from string list with implicit chain (AE4)", async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-create-pipeline-linear-"));
-
-    try {
-      await writeStage(cwd, "alpha");
-      await writeStage(cwd, "beta");
-      await writeStage(cwd, "gamma");
-
-      const created = await createPipeline(cwd, {
-        id: "linear-chain",
-        stages: ["alpha", "beta", "gamma"],
+      expect(result).toEqual({
+        ok: false,
+        status: 400,
+        error: "directory must be inside the project root",
       });
-      expect(created.ok).toBe(true);
-
-      const yaml = await readFile(path.join(cwd, "pipelines", "linear-chain.yaml"), "utf8");
-      expect(yaml).toBe(
-        ["id: linear-chain", "stages:", "  - alpha", "  - beta", "  - gamma", ""].join("\n"),
-      );
-
-      const loaded = await loadPipeline(path.join(cwd, "pipelines", "linear-chain.yaml"), { cwd });
-      expect(loaded.pipeline.stages).toEqual(["alpha", "beta", "gamma"]);
-      const betaNode = loaded.dag.nodes.find((node) => node.id === "beta");
-      expect(betaNode?.needs).toBe("alpha");
-      const gammaNode = loaded.dag.nodes.find((node) => node.id === "gamma");
-      expect(gammaNode?.needs).toBe("beta");
     } finally {
-      await rm(cwd, { recursive: true, force: true });
+      await cleanup();
     }
   });
 });

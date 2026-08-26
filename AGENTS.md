@@ -6,7 +6,7 @@ Guidance for contributors and AI coding agents working on the Stageflow reposito
 
 Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono), with a local operator console.
 
-- Users author YAML catalogs (`pipelines/`, `stages/`, `tasks/`) in their project
+- Users author **pipeline-owned YAML** (`*.pipeline.yaml`, `*.task.yaml`, optional `stageflow.yaml` manifest)
 - Each stage runs in a fresh Pi agent session
 - Stages hand off via typed envelopes and artifacts
 - HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), and via MCP when `sf ui` is running
@@ -56,10 +56,14 @@ Dev entrypoint without a global install:
 
 ```bash
 npm run dev -- ui
-npm run dev -- run --task tests/fixtures/tasks/sample.yaml --pipeline single
+npm run dev -- run \
+  --task tests/fixtures/tasks/sample.task.yaml \
+  --pipeline tests/fixtures/pipelines/single.pipeline.yaml
 ```
 
 Optional: `npm run ui:dev` for Vite hot reload against a running `sf ui` backend.
+
+Repo-root [`stageflow.yaml`](stageflow.yaml) lists example catalog roots and excludes `tests/fixtures` from operator-console browse (fixtures remain loadable by explicit path in tests).
 
 ## YAML authoring
 

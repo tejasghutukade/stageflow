@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -427,7 +428,7 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     );
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml: "id: t\ngoal: g\n",
     });
     const roots = buildStageRoots(run.workspaceDir, "clarify");
@@ -702,8 +703,8 @@ describe.each(kinds)("runtime stage recovery abandon (%s)", (kind) => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
 
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -760,8 +761,8 @@ describe.each(kinds)("runtime stage recovery abandon (%s)", (kind) => {
       const manager = new RunManager({ agent, store, cwd: fixtures });
 
       const started = await manager.startRun({
-        task: path.join(fixtures, "tasks", "sample.yaml"),
-        pipeline: "parallel-retry-fanout",
+        task: SAMPLE_TASK,
+        pipeline: pipelinePath("parallel-retry-fanout"),
       });
       expect(started.ok).toBe(true);
       if (!started.ok) return;
@@ -898,8 +899,8 @@ describe("runtime stage recovery abandon parallel interaction", () => {
 
       const manager = new RunManager({ agent, store, cwd: fixtures });
       const started = await manager.startRun({
-        task: path.join(fixtures, "tasks", "sample.yaml"),
-        pipeline: "parallel-retry-fanout",
+        task: SAMPLE_TASK,
+        pipeline: pipelinePath("parallel-retry-fanout"),
       });
       expect(started.ok).toBe(true);
       if (!started.ok) return;

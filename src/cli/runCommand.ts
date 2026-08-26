@@ -17,7 +17,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 
@@ -148,13 +148,20 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   };
 }
 
-function defaultStartRun(cwd: string, operatorCatalog: OperatorCatalog): StartRunFn {
+function defaultStartRun(
+  cwd: string,
+  projectRoot: string,
+  isGitProject: boolean,
+  operatorCatalog: OperatorCatalog,
+): StartRunFn {
   return async (input) => {
-    const store = createRunStore({ rootDir: cwd });
+    const store = createRunStore({ rootDir: projectRoot });
     const manager = new RunManager({
       agent: new PiAgentAdapter(),
       store,
       cwd,
+      projectRoot,
+      isGitProject,
       operatorCatalog,
       executionMode: readStageExecutionMode(process.env, "process"),
     });
@@ -175,12 +182,16 @@ export async function runRunCommand(
   args: string[],
   options: {
     cwd?: string;
+    projectRoot?: string;
+    isGitProject?: boolean;
     io?: Partial<RunCommandIo>;
     startRun?: StartRunFn;
     env?: Record<string, string | undefined>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
+  const isGitProject = options.isGitProject ?? false;
   const out: RunCommandIo = { ...defaultIo, ...options.io };
 
   let parsed: ParsedRunArgs;
@@ -212,7 +223,9 @@ export async function runRunCommand(
     env: options.env ?? process.env,
     defaultCwd: cwd,
   });
-  const startRun = options.startRun ?? defaultStartRun(cwd, operatorCatalog);
+  const startRun =
+    options.startRun ??
+    defaultStartRun(cwd, projectRoot, isGitProject, operatorCatalog);
   const identity = resolveCiIdentity({
     flags: {
       gitSha: parsed.gitSha,

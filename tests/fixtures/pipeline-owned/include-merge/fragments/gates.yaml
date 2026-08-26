@@ -1,0 +1,2 @@
+stages:
+  - uses: ./gate.stage.yaml

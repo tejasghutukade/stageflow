@@ -4,13 +4,15 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
+import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
 
-const ALLOWED_STAGE_REF_KEYS = new Set(["id", "needs"]);
+const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
 type NormalizedEdge = {
   id: string;
   needs: string | null;
   stageIndex: number;
+  fork?: { select: "one" | "subset"; allow_none?: boolean };
 };
 
 export type ResolvePipelineDagContext = {
@@ -45,11 +47,10 @@ export function parsePipelineStageEntries(
   for (let index = 0; index < raw.length; index++) {
     const entry = raw[index];
     if (typeof entry === "string") {
-      if (!entry) {
-        throw new Error(formatError(ctx, `invalid stage entry at index ${index}: stage id must be a non-empty string`));
-      }
-      entries.push(entry);
-      continue;
+      const hint = entry
+        ? `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "${entry}", uses: "./${entry}.yaml" } or inline body`
+        : `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`;
+      throw new Error(formatError(ctx, hint));
     }
 
     if (!isPlainObject(entry)) {
@@ -58,7 +59,7 @@ export function parsePipelineStageEntries(
 
     const keys = Object.keys(entry);
     for (const key of keys) {
-      if (!ALLOWED_STAGE_REF_KEYS.has(key)) {
+      if (!isAllowedPipelineStageEntryKey(key)) {
         throw new Error(
           formatError(ctx, `invalid stage entry "${String(entry.id ?? index)}": unknown key "${key}"`),
         );
@@ -69,8 +70,21 @@ export function parsePipelineStageEntries(
       throw new Error(formatError(ctx, `invalid stage entry at index ${index}: id must be a non-empty string`));
     }
 
+    let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
+    if (entry.fork !== undefined) {
+      if (!isPlainObject(entry.fork)) {
+        throw new Error(formatError(ctx, `stage "${entry.id}": fork must be an object`));
+      }
+      for (const fk of Object.keys(entry.fork)) {
+        if (!ALLOWED_FORK_KEYS.has(fk)) {
+          throw new Error(formatError(ctx, `stage "${entry.id}": fork: unknown key "${fk}"`));
+        }
+      }
+      forkValue = entry.fork as { select: "one" | "subset"; allow_none?: boolean };
+    }
+
     if (entry.needs === undefined) {
-      entries.push({ id: entry.id });
+      entries.push(forkValue !== undefined ? { id: entry.id, fork: forkValue } : { id: entry.id });
       continue;
     }
 
@@ -89,32 +103,21 @@ export function parsePipelineStageEntries(
       throw new Error(formatError(ctx, `stage "${entry.id}": needs must be a non-empty string`));
     }
 
-    entries.push({ id: entry.id, needs: entry.needs });
+    entries.push(forkValue !== undefined
+      ? { id: entry.id, needs: entry.needs, fork: forkValue }
+      : { id: entry.id, needs: entry.needs });
   }
 
   return entries;
 }
 
-function normalizeToEdges(entries: PipelineStageYamlEntry[]): NormalizedEdge[] {
-  const edges: NormalizedEdge[] = [];
-  for (let index = 0; index < entries.length; index++) {
-    const entry = entries[index];
-    if (typeof entry === "string") {
-      edges.push({
-        id: entry,
-        needs: index > 0 ? (entries[index - 1] as string) : null,
-        stageIndex: index,
-      });
-      continue;
-    }
-
-    edges.push({
-      id: entry.id,
-      needs: entry.needs ?? null,
-      stageIndex: index,
-    });
-  }
-  return edges;
+function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
+  return entries.map((entry, index) => ({
+    id: entry.id,
+    needs: entry.needs ?? null,
+    stageIndex: index,
+    ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
+  }));
 }
 
 function detectDuplicateIds(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
@@ -215,7 +218,7 @@ function topologicalSort(edges: NormalizedEdge[]): NormalizedEdge[] {
     children.get(edge.needs)?.push(edge.id);
   }
 
-  for (const [parent, childIds] of children) {
+  for (const [, childIds] of children) {
     childIds.sort(
       (a, b) => (byId.get(a)?.stageIndex ?? 0) - (byId.get(b)?.stageIndex ?? 0),
     );
@@ -275,17 +278,42 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     needs: edge.needs,
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
+    ...(edge.fork !== undefined
+      ? { fork: { select: edge.fork.select, allow_none: edge.fork.allow_none ?? false } }
+      : {}),
   }));
 
   return { nodes, roots, childrenOf };
 }
 
-export function resolvePipelineDag(
-  rawStages: unknown,
+function validateForkFields(
+  edges: NormalizedEdge[],
+  dag: ResolvedPipelineDag,
+  ctx: ResolvePipelineDagContext,
+): void {
+  for (const edge of edges) {
+    if (!edge.fork) continue;
+    if (edge.fork.select !== "one" && edge.fork.select !== "subset") {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${edge.id}": fork.select must be "one" or "subset"${edge.fork.select === undefined ? " (missing)" : `, got "${String(edge.fork.select)}"`}`,
+        ),
+      );
+    }
+    if ((dag.childrenOf[edge.id] ?? []).length === 0) {
+      throw new Error(
+        formatError(ctx, `fork on stage "${edge.id}": no children in the DAG`),
+      );
+    }
+  }
+}
+
+export function resolvePipelineDagFromRefs(
+  refs: PipelineStageRef[],
   ctx: ResolvePipelineDagContext,
 ): { stages: string[]; dag: ResolvedPipelineDag } {
-  const entries = parsePipelineStageEntries(rawStages, ctx);
-  const edges = normalizeToEdges(entries);
+  const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
   validateNeedsTargets(edges, ctx);
   detectCycle(edges, ctx);
@@ -295,8 +323,17 @@ export function resolvePipelineDag(
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
   const dag = buildResolvedPipelineDag(edges);
+  validateForkFields(edges, dag, ctx);
 
   return { stages, dag };
+}
+
+export function resolvePipelineDag(
+  rawStages: unknown,
+  ctx: ResolvePipelineDagContext,
+): { stages: string[]; dag: ResolvedPipelineDag } {
+  const entries = parsePipelineStageEntries(rawStages, ctx);
+  return resolvePipelineDagFromRefs(entries, ctx);
 }
 
 export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPipelineDag): boolean {
@@ -331,15 +368,13 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
   const stageIds: string[] = [];
   for (const entry of rawStages) {
     if (typeof entry === "string") {
-      if (!entry) return null;
-      stageIds.push(entry);
-      continue;
+      return null;
     }
 
     if (!isPlainObject(entry)) return null;
     const keys = Object.keys(entry);
     for (const key of keys) {
-      if (!ALLOWED_STAGE_REF_KEYS.has(key)) return null;
+      if (!isAllowedPipelineStageEntryKey(key)) return null;
     }
     if (typeof entry.id !== "string" || !entry.id) return null;
     if (entry.needs !== undefined) {

@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,24 +11,13 @@ if (!existsSync(cli)) {
   process.exit(1);
 }
 
-const examplesRoot = path.join(repoRoot, "examples");
-let failed = 0;
-
-for (const name of readdirSync(examplesRoot).sort()) {
-  const dir = path.join(examplesRoot, name);
-  if (!statSync(dir).isDirectory()) continue;
-  if (!existsSync(path.join(dir, "pipelines"))) continue;
-
-  process.stdout.write(`validate ${name} ... `);
-  try {
-    execSync(`node "${cli}" validate --strict`, { cwd: dir, stdio: "pipe" });
-    console.log("ok");
-  } catch {
-    console.log("FAILED");
-    failed += 1;
-  }
+if (!existsSync(path.join(repoRoot, "stageflow.yaml"))) {
+  console.error("Missing repo-root stageflow.yaml");
+  process.exit(1);
 }
 
-if (failed > 0) {
+try {
+  execSync(`node "${cli}" validate --strict`, { cwd: repoRoot, stdio: "inherit" });
+} catch {
   process.exit(1);
 }

@@ -1,0 +1,8 @@
+id: fork-demo
+goal: |
+  Operator chooses branch-a or branch-b at the decide gate; the pipeline routes
+  to that branch and skips the other.
+context: |
+  Manual HITL fork walkthrough. At decide, answer the free_text gate with
+  exactly branch-a or branch-b. The chosen branch should succeed; the other
+  should be skipped.

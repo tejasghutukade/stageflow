@@ -1,20 +1,37 @@
-import { access, mkdir, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { NormalizedPipelineStageEntry } from "../types/pipeline.js";
+import type { StageGateKind } from "../types/stage.js";
 import { STAGE_ID_PATTERN } from "./createStage.js";
-import { loadPipeline } from "./loadPipeline.js";
-import { loadStage } from "./loadStage.js";
+import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import type { PipelineListing } from "./listConfig.js";
+import {
+  inferIdFromUsesPath,
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "./normalizePipelineStageEntry.js";
 import { readYamlObject } from "./readYamlObject.js";
-import { resolvePipelineDag } from "./resolvePipelineDag.js";
+import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
+import { validatePipeline } from "./validateCatalog.js";
+import { loadPipelineOutcome } from "./loadPipeline.js";
+
+export type CreatePipelineStageInline = {
+  system_prompt: string;
+  model: string;
+  gate_kinds?: StageGateKind[];
+};
 
 export type CreatePipelineStageRef = {
   id: string;
   needs?: string;
+  uses?: string;
+  inline?: CreatePipelineStageInline;
 };
 
 export type CreatePipelineInput = {
+  directory: string;
   id: string;
-  stages: CreatePipelineStageRef[] | string[];
+  stages: CreatePipelineStageRef[];
 };
 
 export type CreatePipelineParseError = {
@@ -41,32 +58,166 @@ function validatePipelineId(id: string): string | null {
   return null;
 }
 
+function defaultUsesPath(stageId: string): string {
+  return `./${stageId}.yaml`;
+}
+
 export function normalizeCreatePipelineStages(
-  stages: CreatePipelineStageRef[] | string[],
+  stages: CreatePipelineStageRef[],
 ): CreatePipelineStageRef[] {
-  if (stages.length > 0 && typeof stages[0] === "string") {
-    return (stages as string[]).map((id) => ({ id }));
+  return stages.map((stage) => ({
+    ...stage,
+    uses: stage.uses ?? (stage.inline ? undefined : defaultUsesPath(stage.id)),
+  }));
+}
+
+function stageRefToRaw(ref: CreatePipelineStageRef): Record<string, unknown> {
+  const raw: Record<string, unknown> = { id: ref.id };
+  if (ref.needs !== undefined) raw.needs = ref.needs;
+  if (ref.uses !== undefined) raw.uses = ref.uses;
+  if (ref.inline) {
+    raw.system_prompt = ref.inline.system_prompt;
+    raw.model = ref.inline.model;
+    if (ref.inline.gate_kinds !== undefined) {
+      raw.gate_kinds = ref.inline.gate_kinds;
+    }
   }
-  return stages as CreatePipelineStageRef[];
+  return raw;
+}
+
+function toAuthoringRawEntries(
+  stages: CreatePipelineStageRef[],
+  declaringPath: string,
+): RawMergedEntry[] {
+  return stages.map((stage) => ({
+    raw: stageRefToRaw(stage),
+    declaringPath,
+  }));
+}
+
+function normalizedToCreateRefs(
+  entries: NormalizedPipelineStageEntry[],
+): CreatePipelineStageRef[] {
+  return entries.map((entry) => {
+    const ref: CreatePipelineStageRef = { id: entry.id };
+    if (entry.needs !== undefined) ref.needs = entry.needs;
+    if (entry.body.kind === "uses") {
+      ref.uses = entry.body.path;
+    } else {
+      const raw = entry.body.raw;
+      ref.inline = {
+        system_prompt: String(raw.system_prompt ?? ""),
+        model: String(raw.model ?? ""),
+        ...(Array.isArray(raw.gate_kinds)
+          ? { gate_kinds: raw.gate_kinds as StageGateKind[] }
+          : {}),
+      };
+    }
+    return ref;
+  });
+}
+
+function normalizeAuthoringStages(
+  stages: CreatePipelineStageRef[],
+  ctx: { pipelineId: string; path: string },
+):
+  | { ok: true; stages: CreatePipelineStageRef[] }
+  | { ok: false; status: 422; error: string } {
+  const prepared = normalizeCreatePipelineStages(stages);
+  const normalizeOutcome = normalizePipelineStageEntries(
+    toAuthoringRawEntries(prepared, ctx.path),
+    ctx,
+  );
+  if (!normalizeOutcome.ok) {
+    return {
+      ok: false,
+      status: 422,
+      error: normalizeOutcome.issues[0]?.message ?? "Invalid pipeline stages",
+    };
+  }
+
+  try {
+    resolvePipelineDagFromRefs(toWiringRefs(normalizeOutcome.value), ctx);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 422, error: message };
+  }
+
+  return { ok: true, stages: normalizedToCreateRefs(normalizeOutcome.value) };
+}
+
+function parseInlineBody(
+  entry: Record<string, unknown>,
+  index: number,
+): CreatePipelineStageInline | CreatePipelineParseError {
+  if (typeof entry.system_prompt !== "string" || entry.system_prompt.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: `stages[${index}].system_prompt is required for inline stage`,
+    };
+  }
+  if (typeof entry.model !== "string" || entry.model.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: `stages[${index}].model is required for inline stage`,
+    };
+  }
+  const inline: CreatePipelineStageInline = {
+    system_prompt: entry.system_prompt,
+    model: entry.model,
+  };
+  if (entry.gate_kinds !== undefined) {
+    if (!Array.isArray(entry.gate_kinds)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `stages[${index}].gate_kinds must be an array`,
+      };
+    }
+    inline.gate_kinds = entry.gate_kinds as StageGateKind[];
+  }
+  return inline;
 }
 
 function parseStageEntry(
   entry: unknown,
   index: number,
 ): CreatePipelineStageRef | CreatePipelineParseError {
+  if (typeof entry === "string") {
+    const hint = entry
+      ? `bare string stage refs are not supported; use { id: "${entry}", uses: "./${entry}.yaml" } or inline body`
+      : `bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`;
+    return {
+      ok: false,
+      status: 400,
+      error: `stages[${index}]: ${hint}`,
+    };
+  }
+
   if (!isPlainObject(entry)) {
     return {
       ok: false,
       status: 400,
-      error: `stages[${index}] must be a string or object with id`,
+      error: `stages[${index}] must be an object with id`,
     };
   }
 
-  if (typeof entry.id !== "string") {
+  let id = typeof entry.id === "string" ? entry.id : undefined;
+  const uses =
+    typeof entry.uses === "string" && entry.uses.trim() ? entry.uses : undefined;
+
+  if (!id && uses) {
+    const inferred = inferIdFromUsesPath(uses);
+    if (inferred) id = inferred;
+  }
+
+  if (!id) {
     return { ok: false, status: 400, error: `stages[${index}].id is required` };
   }
 
-  const ref: CreatePipelineStageRef = { id: entry.id };
+  const ref: CreatePipelineStageRef = { id };
 
   if (entry.needs !== undefined) {
     if (typeof entry.needs !== "string") {
@@ -79,6 +230,29 @@ function parseStageEntry(
     ref.needs = entry.needs;
   }
 
+  if (entry.uses !== undefined) {
+    if (typeof entry.uses !== "string" || !entry.uses.trim()) {
+      return {
+        ok: false,
+        status: 400,
+        error: `stages[${index}].uses must be a non-empty string`,
+      };
+    }
+    ref.uses = entry.uses;
+  } else if (uses) {
+    ref.uses = uses;
+  }
+
+  const hasInlineFields =
+    entry.system_prompt !== undefined ||
+    entry.model !== undefined ||
+    entry.gate_kinds !== undefined;
+  if (hasInlineFields) {
+    const inline = parseInlineBody(entry, index);
+    if ("ok" in inline) return inline;
+    ref.inline = inline;
+  }
+
   return ref;
 }
 
@@ -87,6 +261,18 @@ export function parseCreatePipelineBody(
 ): CreatePipelineInput | CreatePipelineParseError {
   if (!isPlainObject(body)) {
     return { ok: false, status: 400, error: "Request body must be an object" };
+  }
+
+  if (typeof body.directory !== "string" || !body.directory.trim()) {
+    return { ok: false, status: 400, error: "directory is required" };
+  }
+  const directory = body.directory.trim().replace(/\\/g, "/");
+  if (directory.endsWith(".yaml") || directory.endsWith(".yml")) {
+    return {
+      ok: false,
+      status: 400,
+      error: "directory must be a catalog folder, not a pipeline file path",
+    };
   }
 
   if (typeof body.id !== "string") {
@@ -104,33 +290,6 @@ export function parseCreatePipelineBody(
     return { ok: false, status: 400, error: "stages must be a non-empty array" };
   }
 
-  let hasString = false;
-  let hasObject = false;
-  for (const entry of body.stages) {
-    if (typeof entry === "string") {
-      hasString = true;
-    } else if (isPlainObject(entry)) {
-      hasObject = true;
-    } else {
-      return { ok: false, status: 400, error: "stages must be an array of strings" };
-    }
-  }
-
-  if (hasString && hasObject) {
-    return {
-      ok: false,
-      status: 400,
-      error: "stages must be either all strings or all objects",
-    };
-  }
-
-  if (hasString) {
-    return {
-      id: body.id,
-      stages: body.stages as string[],
-    };
-  }
-
   const refs: CreatePipelineStageRef[] = [];
   for (let index = 0; index < body.stages.length; index++) {
     const parsed = parseStageEntry(body.stages[index], index);
@@ -141,9 +300,24 @@ export function parseCreatePipelineBody(
   }
 
   return {
+    directory,
     id: body.id,
     stages: refs,
   };
+}
+
+function formatInlineYamlScalar(value: string): string {
+  if (
+    value.includes("\n") ||
+    /[:#"'&*!|>@`[\]{}]/.test(value) ||
+    value.startsWith(" ") ||
+    value.endsWith(" ") ||
+    value.startsWith("-") ||
+    value.startsWith("?")
+  ) {
+    return JSON.stringify(value);
+  }
+  return value;
 }
 
 export function pipelineConfigToYaml(
@@ -151,16 +325,36 @@ export function pipelineConfigToYaml(
   options: { format: "linear" | "dag" },
 ): string {
   const lines: string[] = [`id: ${pipeline.id}`, "stages:"];
-  if (options.format === "linear") {
-    for (const stage of pipeline.stages) {
-      lines.push(`  - ${stage.id}`);
-    }
-  } else {
-    for (const stage of pipeline.stages) {
+  for (const stage of pipeline.stages) {
+    if (options.format === "linear" && !stage.needs && !stage.inline && stage.uses) {
       lines.push(`  - id: ${stage.id}`);
-      if (stage.needs) {
-        lines.push(`    needs: ${stage.needs}`);
+      lines.push(`    uses: ${stage.uses}`);
+      continue;
+    }
+    lines.push(`  - id: ${stage.id}`);
+    if (stage.needs) {
+      lines.push(`    needs: ${stage.needs}`);
+    }
+    if (stage.inline) {
+      if (stage.inline.gate_kinds && stage.inline.gate_kinds.length > 0) {
+        lines.push("    gate_kinds:");
+        for (const kind of stage.inline.gate_kinds) {
+          lines.push(`      - ${kind}`);
+        }
       }
+      if (stage.inline.system_prompt.includes("\n")) {
+        lines.push("    system_prompt: |");
+        for (const line of stage.inline.system_prompt.split("\n")) {
+          lines.push(`      ${line}`);
+        }
+      } else {
+        lines.push(
+          `    system_prompt: ${formatInlineYamlScalar(stage.inline.system_prompt)}`,
+        );
+      }
+      lines.push(`    model: ${formatInlineYamlScalar(stage.inline.model)}`);
+    } else if (stage.uses) {
+      lines.push(`    uses: ${stage.uses}`);
     }
   }
   lines.push("");
@@ -176,31 +370,40 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+function resolveDirectory(projectRoot: string, directory: string): string | null {
+  const absDirectory = path.resolve(projectRoot, directory);
+  const rel = path.relative(projectRoot, absDirectory);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return null;
+  }
+  return absDirectory;
+}
+
 async function findPipelineIdCollision(
-  cwd: string,
+  pipelineDirectory: string,
+  projectRoot: string,
   id: string,
   targetPath: string,
 ): Promise<string | null> {
   if (await fileExists(targetPath)) {
-    return path.relative(cwd, targetPath);
+    return path.relative(projectRoot, targetPath);
   }
 
-  const dir = path.join(cwd, "pipelines");
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = await readdir(pipelineDirectory, { withFileTypes: true });
   } catch {
     return null;
   }
 
   for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    const filePath = path.join(dir, entry.name);
+    const filePath = path.join(pipelineDirectory, entry.name);
     if (filePath === targetPath) continue;
     try {
       const raw = await readYamlObject(filePath);
       if (raw?.id === id) {
-        return path.relative(cwd, filePath);
+        return path.relative(projectRoot, filePath);
       }
     } catch {
       // ignore unreadable files for collision scan
@@ -210,7 +413,7 @@ async function findPipelineIdCollision(
 }
 
 async function validateStageReferences(
-  cwd: string,
+  pipelineDirectory: string,
   stages: CreatePipelineStageRef[],
 ): Promise<{ ok: true } | { ok: false; status: 422; error: string }> {
   const seen = new Set<string>();
@@ -225,16 +428,24 @@ async function validateStageReferences(
     seen.add(stage.id);
   }
 
-  const stagesDir = path.join(cwd, "stages");
+  const inlineCount = stages.filter((stage) => stage.inline).length;
+  if (inlineCount > 0 && stages.length > 1) {
+    return {
+      ok: false,
+      status: 422,
+      error: "Inline stage bodies are supported for single-stage pipelines only",
+    };
+  }
+
   for (const stage of stages) {
-    const stagePath = path.join(stagesDir, `${stage.id}.yaml`);
-    try {
-      await loadStage(stagePath);
-    } catch {
+    if (stage.inline) continue;
+    const uses = stage.uses ?? defaultUsesPath(stage.id);
+    const stagePath = path.resolve(pipelineDirectory, uses);
+    if (!(await fileExists(stagePath))) {
       return {
         ok: false,
         status: 422,
-        error: "one or more selected Stages no longer exist",
+        error: `missing stage file for "${stage.id}" at ${uses}`,
       };
     }
   }
@@ -242,41 +453,76 @@ async function validateStageReferences(
   return { ok: true };
 }
 
-function buildResolverInput(
-  input: CreatePipelineInput,
-  normalized: CreatePipelineStageRef[],
-): unknown[] {
-  if (input.stages.length > 0 && typeof input.stages[0] === "string") {
-    return input.stages as string[];
-  }
-  return normalized.map((ref) =>
-    ref.needs ? { id: ref.id, needs: ref.needs } : { id: ref.id },
-  );
-}
-
-function usesDagYaml(input: CreatePipelineInput, normalized: CreatePipelineStageRef[]): boolean {
-  if (input.stages.length > 0 && typeof input.stages[0] !== "string") {
-    return true;
-  }
+function usesDagYaml(normalized: CreatePipelineStageRef[]): boolean {
   return normalized.some((ref) => ref.needs !== undefined);
 }
 
+function buildPipelineListing(
+  projectRoot: string,
+  relPath: string,
+  loaded: {
+    pipeline: { id: string };
+    stages: Array<{ id: string; gate_kinds?: StageGateKind[] }>;
+    stageSources?: Record<string, { kind: "inline" } | { kind: "file"; path: string }>;
+  },
+): PipelineListing {
+  return {
+    path: relPath,
+    id: loaded.pipeline.id,
+    stages: loaded.stages.map((stage) => {
+      const source = loaded.stageSources?.[stage.id];
+      const listing = {
+        id: stage.id,
+        ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
+      };
+      if (source?.kind === "inline") {
+        return { ...listing, inline: true };
+      }
+      if (source?.kind === "file") {
+        return {
+          ...listing,
+          uses_path: path.relative(projectRoot, source.path).replace(/\\/g, "/"),
+        };
+      }
+      return listing;
+    }),
+  };
+}
+
 export async function createPipeline(
-  cwd: string,
+  projectRoot: string,
   input: CreatePipelineInput,
 ): Promise<CreatePipelineResult> {
-  const normalized = normalizeCreatePipelineStages(input.stages);
+  const pipelineDirectory = resolveDirectory(projectRoot, input.directory);
+  if (!pipelineDirectory) {
+    return {
+      ok: false,
+      status: 400,
+      error: "directory must be inside the project root",
+    };
+  }
 
-  const stageValidation = await validateStageReferences(cwd, normalized);
+  const filePath = path.join(pipelineDirectory, `${input.id}.pipeline.yaml`);
+  const relPath = path.relative(projectRoot, filePath).replace(/\\/g, "/");
+  const validationCtx = { pipelineId: input.id, path: relPath };
+
+  const normalizedOutcome = normalizeAuthoringStages(input.stages, validationCtx);
+  if (!normalizedOutcome.ok) {
+    return normalizedOutcome;
+  }
+  const normalized = normalizedOutcome.stages;
+
+  const stageValidation = await validateStageReferences(pipelineDirectory, normalized);
   if (!stageValidation.ok) {
     return stageValidation;
   }
 
-  const pipelinesDir = path.join(cwd, "pipelines");
-  const filePath = path.join(pipelinesDir, `${input.id}.yaml`);
-  const relPath = path.relative(cwd, filePath);
-
-  const collision = await findPipelineIdCollision(cwd, input.id, filePath);
+  const collision = await findPipelineIdCollision(
+    pipelineDirectory,
+    projectRoot,
+    input.id,
+    filePath,
+  );
   if (collision) {
     return {
       ok: false,
@@ -285,18 +531,10 @@ export async function createPipeline(
     };
   }
 
-  const resolverInput = buildResolverInput(input, normalized);
-  try {
-    resolvePipelineDag(resolverInput, { pipelineId: input.id, path: relPath });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 422, error: message };
-  }
-
-  const yamlFormat = usesDagYaml(input, normalized) ? "dag" : "linear";
+  const yamlFormat = usesDagYaml(normalized) ? "dag" : "linear";
 
   try {
-    await mkdir(pipelinesDir, { recursive: true });
+    await mkdir(pipelineDirectory, { recursive: true });
     await writeFile(
       filePath,
       pipelineConfigToYaml({ id: input.id, stages: normalized }, { format: yamlFormat }),
@@ -307,21 +545,33 @@ export async function createPipeline(
     return { ok: false, status: 500, error: message };
   }
 
-  try {
-    const loaded = await loadPipeline(filePath, { cwd });
+  const validation = await validatePipeline(relPath, {
+    cwd: projectRoot,
+    validateStages: true,
+    strict: true,
+  });
+  if (!validation.ok) {
+    await unlink(filePath).catch(() => {});
+    const errorFinding = validation.findings.find((finding) => finding.severity === "error");
     return {
-      ok: true,
-      pipeline: {
-        path: relPath,
-        id: loaded.pipeline.id,
-        stages: loaded.stages.map((stage) => ({
-          id: stage.id,
-          ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
-        })),
-      },
+      ok: false,
+      status: 422,
+      error: errorFinding?.message ?? "Pipeline validation failed",
     };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 500, error: message };
   }
+
+  const loadOutcome = await loadPipelineOutcome(relPath, { cwd: projectRoot });
+  if (!loadOutcome.ok) {
+    await unlink(filePath).catch(() => {});
+    return {
+      ok: false,
+      status: 500,
+      error: loadOutcome.issues[0]?.message ?? "Failed to load created pipeline",
+    };
+  }
+
+  return {
+    ok: true,
+    pipeline: buildPipelineListing(projectRoot, relPath, loadOutcome.value),
+  };
 }

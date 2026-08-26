@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { listPipelines } from "../config/listConfig.js";
+import { browseCatalog } from "../config/browseCatalog.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -13,6 +13,16 @@ const taskFileSchema = z.object({
   constraints: z.string().optional(),
   checkout: z.string().optional(),
 });
+
+const startRunSchema = z
+  .object({
+    pipeline: z.string().describe("Filesystem path to a pipeline YAML file"),
+    task_path: z.string().optional(),
+    task: taskFileSchema.optional(),
+  })
+  .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
+    message: "Exactly one of task_path or task is required",
+  });
 
 function textResult(data: unknown, isError = false) {
   return {
@@ -33,12 +43,24 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
     "list_pipelines",
     {
-      description: "List runnable pipeline ids from the factory cwd",
+      description: "List manifest-declared pipeline paths from the project catalog",
       inputSchema: z.object({}),
     },
     async () => {
-      const pipelines = await listPipelines(cwd);
-      return textResult({ pipelines });
+      const catalog = await browseCatalog(cwd);
+      return textResult({ pipelines: catalog.pipelines });
+    },
+  );
+
+  server.registerTool(
+    "list_tasks",
+    {
+      description: "List manifest-declared task paths from the project catalog",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const catalog = await browseCatalog(cwd);
+      return textResult({ tasks: catalog.tasks });
     },
   );
 
@@ -68,17 +90,18 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
     "start_run",
     {
       description:
-        "Start a pipeline with an inline TaskFile (not written under tasks/). Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (same checkout leased), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout.",
-      inputSchema: z.object({
-        pipeline: z.string(),
-        task: taskFileSchema,
-      }),
+        "Start a pipeline run using a filesystem pipeline path and either task_path (catalog task file) or an inline task object. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (same checkout leased), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout.",
+      inputSchema: startRunSchema,
     },
-    async ({ pipeline, task }) => {
+    async ({ pipeline, task_path, task }) => {
       if (!pipeline.trim()) {
         return textResult({ error: "pipeline is required" }, true);
       }
-      const result = await manager.startRun({ pipeline, task });
+      const taskInput = task_path ?? task;
+      if (taskInput === undefined) {
+        return textResult({ error: "Exactly one of task_path or task is required" }, true);
+      }
+      const result = await manager.startRun({ pipeline, task: taskInput });
       if (!result.ok) {
         const { ok: _ok, reason, ...rest } = result;
         return textResult({ error: reason, ...rest }, true);

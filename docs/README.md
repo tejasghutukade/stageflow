@@ -6,7 +6,7 @@ permalink: /
 
 # Stageflow documentation
 
-Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono). You author YAML in your project — pipelines, stages, and tasks — and Stageflow runs each stage in a fresh Pi agent session with structured handoffs between steps.
+Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono). You author **pipeline-owned YAML** — `*.pipeline.yaml`, separate `*.task.yaml` files, optional repo-root `stageflow.yaml` manifest — and Stageflow runs each stage in a fresh Pi agent session with structured handoffs between steps.
 
 Stages are **author-defined and domain-agnostic**. Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns; nothing in Stageflow hard-codes a domain.
 
@@ -14,9 +14,9 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 | Doc | What you'll learn |
 |-----|-------------------|
-| [Quick start](quickstart.md) | Install, create a minimal catalog, run locally |
+| [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Pipeline, stage, and task file schema |
-| [CLI reference](cli-reference.md) | `sf run`, `sf validate`, `sf ui`, `sf providers` |
+| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf ui`, `sf providers` |
 
 ## Core concepts
 
@@ -44,9 +44,9 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of truth for valid catalog shapes:
 
-- [`pipelines/`](../tests/fixtures/pipelines/) — linear, parallel fan-out, HITL, validation edge cases
-- [`stages/`](../tests/fixtures/stages/) — gate kinds, payload schemas, multi-stage handoffs
-- [`tasks/`](../tests/fixtures/tasks/) — task file shapes
+- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — linear, parallel fan-out, HITL, fork routing, validation edge cases (`*.pipeline.yaml`)
+- [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, payload schemas (referenced via `uses:`)
+- [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 
 Runnable walkthroughs live in [`examples/`](../examples/) (see `examples/README.md` when present).
 

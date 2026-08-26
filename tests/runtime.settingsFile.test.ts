@@ -5,14 +5,20 @@ import path from "node:path";
 import {
   INVALID_CREDENTIAL_SOURCE_MESSAGE,
   parseCredentialSource,
+  readCredentialSourceFromContext,
   readCredentialSourceFromFile,
   readFactorySettings,
+  readMaxConcurrentFromContext,
   readMaxConcurrentFromFile,
+  writeCredentialSourceToContext,
   writeCredentialSourceToFile,
   writeFactorySettings,
+  writeFactorySettingsForContext,
   writeMaxConcurrentToFile,
 } from "../src/runtime/settingsFile.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { resolveProjectContext } from "../src/project/resolveProjectContext.js";
+import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
 describe("settingsFile credentialSource", () => {
   it("writes sf_owned and reads it back", async () => {
@@ -74,5 +80,33 @@ describe("settingsFile credentialSource", () => {
       credentialSource: "sf_owned",
     });
     expect(raw).not.toMatch(/api[_-]?key|sk-|token/i);
+  });
+
+  it("AE5: project credentialSource overrides global in git repo", async () => {
+    await withIsolatedHome(async (home) => {
+      const { root, nested, cleanup } = await initTempGitRepo();
+      try {
+        writeFactorySettingsForContext(resolveProjectContext(home), {
+          credentialSource: "sf_owned",
+        });
+        writeCredentialSourceToContext(resolveProjectContext(nested), "pi_home");
+        expect(readCredentialSourceFromContext(resolveProjectContext(nested))).toBe(
+          "pi_home",
+        );
+        await readFile(path.join(storeRootFor(root), "settings.json"), "utf8");
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  it("non-git context reads settings from global home only", async () => {
+    await withIsolatedHome(async (home) => {
+      const outside = path.join(home, "workspace");
+      await mkdir(outside, { recursive: true });
+      const ctx = resolveProjectContext(outside);
+      writeFactorySettingsForContext(ctx, { maxConcurrent: 5 });
+      expect(readMaxConcurrentFromContext(ctx)).toBe(5);
+    });
   });
 });

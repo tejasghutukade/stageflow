@@ -11,7 +11,7 @@ import {
 import { runProvidersCommand } from "../src/cli/providersCommand.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { readCredentialSourceFromFile } from "../src/runtime/settingsFile.js";
-import { storeRootFor } from "../src/runstore/paths.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
 function fakeProvider(partial: {
   id: string;
@@ -214,55 +214,58 @@ describe("CLI providers", () => {
   });
 
   it("detect prints safe booleans without auth file contents", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-detect-"));
-    writeCredentialSourceToFile(root, "sf_owned");
-    const secretPath = path.join(storeRootFor(root), "auth.json");
-    await mkdir(path.dirname(secretPath), { recursive: true });
-    await writeFile(
-      secretPath,
-      JSON.stringify({ "key-provider": { type: "api_key", key: "SECRET-DETECT-MARKER" } }),
-      "utf8",
-    );
-    const cap = captureIo();
-    const code = await runProvidersCommand(["detect"], root, cap.io);
-    expect(code).toBe(0);
-    expect(cap.combined()).toMatch(/piHomeUsable=/);
-    expect(cap.combined()).toMatch(/provisional=/);
-    expect(cap.combined()).toMatch(/credentialSource=sf_owned|bindingSource=/);
-    expect(cap.combined()).not.toContain("SECRET-DETECT-MARKER");
+    await withIsolatedHome(async (home) => {
+      writeCredentialSourceToFile(home, "sf_owned");
+      const secretPath = path.join(home, ".stageflow", "agent", "auth.json");
+      await mkdir(path.dirname(secretPath), { recursive: true });
+      await writeFile(
+        secretPath,
+        JSON.stringify({ "key-provider": { type: "api_key", key: "SECRET-DETECT-MARKER" } }),
+        "utf8",
+      );
+      const cap = captureIo();
+      const code = await runProvidersCommand(["detect"], home, cap.io);
+      expect(code).toBe(0);
+      expect(cap.combined()).toMatch(/piHomeUsable=/);
+      expect(cap.combined()).toMatch(/provisional=/);
+      expect(cap.combined()).toMatch(/credentialSource=sf_owned|bindingSource=/);
+      expect(cap.combined()).not.toContain("SECRET-DETECT-MARKER");
+    });
   });
 
   it("source get prints credential source or unset messaging", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-source-get-"));
-    const unset = captureIo();
-    expect(await runProvidersCommand(["source", "get"], root, unset.io)).toBe(
-      0,
-    );
-    expect(unset.combined()).toMatch(/unset|pi_home|sf_owned/);
+    await withIsolatedHome(async (home) => {
+      const unset = captureIo();
+      expect(await runProvidersCommand(["source", "get"], home, unset.io)).toBe(
+        0,
+      );
+      expect(unset.combined()).toMatch(/unset|pi_home|sf_owned/);
 
-    writeCredentialSourceToFile(root, "pi_home");
-    const set = captureIo();
-    expect(await runProvidersCommand(["source"], root, set.io)).toBe(0);
-    expect(set.stdout.join("\n").trim()).toBe("pi_home");
+      writeCredentialSourceToFile(home, "pi_home");
+      const set = captureIo();
+      expect(await runProvidersCommand(["source"], home, set.io)).toBe(0);
+      expect(set.stdout.join("\n").trim()).toBe("pi_home");
+    });
   });
 
   it("source set round-trips and rejects invalid values", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-source-set-"));
-    writeCredentialSourceToFile(root, "pi_home");
+    await withIsolatedHome(async (home) => {
+      writeCredentialSourceToFile(home, "pi_home");
 
-    const ok = captureIo();
-    expect(
-      await runProvidersCommand(["source", "set", "sf_owned"], root, ok.io),
-    ).toBe(0);
-    expect(ok.stdout.join("\n").trim()).toBe("sf_owned");
-    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
+      const ok = captureIo();
+      expect(
+        await runProvidersCommand(["source", "set", "sf_owned"], home, ok.io),
+      ).toBe(0);
+      expect(ok.stdout.join("\n").trim()).toBe("sf_owned");
+      expect(readCredentialSourceFromFile(home)).toBe("sf_owned");
 
-    const bad = captureIo();
-    expect(
-      await runProvidersCommand(["source", "set", "bogus"], root, bad.io),
-    ).toBe(1);
-    expect(readCredentialSourceFromFile(root)).toBe("sf_owned");
-    expect(bad.combined()).toMatch(/pi_home or sf_owned/);
+      const bad = captureIo();
+      expect(
+        await runProvidersCommand(["source", "set", "bogus"], home, bad.io),
+      ).toBe(1);
+      expect(readCredentialSourceFromFile(home)).toBe("sf_owned");
+      expect(bad.combined()).toMatch(/pi_home or sf_owned/);
+    });
   });
 
   it("logout disconnects and maps failures without secrets", async () => {

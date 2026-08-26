@@ -5,17 +5,24 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { sameCliEntry } from "../src/cli.js";
 import { runRunCommand } from "../src/cli/runCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
+import { SAMPLE_TASK, SINGLE_PIPELINE, pipelinePath } from "./helpers/fixturePaths.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
-const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
+const sampleTask = SAMPLE_TASK;
+const singlePipeline = SINGLE_PIPELINE;
+const docsOnlyPipeline = pipelinePath("docs-only");
+const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
+const manifestCatalog = path.join(fixtures, "manifest-catalog");
+const demoPipeline = path.join(manifestCatalog, "pipelines", "demo.pipeline.yaml");
 
 function runCli(args: string[]) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {
@@ -23,6 +30,15 @@ function runCli(args: string[]) {
     encoding: "utf8",
   });
 }
+
+describe("sameCliEntry", () => {
+  it("treats .ts and missing .js siblings as the same entry", () => {
+    const tsEntry = path.join(root, "src", "cli.ts");
+    const jsSibling = path.join(root, "src", "cli.js");
+    expect(sameCliEntry(tsEntry, jsSibling)).toBe(true);
+    expect(sameCliEntry(jsSibling, tsEntry)).toBe(true);
+  });
+});
 
 describe("CLI stub", { timeout: 15_000 }, () => {
   it("exits non-zero on missing args and prints usage", () => {
@@ -39,7 +55,9 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/--checkout/);
     expect(result.stdout).toMatch(/sf run[^\n]*--json/);
     expect(result.stdout).toMatch(/sf validate/);
-    expect(result.stdout).toMatch(/--pipeline/);
+    expect(result.stdout).toMatch(/sf init/);
+    expect(result.stdout).not.toMatch(/name-or-path/);
+    expect(result.stdout).toMatch(/--pipeline <path>/);
     expect(result.stdout).toMatch(/--strict/);
     expect(result.stdout).toMatch(/--json/);
     expect(result.stdout).toMatch(/sf providers list/);
@@ -82,7 +100,10 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.status).toBe(0);
     const out = result.stdout + result.stderr;
     expect(out).toMatch(/sf validate/);
-    expect(out).toMatch(/--pipeline/);
+    expect(out).toMatch(/--pipeline <path>/);
+    expect(out).toMatch(/--task <path>/);
+    expect(out).toMatch(/manifest-all|stageflow\.yaml/i);
+    expect(out).not.toMatch(/name-or-path/);
     expect(out).toMatch(/--strict/);
     expect(out).toMatch(/--json/);
   });
@@ -104,11 +125,13 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(out).not.toMatch(/stack|at Object|Error: /i);
   });
 
-  it("run --help mentions --json", () => {
+  it("run --help mentions --json and path-based pipeline", () => {
     const result = runCli(["run", "--help"]);
     expect(result.status).toBe(0);
     const out = result.stdout + result.stderr;
     expect(out).toMatch(/sf run[^\n]*--json/);
+    expect(out).toMatch(/--pipeline <path>/);
+    expect(out).not.toMatch(/name-or-path/);
   });
 
   it("run unknown flag exits non-zero with usage", () => {
@@ -164,7 +187,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
         "--task",
         sampleTask,
         "--pipeline",
-        "single",
+        singlePipeline,
         "--git-sha",
         "deadbeef",
         "--ci-pr-url",
@@ -215,7 +238,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
         "--task",
         sampleTask,
         "--pipeline",
-        "single",
+        singlePipeline,
         "--git-sha",
         "deadbeef",
         "--ci-pr-url",
@@ -243,5 +266,17 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(meta.git_sha).toBe("deadbeef");
     expect(meta.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
     expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/99");
+  });
+
+  it("AE1: bare pipeline name fails with actionable error", async () => {
+    const emptyDir = await mkdtemp(path.join(tmpdir(), "sf-cli-bare-pipeline-"));
+    const result = spawnSync(process.execPath, [tsxCli, cli, "run", "--task", sampleTask, "--pipeline", "single"], {
+      cwd: emptyDir,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/not found|filesystem path/i);
+    expect(out).not.toMatch(/Pipeline succeeded/);
   });
 });

@@ -13,14 +13,14 @@ function isGateKind(value: string): value is StageGateKind {
 
 function parseGateKinds(
   raw: unknown,
-  filePath: string,
+  label: string,
 ): LoadOutcome<StageGateKind[] | undefined> {
   if (raw === undefined) return loadSuccess(undefined);
   if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
     return loadFailure([
       {
         code: "stage.invalid_gate_kinds",
-        message: `Invalid stage file ${filePath}: gate_kinds must be an array of strings`,
+        message: `Invalid stage ${label}: gate_kinds must be an array of strings`,
         category: "stage",
       },
     ]);
@@ -31,7 +31,7 @@ function parseGateKinds(
       return loadFailure([
         {
           code: "stage.invalid_gate_kinds",
-          message: `Invalid stage file ${filePath}: unsupported gate kind "${item}" (allowed: ${STAGE_GATE_KINDS.join(", ")})`,
+          message: `Invalid stage ${label}: unsupported gate kind "${item}" (allowed: ${STAGE_GATE_KINDS.join(", ")})`,
           category: "stage",
         },
       ]);
@@ -39,6 +39,97 @@ function parseGateKinds(
     kinds.push(item);
   }
   return loadSuccess(kinds.length > 0 ? kinds : undefined);
+}
+
+function parseStageFields(
+  raw: Record<string, unknown>,
+  label: string,
+  entryId: string,
+): LoadOutcome<StageConfig> {
+  if (
+    typeof raw.system_prompt !== "string" ||
+    typeof raw.model !== "string"
+  ) {
+    return loadFailure([
+      {
+        code: "stage.invalid_shape",
+        message: `Invalid stage ${label}: system_prompt and model are required strings`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+
+  const stage: StageConfig = {
+    id: entryId,
+    system_prompt: raw.system_prompt,
+    model: raw.model,
+  };
+
+  if (raw.payload_schema !== undefined) {
+    if (
+      raw.payload_schema === null ||
+      typeof raw.payload_schema !== "object" ||
+      Array.isArray(raw.payload_schema)
+    ) {
+      return loadFailure([
+        {
+          code: "stage.invalid_payload_schema",
+          message: `Invalid stage ${label}: payload_schema must be an object`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    try {
+      compilePayloadSchema(raw.payload_schema);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return loadFailure([
+        {
+          code: "stage.invalid_payload_schema",
+          message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.payload_schema = raw.payload_schema;
+  }
+
+  const gateKindsOutcome = parseGateKinds(raw.gate_kinds, label);
+  if (!gateKindsOutcome.ok) {
+    const issues: LoadIssue[] = gateKindsOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+
+  if (raw.skill !== undefined) {
+    if (typeof raw.skill !== "string" || raw.skill.trim() === "") {
+      return loadFailure([
+        {
+          code: "stage.invalid_skill",
+          message: `Invalid stage ${label}: skill must be a non-empty string`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.skill = raw.skill.trim();
+  }
+
+  return loadSuccess(stage);
+}
+
+export function loadStageFromObjectOutcome(
+  raw: Record<string, unknown>,
+  ctx: { entryId: string; declaringPath: string },
+): LoadOutcome<StageConfig> {
+  const label = `${ctx.entryId} (${ctx.declaringPath})`;
+  return parseStageFields(raw, label, ctx.entryId);
 }
 
 export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<StageConfig>> {
@@ -56,83 +147,29 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
     ]);
   }
 
-  if (
-    typeof raw?.id !== "string" ||
-    typeof raw?.system_prompt !== "string" ||
-    typeof raw?.model !== "string"
-  ) {
+  if (typeof raw?.id !== "string") {
     return loadFailure([
       {
         code: "stage.invalid_shape",
         message: `Invalid stage file ${filePath}: id, system_prompt, and model are required strings`,
         category: "stage",
-        stageId: typeof raw?.id === "string" ? raw.id : undefined,
       },
     ]);
   }
 
-  const stage: StageConfig = {
-    id: raw.id,
-    system_prompt: raw.system_prompt,
-    model: raw.model,
-  };
-
-  if (raw.payload_schema !== undefined) {
-    if (
-      raw.payload_schema === null ||
-      typeof raw.payload_schema !== "object" ||
-      Array.isArray(raw.payload_schema)
-    ) {
-      return loadFailure([
-        {
-          code: "stage.invalid_payload_schema",
-          message: `Invalid stage file ${filePath}: payload_schema must be an object`,
-          category: "stage",
-          stageId: raw.id,
-        },
-      ]);
-    }
-    try {
-      compilePayloadSchema(raw.payload_schema);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return loadFailure([
-        {
-          code: "stage.invalid_payload_schema",
-          message: `Invalid stage file ${filePath}: invalid payload_schema: ${message}`,
-          category: "stage",
-          stageId: raw.id,
-        },
-      ]);
-    }
-    stage.payload_schema = raw.payload_schema;
+  const outcome = parseStageFields(raw, `file ${filePath}`, raw.id);
+  if (!outcome.ok) return outcome;
+  if (outcome.value.id !== raw.id) {
+    return loadFailure([
+      {
+        code: "stage.invalid_shape",
+        message: `Invalid stage file ${filePath}: id mismatch`,
+        category: "stage",
+        stageId: raw.id,
+      },
+    ]);
   }
-
-  const gateKindsOutcome = parseGateKinds(raw.gate_kinds, filePath);
-  if (!gateKindsOutcome.ok) {
-    const issues: LoadIssue[] = gateKindsOutcome.issues.map((issue) => ({
-      ...issue,
-      stageId: stage.id,
-    }));
-    return loadFailure(issues);
-  }
-  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
-
-  if (raw.skill !== undefined) {
-    if (typeof raw.skill !== "string" || raw.skill.trim() === "") {
-      return loadFailure([
-        {
-          code: "stage.invalid_skill",
-          message: `Invalid stage file ${filePath}: skill must be a non-empty string`,
-          category: "stage",
-          stageId: stage.id,
-        },
-      ]);
-    }
-    stage.skill = raw.skill.trim();
-  }
-
-  return loadSuccess(stage);
+  return outcome;
 }
 
 export async function loadStage(filePath: string): Promise<StageConfig> {

@@ -1,7 +1,6 @@
 import { PiAgentAdapter } from "../agent/piAdapter.js";
-import { loadPipeline } from "../config/loadPipeline.js";
-import { loadTaskFromYaml } from "../config/loadTask.js";
 import { createRunStore } from "../runstore/createStore.js";
+import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
   rootsForStageWorker,
@@ -27,10 +26,11 @@ export async function runStageWorker(
   input: StageWorkerInput,
 ): Promise<RunStageOutcome> {
   const store = createRunStore({ rootDir: input.rootDir });
-  const meta = await store.readRunMeta(input.runId);
-  const taskYaml = await store.readTaskYaml(input.runId);
-  const task = loadTaskFromYaml(taskYaml, `run ${input.runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd: input.rootDir });
+  const { meta, task, loaded } = await loadRunContext(
+    store,
+    input.runId,
+    input.rootDir,
+  );
   const stage = loaded.stages.find((s) => s.id === input.stageId);
   if (!stage) {
     return {

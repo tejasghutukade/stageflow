@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort } from "../agent/port.js";
-import { loadPipelineValidated } from "../config/loadPipeline.js";
+import { loadPipelineValidated } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import { buildValidationResult } from "../config/validateCatalog.js";
 import type { RunStore } from "../runstore/port.js";
@@ -11,6 +11,7 @@ import type { StageHitlController } from "./stageHitl.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { runPipelineDag } from "./pipelineScheduler.js";
 import {
   readMaxActiveStagesPerRun,
@@ -46,6 +47,7 @@ export type PreparedPipeline = {
   agent: AgentPort;
   store: RunStore;
   cwd: string;
+  projectRoot: string;
   checkoutRoot?: string;
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
@@ -79,6 +81,7 @@ async function preparePipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   gitSha?: string;
   ciPrUrl?: string;
@@ -116,6 +119,14 @@ async function preparePipeline(options: {
     options.cwd,
   );
 
+  const pipelinePath = normalizeCatalogPath(loaded.pipelinePath);
+  const taskPath = options.taskPath
+    ? normalizeCatalogPath(path.resolve(options.cwd, options.taskPath))
+    : undefined;
+  const projectRoot = normalizeCatalogPath(
+    options.projectRoot ?? options.cwd,
+  );
+
   const run = await options.store.createRun({
     pipelineId: loaded.pipeline.id,
     taskYaml,
@@ -125,6 +136,9 @@ async function preparePipeline(options: {
     ciPrUrl: options.ciPrUrl,
     ciJobUrl: options.ciJobUrl,
     pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    pipelinePath,
+    taskPath,
+    projectRoot,
   });
   const executionMode = readStageExecutionMode(
     process.env,
@@ -141,6 +155,7 @@ async function preparePipeline(options: {
     agent: options.agent,
     store: options.store,
     cwd: options.cwd,
+    projectRoot: options.projectRoot ?? options.cwd,
     checkoutRoot,
     hitl: options.hitl,
     executionMode,
@@ -194,6 +209,7 @@ export async function runPipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd?: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
@@ -203,6 +219,7 @@ export async function runPipeline(options: {
   skipGates?: boolean;
 }): Promise<PipelineRunResult> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
     agent: options.agent,
     store: options.store,
@@ -210,6 +227,7 @@ export async function runPipeline(options: {
     taskYaml: options.taskYaml,
     pipeline: options.pipeline,
     cwd,
+    projectRoot,
     checkoutOverride: options.checkoutOverride,
     hitl: options.hitl,
     executionMode: options.executionMode,
@@ -232,6 +250,7 @@ export async function startPipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd?: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   gitSha?: string;
   ciPrUrl?: string;
@@ -244,6 +263,7 @@ export async function startPipeline(options: {
   skipGates?: boolean;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
     agent: options.agent,
     store: options.store,
@@ -251,6 +271,7 @@ export async function startPipeline(options: {
     taskYaml: options.taskYaml,
     pipeline: options.pipeline,
     cwd,
+    projectRoot,
     checkoutOverride: options.checkoutOverride,
     gitSha: options.gitSha,
     ciPrUrl: options.ciPrUrl,

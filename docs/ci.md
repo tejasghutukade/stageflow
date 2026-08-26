@@ -7,6 +7,13 @@ title: Ci
 
 Stageflow is designed to run the same YAML catalog locally, in the operator console, and in CI. The **guest actor in CI is the CLI** — `sf ui` and MCP are not required in the job.
 
+Run validate and pipeline commands from the **repository root** (`$GITHUB_WORKSPACE`) with path arguments:
+
+```bash
+sf validate --strict --json
+sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json
+```
+
 ## Validate in CI
 
 Check catalog shape before running agents:
@@ -18,9 +25,11 @@ sf validate --strict --json
 | Exit | Meaning |
 |------|---------|
 | `0` | No errors |
-| `1` | Validation errors (warnings alone pass unless `--strict` promotes orphans) |
+| `1` | Validation errors (warnings alone pass unless `--strict` promotes manifest warnings) |
 
-Validate scope: **pipeline and stage YAML only**. It does not verify task files, provider credentials, or checkout paths.
+With no flags, `sf validate` validates all pipelines and tasks declared in `stageflow.yaml`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors.
+
+Validate scope: **pipeline and stage YAML only**. It does not verify task files (unless `--task`), provider credentials, or checkout paths.
 
 JSON output includes `ok`, `scope`, `summary`, and `findings[]` with `severity`, `code`, `file`, `message`.
 
@@ -28,7 +37,7 @@ JSON output includes `ok`, `scope`, `summary`, and `findings[]` with `severity`,
 
 ```bash
 sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
-sf run --task tasks/my-task.yaml --pipeline hello --json
+sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json
 ```
 
 Provider login stores credentials in the job environment (prefer `--api-key-env` over prompts).
@@ -40,6 +49,8 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | `0` | `succeeded` | Pipeline completed |
 | `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
 | `2` | `waiting` | Stage blocked on HITL |
+
+Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md).
 
@@ -83,6 +94,8 @@ One document per invocation with `--json`:
 
 `ok` is `true` only for `succeeded`.
 
+Run records store optional **`pipeline_path`** and **`task_path`** catalog locators (for resume and triage). These appear on MCP `get_run` and console run detail — not in CLI `--json` stdout.
+
 ## CI identity metadata
 
 Optional flags on `sf run` (auto-detected on GitHub Actions when omitted):
@@ -97,12 +110,12 @@ Recorded on the run for operator triage in the console.
 
 ## Skills in CI
 
-Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator catalog** `{ cwd, agentDir }`:
+Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator checkout** `{ cwd, agentDir }`:
 
-- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the catalog directory (where your `pipelines/` and `stages/` live). Run `sf run` from that directory, or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`.
+- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the project git root. Run `sf run` from the repo (or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`).
 - **User/runner skills:** install under the Pi agent directory (`~/.pi/agent/skills/<name>/SKILL.md`), or pass `--operator-agent-dir <path>` / set `STAGEFLOW_OPERATOR_AGENT_DIR` to point at a Pi agent dir that contains a `skills/` subtree.
 
-The guest CLI defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }`. Override when the job checkout is not the catalog root or when skills live in a shared agent dir on the runner.
+The guest CLI defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }`. Override when the job checkout is not the skill tree root or when skills live in a shared agent dir on the runner.
 
 ## Extensions in CI
 
@@ -143,12 +156,12 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
       - name: Run pipeline
-        run: sf run --task tasks/my-task.yaml --pipeline hello --json --skip-gates
-        # If pipelines/stages live in a subdirectory, add:
-        # --operator-cwd path/to/catalog
+        run: sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json --skip-gates
+        # When skills live outside the repo checkout, add:
+        # --operator-cwd path/to/checkout
 ```
 
-Adjust task, pipeline, and secrets for your catalog. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/).
+Adjust task, pipeline, and secrets for your project. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/).
 
 ## Concurrency env vars
 
@@ -157,12 +170,12 @@ Adjust task, pipeline, and secrets for your catalog. Dogfood release automation 
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel runs (busy exit if full) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Parallel stages within one run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
-| `STAGEFLOW_OPERATOR_CWD` | Operator catalog root for skill resolution (see [Skills in CI](#skills-in-ci)) |
+| `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution (see [Skills in CI](#skills-in-ci)) |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills |
 
 ## State in CI
 
-Runs write under `.stageflow/` in the workspace. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
+Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
 
 ## See also
 

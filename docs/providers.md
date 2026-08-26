@@ -13,8 +13,8 @@ Provider management is via `sf providers` and the console **Settings → Provide
 
 | Mode | Where credentials live |
 |------|------------------------|
-| `pi_home` | Pi's standard auth file under your Pi home directory |
-| `sf_owned` | Stageflow-managed auth file in the project / agent dir |
+| `pi_home` | Pi's standard auth file under your Pi home directory (`~/.pi/agent/auth.json`) |
+| `sf_owned` | Stageflow global auth at `~/.stageflow/agent/auth.json` |
 
 Check current binding:
 
@@ -35,7 +35,9 @@ sf providers source set sf_owned
 **When to use which:**
 
 - **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
-- **`sf_owned`** — isolate Stageflow credentials per project or machine without touching Pi home
+- **`sf_owned`** — isolate Stageflow credentials in `~/.stageflow/` without touching Pi home
+
+Project run state and settings live under **`<git-root>/.stageflow/`** — separate from global auth.
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 

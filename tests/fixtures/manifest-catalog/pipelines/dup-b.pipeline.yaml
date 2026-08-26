@@ -1,0 +1,4 @@
+id: dup-a
+stages:
+  - id: step
+    uses: ./step.yaml
