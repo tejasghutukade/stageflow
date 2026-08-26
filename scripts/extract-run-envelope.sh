@@ -60,14 +60,24 @@ done
   exit 1
 }
 
-OUTCOME="$(jq -r '.outcome // empty' "$SF_RUN_JSON")"
+read_sf_run_json() {
+  sed -n '/^{/,$p' "$SF_RUN_JSON"
+}
+
+SF_RUN_DOC="$(read_sf_run_json)"
+if [[ -z "$SF_RUN_DOC" ]]; then
+  echo "error: sf-run.json does not contain a JSON document" >&2
+  exit 1
+fi
+
+OUTCOME="$(jq -r '.outcome // empty' <<<"$SF_RUN_DOC")"
 if [[ "$OUTCOME" != "succeeded" ]]; then
   echo "error: pipeline outcome is not succeeded (got: ${OUTCOME:-<missing>})" >&2
   exit 1
 fi
 
-RUN_ID="$(jq -r '.runId // empty' "$SF_RUN_JSON")"
-RUN_DIR="$(jq -r '.runDir // empty' "$SF_RUN_JSON")"
+RUN_ID="$(jq -r '.runId // empty' <<<"$SF_RUN_DOC")"
+RUN_DIR="$(jq -r '.runDir // empty' <<<"$SF_RUN_DOC")"
 
 if [[ -z "$RUN_ID" || -z "$RUN_DIR" ]]; then
   echo "error: sf-run.json missing runId or runDir" >&2
@@ -76,8 +86,7 @@ fi
 
 query_envelope() {
   sqlite3 "$STATE_DB" \
-    "SELECT envelope_json FROM stages WHERE run_id=? AND stage_id=?" \
-    "$1" "$2"
+    "SELECT envelope_json FROM stages WHERE run_id='${1//\'/\'\'}' AND stage_id='${2//\'/\'\'}';"
 }
 
 if [[ -n "$DETECT_STAGE_ID" ]]; then

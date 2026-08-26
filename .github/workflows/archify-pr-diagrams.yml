@@ -55,7 +55,7 @@ jobs:
           fi
 
       - name: Validate pipeline catalog
-        run: npm run dev -- validate --strict --json
+        run: node dist/cli.js validate --strict --json
 
       - name: Run Archify-on-PR pipeline
         env:
@@ -66,9 +66,9 @@ jobs:
           GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          npm run dev -- providers login openai --type api_key --api-key-env OPENAI_API_KEY
+          node dist/cli.js providers login openai --type api_key --api-key-env OPENAI_API_KEY
           set +e
-          npm run dev -- run \
+          node dist/cli.js run \
             --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
             --task examples/archify-on-pr/archify-on-pr.task.yaml \
             --checkout "$GITHUB_WORKSPACE" \
@@ -85,8 +85,7 @@ jobs:
         name: Extract run envelope
         run: |
           set -e
-          ENVELOPE="$(./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes)"
-          echo "$ENVELOPE" > envelope.json
+          ./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes > envelope.json
           cat envelope.json
           SKIPPED="$(jq -r '.skipped' envelope.json)"
           echo "skipped=${SKIPPED}" >> "${GITHUB_OUTPUT}"
