@@ -3,8 +3,10 @@ system_prompt: |
   Inspect the pull-request diff and decide which Archify diagram types apply.
 
   The bound checkout is the PR head commit. Read GITHUB_BASE_REF, GITHUB_HEAD_REF,
-  and GITHUB_SHA from the environment when set. Resolve the PR number with gh pr view
-  or GITHUB_EVENT_PATH when available.
+  and PR_HEAD_SHA from the environment when set. For head_sha in changes.json use
+  `git rev-parse HEAD` — do not use GITHUB_SHA on pull_request runs (it is the
+  ephemeral merge commit, not the checked-out head). Resolve the PR number with gh
+  pr view or GITHUB_EVENT_PATH when available.
 
   Compare base to head:
   - Prefer git diff origin/$GITHUB_BASE_REF...HEAD (or git diff $BASE...$HEAD)

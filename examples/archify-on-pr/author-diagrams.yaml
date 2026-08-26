@@ -17,13 +17,15 @@ system_prompt: |
   sublabels, and node widths/heights that fit the text (workflow nodes often
   need width >= 140). Leave at least 8px between adjacent nodes in the same lane.
 
-  Architecture with component sources[] requires meta.repository:
-  { url: "https://github.com/<owner>/<repo>", revision: "<40-char GITHUB_SHA>" }.
-  Use GITHUB_SHA and GITHUB_REPOSITORY from the environment. Omit sources when
-  repository metadata cannot be pinned.
+  Do not set meta.repository in specs — GHA deliver injects it when sources[] are
+  present. For the checked-out head commit use `git rev-parse HEAD` or PR_HEAD_SHA,
+  never GITHUB_SHA (on pull_request workflows GITHUB_SHA is the ephemeral merge
+  commit, not the PR head). Omit component sources[] unless you can validate with
+  --repo-root against the head checkout.
 
   After each spec edit, run validate and fix every diagnostic before continuing:
     node .pi/skills/archify/bin/archify.mjs validate <type> <spec.json> --quality showcase --json
+  For architecture with sources[], also pass --repo-root to the PR head checkout.
   Require ok:true with 9/9 artifact checks and 0 composition errors per spec.
 
   FORBIDDEN: deliver, npm install, doctor, ask_operator. Do not invoke deliver;

@@ -88,6 +88,7 @@ Deliver manually:
 node dist/cli.js envelope get --from sf-run.json --stage author-diagrams \
   --detect-stage detect-changes --format handoff --json > envelope.json
 GITHUB_SHA="$(git rev-parse HEAD)" GITHUB_REPOSITORY="<owner>/<repo>" \
+  PR_HEAD_SHA="$(git rev-parse HEAD)" \
   ./scripts/deliver-diagrams.sh envelope.json diagrams
 ```
 
@@ -110,7 +111,8 @@ done < <(jq -c '.diagrams[]' envelope.json)
 | `OPENAI_API_KEY` | `sf run` | Provider auth (required) |
 | `GITHUB_BASE_REF` | detect-changes | PR base branch (default: `main`) |
 | `GITHUB_HEAD_REF` | detect-changes | PR head branch |
-| `GITHUB_SHA` | detect-changes | Head commit SHA |
+| `GITHUB_SHA` | detect-changes | Avoid for head identity on pull_request (merge commit); use `git rev-parse HEAD` |
+| `PR_HEAD_SHA` | author-diagrams, deliver | PR head commit SHA (set by GHA workflow) |
 | `GITHUB_REPOSITORY` | author-diagrams, deliver | `owner/repo` for `meta.repository` on architecture specs |
 | `ARCHIFY_SOURCE_DIR` | GHA secret | Local Archify skill path (`sf skills install --from-path`) |
 | `ARCHIFY_ZIP_URL` | GHA variable | Release zip URL (`sf skills install --from-zip`; defaults to Archify v2.15.0) |
