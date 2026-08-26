@@ -40,8 +40,6 @@ jobs:
 
       - name: Install Archify skill
         env:
-          # Repository secret: local path to Archify skill tree (e.g. on self-hosted runners).
-          # When unset, set ARCHIFY_ZIP_URL (repo variable) or pass --zip-url via workflow env.
           ARCHIFY_SOURCE_DIR: ${{ secrets.ARCHIFY_SOURCE_DIR }}
           ARCHIFY_ZIP_URL: ${{ vars.ARCHIFY_ZIP_URL }}
           ARCHIFY_VERSION: "2.15.0"

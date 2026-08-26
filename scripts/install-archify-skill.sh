@@ -22,6 +22,8 @@ Options:
 Environment:
   ARCHIFY_SOURCE_DIR  Local path (used if --source-dir not set)
   ARCHIFY_ZIP_URL     Zip URL (used if --zip-url not set)
+
+When neither is set, downloads Archify v2.15.0 from the public GitHub release.
 EOF
 }
 
@@ -75,6 +77,9 @@ parse_args() {
   if [ -z "$ZIP_URL" ] && [ -n "${ARCHIFY_ZIP_URL:-}" ]; then
     ZIP_URL="$ARCHIFY_ZIP_URL"
   fi
+  if [ -z "$SOURCE_DIR" ] && [ -z "$ZIP_URL" ]; then
+    ZIP_URL="https://github.com/tt-a1i/archify/releases/download/v2.15.0/archify.zip"
+  fi
 }
 
 find_skill_root() {
@@ -100,6 +105,8 @@ find_skill_root() {
   exit 1
 }
 
+RESOLVED_SRC=""
+
 resolve_source_from_zip() {
   need_cmd curl
   need_cmd unzip
@@ -108,10 +115,10 @@ resolve_source_from_zip() {
   trap cleanup EXIT
 
   local zipfile="${TMP_EXTRACT_DIR}/archify.zip"
-  echo "Downloading Archify from ${ZIP_URL}"
+  echo "Downloading Archify from ${ZIP_URL}" >&2
   curl -fsSL "$ZIP_URL" -o "$zipfile"
   unzip -q "$zipfile" -d "${TMP_EXTRACT_DIR}/extract"
-  find_skill_root "${TMP_EXTRACT_DIR}/extract"
+  RESOLVED_SRC="$(find_skill_root "${TMP_EXTRACT_DIR}/extract")"
 }
 
 resolve_source_dir() {
@@ -129,7 +136,7 @@ resolve_source_dir() {
       err "source directory missing bin/archify.mjs: $SOURCE_DIR"
       exit 1
     fi
-    printf '%s\n' "$SOURCE_DIR"
+    RESOLVED_SRC="$SOURCE_DIR"
     return
   fi
 
@@ -172,18 +179,19 @@ verify_install() {
 main() {
   parse_args "$@"
 
-  local src
-  src="$(resolve_source_dir)"
+  resolve_source_dir
 
   if [ -n "$VERSION" ]; then
     echo "Installing Archify ${VERSION} to ${DEST}"
   else
     echo "Installing Archify to ${DEST}"
   fi
-  echo "Source: ${src}"
+  echo "Source: ${RESOLVED_SRC}"
 
-  copy_skill "$src"
+  copy_skill "$RESOLVED_SRC"
   verify_install
+  cleanup
+  trap - EXIT
 
   echo "Archify skill installed at ${DEST}"
 }

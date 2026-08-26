@@ -39,11 +39,19 @@ spec artifact per type.
 From the repository git root:
 
 ```bash
+./scripts/install-archify-skill.sh --version 2.15.0
+```
+
+With no source flags, the script downloads Archify v2.15.0 from the public
+[GitHub release](https://github.com/tt-a1i/archify/releases/tag/v2.15.0). For
+local development you can point at an existing tree:
+
+```bash
 ./scripts/install-archify-skill.sh --source-dir ~/.agents/skills/archify
 ```
 
-Alternatives: `ARCHIFY_SOURCE_DIR`, `--zip-url`, or `ARCHIFY_ZIP_URL`. The script
-copies the runtime tree to `.pi/skills/archify/` and runs `archify doctor`.
+Override with `ARCHIFY_SOURCE_DIR`, `--zip-url`, or `ARCHIFY_ZIP_URL` when needed.
+The script copies the runtime tree to `.pi/skills/archify/` and runs `archify doctor`.
 
 ## Commands
 
@@ -96,8 +104,8 @@ done < <(jq -c '.diagrams[]' <<<"$ENVELOPE")
 | `GITHUB_BASE_REF` | detect-changes | PR base branch (default: `main`) |
 | `GITHUB_HEAD_REF` | detect-changes | PR head branch |
 | `GITHUB_SHA` | detect-changes | Head commit SHA |
-| `ARCHIFY_SOURCE_DIR` | install script | Local Archify skill path |
-| `ARCHIFY_ZIP_URL` | install script | Release zip URL |
+| `ARCHIFY_SOURCE_DIR` | install script | Local Archify skill path (optional override) |
+| `ARCHIFY_ZIP_URL` | install script | Release zip URL (optional override; defaults to Archify v2.15.0 GitHub release) |
 
 ## Fork PR limitation
 
