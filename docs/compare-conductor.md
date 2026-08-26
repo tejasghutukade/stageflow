@@ -59,7 +59,7 @@ If you want stage-bound Pi runs with reviewable envelopes and an operator consol
 
 | Topic | Stageflow | Conductor |
 |-------|-----------|-----------|
-| Config format | `pipelines/`, `stages/`, `tasks/` | Workflow YAML + agent definitions |
+| Config format | Pipeline-owned YAML (`*.pipeline.yaml`, `uses:`, `stageflow.yaml`) | Workflow YAML + agent definitions |
 | Parallelism | Pipeline DAG (`needs`) | Graph parallelism |
 | CI story | `sf validate`, `sf run --json`, exit 0/1/2 | Conductor CLI / Actions patterns |
 | MCP | Streamable HTTP when `sf ui` runs | Varies by deployment |

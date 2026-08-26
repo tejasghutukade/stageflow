@@ -40,7 +40,7 @@ Plan review with artifact gate: [`tests/fixtures/stages/plan-review.yaml`](../te
 ### Default: park on wait
 
 ```bash
-sf run --task tasks/sample.yaml --pipeline plan-review-proving
+sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/plan-review-proving.pipeline.yaml
 ```
 
 When a stage waits, the CLI exits **`2`** and prints the run folder path. The run stays resumable from the console.
@@ -59,7 +59,7 @@ JSON with `--json`:
 ### `--skip-gates`
 
 ```bash
-sf run --task tasks/sample.yaml --pipeline plan-review-proving --skip-gates
+sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/plan-review-proving.pipeline.yaml --skip-gates
 ```
 
 If a stage would wait, the worker **fails immediately** with reason `skip-gates: stage requested wait`. Exit code **`1`**, not `2`.
@@ -106,4 +106,4 @@ MCP does not expose a dedicated “answer gate” tool in v1. Poll `get_run` for
 - [Envelopes](envelopes.md) — completing a stage after gates
 - [CI / headless](ci.md) — `--skip-gates` in automation
 - [YAML catalog](yaml-catalog.md) — `gate_kinds` field
-- [`tests/fixtures/pipelines/hitl-four-kinds-proving.yaml`](../tests/fixtures/pipelines/hitl-four-kinds-proving.yaml)
+- [`tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml`](../tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml)

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +12,7 @@ import {
 import { isTaskFile, resolveStartTaskInput } from "../src/runtime/taskInput.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const samplePath = path.join(fixtures, "tasks", "sample.yaml");
+const samplePath = SAMPLE_TASK;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("task load seam outcomes", () => {
@@ -74,7 +75,7 @@ describe("taskInput uses the load parse", () => {
   it("isTaskFile wraps parseTaskFile", () => {
     expect(isTaskFile({ id: "t", goal: "g" })).toBe(true);
     expect(isTaskFile({ id: "t" })).toBe(false);
-    expect(isTaskFile("tasks/sample.yaml")).toBe(false);
+    expect(isTaskFile("tasks/sample.task.yaml")).toBe(false);
     expect(parseTaskFile({ id: "t", goal: "g", checkout: 42 }, "task").ok).toBe(true);
     expect(isTaskFile({ id: "t", goal: "g", checkout: 42 })).toBe(true);
   });

@@ -1,0 +1,7 @@
+id: plan-review
+stages:
+  - id: plan-review
+    uses: ./plan-review.yaml
+  - id: plan-review-followup
+    uses: ./plan-review-followup.yaml
+    needs: plan-review

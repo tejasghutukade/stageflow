@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,7 +28,7 @@ describe("sf run validation gate", { timeout: 30_000 }, () => {
     const result = runCli([
       "run",
       "--task",
-      "tasks/sample.yaml",
+      "tasks/sample.task.yaml",
       "--pipeline",
       brokenPipeline,
     ]);
@@ -41,7 +42,7 @@ describe("sf run validation gate", { timeout: 30_000 }, () => {
     const result = runCli([
       "run",
       "--task",
-      "tasks/sample.yaml",
+      "tasks/sample.task.yaml",
       "--pipeline",
       brokenPipeline,
     ]);
@@ -64,7 +65,7 @@ describe("sf run validation gate", { timeout: 30_000 }, () => {
     const runResult = runCli([
       "run",
       "--task",
-      "tasks/sample.yaml",
+      "tasks/sample.task.yaml",
       "--pipeline",
       brokenPipeline,
     ]);
@@ -85,7 +86,7 @@ describe("sf run validation gate", { timeout: 30_000 }, () => {
       "run",
       "--json",
       "--task",
-      "tasks/sample.yaml",
+      "tasks/sample.task.yaml",
       "--pipeline",
       brokenPipeline,
     ]);

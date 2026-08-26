@@ -9,11 +9,12 @@ import { normalizeCatalogPath } from "../src/runstore/normalizeCatalogPath.js";
 import { loadRunContext } from "../src/runtime/resumeReconstruct.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { startPipeline } from "../src/runtime/pipelineRunner.js";
+import { SAMPLE_TASK } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const owned = path.join(fixtures, "pipeline-owned", "inline-leaf");
 const pipelineFile = path.join(owned, "inline.pipeline.yaml");
-const taskFile = path.join(fixtures, "tasks", "sample.yaml");
+const taskFile = SAMPLE_TASK;
 
 function successEnvelope(summary: string) {
   return {

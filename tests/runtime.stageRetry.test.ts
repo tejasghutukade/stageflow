@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, readFile, writeFile, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -199,11 +200,11 @@ async function seedLinearReconcilableRun(
   store: ReturnType<typeof createRunStore>,
 ) {
   const taskYaml = await readFile(
-    path.join(fixtures, "tasks", "sample.yaml"),
+    SAMPLE_TASK,
     "utf8",
   );
   const run = await store.createRun({
-    pipelineId: "linear-explicit",
+    ...catalogLocators("linear-explicit"),
     taskYaml,
     taskId: "sample",
   });
@@ -234,11 +235,11 @@ async function seedParallelReconcilableRun(
   store: ReturnType<typeof createRunStore>,
 ) {
   const taskYaml = await readFile(
-    path.join(fixtures, "tasks", "sample.yaml"),
+    SAMPLE_TASK,
     "utf8",
   );
   const run = await store.createRun({
-    pipelineId: "parallel-retry-fanout",
+    ...catalogLocators("parallel-retry-fanout"),
     taskYaml,
     taskId: "sample",
   });
@@ -339,11 +340,11 @@ describe("RunRetryCoordinator.retryStage", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-s4-conflict-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "linear-explicit",
+      ...catalogLocators("linear-explicit"),
       taskYaml,
       taskId: "sample",
     });
@@ -395,8 +396,8 @@ describe("runtime stage retry", () => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
 
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -435,8 +436,8 @@ describe("runtime stage retry", () => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
 
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -480,8 +481,8 @@ describe("runtime stage retry", () => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
 
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -524,8 +525,8 @@ describe("runtime stage retry", () => {
     const manager = new RunManager({ agent, store, cwd: fixtures });
 
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -561,8 +562,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -619,8 +620,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -687,8 +688,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -752,8 +753,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -824,8 +825,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -908,8 +909,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -996,8 +997,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1069,8 +1070,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1161,8 +1162,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1271,8 +1272,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1364,8 +1365,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1443,8 +1444,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1555,8 +1556,8 @@ describe("runtime stage retry", () => {
     const started = await startPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
       cwd: fixtures,
       executionMode: "process",
       stageProcessLauncher: { launch } as unknown as StageProcessLauncher,
@@ -1610,8 +1611,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1709,8 +1710,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1832,11 +1833,11 @@ describe("runtime stage retry", () => {
     );
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "parallel-retry-fanout",
+      ...catalogLocators("parallel-retry-fanout"),
       taskYaml,
       taskId: "sample",
     });
@@ -1934,8 +1935,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -1999,8 +2000,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "linear-explicit",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -2061,8 +2062,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -2138,8 +2139,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -2214,8 +2215,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -2315,8 +2316,8 @@ describe("runtime stage retry", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-retry-fanout",
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-retry-fanout"),
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -2365,11 +2366,11 @@ describe("runtime stage retry", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-ae3-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml,
       taskId: "sample",
     });

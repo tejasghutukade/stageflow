@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, taskPath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,7 +18,7 @@ const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fix
 
 describe("YAML loaders", () => {
   it.skip("legacy three-dir pipeline load — migrated in S7", async () => {
-    const loaded = await loadPipeline("docs-only", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("docs-only"), { cwd: fixtures });
     expect(loaded.pipeline.stages).toEqual([
       "clarify",
       "design-doc",
@@ -26,20 +27,20 @@ describe("YAML loaders", () => {
   });
 
   it.skip("legacy broken pipeline missing stage — migrated in S7", async () => {
-    await expect(loadPipeline("broken", { cwd: fixtures })).rejects.toThrow(
+    await expect(loadPipeline(pipelinePath("broken"), { cwd: fixtures })).rejects.toThrow(
       /missing stage/,
     );
   });
 
   it("loads a structured task with goal and context", async () => {
-    const task = await loadTask(path.join(fixtures, "tasks", "sample.yaml"));
+    const task = await loadTask(SAMPLE_TASK);
     expect(task.goal).toMatch(/calendar/i);
     expect(task.context).toBeTruthy();
     expect(task.checkout).toBeUndefined();
   });
 
   it("loads a task with absolute checkout", async () => {
-    const task = await loadTask(path.join(fixtures, "tasks", "with-checkout.yaml"));
+    const task = await loadTask(taskPath("with-checkout"));
     expect(task.checkout).toBe("/abs/project/checkout");
   });
 
@@ -68,18 +69,18 @@ checkout: 42
   });
 
   it.skip("legacy fan-out fixture — migrated in S7", async () => {
-    const loaded = await loadPipeline("parallel-after-clarify", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-after-clarify"), { cwd: fixtures });
     expect(loaded.dag.roots).toEqual(["clarify"]);
   });
 
   it.skip("legacy explicit linear fixture — migrated in S7", async () => {
-    const docsOnly = await loadPipeline("docs-only", { cwd: fixtures });
-    const linearExplicit = await loadPipeline("linear-explicit", { cwd: fixtures });
+    const docsOnly = await loadPipeline(pipelinePath("docs-only"), { cwd: fixtures });
+    const linearExplicit = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
     expect(areResolvedDagsEquivalent(docsOnly.dag, linearExplicit.dag)).toBe(true);
   });
 
   it.skip("legacy single-stage pipeline — migrated in S7", async () => {
-    const loaded = await loadPipeline("single", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("single"), { cwd: fixtures });
     expect(loaded.stages).toHaveLength(1);
   });
 

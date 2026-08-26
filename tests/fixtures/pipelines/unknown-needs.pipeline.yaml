@@ -1,5 +1,7 @@
 id: unknown-needs
 stages:
   - id: clarify
+    uses: ../stages/clarify.yaml
   - id: design-doc
     needs: missing-stage
+    uses: ../stages/design-doc.yaml

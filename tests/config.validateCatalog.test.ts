@@ -12,6 +12,7 @@ import {
 } from "../src/config/validateCatalog.js";
 import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
@@ -82,7 +83,7 @@ describe("validateCatalog helpers", () => {
       {
         severity: "error",
         code: "pipeline.missing_stage",
-        path: "pipelines/broken.yaml",
+        path: "pipelines/broken.pipeline.yaml",
         message: "missing",
         category: "pipeline",
       },
@@ -248,25 +249,25 @@ describe("validateCatalog pipeline scope", () => {
   it.skip("AE-S1-2: targeted docs-only passes — legacy fixtures S7", async () => {
     const result = await validateCatalog({
       scope: "pipeline",
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       cwd: fixtures,
     });
     expect(result.ok).toBe(true);
-    expect(result.findings.some((f) => f.path.includes("broken.yaml"))).toBe(false);
+    expect(result.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
   });
 
   it.skip("AE-S5-3: targeted validate agrees with loadPipelineValidated — legacy S7", async () => {
     const validateResult = await validateCatalog({
       scope: "pipeline",
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       cwd: fixtures,
     });
-    const loadResult = await loadPipelineValidated("docs-only", {
+    const loadResult = await loadPipelineValidated(pipelinePath("docs-only"), {
       cwd: fixtures,
     });
     expect(validateResult.ok).toBe(true);
     expect(loadResult.ok).toBe(true);
-    expect(validateResult.findings.some((f) => f.path.includes("broken.yaml"))).toBe(false);
+    expect(validateResult.findings.some((f) => f.path.includes("broken.pipeline.yaml"))).toBe(false);
   });
 
   it("AE-S1-4: stage id must match filename stem", async () => {
@@ -331,7 +332,7 @@ describe("validateCatalog pipeline scope", () => {
 
 describe("validateCatalog task scope", () => {
   it("AE4: valid task file passes with scope task", async () => {
-    const taskPath = path.join(fixtures, "tasks", "sample.yaml");
+    const taskPath = SAMPLE_TASK;
     const result = await validateCatalog({
       scope: "task",
       task: taskPath,
@@ -384,10 +385,17 @@ describe("validateCatalog legacy fixtures", () => {
     expect(findingCodes(result.findings)).toContain("pipeline.dag_error");
   });
 
-  it("full scope on repo without manifest emits manifest_missing", async () => {
+  it("full scope on project without manifest emits manifest_missing", async () => {
     clearFindProjectRootCacheForTests();
-    const result = await validateCatalog({ scope: "full", cwd: fixtures });
-    expect(result.findings.some((f) => f.code === "catalog.manifest_missing")).toBe(true);
-    clearFindProjectRootCacheForTests();
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const result = await validateCatalog({ scope: "full", cwd: root });
+      expect(result.findings.some((f) => f.code === "catalog.manifest_missing")).toBe(
+        true,
+      );
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
   });
 });

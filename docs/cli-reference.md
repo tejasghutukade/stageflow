@@ -20,7 +20,7 @@ sf --help
 Run a pipeline against a task file.
 
 ```bash
-sf run --task <path> --pipeline <name-or-path> [options]
+sf run --task <path> --pipeline <path> [options]
 ```
 
 | Flag | Description |
@@ -58,7 +58,7 @@ Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout 
 Example:
 
 ```bash
-sf run --task tasks/sample.yaml --pipeline single --json
+sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/single.pipeline.yaml --json
 ```
 
 ## `sf validate`
@@ -66,7 +66,7 @@ sf run --task tasks/sample.yaml --pipeline single --json
 Validate pipeline and stage YAML in the current directory.
 
 ```bash
-sf validate [--pipeline <name-or-path>] [--strict] [--json]
+sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
 ```
 
 | Flag | Description |

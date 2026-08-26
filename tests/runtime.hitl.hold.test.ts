@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -80,8 +81,8 @@ describe("runtime HITL hold/resume (U4)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "docs-only",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -163,8 +164,8 @@ describe("runtime HITL hold/resume (U4)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "docs-only",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: LINEAR_EXPLICIT_PIPELINE,
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -212,8 +213,8 @@ describe("runtime HITL hold/resume (U4)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -261,11 +262,11 @@ describe("runtime HITL hold/resume (U4)", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml,
       taskId: "sample",
     });
@@ -332,8 +333,8 @@ describe("runtime HITL hold/resume (U4)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -364,11 +365,11 @@ describe("runtime HITL hold/resume (U4)", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml,
       taskId: "sample",
     });
@@ -423,11 +424,11 @@ describe("runtime HITL hold/resume (U4)", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-ae2-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml,
       taskId: "sample",
     });
@@ -504,8 +505,8 @@ describe("runtime HITL hold/resume (U4)", () => {
     ]);
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "single",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("single"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -520,11 +521,11 @@ describe("runtime HITL hold/resume (U4)", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-reconcile-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "single",
+      ...catalogLocators("single"),
       taskYaml,
       taskId: "sample",
     });
@@ -589,11 +590,11 @@ describe("runtime HITL hold/resume (U4)", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-hitl-par-reconcile-"));
     const store = createRunStore({ rootDir: root });
     const taskYaml = await readFile(
-      path.join(fixtures, "tasks", "sample.yaml"),
+      SAMPLE_TASK,
       "utf8",
     );
     const run = await store.createRun({
-      pipelineId: "parallel-hitl-fork",
+      ...catalogLocators("parallel-hitl-fork"),
       taskYaml,
       taskId: "sample",
     });

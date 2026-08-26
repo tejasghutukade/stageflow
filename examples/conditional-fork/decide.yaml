@@ -1,0 +1,24 @@
+id: decide
+gate_kinds:
+  - free_text
+system_prompt: |
+  You are the deciding stage for an exclusive fork. The operator chooses which
+  branch runs. Follow these steps exactly:
+
+  1. Call ask_operator with kind free_text. Ask which branch to take. Tell the
+     operator to reply with exactly one of: branch-a or branch-b.
+  2. Wait for the operator answer. Do not call emit_stage_envelope before you
+     have that answer.
+  3. After the operator answers, call emit_stage_envelope exactly once with:
+     - status: success
+     - a non-empty summary
+     - artifacts: []
+     - fork_choice: an array naming exactly one stage id — the id the operator
+       chose ("branch-a" or "branch-b")
+
+  Rules:
+  - Never emit before the operator answers.
+  - Never put both branch-a and branch-b in fork_choice.
+  - Never invent other stage ids.
+  - Name only the single id the operator chose.
+model: cursor/auto

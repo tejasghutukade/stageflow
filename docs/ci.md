@@ -28,7 +28,7 @@ JSON output includes `ok`, `scope`, `summary`, and `findings[]` with `severity`,
 
 ```bash
 sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
-sf run --task tasks/my-task.yaml --pipeline hello --json
+sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json
 ```
 
 Provider login stores credentials in the job environment (prefer `--api-key-env` over prompts).
@@ -40,6 +40,8 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | `0` | `succeeded` | Pipeline completed |
 | `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
 | `2` | `waiting` | Stage blocked on HITL |
+
+Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md).
 
@@ -99,7 +101,7 @@ Recorded on the run for operator triage in the console.
 
 Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator catalog** `{ cwd, agentDir }`:
 
-- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the catalog directory (where your `pipelines/` and `stages/` live). Run `sf run` from that directory, or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`.
+- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the project git root. Run `sf run` from the repo (or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`).
 - **User/runner skills:** install under the Pi agent directory (`~/.pi/agent/skills/<name>/SKILL.md`), or pass `--operator-agent-dir <path>` / set `STAGEFLOW_OPERATOR_AGENT_DIR` to point at a Pi agent dir that contains a `skills/` subtree.
 
 The guest CLI defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }`. Override when the job checkout is not the catalog root or when skills live in a shared agent dir on the runner.
@@ -143,7 +145,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
       - name: Run pipeline
-        run: sf run --task tasks/my-task.yaml --pipeline hello --json --skip-gates
+        run: sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json --skip-gates
         # If pipelines/stages live in a subdirectory, add:
         # --operator-cwd path/to/catalog
 ```

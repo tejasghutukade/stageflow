@@ -12,6 +12,7 @@ import { projectRunForMcp } from "../src/mcp/projectRun.js";
 import { readRunArtifact } from "../src/mcp/readArtifact.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -196,7 +197,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(pipelines.isError).toBe(false);
       expect(
         pipelines.payload.pipelines.some(
-          (p: { path: string }) => p.path === "pipelines/docs-only.yaml",
+          (p: { path: string }) => p.path === "pipelines/docs-only.pipeline.yaml",
         ),
       ).toBe(true);
 
@@ -218,7 +219,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: "pipelines/docs-only.yaml",
+        pipeline: pipelinePath("docs-only"),
         task: { id: "mcp-inline", goal: "from mcp" },
       });
       expect(started.isError).toBe(false);
@@ -238,7 +239,7 @@ describe("MCP tools and HTTP inline task", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/docs-only.yaml",
+          pipeline: pipelinePath("docs-only"),
           task: { id: "rest-inline", goal: "from rest" },
         }),
       });
@@ -338,7 +339,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: "pipelines/single.yaml",
+        pipeline: pipelinePath("single"),
         task: { id: "holder", goal: "hold", checkout },
       });
       expect(first.isError).toBe(false);
@@ -361,7 +362,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(health.payload).not.toHaveProperty("inFlight");
 
       const overCap = await mcpCall(base, "start_run", {
-        pipeline: "pipelines/single.yaml",
+        pipeline: pipelinePath("single"),
         task: { id: "over", goal: "no slot" },
       });
       expect(overCap.isError).toBe(true);
@@ -416,7 +417,7 @@ describe("MCP tools and HTTP inline task", () => {
       const base = `http://127.0.0.1:${address.port}`;
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: "pipelines/single.yaml",
+        pipeline: pipelinePath("single"),
         task: { id: "a", goal: "first", checkout },
       });
       expect(first.isError).toBe(false);
@@ -429,7 +430,7 @@ describe("MCP tools and HTTP inline task", () => {
       }
 
       const conflict = await mcpCall(base, "start_run", {
-        pipeline: "pipelines/single.yaml",
+        pipeline: pipelinePath("single"),
         task: { id: "b", goal: "same", checkout },
       });
       expect(conflict.isError).toBe(true);

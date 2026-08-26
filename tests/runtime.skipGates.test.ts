@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,7 +23,7 @@ const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
+const sampleTask = SAMPLE_TASK;
 
 const waitEnvelope = {
   status: "success" as const,
@@ -179,7 +180,7 @@ describe("skip-gates yield-loop fail-before-park (U2)", () => {
     });
     const started = await manager.startRun({
       task: sampleTask,
-      pipeline: "single",
+      pipeline: pipelinePath("single"),
       skipGates: true,
     });
     expect(started.ok).toBe(true);

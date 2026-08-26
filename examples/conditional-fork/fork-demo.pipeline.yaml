@@ -1,0 +1,12 @@
+id: fork-demo
+stages:
+  - id: decide
+    uses: ./decide.yaml
+    fork:
+      select: one
+  - id: branch-a
+    uses: ./branch-a.yaml
+    needs: decide
+  - id: branch-b
+    uses: ./branch-b.yaml
+    needs: decide

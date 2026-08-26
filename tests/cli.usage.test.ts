@@ -11,14 +11,15 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
+import { SAMPLE_TASK, SINGLE_PIPELINE, pipelinePath } from "./helpers/fixturePaths.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
-const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
-const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
-const docsOnlyPipeline = path.join(fixtures, "pipelines", "docs-only.yaml");
+const sampleTask = SAMPLE_TASK;
+const singlePipeline = SINGLE_PIPELINE;
+const docsOnlyPipeline = pipelinePath("docs-only");
 const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
 const demoPipeline = path.join(manifestCatalog, "pipelines", "demo.pipeline.yaml");

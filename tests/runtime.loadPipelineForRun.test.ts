@@ -36,12 +36,10 @@ describe("loadPipelineForRun", () => {
     ).rejects.toThrow(`Pipeline not found at stored path: ${missing}`);
   });
 
-  it("falls back to pipeline_id when pipeline_path is null", async () => {
-    const loaded = await loadPipelineForRun(
-      meta({ pipeline_id: "locator-fallback" }),
-      fixtures,
-    );
-    expect(loaded.pipeline.id).toBe("locator-fallback");
+  it("rejects bare pipeline_id when pipeline_path is absent", async () => {
+    await expect(
+      loadPipelineForRun(meta({ pipeline_id: "locator-fallback" }), fixtures),
+    ).rejects.toThrow(/filesystem path/i);
   });
 
   it("uses project_root as loader cwd when set", async () => {

@@ -1,0 +1,6 @@
+id: branch-b
+system_prompt: |
+  You are branch-b. Call emit_stage_envelope exactly once with status success,
+  a short summary that acknowledges branch-b ran, and artifacts []. Do not call
+  ask_operator.
+model: cursor/auto

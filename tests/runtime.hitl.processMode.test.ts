@@ -9,6 +9,7 @@ import * as pipelineScheduler from "../src/runtime/pipelineScheduler.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { catalogLocators } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,7 +32,7 @@ async function createWaitingRun(root: string) {
   const store = createRunStore({ rootDir: root });
   const taskYaml = "id: sample\ngoal: process-mode-hitl\n";
   const run = await store.createRun({
-    pipelineId: "docs-only",
+    ...catalogLocators("linear-explicit"),
     taskYaml,
     taskId: "sample",
   });

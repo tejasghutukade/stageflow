@@ -19,6 +19,7 @@ type StageEnvelope = {
   summary: string;
   artifacts: string[];
   payload?: Record<string, unknown>;
+  fork_choice?: string[];
   stage_id?: string;
   notes?: string;
 };
@@ -30,8 +31,11 @@ type StageEnvelope = {
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
 | `payload` | no | Structured data for downstream stages |
+| `fork_choice` | no* | Named immediate successor ids to run; required on success when the stage has a `fork` field |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
+
+\* Required for fork stages on success. On non-fork stages the field is optional and ignored for routing.
 
 ## Emitting an envelope
 
@@ -54,6 +58,26 @@ Example success emit (conceptual):
 On `status: "failure"`, the envelope is accepted but the **pipeline stops** — the stage does not advance successors.
 
 If the stage declares `payload_schema` in YAML, `payload` is validated against that JSON Schema subset on success.
+
+### Fork stages
+
+If the stage's pipeline entry has a `fork` field, the success emit **must** include `fork_choice: string[]` naming which immediate successors to run. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
+
+```json
+{
+  "status": "success",
+  "summary": "Chose design-doc branch.",
+  "artifacts": [],
+  "fork_choice": ["design-doc"]
+}
+```
+
+Rules:
+- Every id in `fork_choice` must be an immediate successor of this stage.
+- `fork_choice: []` is accepted only when `allow_none: true` is set in the pipeline `fork` field.
+- `fork_choice` on a failure emit is ignored; no successor is named.
+
+Unchosen successors are `skipped` — the same status used when a parent fails. See [YAML catalog](yaml-catalog.md#fork-pipelines) for the `fork` field.
 
 ## Artifacts
 

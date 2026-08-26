@@ -1,19 +1,19 @@
 # ci-validate
 
-Validate-only CI demo. Checks pipeline and stage YAML with `sf validate --strict` — no provider auth or agent run required.
+Validate-only CI demo. Checks the repo manifest and example catalogs with `sf validate --strict` — no provider auth or agent run required.
 
 ## Prerequisites
 
 - Node.js ≥ 20
-- Stageflow CLI (`npm i -g stageflow` or `npx stageflow`)
+- Stageflow CLI (`npm i -g stageflow` or built from this repo)
 
 ## Commands
 
-From this directory:
+From the **repository git root**:
 
 ```bash
-chmod +x validate.sh
-./validate.sh
+chmod +x examples/ci-validate/validate.sh
+./examples/ci-validate/validate.sh
 ```
 
 Or directly:
@@ -28,12 +28,8 @@ sf validate --strict --json
 - uses: actions/setup-node@v4
   with:
     node-version: "24"
-
-- run: npm i -g stageflow@latest
-
-- name: Validate Stageflow catalog
-  working-directory: examples/ci-validate
-  run: sf validate --strict --json
+- run: npm i -g stageflow
+- run: sf validate --strict --json
 ```
 
-See [docs/ci.md](../../docs/ci.md) for exit codes and JSON output shape.
+Run from the workspace root where `stageflow.yaml` lives.

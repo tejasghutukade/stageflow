@@ -1,0 +1,4 @@
+id: hello
+stages:
+  - id: research
+    uses: ./research.yaml

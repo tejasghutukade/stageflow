@@ -8,6 +8,7 @@ import type { ValidationResult } from "../src/config/validateCatalog.js";
 import { runValidateCommand } from "../src/cli/validateCommand.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import {
   exitCodeForValidation,
   formatValidationHuman,
@@ -170,7 +171,7 @@ describe("runValidateCommand", () => {
         {
           severity: "error",
           code: "pipeline.missing_stage",
-          path: "pipelines/broken.yaml",
+          path: "pipelines/broken.pipeline.yaml",
           message: "missing stage",
           category: "pipeline",
         },
@@ -268,7 +269,7 @@ describe("formatValidationJson and exitCodeForValidation", () => {
         {
           severity: "error",
           code: "pipeline.dag_error",
-          path: "pipelines/cycle.yaml",
+          path: "pipelines/cycle.pipeline.yaml",
           message: "dependency cycle",
           category: "pipeline",
         },
@@ -295,7 +296,7 @@ describe("formatValidationJson and exitCodeForValidation", () => {
       severity: "error",
       category: "pipeline",
       code: "pipeline.dag_error",
-      file: "pipelines/cycle.yaml",
+      file: "pipelines/cycle.pipeline.yaml",
       message: "dependency cycle",
     });
   });

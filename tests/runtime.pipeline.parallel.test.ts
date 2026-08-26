@@ -21,6 +21,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -128,10 +129,10 @@ async function prepareProcessPipeline(
   pipelineId: string,
 ) {
   const store = createRunStore({ rootDir: root });
-  const taskPath = path.join(fixtures, "tasks", "sample.yaml");
+  const taskPath = SAMPLE_TASK;
   const taskYaml = await readFile(taskPath, "utf8");
   const task = loadTaskFromYaml(taskYaml, taskPath);
-  const loaded = await loadPipeline(pipelineId, { cwd: fixtures });
+  const loaded = await loadPipeline(pipelinePath(pipelineId), { cwd: fixtures });
   const run = await store.createRun({
     pipelineId: loaded.pipeline.id,
     taskYaml,
@@ -304,6 +305,28 @@ describe("parallel pipeline scheduler process mode", () => {
     expect(result.reason).toBe("sibling exploded");
   });
 
+  it("process mode succeeded without envelope fails the stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-no-envelope-"));
+    const { prepared } = await prepareProcessPipeline(
+      root,
+      "parallel-after-clarify",
+    );
+
+    const launch = vi.fn(async () => ({ type: "succeeded" as const }));
+    const mockLauncher = { launch } as unknown as StageProcessLauncher;
+
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 3,
+      executionMode: "process",
+      stageProcessLauncher: mockLauncher,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBeTruthy();
+  });
+
   it("resumeRun hasActive early return is waiting not succeeded", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-resume-active-"));
     const { prepared, store } = await prepareProcessPipeline(
@@ -373,8 +396,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent: wrapped,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
@@ -442,8 +465,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent: wrapped,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
@@ -480,8 +503,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-five-fork",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-five-fork"),
       cwd: fixtures,
       maxActiveStagesPerRun: 3,
     });
@@ -551,8 +574,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-after-clarify",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-after-clarify"),
       cwd: fixtures,
     });
 
@@ -632,8 +655,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
-      pipeline: "parallel-hitl-fork",
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      pipeline: pipelinePath("parallel-hitl-fork"),
+      task: SAMPLE_TASK,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -686,8 +709,8 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const runPromise = runPipeline({
       agent,
       store,
-      taskPath: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "parallel-five-fork",
+      taskPath: SAMPLE_TASK,
+      pipeline: pipelinePath("parallel-five-fork"),
       cwd: fixtures,
       maxActiveStagesPerRun: 2,
     });

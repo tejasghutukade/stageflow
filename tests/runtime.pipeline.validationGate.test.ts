@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const readFileMock = vi.hoisted(() => vi.fn());
 
@@ -27,7 +28,7 @@ import {
 import { createRunStore } from "../src/runstore/createStore.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
-const sampleTaskPath = path.join(fixtures, "tasks", "sample.yaml");
+const sampleTaskPath = SAMPLE_TASK;
 
 describe("preparePipeline validation gate", () => {
   afterEach(() => {
@@ -52,7 +53,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskPath: sampleTaskPath,
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       }),
     ).rejects.toBeInstanceOf(PipelineValidationError);
@@ -75,7 +76,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskPath: sampleTaskPath,
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       });
     } catch (err) {
@@ -115,7 +116,7 @@ describe("preparePipeline validation gate", () => {
       agent,
       store,
       taskPath: sampleTaskPath,
-      pipeline: "docs-only",
+      pipeline: pipelinePath("docs-only"),
       cwd: fixtures,
     });
 
@@ -134,7 +135,7 @@ describe("preparePipeline validation gate", () => {
         agent,
         store,
         taskYaml: "id: t\ngoal: g\n",
-        pipeline: "broken",
+        pipeline: pipelinePath("broken"),
         cwd: fixtures,
       }),
     ).rejects.toBeInstanceOf(PipelineValidationError);

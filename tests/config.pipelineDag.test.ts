@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,7 +17,7 @@ const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fix
 const owned = path.join(fixtures, "pipeline-owned");
 const stagesDir = path.join(fixtures, "stages");
 
-const ctx = (pipelineId: string, relPath = "pipelines/test.yaml") => ({
+const ctx = (pipelineId: string, relPath = "pipelines/test.pipeline.yaml") => ({
   pipelineId,
   path: path.join(fixtures, relPath),
 });
@@ -29,7 +30,7 @@ describe("resolvePipelineDag", () => {
         { id: "design-doc", needs: "clarify" },
         { id: "implementation-plan", needs: "design-doc" },
       ],
-      ctx("docs-only", "pipelines/docs-only.yaml"),
+      ctx("docs-only", "pipelines/docs-only.pipeline.yaml"),
     );
 
     expect(stages).toEqual(["clarify", "design-doc", "implementation-plan"]);
@@ -107,7 +108,7 @@ describe("resolvePipelineDag", () => {
     expect(() =>
       resolvePipelineDag(
         [{ id: "clarify" }, { id: "design-doc" }, { id: "clarify" }],
-        ctx("duplicate-stage"),
+        ctx("duplicate-stage.pipeline"),
       ),
     ).toThrow(/duplicate stage "clarify"/i);
   });

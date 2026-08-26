@@ -1,0 +1,5 @@
+id: decide
+gate_kinds:
+  - free_text
+system_prompt: Decide which branch to take.
+model: anthropic/claude-sonnet-4-5

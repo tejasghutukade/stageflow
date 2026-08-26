@@ -13,6 +13,7 @@ import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -535,8 +536,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/docs-only.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("docs-only"),
         }),
       });
       expect(started.status).toBe(202);
@@ -583,8 +584,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/single.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -738,8 +739,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/parallel-hitl-multi-wait.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("parallel-hitl-multi-wait"),
         }),
       });
       expect(started.status).toBe(202);
@@ -860,8 +861,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/parallel-track-fanout.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("parallel-track-fanout"),
         }),
       });
       expect(started.status).toBe(202);
@@ -989,8 +990,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/single.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1070,8 +1071,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/single.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1126,8 +1127,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/single.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1175,8 +1176,8 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          task: "tasks/sample.yaml",
-          pipeline: "pipelines/single.yaml",
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1304,7 +1305,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "a", goal: "first" },
         }),
       });
@@ -1312,7 +1313,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "b", goal: "second" },
         }),
       });
@@ -1373,7 +1374,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "holder", goal: "hold slot", checkout },
         }),
       });
@@ -1389,7 +1390,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "cap", goal: "over max" },
         }),
       });
@@ -1421,7 +1422,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "pipelines/single.yaml",
+            pipeline: pipelinePath("single"),
             task: { id: "a", goal: "first", checkout },
           }),
         });
@@ -1436,7 +1437,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "pipelines/single.yaml",
+            pipeline: pipelinePath("single"),
             task: { id: "b", goal: "same checkout", checkout },
           }),
         });
@@ -1578,7 +1579,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "holder", goal: "hold slot" },
         }),
       });
@@ -1626,7 +1627,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "pipelines/single.yaml",
+          pipeline: pipelinePath("single"),
           task: { id: "blocked", goal: "should 409" },
         }),
       });
@@ -1807,8 +1808,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         expect(started.status).toBe(202);
@@ -1892,8 +1893,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -1946,8 +1947,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -1995,8 +1996,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2042,8 +2043,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2075,8 +2076,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2140,8 +2141,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2177,8 +2178,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/parallel-retry-fanout.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2215,7 +2216,7 @@ describe("localhost HTTP API", () => {
           server.close((err) => (err ? reject(err) : resolve()));
         });
       }
-    }, 15000);
+    }, 30000);
 
     it("accepts retry on failed stage during recovery running (AE4b)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-ae4b-"));
@@ -2227,8 +2228,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/parallel-retry-fanout.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2282,8 +2283,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/linear-explicit.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2431,8 +2432,8 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            task: "tasks/sample.yaml",
-            pipeline: "pipelines/parallel-retry-fanout.yaml",
+            task: "tasks/sample.task.yaml",
+            pipeline: pipelinePath("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;

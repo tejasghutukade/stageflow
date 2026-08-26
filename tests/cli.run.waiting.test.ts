@@ -9,12 +9,13 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
+import { SINGLE_PIPELINE, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
-const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
+const singlePipeline = SINGLE_PIPELINE;
 
 function captureIo() {
   const stdout: string[] = [];
@@ -64,7 +65,7 @@ describe("cli run waiting outcome", () => {
       stageProcessLauncher: { launch } as unknown as StageProcessLauncher,
     });
     const started = await manager.startRun({
-      task: path.join(fixtures, "tasks", "sample.yaml"),
+      task: SAMPLE_TASK,
       pipeline: singlePipeline,
     });
     expect(started.ok).toBe(true);

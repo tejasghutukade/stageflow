@@ -95,7 +95,6 @@ jobs:
 
       - name: Generate notes and publish GitHub Release via Stageflow
         if: steps.gate.outputs.release == 'true'
-        working-directory: examples/github-release
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -107,7 +106,14 @@ jobs:
           sf providers login openai --type api_key --api-key-env OPENAI_API_KEY
           sf validate --strict --json
           set +e
-          sf run --task tasks/github-release.yaml --pipeline github-release --checkout "$GITHUB_WORKSPACE" --json --skip-gates --git-sha "$GITHUB_SHA" --ci-job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$GITHUB_WORKSPACE/sf-run.json"
+          sf run \
+            --pipeline examples/github-release/github-release.pipeline.yaml \
+            --task examples/github-release/github-release.task.yaml \
+            --checkout "$GITHUB_WORKSPACE" \
+            --json --skip-gates \
+            --git-sha "$GITHUB_SHA" \
+            --ci-job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            > "$GITHUB_WORKSPACE/sf-run.json"
           status=$?
           set -e
           cat "$GITHUB_WORKSPACE/sf-run.json"
@@ -121,10 +127,10 @@ jobs:
           include-hidden-files: true
           path: |
             sf-run.json
-            examples/github-release/.stageflow/state.db
-            examples/github-release/.stageflow/state.db-wal
-            examples/github-release/.stageflow/state.db-shm
-            examples/github-release/.stageflow/runs/
-            !examples/github-release/.stageflow/runs/**/.pi-agent/**
+            .stageflow/state.db
+            .stageflow/state.db-wal
+            .stageflow/state.db-shm
+            .stageflow/runs/
+            !.stageflow/runs/**/.pi-agent/**
           if-no-files-found: warn
           retention-days: 30

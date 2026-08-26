@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { access, mkdtemp, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -65,7 +66,7 @@ describe("readMaxActiveStagesPerRun (U1)", () => {
 
 describe("resolvePriorEnvelope (U2)", () => {
   async function loadDag(pipelineId: string) {
-    return loadPipeline(pipelineId, { cwd: fixtures });
+    return loadPipeline(pipelinePath(pipelineId), { cwd: fixtures });
   }
 
   it("root stage receives null prior", async () => {
@@ -79,7 +80,7 @@ describe("resolvePriorEnvelope (U2)", () => {
   });
 
   it("linear child receives parent envelope", async () => {
-    const loaded = await loadDag("docs-only");
+    const loaded = await loadDag("linear-explicit");
     const parent: StageEnvelope = {
       status: "success",
       summary: "from-a",
@@ -188,7 +189,7 @@ describe.each(storeKinds)("buildCompletedEnvelopesFromRun (%s)", (kind) => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-env-route-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
-      pipelineId: "docs-only",
+      ...catalogLocators("linear-explicit"),
       taskYaml: "id: t\ngoal: g\n",
     });
 
@@ -219,7 +220,7 @@ describe.each(storeKinds)("buildCompletedEnvelopesFromRun (%s)", (kind) => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-env-prior-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
-      pipelineId: "docs-only",
+      ...catalogLocators("linear-explicit"),
       taskYaml: "id: t\ngoal: g\n",
     });
 
@@ -246,7 +247,7 @@ describe.each(storeKinds)("buildCompletedEnvelopesFromRun (%s)", (kind) => {
       upstreamEnvelope,
     );
 
-    const loaded = await loadPipeline("docs-only", { cwd: fixtures });
+    const loaded = await loadPipeline(LINEAR_EXPLICIT_PIPELINE, { cwd: fixtures });
     const result = await resolvePriorEnvelope({
       dag: loaded.dag,
       stageId: "design-doc",

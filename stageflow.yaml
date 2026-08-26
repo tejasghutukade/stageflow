@@ -1,0 +1,19 @@
+version: 1
+catalog:
+  pipelines:
+    - examples/conditional-fork
+    - examples/hello-world
+    - examples/plan-review
+    - examples/github-release
+    - examples/ci-validate
+  tasks:
+    - examples/conditional-fork
+    - examples/hello-world
+    - examples/plan-review
+    - examples/github-release
+    - examples/ci-validate
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+  exclude:
+    - tests/fixtures

@@ -1,0 +1,7 @@
+id: github-release
+stages:
+  - id: draft-release-notes
+    uses: ./draft-release-notes.yaml
+  - id: publish-github-release
+    uses: ./publish-github-release.yaml
+    needs: draft-release-notes

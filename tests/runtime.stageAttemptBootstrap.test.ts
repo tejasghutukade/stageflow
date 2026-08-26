@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,11 +186,11 @@ describe("openStageAttempt", () => {
   });
 
   it("passes prior StageEnvelope matching envelopeRouting for a needs Stage", async () => {
-    const loaded = await loadPipeline("docs-only", { cwd: fixtures });
+    const loaded = await loadPipeline(LINEAR_EXPLICIT_PIPELINE, { cwd: fixtures });
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-"));
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
-      pipelineId: "docs-only",
+      ...catalogLocators("linear-explicit"),
       taskYaml: "id: t\ngoal: g\n",
     });
     const parent: StageEnvelope = {
@@ -236,11 +237,11 @@ describe("openStageAttempt", () => {
   });
 
   it("fails closed without openStage when the upstream envelope is missing", async () => {
-    const loaded = await loadPipeline("docs-only", { cwd: fixtures });
+    const loaded = await loadPipeline(LINEAR_EXPLICIT_PIPELINE, { cwd: fixtures });
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-no-prior-"));
     const store = createRunStore({ rootDir: root });
     const run = await store.createRun({
-      pipelineId: "docs-only",
+      ...catalogLocators("linear-explicit"),
       taskYaml: "id: t\ngoal: g\n",
     });
     const { agent, opened } = recordingAgent();

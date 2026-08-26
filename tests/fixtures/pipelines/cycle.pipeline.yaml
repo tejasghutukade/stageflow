@@ -2,5 +2,7 @@ id: cycle
 stages:
   - id: clarify
     needs: design-doc
+    uses: ../stages/clarify.yaml
   - id: design-doc
     needs: clarify
+    uses: ../stages/design-doc.yaml

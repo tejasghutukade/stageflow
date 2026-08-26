@@ -2,27 +2,34 @@
 
 Two-stage pipeline with an **artifact-backed operator gate** (`ask_operator`). This is an **SDLC-style example** — plan review before implementation — but the same HITL pattern applies to any workflow you author.
 
-Adapted from `tests/fixtures/pipelines/plan-review-proving.yaml`.
+Fixture twin: `tests/fixtures/pipelines/plan-review-proving.pipeline.yaml`.
 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow installed
 - Provider auth connected
-- Operator console for the gate: run `sf ui` in a separate terminal (default `http://127.0.0.1:3847`)
+- Operator console: `sf ui` (default `http://127.0.0.1:3847`)
 
 ## Commands
 
-From this directory:
+From the **repository git root**:
 
 ```bash
-sf validate --strict
+sf validate --pipeline examples/plan-review/plan-review.pipeline.yaml --strict
+```
+
+Terminal 1:
+
+```bash
 sf ui
 ```
 
-In another terminal:
+Terminal 2:
 
 ```bash
-sf run --task tasks/plan-review.yaml --pipeline plan-review
+sf run \
+  --pipeline examples/plan-review/plan-review.pipeline.yaml \
+  --task examples/plan-review/plan-review.task.yaml
 ```
 
 When the first stage blocks on HITL, open the run in the console, review the plan artifact, and accept or reject. Exit code `2` means waiting on operator input.

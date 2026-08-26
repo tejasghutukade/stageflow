@@ -34,13 +34,14 @@ import { parseRunStageArgs } from "../src/cli.js";
 import { resolveOperatorCatalog } from "../src/cli/operatorCatalog.js";
 import { runRunCommand } from "../src/cli/runCommand.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
+import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
-const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
-const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
+const sampleTask = SAMPLE_TASK;
+const singlePipeline = SINGLE_PIPELINE;
 
 function runCli(args: string[], cwd = root) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {

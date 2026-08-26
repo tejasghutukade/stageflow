@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -45,7 +46,7 @@ describe("hydrateScheduleForRetry", () => {
   it("linear A→B→C: retry B resets B and C to pending, A succeeded", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-linear-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("linear-explicit", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -77,7 +78,7 @@ describe("hydrateScheduleForRetry", () => {
   it("A→(B,C)→D fan-out: retry B resets B and D only, C succeeded", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-fanout-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -109,7 +110,7 @@ describe("hydrateScheduleForRetry", () => {
   it("both branches failed: retry B leaves C failed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-both-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -141,7 +142,7 @@ describe("hydrateScheduleForRetryRoots", () => {
   it("AE2 regression: single failed root leaves succeeded sibling sticky", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-multi-ae2-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -174,7 +175,7 @@ describe("hydrateScheduleForRetryRoots", () => {
   it("two-root union downstream resets both branches and shared join", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-multi-union-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -211,7 +212,7 @@ describe("hydrateScheduleForRetryRoots", () => {
 
 describe("collectDownstreamStageIds", () => {
   it("walks childrenOf transitive closure", async () => {
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const downstream = collectDownstreamStageIds(loaded.dag, "design-doc");
     expect(downstream.has("join-doc")).toBe(true);
     expect(downstream.has("implementation-plan")).toBe(false);
@@ -220,7 +221,7 @@ describe("collectDownstreamStageIds", () => {
 
 describe("collectDownstreamClosure", () => {
   it("unions downstream closures for multiple roots", async () => {
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const downstream = collectDownstreamClosure(loaded.dag, [
       "design-doc",
       "implementation-plan",
@@ -235,7 +236,7 @@ describe("applyRetryRootDelta", () => {
   it("Hydrate join AE: mid-loop addRoot resets branch without touching succeeded sibling", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-join-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("parallel-retry-fanout", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("parallel-retry-fanout"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
@@ -279,7 +280,7 @@ describe("applyRetryRootDelta", () => {
   it("preserves active stage inside delta reset closure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-delta-active-closure-"));
     const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline("linear-explicit", { cwd: fixtures });
+    const loaded = await loadPipeline(pipelinePath("linear-explicit"), { cwd: fixtures });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       taskYaml: "id: t\ngoal: g\n",
