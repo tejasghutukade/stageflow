@@ -113,10 +113,55 @@ jobs:
           echo "$receipts" | jq '.' > deliver-receipts.json
           cat deliver-receipts.json
 
-      - id: upload-diagrams
-        name: Upload diagram HTML
+      - id: upload-architecture
+        name: Upload architecture.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/architecture.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/architecture.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-workflow
+        name: Upload workflow.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/workflow.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/workflow.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-sequence
+        name: Upload sequence.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/sequence.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/sequence.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-dataflow
+        name: Upload dataflow.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/dataflow.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/dataflow.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-lifecycle
+        name: Upload lifecycle.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/lifecycle.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/lifecycle.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-diagrams-bundle
+        name: Upload diagram bundle (zip)
         if: steps.envelope.outputs.skipped != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: archify-diagrams-pr-${{ github.event.pull_request.number }}
           path: diagrams/
@@ -124,33 +169,57 @@ jobs:
 
       - name: Build PR comment
         if: steps.envelope.outputs.skipped != 'true'
+        env:
+          URL_ARCHITECTURE: ${{ steps.upload-architecture.outputs.artifact-url }}
+          URL_WORKFLOW: ${{ steps.upload-workflow.outputs.artifact-url }}
+          URL_SEQUENCE: ${{ steps.upload-sequence.outputs.artifact-url }}
+          URL_DATAFLOW: ${{ steps.upload-dataflow.outputs.artifact-url }}
+          URL_LIFECYCLE: ${{ steps.upload-lifecycle.outputs.artifact-url }}
+          BUNDLE_URL: ${{ steps.upload-diagrams-bundle.outputs.artifact-url }}
         run: |
+          set -e
           HEAD_SHA="${{ github.event.pull_request.head.sha }}"
           SHORT_SHA="${HEAD_SHA:0:7}"
-          ARTIFACT_URL="${{ steps.upload-diagrams.outputs.artifact-url }}"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          if [ -n "${ARTIFACT_URL}" ]; then
-            DIAGRAM_LINK="[Open interactive HTML](${ARTIFACT_URL})"
-          else
-            DIAGRAM_LINK="[View workflow run](${RUN_URL})"
-          fi
+          artifact_url_for_type() {
+            case "$1" in
+              architecture) echo "${URL_ARCHITECTURE}" ;;
+              workflow) echo "${URL_WORKFLOW}" ;;
+              sequence) echo "${URL_SEQUENCE}" ;;
+              dataflow) echo "${URL_DATAFLOW}" ;;
+              lifecycle) echo "${URL_LIFECYCLE}" ;;
+              *) echo "" ;;
+            esac
+          }
 
           {
             echo "## Diagrams (Archify)"
             echo ""
             echo "Updated for \`${SHORT_SHA}\`."
             echo ""
-            echo "| Type | Summary |"
-            echo "|---|---|"
-            jq -r '.diagrams[] | "| \(.diagram_type) | \(.summary) |"' envelope.json
+            echo "| Type | Summary | View |"
+            echo "|---|---|---|"
+            while IFS= read -r diagram; do
+              TYPE="$(echo "$diagram" | jq -r '.diagram_type')"
+              SUMMARY="$(echo "$diagram" | jq -r '.summary')"
+              URL="$(artifact_url_for_type "$TYPE")"
+              if [ -n "$URL" ]; then
+                VIEW="[open in browser](${URL})"
+              else
+                VIEW="—"
+              fi
+              echo "| ${TYPE} | ${SUMMARY} | ${VIEW} |"
+            done < <(jq -c '.diagrams[]' envelope.json)
             echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Artifacts | ${DIAGRAM_LINK} |"
-            echo "| Workflow | [run ${{ github.run_number }}](${RUN_URL}) |"
+            echo "| | | |"
+            echo "|---|---|---|"
+            if [ -n "${BUNDLE_URL}" ]; then
+              echo "| Download all | ZIP bundle | [download](${BUNDLE_URL}) |"
+            fi
+            echo "| Workflow | run ${{ github.run_number }} | [logs](${RUN_URL}) |"
             echo ""
-            echo "> Requires GitHub login. Artifact retained 30 days."
+            echo "> View links open HTML in your browser (GitHub login required). Artifacts retained 30 days."
           } > comment.md
 
       - name: Post sticky PR comment

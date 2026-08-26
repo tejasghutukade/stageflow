@@ -117,5 +117,6 @@ is deferred.
 ## GitHub Actions
 
 See [`.github/workflows/archify-pr-diagrams.yml`](../../.github/workflows/archify-pr-diagrams.yml).
-Agents author JSON only; GHA runs `archify deliver` for each type, uploads the
-`diagrams/` artifact, and updates the sticky comment.
+Agents author JSON only; GHA runs `archify deliver` for each type, uploads each
+`{type}.html` unzipped (`upload-artifact@v7`, `archive: false`) for in-browser
+viewing, also uploads a zipped `diagrams/` bundle, and updates the sticky comment.
