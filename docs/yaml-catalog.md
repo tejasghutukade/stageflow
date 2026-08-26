@@ -13,12 +13,15 @@ Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/),
 
 ```
 my-project/
-  stageflow.yaml              # manifest (browse scope)
-  hello.pipeline.yaml         # pipeline definition
-  research.yaml               # stage file (referenced by uses:)
-  my-task.task.yaml
+  stageflow.yaml
+  pipelines/
+    hello.pipeline.yaml       # inline or uses: stage entries
+  tasks/
+    hello.task.yaml
   .stageflow/                 # runtime state at git root
 ```
+
+**Flat layout** — pipeline and task files may also live at the repo root (e.g. `hello.pipeline.yaml`, `my-task.task.yaml`) beside `stageflow.yaml`; validation and CLI accept any filesystem path. This repo uses a flat root for some pipelines under `tests/fixtures/`.
 
 Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml) (examples only; `tests/fixtures` excluded from browse).
 
@@ -119,7 +122,20 @@ Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../t
 
 ### Fork pipelines
 
-A fork parent sets `fork.select` (`one`, `subset`, …). Children list `needs: <parent>`. The parent emits `fork_choice` in its envelope; unchosen branches are `skipped`.
+A deciding stage may declare a `fork` object to require a runtime choice among its immediate successors. The stage must emit `fork_choice` in its envelope (see [Envelopes](envelopes.md)). Use **object-form** stage entries (`id:` + optional `uses:` + `fork:`) — bare string stage refs cannot carry `fork`.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `select` | yes | `one` — exactly one immediate successor must be named in `fork_choice`. `subset` — one or more successors (including all, some, or none when `allow_none` is set). |
+| `allow_none` | no | Boolean, default `false`. When `true`, an empty `fork_choice: []` is valid and all immediate successors are skipped. |
+
+Children list `needs: <parent>`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
+
+Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch.
+
+Skipped stages appear on every observable surface with the same `skipped` status used when a parent fails: operator console run timeline, CLI stage output, MCP `get_run`, and JSON run records. Unchosen fork branches are not failures; see [CI / headless](ci.md) for exit-code behavior.
+
+`fork` on a stage with no immediate successors (a DAG leaf) fails validation (`pipeline.dag_error`). Pipelines without `fork` are unaffected.
 
 ```yaml
 id: fork-demo
@@ -136,7 +152,14 @@ stages:
     needs: decide
 ```
 
-Fixtures: [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml), [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml). Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
+Fixtures:
+
+- [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml) — exclusive `select: one`
+- [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml) — cascade skip through descendants
+- [`fork-route-subset.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-subset.pipeline.yaml) — `select: subset`, multiple successors allowed
+- [`fork-route-allow-none.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-allow-none.pipeline.yaml) — `allow_none: true`, empty choice valid
+
+Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
 
 ## External stage files
 

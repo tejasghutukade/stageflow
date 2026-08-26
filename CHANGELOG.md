@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Conditional stage routing: pipeline `fork` field (`select: one | subset`, optional `allow_none`) and envelope `fork_choice`; unchosen branches and descendants are `skipped`
+- Repo-root `stageflow.yaml` manifest and `sf init` scaffold
+- Git-root `.stageflow` run store; global auth under `~/.stageflow` by default
+
 ### Changed
 
 - **BREAKING:** Pipeline-owned catalog replaces legacy `pipelines/` + `stages/` + cwd layout. Stages are object entries with `uses:` or inline bodies; filenames use `*.pipeline.yaml` / `*.task.yaml`.
 - **BREAKING:** `--pipeline` requires a filesystem path (no bare pipeline id).
 - **BREAKING:** MCP `start_run` requires a pipeline path.
-- Added: repo-root `stageflow.yaml` manifest, `sf init`, git-root `.stageflow` store, global auth under `~/.stageflow` by default.
+- **BREAKING:** MCP `list_pipelines` and `list_tasks` return manifest filesystem paths, not bare ids.
 - Migrated repo fixtures, examples, docs, and CI workflows to pipeline-owned paths.
+
+See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned authoring model.
 
 ## [0.2.0] - 2026-08-25
 
