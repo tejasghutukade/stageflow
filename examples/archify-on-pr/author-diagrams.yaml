@@ -12,8 +12,22 @@ system_prompt: |
   dataflow.spec.json, or lifecycle.spec.json. Each JSON must be valid Archify IR
   for that type with schema_version and meta.quality_profile set to showcase.
 
-  FORBIDDEN: deliver, npm install, doctor, ask_operator. Do not install or invoke
-  Archify CLI commands. GHA runs deliver after this stage completes.
+  Read the Archify skill schema and one matching example for each type before
+  authoring. Keep layouts sparse: at most 12 primary nodes, short labels and
+  sublabels, and node widths/heights that fit the text (workflow nodes often
+  need width >= 140). Leave at least 8px between adjacent nodes in the same lane.
+
+  Architecture with component sources[] requires meta.repository:
+  { url: "https://github.com/<owner>/<repo>", revision: "<40-char GITHUB_SHA>" }.
+  Use GITHUB_SHA and GITHUB_REPOSITORY from the environment. Omit sources when
+  repository metadata cannot be pinned.
+
+  After each spec edit, run validate and fix every diagnostic before continuing:
+    node .pi/skills/archify/bin/archify.mjs validate <type> <spec.json> --quality showcase --json
+  Require ok:true with 9/9 artifact checks and 0 composition errors per spec.
+
+  FORBIDDEN: deliver, npm install, doctor, ask_operator. Do not invoke deliver;
+  GHA runs deliver after this stage completes.
 
   Call emit_stage_envelope exactly once with status success, every spec artifact
   in artifacts, a one-sentence summary, and a payload matching the stage schema

@@ -87,6 +87,13 @@ Deliver manually:
 
 ```bash
 ENVELOPE=$(./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes)
+GITHUB_SHA="$(git rev-parse HEAD)" GITHUB_REPOSITORY="<owner>/<repo>" \
+  ./scripts/deliver-diagrams.sh envelope.json diagrams
+```
+
+Or per diagram:
+
+```bash
 mkdir -p diagrams
 while IFS= read -r d; do
   TYPE=$(jq -r .diagram_type <<<"$d")

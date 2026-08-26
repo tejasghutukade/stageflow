@@ -63,6 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
@@ -98,20 +99,11 @@ jobs:
       - id: deliver
         name: Deliver diagram HTML
         if: steps.envelope.outputs.skipped != 'true'
-        run: |
-          set -e
-          mkdir -p diagrams
-          receipts='[]'
-          while IFS= read -r diagram; do
-            TYPE="$(echo "$diagram" | jq -r '.diagram_type')"
-            SPEC="$(echo "$diagram" | jq -r '.spec_path')"
-            receipt="$(node .pi/skills/archify/bin/archify.mjs deliver \
-              "$TYPE" "$SPEC" "diagrams/${TYPE}.html" \
-              --quality showcase --json)"
-            receipts="$(echo "$receipts" | jq --argjson r "$receipt" '. + [$r]')"
-          done < <(jq -c '.diagrams[]' envelope.json)
-          echo "$receipts" | jq '.' > deliver-receipts.json
-          cat deliver-receipts.json
+        env:
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: ./scripts/deliver-diagrams.sh envelope.json diagrams
 
       - id: upload-architecture
         name: Upload architecture.html
