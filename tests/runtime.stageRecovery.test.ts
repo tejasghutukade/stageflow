@@ -59,6 +59,7 @@ function parallelFanoutStuckDesignAgent(
     design: Parameters<typeof scriptedFakeAgent>[0];
     impl: Parameters<typeof scriptedFakeAgent>[0];
   },
+  options?: { holdDesignRetry?: Promise<void> },
 ): AgentPort & { openCounts: Map<string, number> } {
   const clarifyAgent = scriptedFakeAgent([
     { type: "emit", envelope: okEnvelope("clarify-ok") },
@@ -88,7 +89,19 @@ function parallelFanoutStuckDesignAgent(
         if (designOpens === 1) {
           return hangingStageHandle();
         }
-        return designRetryAgent.openStage(input);
+        const handle = designRetryAgent.openStage(input);
+        const hold = options?.holdDesignRetry;
+        if (hold) {
+          const baseNext = handle.next.bind(handle);
+          handle.next = async () => {
+            const event = await baseNext();
+            if (event.status !== "waiting_for_input") {
+              await hold;
+            }
+            return event;
+          };
+        }
+        return handle;
       }
       if (stageId === "implementation-plan") {
         return implAgent.openStage(input);
@@ -733,10 +746,17 @@ describe.each(kinds)("runtime stage recovery abandon (%s)", (kind) => {
         path.join(tmpdir(), `sf-recovery-ae5-par-retry-${kind}-`),
       );
       const store = createRunStore({ rootDir: root, kind });
-      const agent = parallelFanoutStuckDesignAgent({
-        design: [{ type: "emit", envelope: okEnvelope("design-retry") }],
-        impl: [{ type: "emit", envelope: okEnvelope("impl-retry") }],
+      let releaseDesign!: () => void;
+      const designGate = new Promise<void>((resolve) => {
+        releaseDesign = resolve;
       });
+      const agent = parallelFanoutStuckDesignAgent(
+        {
+          design: [{ type: "emit", envelope: okEnvelope("design-retry") }],
+          impl: [{ type: "emit", envelope: okEnvelope("impl-retry") }],
+        },
+        { holdDesignRetry: designGate },
+      );
       const manager = new RunManager({ agent, store, cwd: fixtures });
 
       const started = await manager.startRun({
@@ -767,17 +787,25 @@ describe.each(kinds)("runtime stage recovery abandon (%s)", (kind) => {
       });
 
       const retryDesign = manager.retryStage(started.runId, "design-doc");
-      await new Promise((r) => setTimeout(r, 50));
-      const retryImpl = manager.retryStage(
+      await waitFor(async () => {
+        const detail = await store.readRun(started.runId);
+        return (
+          detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+          "running"
+        );
+      });
+      const implResult = await manager.retryStage(
         started.runId,
         "implementation-plan",
       );
-      const [designResult, implResult] = await Promise.all([
-        retryDesign,
-        retryImpl,
-      ]);
-      expect(designResult.ok).toBe(true);
       expect(implResult.ok).toBe(true);
+      if (!implResult.ok) {
+        expect(implResult.reason).not.toMatch(/active orchestration/i);
+      }
+
+      releaseDesign();
+      const designResult = await retryDesign;
+      expect(designResult.ok).toBe(true);
 
       await waitFor(async () => {
         const meta = await store.readRunMeta(started.runId);
