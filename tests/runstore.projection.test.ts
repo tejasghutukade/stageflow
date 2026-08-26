@@ -307,6 +307,19 @@ describe("run projection", () => {
     expect(summary.status).toBe("running");
   });
 
+  it("projects locator paths from meta", () => {
+    const pipeline_path = "/abs/pipeline.yaml";
+    const task_path = "/abs/task.yaml";
+    const project_root = "/abs/project";
+    const summary = projectRunSummary(
+      meta({ pipeline_path, task_path, project_root }),
+      [],
+    );
+    expect(summary.pipeline_path).toBe(pipeline_path);
+    expect(summary.task_path).toBe(task_path);
+    expect(summary.project_root).toBe(project_root);
+  });
+
   it("listRuns and readRun agree on triage fields for the same events", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-proj-sqlite-"));
     const store = createRunStore({ rootDir: root });

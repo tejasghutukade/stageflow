@@ -24,6 +24,9 @@ export type McpRunProjection = {
   run_id: string;
   pipeline_id: string;
   task_id?: string;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
   status: RunDetail["status"];
   created_at: string;
   updated_at?: string;
@@ -45,6 +48,13 @@ export function projectRunForMcp(detail: RunDetail): McpRunProjection {
     run_id: detail.run_id,
     pipeline_id: detail.pipeline_id,
     task_id: detail.task_id,
+    ...(detail.pipeline_path !== undefined
+      ? { pipeline_path: detail.pipeline_path }
+      : {}),
+    ...(detail.task_path !== undefined ? { task_path: detail.task_path } : {}),
+    ...(detail.project_root !== undefined
+      ? { project_root: detail.project_root }
+      : {}),
     status: detail.status,
     created_at: detail.created_at,
     updated_at: detail.updated_at,

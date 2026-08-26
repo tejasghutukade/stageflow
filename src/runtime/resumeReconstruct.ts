@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { fakeHitlResumePath } from "../agent/fakeAgent.js";
-import { loadPipeline } from "../config/loadPipeline.js";
+import { loadPipelineForRun } from "./loadPipelineForRun.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import type { RunStore, RunMeta } from "../runstore/port.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
@@ -50,7 +50,7 @@ export async function loadRunContext(
   const meta = await store.readRunMeta(runId);
   const taskYaml = await store.readTaskYaml(runId);
   const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd });
+  const loaded = await loadPipelineForRun(meta, cwd);
   const workspaceDir = store.getWorkspaceDir(runId);
   return { meta, taskYaml, task, loaded, workspaceDir };
 }

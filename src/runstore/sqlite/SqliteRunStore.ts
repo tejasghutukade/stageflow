@@ -19,6 +19,7 @@ import {
   type StageSnapshot,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
+import { normalizeCatalogPath } from "../normalizeCatalogPath.js";
 import { buildStageSnapshotFromStore } from "../stageSnapshot.js";
 import { parsePipelineDagSnapshot } from "../pipelineDagSnapshot.js";
 import { newRunId, runWorkspaceDir } from "../paths.js";
@@ -43,6 +44,9 @@ type RunRow = {
   git_sha: string | null;
   ci_pr_url: string | null;
   ci_job_url: string | null;
+  pipeline_path: string | null;
+  task_path: string | null;
+  project_root: string | null;
 };
 
 type StageRow = {
@@ -111,6 +115,16 @@ function ensurePipelineDagColumn(db: Database.Database): void {
   }
 }
 
+function ensureRunLocatorColumns(db: Database.Database): void {
+  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  for (const name of ["pipeline_path", "task_path", "project_root"] as const) {
+    if (!names.has(name)) {
+      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
+    }
+  }
+}
+
 function ensureStageExecutionsTable(db: Database.Database): void {
   db.exec(`
 CREATE TABLE IF NOT EXISTS stage_executions (
@@ -169,6 +183,7 @@ export class SqliteRunStore implements RunStore {
     ensureCheckoutRootColumn(this.db);
     ensureCiIdentityColumns(this.db);
     ensurePipelineDagColumn(this.db);
+    ensureRunLocatorColumns(this.db);
     ensureStageExecutionsTable(this.db);
     ensureStageEventsAttemptColumn(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
@@ -190,12 +205,22 @@ export class SqliteRunStore implements RunStore {
     await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
     const now = new Date().toISOString();
+    const pipelinePath = input.pipelinePath
+      ? normalizeCatalogPath(input.pipelinePath)
+      : null;
+    const taskPath = input.taskPath
+      ? normalizeCatalogPath(input.taskPath)
+      : null;
+    const projectRoot = input.projectRoot
+      ? normalizeCatalogPath(input.projectRoot)
+      : null;
+
     this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root)`,
       )
       .run({
         run_id: runId,
@@ -212,6 +237,9 @@ export class SqliteRunStore implements RunStore {
         git_sha: input.gitSha ?? null,
         ci_pr_url: input.ciPrUrl ?? null,
         ci_job_url: input.ciJobUrl ?? null,
+        pipeline_path: pipelinePath,
+        task_path: taskPath,
+        project_root: projectRoot,
       });
 
     return { runId, workspaceDir };
@@ -567,7 +595,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
          FROM runs ORDER BY created_at DESC`,
       )
       .all() as RunRow[];
@@ -611,13 +639,16 @@ export class SqliteRunStore implements RunStore {
       ...(row.git_sha != null ? { git_sha: row.git_sha } : {}),
       ...(row.ci_pr_url != null ? { ci_pr_url: row.ci_pr_url } : {}),
       ...(row.ci_job_url != null ? { ci_job_url: row.ci_job_url } : {}),
+      ...(row.pipeline_path != null ? { pipeline_path: row.pipeline_path } : {}),
+      ...(row.task_path != null ? { task_path: row.task_path } : {}),
+      ...(row.project_root != null ? { project_root: row.project_root } : {}),
     };
   }
 
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

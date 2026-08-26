@@ -1,5 +1,5 @@
 import { PiAgentAdapter } from "../agent/piAdapter.js";
-import { loadPipeline } from "../config/loadPipeline.js";
+import { loadPipelineForRun } from "./loadPipelineForRun.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import { createRunStore } from "../runstore/createStore.js";
 import {
@@ -30,7 +30,7 @@ export async function runStageWorker(
   const meta = await store.readRunMeta(input.runId);
   const taskYaml = await store.readTaskYaml(input.runId);
   const task = loadTaskFromYaml(taskYaml, `run ${input.runId} task`);
-  const loaded = await loadPipeline(meta.pipeline_id, { cwd: input.rootDir });
+  const loaded = await loadPipelineForRun(meta, input.rootDir);
   const stage = loaded.stages.find((s) => s.id === input.stageId);
   if (!stage) {
     return {

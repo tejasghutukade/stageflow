@@ -11,6 +11,7 @@ import type { StageHitlController } from "./stageHitl.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { runPipelineDag } from "./pipelineScheduler.js";
 import {
   readMaxActiveStagesPerRun,
@@ -118,6 +119,14 @@ async function preparePipeline(options: {
     options.cwd,
   );
 
+  const pipelinePath = normalizeCatalogPath(loaded.pipelinePath);
+  const taskPath = options.taskPath
+    ? normalizeCatalogPath(path.resolve(options.cwd, options.taskPath))
+    : undefined;
+  const projectRoot = normalizeCatalogPath(
+    options.projectRoot ?? options.cwd,
+  );
+
   const run = await options.store.createRun({
     pipelineId: loaded.pipeline.id,
     taskYaml,
@@ -127,6 +136,9 @@ async function preparePipeline(options: {
     ciPrUrl: options.ciPrUrl,
     ciJobUrl: options.ciJobUrl,
     pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    pipelinePath,
+    taskPath,
+    projectRoot,
   });
   const executionMode = readStageExecutionMode(
     process.env,

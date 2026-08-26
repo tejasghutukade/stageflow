@@ -103,8 +103,15 @@ function resolveListedStatus(
   stages: StageSnapshot[],
   meta: RunMeta,
 ): RunStatus {
+  if (stages.length === 0) return meta.status ?? "created";
   const derived = deriveStatusFromStages(stages);
-  return stages.length > 0 ? derived : (meta.status ?? derived);
+  if (meta.status === "succeeded" && derived === "running") {
+    const hasActiveStage = stages.some(
+      (s) => s.status === "running" || s.status === "waiting_for_input",
+    );
+    if (!hasActiveStage) return "succeeded";
+  }
+  return derived;
 }
 
 export function projectRunSummary(
@@ -115,6 +122,9 @@ export function projectRunSummary(
     run_id: meta.run_id,
     pipeline_id: meta.pipeline_id,
     task_id: meta.task_id,
+    ...(meta.pipeline_path !== undefined ? { pipeline_path: meta.pipeline_path } : {}),
+    ...(meta.task_path !== undefined ? { task_path: meta.task_path } : {}),
+    ...(meta.project_root !== undefined ? { project_root: meta.project_root } : {}),
     status: resolveListedStatus(stages, meta),
     created_at: meta.created_at,
     updated_at: meta.updated_at,
