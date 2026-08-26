@@ -9,7 +9,11 @@ import {
 } from "./validateOutput.js";
 
 export const VALIDATE_USAGE = `Usage:
-  sf validate [--pipeline <name-or-path>] [--strict] [--json]`;
+  sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+
+  With no flags, validates all pipelines and tasks declared in stageflow.yaml (manifest-all).
+  --pipeline validates one pipeline file (includes uses:/include: transitively).
+  --task validates one task file.`;
 
 export type ValidateCommandIo = {
   log: (line: string) => void;
@@ -24,6 +28,7 @@ const defaultIo: ValidateCommandIo = {
 type ParsedValidateArgs = {
   help: boolean;
   pipeline?: string;
+  task?: string;
   strict: boolean;
   json: boolean;
 };
@@ -37,6 +42,7 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
   }
 
   let pipeline: string | undefined;
+  let task: string | undefined;
   let strict = false;
   let json = false;
   let help = false;
@@ -51,6 +57,12 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
         throw new Error("Missing value for --pipeline");
       }
       pipeline = value;
+    } else if (arg === "--task") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --task");
+      }
+      task = value;
     } else if (arg === "--strict") {
       strict = true;
     } else if (arg === "--json") {
@@ -62,7 +74,11 @@ function parseValidateArgs(args: string[]): ParsedValidateArgs {
     }
   }
 
-  return { help, pipeline, strict, json };
+  if (pipeline !== undefined && task !== undefined) {
+    throw new Error("Use at most one of --pipeline or --task");
+  }
+
+  return { help, pipeline, task, strict, json };
 }
 
 export async function runValidateCommand(
@@ -86,10 +102,13 @@ export async function runValidateCommand(
       return 0;
     }
 
+    const scope = parsed.pipeline ? "pipeline" : parsed.task ? "task" : "full";
+
     const result = await validateCatalogFn({
-      scope: parsed.pipeline ? "pipeline" : "full",
+      scope,
       cwd,
       pipeline: parsed.pipeline,
+      task: parsed.task,
       strict: parsed.strict,
     });
 

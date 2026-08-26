@@ -40,6 +40,7 @@ const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
 const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
+const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
 
 function runCli(args: string[], cwd = root) {
   return spawnSync(process.execPath, [tsxCli, cli, ...args], {
@@ -129,7 +130,7 @@ describe("sf run operator catalog", () => {
   it("unknown --operator-nope exits 1", async () => {
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single", "--operator-nope"],
+      ["--task", sampleTask, "--pipeline", singlePipeline, "--operator-nope"],
       { cwd: fixtures, io: cap.io },
     );
     expect(code).toBe(1);
@@ -143,7 +144,7 @@ describe("sf run operator catalog", () => {
         "--task",
         sampleTask,
         "--pipeline",
-        "single",
+        singlePipeline,
         "--operator-cwd",
         "/catalog-cwd",
         "--operator-agent-dir",
@@ -161,7 +162,7 @@ describe("sf run operator catalog", () => {
 
   it("runRunCommand uses env fallback for operator catalog", async () => {
     const cap = captureIo();
-    await runRunCommand(["--task", sampleTask, "--pipeline", "single"], {
+    await runRunCommand(["--task", sampleTask, "--pipeline", singlePipeline], {
       cwd: fixtures,
       io: cap.io,
       env: {

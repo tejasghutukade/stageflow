@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loadPipelineValidated } from "./loadPipeline.js";
+import { loadPipelineValidated, resolvePipelinePath } from "./loadPipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import { loadTaskOutcome } from "./loadTask.js";
 import { readYamlObject } from "./readYamlObject.js";
@@ -47,12 +47,13 @@ export type ValidationFinding = {
   stageId?: string;
 };
 
-export type ValidationScope = "full" | "pipeline";
+export type ValidationScope = "full" | "pipeline" | "task";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
   scope: ValidationScope;
   pipeline?: string;
+  task?: string;
   strict?: boolean;
 };
 
@@ -446,6 +447,20 @@ async function validateManifestAll(
   return findings;
 }
 
+async function validateSingleTask(
+  invocationCwd: string,
+  taskArg: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const taskPath = path.resolve(invocationCwd, taskArg);
+  const outcome = await loadTaskOutcome(taskPath);
+  if (!outcome.ok) {
+    return findingsFromLoadIssues(relCwd, taskPath, outcome.issues);
+  }
+  return [];
+}
+
 export async function validateCatalog(
   options: ValidateCatalogOptions,
 ): Promise<ValidationResult> {
@@ -455,17 +470,38 @@ export async function validateCatalog(
   if (options.scope === "pipeline" && !options.pipeline) {
     throw new Error("validateCatalog: pipeline is required when scope is \"pipeline\"");
   }
+  if (options.scope === "task" && !options.task) {
+    throw new Error("validateCatalog: task is required when scope is \"task\"");
+  }
 
   const allFindings: ValidationFinding[] = [];
 
   if (options.scope === "pipeline") {
-    const result = await loadPipelineValidated(options.pipeline!, {
+    let pipelinePath: string;
+    try {
+      pipelinePath = await resolvePipelinePath(options.pipeline!, cwd);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      allFindings.push(
+        ...findingsFromLoadIssues(cwd, path.resolve(cwd, options.pipeline!), [
+          {
+            code: "pipeline.load_error",
+            message,
+            category: "pipeline",
+          },
+        ]),
+      );
+      return buildValidationResult(options.scope, allFindings, strict);
+    }
+    const result = await loadPipelineValidated(pipelinePath, {
       cwd,
       validateStages: true,
     });
     if (!result.ok) {
       allFindings.push(...result.findings);
     }
+  } else if (options.scope === "task") {
+    allFindings.push(...(await validateSingleTask(cwd, options.task!)));
   } else {
     allFindings.push(...(await validateManifestAll(cwd)));
   }

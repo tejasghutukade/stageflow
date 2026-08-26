@@ -28,15 +28,18 @@ export type LoadPipelineValidatedResult =
   | { ok: true; loaded: LoadedPipeline }
   | { ok: false; findings: ValidationFinding[] };
 
-async function resolvePipelinePath(nameOrPath: string, cwd: string): Promise<string> {
-  const direct = path.resolve(cwd, nameOrPath);
+export async function resolvePipelinePath(
+  pipelinePath: string,
+  cwd: string,
+): Promise<string> {
+  const resolved = path.normalize(path.resolve(cwd, pipelinePath));
   try {
-    await access(direct);
-    return direct;
+    await access(resolved);
+    return resolved;
   } catch {
-    const candidate = path.resolve(cwd, "pipelines", `${nameOrPath}.yaml`);
-    await access(candidate);
-    return candidate;
+    throw new Error(
+      `Pipeline file not found: ${resolved}. Pass a filesystem path to --pipeline (e.g. pipelines/hello.pipeline.yaml), not a bare pipeline id.`,
+    );
   }
 }
 

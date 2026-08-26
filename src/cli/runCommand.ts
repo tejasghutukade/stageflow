@@ -17,7 +17,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 

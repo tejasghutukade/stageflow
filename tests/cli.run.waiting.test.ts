@@ -14,6 +14,7 @@ const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures",
 );
+const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
 
 function captureIo() {
   const stdout: string[] = [];
@@ -64,7 +65,7 @@ describe("cli run waiting outcome", () => {
     });
     const started = await manager.startRun({
       task: path.join(fixtures, "tasks", "sample.yaml"),
-      pipeline: "single",
+      pipeline: singlePipeline,
     });
     expect(started.ok).toBe(true);
     if (!started.ok) return;

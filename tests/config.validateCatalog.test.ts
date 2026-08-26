@@ -329,6 +329,50 @@ describe("validateCatalog pipeline scope", () => {
   });
 });
 
+describe("validateCatalog task scope", () => {
+  it("AE4: valid task file passes with scope task", async () => {
+    const taskPath = path.join(fixtures, "tasks", "sample.yaml");
+    const result = await validateCatalog({
+      scope: "task",
+      task: taskPath,
+      cwd: fixtures,
+    });
+    expect(result.scope).toBe("task");
+    expect(result.ok).toBe(true);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("invalid shape produces task finding", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-task-"));
+    const taskPath = path.join(root, "bad.task.yaml");
+    await writeFile(taskPath, "id: bad\n");
+    const result = await validateCatalog({
+      scope: "task",
+      task: taskPath,
+      cwd: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.some((f) => f.code === "task.invalid_shape")).toBe(true);
+  });
+
+  it("missing file produces load_error finding", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-validate-task-"));
+    const result = await validateCatalog({
+      scope: "task",
+      task: path.join(root, "missing.task.yaml"),
+      cwd: root,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.findings.some((f) => f.code === "task.load_error")).toBe(true);
+  });
+
+  it("throws when task scope omits task path", async () => {
+    await expect(validateCatalog({ scope: "task", cwd: fixtures })).rejects.toThrow(
+      /task is required/i,
+    );
+  });
+});
+
 describe("validateCatalog legacy fixtures", () => {
   it.skip("full fixtures catalog cwd scan — legacy S7", async () => {
     const result = await validateCatalog({

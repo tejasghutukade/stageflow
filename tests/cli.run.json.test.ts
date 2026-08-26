@@ -20,6 +20,8 @@ const cli = path.join(root, "src", "cli.ts");
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const fixtures = path.join(root, "tests", "fixtures");
 const sampleTask = path.join(fixtures, "tasks", "sample.yaml");
+const singlePipeline = path.join(fixtures, "pipeline-owned", "cli-smoke", "single.pipeline.yaml");
+const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
 
 function gatedAgent(gate: Promise<void>) {
   return {
@@ -146,7 +148,7 @@ describe("sf run start-failure mapping (U2)", () => {
       executionMode: "inprocess",
     });
     const first = await manager.startRun({
-      pipeline: "single",
+      pipeline: singlePipeline,
       task: { id: "hold", goal: "hold slot" },
     });
     expect(first.ok).toBe(true);
@@ -154,7 +156,7 @@ describe("sf run start-failure mapping (U2)", () => {
 
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--task", sampleTask, "--pipeline", "single"],
+      ["--task", sampleTask, "--pipeline", singlePipeline],
       {
         cwd: fixtures,
         io: cap.io,
@@ -185,7 +187,7 @@ describe("sf run start-failure mapping (U2)", () => {
       executionMode: "inprocess",
     });
     const first = await manager.startRun({
-      pipeline: "single",
+      pipeline: singlePipeline,
       task: { id: "hold", goal: "hold slot" },
     });
     expect(first.ok).toBe(true);
@@ -193,7 +195,7 @@ describe("sf run start-failure mapping (U2)", () => {
 
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       {
         cwd: fixtures,
         io: cap.io,
@@ -243,7 +245,7 @@ describe("sf run start-failure mapping (U2)", () => {
     };
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       { io: cap.io, startRun: async () => withConflict },
     );
     expect(code).toBe(1);
@@ -265,7 +267,7 @@ describe("sf run start-failure mapping (U2)", () => {
     };
     const cap2 = captureIo();
     await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       { io: cap2.io, startRun: async () => withoutConflict },
     );
     const parsed2 = JSON.parse(cap2.stdoutText()) as Record<string, unknown>;
@@ -282,7 +284,7 @@ describe("sf run start-failure mapping (U2)", () => {
     };
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       { io: cap.io, startRun: async () => rejected },
     );
     expect(code).toBe(1);
@@ -310,7 +312,7 @@ describe("sf run --json completion (U3)", () => {
   it("no-HITL success prints succeeded envelope on stdout and exits 0", async () => {
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       {
         io: cap.io,
         startRun: async () =>
@@ -352,7 +354,7 @@ describe("sf run --json completion (U3)", () => {
     });
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       {
         cwd: fixtures,
         io: cap.io,
@@ -377,7 +379,7 @@ describe("sf run --json completion (U3)", () => {
   it("started stage failure prints failed envelope and exits 1", async () => {
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       {
         io: cap.io,
         startRun: async () =>
@@ -407,11 +409,11 @@ describe("sf run --json completion (U3)", () => {
     const validation = await validateCatalog({
       scope: "pipeline",
       cwd: fixtures,
-      pipeline: "broken",
+      pipeline: brokenPipeline,
     });
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "broken"],
+      ["--json", "--task", sampleTask, "--pipeline", brokenPipeline],
       {
         cwd: fixtures,
         io: cap.io,
@@ -433,7 +435,7 @@ describe("sf run --json completion (U3)", () => {
   it("unexpected throw produces no stdout JSON", async () => {
     const cap = captureIo();
     const code = await runRunCommand(
-      ["--json", "--task", sampleTask, "--pipeline", "single"],
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
       {
         io: cap.io,
         startRun: async () => {
