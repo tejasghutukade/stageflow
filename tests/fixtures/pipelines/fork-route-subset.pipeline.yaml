@@ -1,0 +1,15 @@
+id: fork-route-subset
+stages:
+  - id: clarify
+    fork:
+      select: subset
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    needs: clarify
+    uses: ../stages/design-doc.yaml
+  - id: implementation-plan
+    needs: clarify
+    uses: ../stages/implementation-plan.yaml
+  - id: join-doc
+    needs: clarify
+    uses: ../stages/join-doc.yaml

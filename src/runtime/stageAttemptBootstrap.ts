@@ -1,5 +1,6 @@
 import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
+import { resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
@@ -134,6 +135,8 @@ export async function openStageAttempt(
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, input.stage.id, attempt);
 
+  const forkEmitContext = resolveForkEmitContext(input.dag, input.stage.id);
+
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
@@ -143,6 +146,7 @@ export async function openStageAttempt(
       priorEnvelope: priorResult.prior,
       resumeToken,
       onActivity: input.onActivity,
+      forkEmitContext,
     },
     input.operatorCatalog,
   );

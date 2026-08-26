@@ -14,11 +14,13 @@ import {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "../envelope/check.js";
+import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import {
   assertEnvelopePayload,
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
 import type { StageEnvelope } from "../types/envelope.js";
+import type { ForkEmitContext } from "../types/forkChoice.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
@@ -41,6 +43,7 @@ function toolResult(
 export function createEmitStageEnvelopeTool(
   capture: EmitCapture,
   payloadSchema?: unknown,
+  forkEmitContext?: ForkEmitContext,
 ) {
   const compiledPayload =
     payloadSchema !== undefined
@@ -60,6 +63,10 @@ export function createEmitStageEnvelopeTool(
         compiledPayload !== undefined
           ? compiledPayload
           : Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      fork_choice:
+        forkEmitContext !== undefined
+          ? Type.Array(Type.String())
+          : Type.Optional(Type.Array(Type.String())),
       stage_id: Type.Optional(Type.String()),
       notes: Type.Optional(Type.String()),
     }),
@@ -72,6 +79,16 @@ export function createEmitStageEnvelopeTool(
         );
       }
       try {
+        if (forkEmitContext !== undefined) {
+          const record = params as Record<string, unknown>;
+          if (record.status !== "failure") {
+            normalizeForkChoice(
+              record.fork_choice as string[] | undefined,
+              "emit",
+              forkEmitContext,
+            );
+          }
+        }
         const envelope = assertRequiredEnvelope(params);
         assertEnvelopePayload(envelope, payloadSchema);
         capture.envelope = envelope;

@@ -34,6 +34,16 @@ export function assertRequiredEnvelope(value: unknown): StageEnvelope {
     artifacts: record.artifacts as string[],
   };
 
+  if (record.fork_choice !== undefined) {
+    if (
+      !Array.isArray(record.fork_choice) ||
+      !record.fork_choice.every((item) => typeof item === "string")
+    ) {
+      throw new EnvelopeError("fork_choice must be an array of strings");
+    }
+    envelope.fork_choice = record.fork_choice as string[];
+  }
+
   if (record.payload !== undefined) {
     if (
       record.payload === null ||
