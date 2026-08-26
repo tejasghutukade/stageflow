@@ -93,6 +93,8 @@ export function snapshotToScheduleState(
       return "active";
     case "waiting_for_input":
       return executionMode === "process" ? "waiting" : "active";
+    case "skipped":
+      return "skipped";
     default:
       return "pending";
   }
@@ -596,16 +598,23 @@ export async function runPipelineDag(
     }
   };
 
-  const onStageSuccess = (stageId: string, envelope: StageEnvelope) => {
+  const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
     const node = dag.nodes.find((n) => n.id === stageId);
     if (node?.fork) {
       const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+      const skippedIds: string[] = [];
       applyForkChoiceToSchedule(dag, stageId, chosen, states, {
-        onSkip: (id) => notifyRetryRootTerminal(id, "skipped"),
+        onSkip: (id) => {
+          notifyRetryRootTerminal(id, "skipped");
+          skippedIds.push(id);
+        },
       });
+      for (const id of skippedIds) {
+        await store.appendStageEvent(run.runId, id, { event: "skipped" });
+      }
     }
   };
 
@@ -638,12 +647,17 @@ export async function runPipelineDag(
       if (launchResult.type === "succeeded") {
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
-          onStageSuccess(stageId, envelope);
+          await onStageSuccess(stageId, envelope);
         } catch (err) {
-          await onStageFailure(
-            stageId,
-            err instanceof Error ? err.message : String(err),
-          );
+          const reason = err instanceof Error ? err.message : String(err);
+          if (states.get(stageId) === "succeeded") {
+            schedulingHalted = true;
+            if (firstFailureReason === undefined) {
+              firstFailureReason = reason;
+            }
+            return;
+          }
+          await onStageFailure(stageId, reason);
         }
         return;
       }
@@ -682,7 +696,19 @@ export async function runPipelineDag(
       return;
     }
     if (result.envelope) {
-      onStageSuccess(stageId, result.envelope);
+      try {
+        await onStageSuccess(stageId, result.envelope);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        if (states.get(stageId) === "succeeded") {
+          schedulingHalted = true;
+          if (firstFailureReason === undefined) {
+            firstFailureReason = reason;
+          }
+          return;
+        }
+        await onStageFailure(stageId, reason);
+      }
     } else {
       states.set(stageId, "succeeded");
       notifyRetryRootTerminal(stageId, "succeeded");

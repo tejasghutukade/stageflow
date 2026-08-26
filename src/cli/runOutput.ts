@@ -1,3 +1,5 @@
+import { projectRun } from "../projection/projectRun.js";
+import type { RunStore } from "../runstore/port.js";
 import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import type { BusyCode, StartRunResult } from "../runtime/runManager.js";
 
@@ -64,22 +66,24 @@ function formatStartFailureJson(
   return formatRunStartFailedJson(started);
 }
 
-function formatRunCompletionJson(result: PipelineRunResult): string {
+function baseRunCompletionPayload(
+  result: PipelineRunResult,
+): Record<string, unknown> {
   if (result.outcome === "succeeded") {
-    return stringify({
+    return {
       ok: true,
       outcome: "succeeded",
       runId: result.runId,
       runDir: result.runDir,
-    });
+    };
   }
   if (result.outcome === "waiting") {
-    return stringify({
+    return {
       ok: false,
       outcome: "waiting",
       runId: result.runId,
       runDir: result.runDir,
-    });
+    };
   }
   const payload: Record<string, unknown> = {
     ok: false,
@@ -88,7 +92,23 @@ function formatRunCompletionJson(result: PipelineRunResult): string {
     runDir: result.runDir,
   };
   if (result.reason !== undefined) payload.reason = result.reason;
-  return stringify(payload);
+  return payload;
+}
+
+function formatRunCompletionJson(result: PipelineRunResult): string {
+  return stringify(baseRunCompletionPayload(result));
+}
+
+async function formatRunCompletionJsonWithStages(
+  result: PipelineRunResult,
+  store: RunStore,
+): Promise<string> {
+  const detail = await store.readRun(result.runId);
+  const projection = projectRun(detail);
+  return stringify({
+    ...baseRunCompletionPayload(result),
+    stages: projection.stages,
+  });
 }
 
 function writeStartFailureHuman(
@@ -136,10 +156,15 @@ function exitCodeForRunOutcome(outcome: PipelineRunResult["outcome"]): number {
   }
 }
 
-export function reportCliRun(
+export async function reportCliRun(
   event: CliRunReportEvent,
-  options: { json?: boolean; io: CliRunReportIo },
-): number {
+  options: {
+    json?: boolean;
+    io: CliRunReportIo;
+    store?: RunStore;
+    includeStages?: boolean;
+  },
+): Promise<number> {
   if (event.kind === "start-failure") {
     if (options.json) {
       options.io.log(formatStartFailureJson(event.started));
@@ -149,7 +174,27 @@ export function reportCliRun(
     return 1;
   }
   if (options.json) {
-    options.io.log(formatRunCompletionJson(event.result));
+    if (options.includeStages) {
+      if (!options.store) {
+        options.io.error(
+          "error: --include stages requires an internal run store (report bug)",
+        );
+        return 1;
+      }
+      try {
+        options.io.log(
+          await formatRunCompletionJsonWithStages(event.result, options.store),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        options.io.error(
+          `failed to read run for --include stages: ${message}`,
+        );
+        return 1;
+      }
+    } else {
+      options.io.log(formatRunCompletionJson(event.result));
+    }
   } else {
     writeCompletionHuman(event.result, options.io);
   }

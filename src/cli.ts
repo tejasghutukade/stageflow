@@ -5,10 +5,20 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
+import { ARTIFACT_USAGE, runArtifactCommand } from "./cli/artifactCommand.js";
+import {
+  ENVELOPE_USAGE,
+  runEnvelopeCommand,
+} from "./cli/envelopeCommand.js";
+import {
+  EXPORT_RUN_USAGE,
+  runExportRunCommand,
+} from "./cli/exportRunCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
+import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
@@ -19,8 +29,11 @@ import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
   sf init
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+  sf artifact read --run <runId> --path <relPath> [--out <file>]
+  sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
+  sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
   sf providers status [--provider <id>]
@@ -28,6 +41,9 @@ const USAGE = `Usage:
   sf providers source [get | set <pi_home|sf_owned>]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
   sf providers logout <providerId>
+  sf skills list
+  sf skills install --from-path <dir> [--skill-name <name>]
+  sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
   sf --help
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
@@ -40,7 +56,15 @@ ${RUN_USAGE}
 
 ${VALIDATE_USAGE}
 
-${PROVIDERS_USAGE}`;
+${ARTIFACT_USAGE}
+
+${ENVELOPE_USAGE}
+
+${EXPORT_RUN_USAGE}
+
+${PROVIDERS_USAGE}
+
+${SKILLS_USAGE}`;
 
 function parseArgs(argv: string[]): {
   help: boolean;
@@ -66,7 +90,11 @@ function parseArgs(argv: string[]): {
     command === "providers" ||
     command === "validate" ||
     command === "run" ||
-    command === "init"
+    command === "init" ||
+    command === "artifact" ||
+    command === "envelope" ||
+    command === "export-run" ||
+    command === "skills"
   ) {
     return { help: false, command };
   }
@@ -248,8 +276,36 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
+    if (parsed.command === "artifact") {
+      return runArtifactCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "envelope") {
+      return runEnvelopeCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "export-run") {
+      return runExportRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
     if (parsed.command === "providers") {
       return runProvidersCommand(argv.slice(3), ctx.invocationCwd);
+    }
+
+    if (parsed.command === "skills") {
+      return runSkillsCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
     }
 
     const store = createRunStore({ rootDir: ctx.projectRoot });

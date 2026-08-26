@@ -8,6 +8,8 @@ on:
       - "examples/**"
       - "ui/src/**"
       - "stageflow.yaml"
+      - ".github/workflows/**"
+      - "scripts/**"
 
 permissions:
   contents: read
@@ -57,7 +59,14 @@ jobs:
       - name: Validate pipeline catalog
         run: node dist/cli.js validate --strict --json
 
-      - name: Run Archify-on-PR pipeline
+      - name: Provider login
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node dist/cli.js providers login openai --type api_key --api-key-env OPENAI_API_KEY
+
+      - id: envelope
+        name: Run Archify-on-PR pipeline
+        uses: ./.github/actions/sf-run
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -66,35 +75,16 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: |
-          node dist/cli.js providers login openai --type api_key --api-key-env OPENAI_API_KEY
-          set +e
-          node dist/cli.js run \
-            --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
-            --task examples/archify-on-pr/archify-on-pr.task.yaml \
-            --checkout "$GITHUB_WORKSPACE" \
-            --json --skip-gates \
-            --git-sha "$GITHUB_SHA" \
-            --ci-job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            > "$GITHUB_WORKSPACE/sf-run.json"
-          status=$?
-          set -e
-          cat "$GITHUB_WORKSPACE/sf-run.json"
-          exit $status
-
-      - id: envelope
-        name: Extract run envelope
-        run: |
-          set -e
-          ./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes > envelope.json
-          cat envelope.json
-          SKIPPED="$(jq -r '.skipped' envelope.json)"
-          echo "skipped=${SKIPPED}" >> "${GITHUB_OUTPUT}"
-          if [ "${SKIPPED}" = "true" ]; then
-            echo "No diagram-relevant changes; skipping deliver and PR comment."
-            exit 0
-          fi
-          echo "diagram_count=$(jq '.diagrams | length' envelope.json)" >> "${GITHUB_OUTPUT}"
+        with:
+          pipeline: examples/archify-on-pr/archify-on-pr.pipeline.yaml
+          task: examples/archify-on-pr/archify-on-pr.task.yaml
+          checkout: ${{ github.workspace }}
+          extra-args: >-
+            --skip-gates
+            --git-sha ${{ github.event.pull_request.head.sha }}
+            --ci-job-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          detect-stage: detect-changes
+          stage: author-diagrams
 
       - id: deliver
         name: Deliver diagram HTML

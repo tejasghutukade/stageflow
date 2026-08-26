@@ -55,6 +55,7 @@ function deriveReadiness(
   const { status } = stage;
   if (status === "succeeded") return { readiness: "succeeded" };
   if (status === "failed") return { readiness: "failed" };
+  if (status === "skipped") return { readiness: "skipped" };
   if (status === "running") return { readiness: "running" };
   if (status === "waiting_for_input") return { readiness: "waiting" };
 

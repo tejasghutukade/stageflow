@@ -74,11 +74,11 @@ the run workspace.
 
 ### Extract envelope
 
-Mirrors the GHA deliver step — reads the author stage envelope from
-`.stageflow/state.db`:
+Mirrors the GHA deliver step — reads the author stage envelope via the CLI:
 
 ```bash
-./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes
+node dist/cli.js envelope get --from sf-run.json --stage author-diagrams \
+  --detect-stage detect-changes --format handoff --json > envelope.json
 ```
 
 Outputs `{ "skipped": true }` when detect skipped downstream, or
@@ -86,7 +86,8 @@ Outputs `{ "skipped": true }` when detect skipped downstream, or
 Deliver manually:
 
 ```bash
-ENVELOPE=$(./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes)
+node dist/cli.js envelope get --from sf-run.json --stage author-diagrams \
+  --detect-stage detect-changes --format handoff --json > envelope.json
 GITHUB_SHA="$(git rev-parse HEAD)" GITHUB_REPOSITORY="<owner>/<repo>" \
   ./scripts/deliver-diagrams.sh envelope.json diagrams
 ```
@@ -100,7 +101,7 @@ while IFS= read -r d; do
   SPEC=$(jq -r .spec_path <<<"$d")
   node .pi/skills/archify/bin/archify.mjs deliver \
     "$TYPE" "$SPEC" "diagrams/${TYPE}.html" --quality showcase
-done < <(jq -c '.diagrams[]' <<<"$ENVELOPE")
+done < <(jq -c '.diagrams[]' envelope.json)
 ```
 
 ## Environment variables

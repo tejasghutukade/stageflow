@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
-import { runRunCommand } from "../src/cli/runCommand.js";
+import { completeCliRun, runRunCommand } from "../src/cli/runCommand.js";
 import { formatValidationJson } from "../src/cli/validateOutput.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { PipelineValidationError } from "../src/runtime/pipelineRunner.js";
@@ -13,6 +13,7 @@ import type { PipelineRunResult } from "../src/runtime/pipelineRunner.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import type { StartRunResult } from "../src/runtime/runManager.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
+import type { RunStore } from "../src/runstore/port.js";
 import { validateCatalog } from "../src/config/validateCatalog.js";
 import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
 
@@ -448,5 +449,192 @@ describe("sf run --json completion (U3)", () => {
     expect(cap.stdoutText()).toBe("");
     expect(() => JSON.parse(cap.stdoutText())).toThrow();
     expect(cap.stderrText()).toBe("unexpected boom");
+  });
+});
+
+describe("sf run --json --include stages (U3)", () => {
+  it("--json --include stages succeeded run includes stages[] with stage_id and status", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-include-ok-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd: fixtures,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      {
+        cwd: fixtures,
+        projectRoot: storeRoot,
+        io: cap.io,
+        store,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      runId: string;
+      runDir: string;
+      stages: Array<{ stage_id: string; status: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.outcome).toBe("succeeded");
+    expect(parsed.stages).toHaveLength(1);
+    expect(parsed.stages[0]?.stage_id).toBe("clarify");
+    expect(parsed.stages[0]?.status).toBe("succeeded");
+    expect(cap.stderrText()).toBe("");
+  });
+
+  it("--json --include stages failed run still includes stages with the failed stage", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-include-fail-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const failAgent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({ ok: false as const, reason: "stage boom" }),
+        });
+      },
+      async runStage() {
+        return { ok: false as const, reason: "stage boom" };
+      },
+    };
+    const manager = new RunManager({
+      agent: failAgent,
+      store,
+      cwd: fixtures,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      {
+        cwd: fixtures,
+        projectRoot: storeRoot,
+        io: cap.io,
+        store,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      stages: Array<{ stage_id: string; status: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("failed");
+    expect(parsed.stages).toHaveLength(1);
+    expect(parsed.stages[0]?.stage_id).toBe("clarify");
+    expect(parsed.stages[0]?.status).toBe("failed");
+  });
+
+  it("--json without --include has no stages key", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: true,
+            outcome: "succeeded",
+            runId: "run-ok",
+            runDir: "/tmp/runs/ok",
+          }),
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: true,
+      outcome: "succeeded",
+      runId: "run-ok",
+      runDir: "/tmp/runs/ok",
+    });
+    expect(parsed).not.toHaveProperty("stages");
+  });
+
+  it("--include foo exits 1 with Unknown --include value: foo", async () => {
+    const cap = captureIo();
+    const startRun = vi.fn();
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--include",
+        "foo",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      { io: cap.io, startRun },
+    );
+    expect(code).toBe(1);
+    expect(startRun).not.toHaveBeenCalled();
+    expect(cap.stderrText()).toMatch(/Unknown --include value: foo/);
+    expect(cap.stdoutText()).toBe("");
+  });
+
+  it("--include stages without --json exits 1", async () => {
+    const cap = captureIo();
+    const startRun = vi.fn();
+    const code = await runRunCommand(
+      [
+        "--include",
+        "stages",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+      ],
+      { io: cap.io, startRun },
+    );
+    expect(code).toBe(1);
+    expect(startRun).not.toHaveBeenCalled();
+    expect(cap.stderrText()).toBe("error: --include stages requires --json");
+    expect(cap.stdoutText()).toBe("");
+  });
+
+  it("store read failure with --include stages exits non-zero without stdout JSON", async () => {
+    const cap = captureIo();
+    const brokenStore = {
+      readRun: vi.fn().mockRejectedValue(new Error("store locked")),
+    } as unknown as RunStore;
+    const code = await completeCliRun(
+      startedOk({
+        ok: true,
+        outcome: "succeeded",
+        runId: "run-ok",
+        runDir: "/tmp/runs/ok",
+      }),
+      cap.io,
+      { json: true, includeStages: true, store: brokenStore },
+    );
+    expect(code).toBe(1);
+    expect(cap.stdoutText()).toBe("");
+    expect(cap.stderrText()).toMatch(
+      /failed to read run for --include stages: store locked/,
+    );
   });
 });
