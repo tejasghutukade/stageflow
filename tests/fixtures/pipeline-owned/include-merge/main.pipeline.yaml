@@ -1,0 +1,7 @@
+id: include-merge
+include:
+  - local: ./fragments/gates.yaml
+stages:
+  - id: finish
+    uses: ./finish.yaml
+    needs: gate

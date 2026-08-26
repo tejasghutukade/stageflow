@@ -1,0 +1,3 @@
+id: gate
+system_prompt: Gate stage from included fragment.
+model: cursor/auto

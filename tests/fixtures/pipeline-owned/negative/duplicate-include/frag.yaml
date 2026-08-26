@@ -1,0 +1,4 @@
+stages:
+  - id: gate
+    system_prompt: Gate from fragment.
+    model: cursor/auto

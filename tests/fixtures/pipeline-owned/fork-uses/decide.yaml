@@ -1,0 +1,6 @@
+id: decide
+gate_kinds:
+  - free_text
+system_prompt: |
+  You are the deciding stage for an exclusive fork. Ask the operator which branch to take.
+model: cursor/auto

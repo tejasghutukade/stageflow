@@ -1,16 +1,25 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
-import type { LoadedPipeline, PipelineConfig } from "../types/pipeline.js";
+import type {
+  LoadedPipeline,
+  PipelineConfig,
+  PipelineStageSource,
+} from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
-import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
-import { loadStageOutcome } from "./loadStage.js";
+import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { mergePipelineStages } from "./mergePipelineIncludes.js";
+import {
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "./normalizePipelineStageEntry.js";
+import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
 import { readYamlObject } from "./readYamlObject.js";
-import { extractPipelineStageIds, resolvePipelineDag } from "./resolvePipelineDag.js";
 import type { ValidationFinding } from "./validateCatalog.js";
 import {
   findingStageIdFilenameMismatch,
   findingsFromLoadIssues,
 } from "./validateCatalog.js";
+import { resolvePipelineDag } from "./resolvePipelineDag.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
@@ -33,10 +42,9 @@ async function resolvePipelinePath(nameOrPath: string, cwd: string): Promise<str
 
 export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string } = {},
+  options: { cwd?: string } = {},
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
-  const stagesDir = options.stagesDir ?? path.join(cwd, "stages");
 
   let pipelinePath: string;
   try {
@@ -52,37 +60,28 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  let raw: Record<string, unknown>;
-  try {
-    raw = await readYamlObject(pipelinePath);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return loadFailure([
-      {
-        code: "pipeline.load_error",
-        message,
-        category: "pipeline",
-      },
-    ]);
+  const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
+
+  const mergeOutcome = await mergePipelineStages(normalizedPipelinePath);
+  if (!mergeOutcome.ok) {
+    return loadFailure(mergeOutcome.issues);
   }
 
-  if (typeof raw?.id !== "string" || !Array.isArray(raw.stages)) {
-    return loadFailure([
-      {
-        code: "pipeline.invalid_shape",
-        message: `Invalid pipeline ${pipelinePath}: id and stages[] are required`,
-        category: "pipeline",
-      },
-    ]);
+  const { entries: rawEntries, pipelineId } = mergeOutcome.value;
+  const ctx = { pipelineId, path: normalizedPipelinePath };
+
+  const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
+  if (!normalizeOutcome.ok) {
+    return loadFailure(normalizeOutcome.issues);
   }
 
-  const pipelineId = raw.id;
-  const ctx = { pipelineId: raw.id, path: pipelinePath };
+  const normalizedEntries = normalizeOutcome.value;
+  const wiringRefs = toWiringRefs(normalizedEntries);
 
   let stageIds: string[];
   let dag: LoadedPipeline["dag"];
   try {
-    const resolved = resolvePipelineDag(raw.stages, ctx);
+    const resolved = resolvePipelineDag(wiringRefs, ctx);
     stageIds = resolved.stages;
     dag = resolved.dag;
   } catch (err) {
@@ -97,30 +96,76 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  const pipeline: PipelineConfig = {
-    id: raw.id,
-    stages: stageIds,
-  };
-
+  const entryById = new Map(normalizedEntries.map((entry) => [entry.id, entry]));
+  const stageSources: Record<string, PipelineStageSource> = {};
   const stages: StageConfig[] = [];
-  for (const stageId of pipeline.stages) {
-    const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-    const stageOutcome = await loadStageOutcome(stagePath);
-    if (!stageOutcome.ok) {
-      const message = `Pipeline ${pipeline.id} references missing stage "${stageId}" at ${stagePath}`;
+
+  for (const stageId of stageIds) {
+    const entry = entryById.get(stageId);
+    if (!entry) {
       return loadFailure([
         {
-          code: "pipeline.missing_stage",
-          message,
+          code: "pipeline.invalid_shape",
+          message: `Pipeline ${pipelineId}: missing normalized entry for stage "${stageId}"`,
           category: "pipeline",
           pipelineId,
         },
       ]);
     }
+
+    if (entry.body.kind === "inline") {
+      const inlineOutcome = loadStageFromObjectOutcome(entry.body.raw, {
+        entryId: entry.id,
+        declaringPath: entry.declaringPath,
+      });
+      if (!inlineOutcome.ok) {
+        return loadFailure(inlineOutcome.issues);
+      }
+      stages.push(inlineOutcome.value);
+      stageSources[stageId] = { kind: "inline" };
+      continue;
+    }
+
+    const stageOutcome = await loadStageOutcome(entry.body.absolutePath);
+    if (!stageOutcome.ok) {
+      return loadFailure([
+        {
+          code: "pipeline.missing_stage",
+          message: `Pipeline ${pipelineId} references missing stage "${stageId}" at ${entry.body.absolutePath}`,
+          category: "pipeline",
+          pipelineId,
+        },
+        ...stageOutcome.issues,
+      ]);
+    }
+
+    if (stageOutcome.value.id !== entry.id) {
+      return loadFailure([
+        {
+          code: "pipeline.stage_id_mismatch",
+          message: `Pipeline ${pipelineId}: stage entry "${entry.id}" in ${entry.declaringPath} uses ${entry.body.path} which declares id "${stageOutcome.value.id}"`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+
     stages.push(stageOutcome.value);
+    stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
-  return loadSuccess({ pipeline, stages, dag });
+  const pipeline: PipelineConfig = {
+    id: pipelineId,
+    stages: stageIds,
+  };
+
+  return loadSuccess({
+    pipeline,
+    stages,
+    dag,
+    pipelinePath: normalizedPipelinePath,
+    stageSources,
+  });
 }
 
 async function checkStageIdFilename(
@@ -169,10 +214,9 @@ async function validateStageFile(
 
 export async function loadPipelineValidated(
   nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string; validateStages?: boolean } = {},
+  options: { cwd?: string; validateStages?: boolean } = {},
 ): Promise<LoadPipelineValidatedResult> {
   const cwd = options.cwd ?? process.cwd();
-  const stagesDir = options.stagesDir ?? path.join(cwd, "stages");
   const validateStages = options.validateStages ?? true;
 
   let pipelinePath: string;
@@ -192,39 +236,21 @@ export async function loadPipelineValidated(
     };
   }
 
-  const referencedStageIds = new Set<string>();
-  try {
-    const raw = await readYamlObject(pipelinePath);
-    if (typeof raw?.id === "string" && Array.isArray(raw.stages)) {
-      const stageIds = extractPipelineStageIds(raw.stages);
-      if (stageIds) {
-        for (const stageId of stageIds) {
-          referencedStageIds.add(stageId);
-        }
-      }
-    }
-  } catch {
-    // loadPipelineOutcome will report read errors
-  }
-
-  const outcome = await loadPipelineOutcome(nameOrPath, { cwd, stagesDir });
+  const outcome = await loadPipelineOutcome(nameOrPath, { cwd });
   const findings: ValidationFinding[] = [];
 
   if (!outcome.ok) {
     findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
-    if (validateStages) {
-      for (const stageId of referencedStageIds) {
-        const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-        findings.push(...(await validateStageFile(cwd, stagePath)));
-      }
-    }
     return { ok: false, findings };
   }
 
-  if (validateStages) {
-    for (const stageId of outcome.value.pipeline.stages) {
-      const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-      findings.push(...(await validateStageFile(cwd, stagePath)));
+  if (validateStages && outcome.value.stageSources) {
+    for (const [stageId, source] of Object.entries(outcome.value.stageSources)) {
+      if (source.kind === "file") {
+        findings.push(...(await validateStageFile(cwd, source.path)));
+      } else {
+        void stageId;
+      }
     }
   }
 
@@ -237,7 +263,7 @@ export async function loadPipelineValidated(
 
 export async function loadPipeline(
   nameOrPath: string,
-  options: { cwd?: string; stagesDir?: string } = {},
+  options: { cwd?: string } = {},
 ): Promise<LoadedPipeline> {
   const outcome = await loadPipelineOutcome(nameOrPath, options);
   if (!outcome.ok) {

@@ -1,0 +1,3 @@
+id: decide
+system_prompt: Inferred id from uses path.
+model: cursor/auto

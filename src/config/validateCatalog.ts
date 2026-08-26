@@ -15,6 +15,13 @@ export type ValidationFindingCode =
   | "pipeline.dag_error"
   | "pipeline.missing_stage"
   | "pipeline.load_error"
+  | "pipeline.string_stage_ref"
+  | "pipeline.stage_uses_inline_conflict"
+  | "pipeline.stage_missing_body"
+  | "pipeline.stage_id_mismatch"
+  | "pipeline.include_cycle"
+  | "pipeline.include_invalid"
+  | "pipeline.include_duplicate_stage"
   | "stage.invalid_shape"
   | "stage.invalid_payload_schema"
   | "stage.invalid_gate_kinds"
@@ -321,51 +328,35 @@ type PipelineValidationResult = {
 
 async function validatePipelineFile(
   pipelinePath: string,
-  options: { cwd: string; stagesDir: string; validateStages: boolean },
+  options: { cwd: string; validateStages: boolean },
 ): Promise<PipelineValidationResult> {
-  const { cwd, stagesDir, validateStages } = options;
+  const { cwd, validateStages } = options;
   const findings: ValidationFinding[] = [];
   const referencedStageIds = new Set<string>();
 
-  let pipelineId: string | undefined;
-  try {
-    const raw = await readYamlObject(pipelinePath);
-    if (typeof raw?.id === "string") {
-      pipelineId = raw.id;
-      if (Array.isArray(raw.stages)) {
-        const stageIds = extractPipelineStageIds(raw.stages);
-        if (stageIds) {
-          for (const stageId of stageIds) {
-            referencedStageIds.add(stageId);
-          }
-        }
-      }
-    }
-  } catch {
-    // loadPipelineOutcome will report read errors
-  }
-
-  const outcome = await loadPipelineOutcome(pipelinePath, { cwd, stagesDir });
+  const outcome = await loadPipelineOutcome(pipelinePath, { cwd });
   if (!outcome.ok) {
     findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
-    if (validateStages) {
-      for (const stageId of referencedStageIds) {
-        const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-        findings.push(...(await validateStageFile(cwd, stagePath)));
-      }
-    }
-    return { findings, pipelineId, referencedStageIds };
+    return { findings, pipelineId: undefined, referencedStageIds };
   }
 
   for (const stageId of outcome.value.pipeline.stages) {
     referencedStageIds.add(stageId);
-    if (validateStages) {
-      const stagePath = path.join(stagesDir, `${stageId}.yaml`);
-      findings.push(...(await validateStageFile(cwd, stagePath)));
+  }
+
+  if (validateStages && outcome.value.stageSources) {
+    for (const [, source] of Object.entries(outcome.value.stageSources)) {
+      if (source.kind === "file") {
+        findings.push(...(await validateStageFile(cwd, source.path)));
+      }
     }
   }
 
-  return { findings, pipelineId: outcome.value.pipeline.id, referencedStageIds };
+  return {
+    findings,
+    pipelineId: outcome.value.pipeline.id,
+    referencedStageIds,
+  };
 }
 
 async function collectPipelineIds(
@@ -461,7 +452,6 @@ export async function validateCatalog(
   if (options.scope === "pipeline") {
     const result = await loadPipelineValidated(options.pipeline!, {
       cwd,
-      stagesDir,
       validateStages: true,
     });
     if (!result.ok) {
@@ -474,7 +464,6 @@ export async function validateCatalog(
     for (const pipelinePath of pipelineFiles) {
       const result = await validatePipelineFile(pipelinePath, {
         cwd,
-        stagesDir,
         validateStages: false,
       });
       allFindings.push(...result.findings);
