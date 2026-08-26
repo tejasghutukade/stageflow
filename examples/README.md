@@ -10,6 +10,7 @@ Stages are **author-defined** in YAML; these walkthroughs show domain-neutral fl
 | [plan-review](plan-review/) | Multi-stage with operator gate | `sf ui`, then `sf run` |
 | [conditional-fork](conditional-fork/) | Exclusive fork; operator chooses branch | `sf ui`, then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
+| [archify-on-pr](archify-on-pr/) | PR diagrams (architecture, workflow, sequence, dataflow, lifecycle) | Used in archify-pr-diagrams workflow |
 | [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |
 
 Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). **`sf ui` started from any subdirectory** still uses `<repo>/.stageflow` for run state.

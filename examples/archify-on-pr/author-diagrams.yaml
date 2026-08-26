@@ -1,0 +1,38 @@
+id: author-diagrams
+system_prompt: |
+  Author Archify diagram specs for every diagram type selected by detect-changes.
+
+  Read the detect-changes envelope for pr_number, changed_files, diagram_types,
+  change_summary, and content_hash. Inspect bounded repo evidence for those paths
+  in the PR head checkout — do not assume changes that are not in the diff.
+
+  For each entry in diagram_types (architecture, workflow, sequence, dataflow,
+  lifecycle), write a separate spec artifact via write_stage_artifact:
+  architecture.spec.json, workflow.spec.json, sequence.spec.json,
+  dataflow.spec.json, or lifecycle.spec.json. Each JSON must be valid Archify IR
+  for that type with schema_version and meta.quality_profile set to showcase.
+
+  FORBIDDEN: deliver, npm install, doctor, ask_operator. Do not install or invoke
+  Archify CLI commands. GHA runs deliver after this stage completes.
+
+  Call emit_stage_envelope exactly once with status success, every spec artifact
+  in artifacts, a one-sentence summary, and a payload matching the stage schema
+  with a diagrams array — one object per authored type:
+  { diagram_type, spec_artifact, summary }.
+  Do not stop after a chat reply.
+model: openai/gpt-5.3-codex
+payload_schema:
+  type: object
+  required: [diagrams]
+  properties:
+    diagrams:
+      type: array
+      items:
+        type: object
+        required: [diagram_type, spec_artifact, summary]
+        properties:
+          diagram_type: { type: string }
+          spec_artifact: { type: string }
+          summary: { type: string }
+        additionalProperties: false
+  additionalProperties: false

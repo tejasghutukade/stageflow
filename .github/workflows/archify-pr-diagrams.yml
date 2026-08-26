@@ -1,0 +1,206 @@
+name: Archify PR diagrams
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "src/**"
+      - "examples/**"
+      - "ui/src/**"
+      - "stageflow.yaml"
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+
+jobs:
+  diagram:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.event.pull_request.base.ref }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Build Stageflow CLI
+        run: npm ci && npm run build
+
+      - name: Install Archify skill
+        env:
+          # Repository secret: local path to Archify skill tree (e.g. on self-hosted runners).
+          # When unset, set ARCHIFY_ZIP_URL (repo variable) or pass --zip-url via workflow env.
+          ARCHIFY_SOURCE_DIR: ${{ secrets.ARCHIFY_SOURCE_DIR }}
+          ARCHIFY_ZIP_URL: ${{ vars.ARCHIFY_ZIP_URL }}
+          ARCHIFY_VERSION: "2.15.0"
+        run: ./scripts/install-archify-skill.sh --version "${ARCHIFY_VERSION}"
+
+      - name: Require OPENAI_API_KEY
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is empty. Add it as a repository Actions secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - name: Validate pipeline catalog
+        run: npm run dev -- validate --strict --json
+
+      - name: Run Archify-on-PR pipeline
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          npm run dev -- providers login openai --type api_key --api-key-env OPENAI_API_KEY
+          set +e
+          npm run dev -- run \
+            --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
+            --task examples/archify-on-pr/archify-on-pr.task.yaml \
+            --checkout "$GITHUB_WORKSPACE" \
+            --json --skip-gates \
+            --git-sha "$GITHUB_SHA" \
+            --ci-job-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            > "$GITHUB_WORKSPACE/sf-run.json"
+          status=$?
+          set -e
+          cat "$GITHUB_WORKSPACE/sf-run.json"
+          exit $status
+
+      - id: envelope
+        name: Extract run envelope
+        run: |
+          set -e
+          ENVELOPE="$(./scripts/extract-run-envelope.sh sf-run.json --detect-stage detect-changes)"
+          echo "$ENVELOPE" > envelope.json
+          cat envelope.json
+          SKIPPED="$(jq -r '.skipped' envelope.json)"
+          echo "skipped=${SKIPPED}" >> "${GITHUB_OUTPUT}"
+          if [ "${SKIPPED}" = "true" ]; then
+            echo "No diagram-relevant changes; skipping deliver and PR comment."
+            exit 0
+          fi
+          echo "diagram_count=$(jq '.diagrams | length' envelope.json)" >> "${GITHUB_OUTPUT}"
+
+      - id: deliver
+        name: Deliver diagram HTML
+        if: steps.envelope.outputs.skipped != 'true'
+        run: |
+          set -e
+          mkdir -p diagrams
+          receipts='[]'
+          while IFS= read -r diagram; do
+            TYPE="$(echo "$diagram" | jq -r '.diagram_type')"
+            SPEC="$(echo "$diagram" | jq -r '.spec_path')"
+            receipt="$(node .pi/skills/archify/bin/archify.mjs deliver \
+              "$TYPE" "$SPEC" "diagrams/${TYPE}.html" \
+              --quality showcase --json)"
+            receipts="$(echo "$receipts" | jq --argjson r "$receipt" '. + [$r]')"
+          done < <(jq -c '.diagrams[]' envelope.json)
+          echo "$receipts" | jq '.' > deliver-receipts.json
+          cat deliver-receipts.json
+
+      - id: upload-diagrams
+        name: Upload diagram HTML
+        if: steps.envelope.outputs.skipped != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: archify-diagrams-pr-${{ github.event.pull_request.number }}
+          path: diagrams/
+          retention-days: 30
+
+      - name: Build PR comment
+        if: steps.envelope.outputs.skipped != 'true'
+        run: |
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          ARTIFACT_URL="${{ steps.upload-diagrams.outputs.artifact-url }}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ -n "${ARTIFACT_URL}" ]; then
+            DIAGRAM_LINK="[Open interactive HTML](${ARTIFACT_URL})"
+          else
+            DIAGRAM_LINK="[View workflow run](${RUN_URL})"
+          fi
+
+          {
+            echo "## Diagrams (Archify)"
+            echo ""
+            echo "Updated for \`${SHORT_SHA}\`."
+            echo ""
+            echo "| Type | Summary |"
+            echo "|---|---|"
+            jq -r '.diagrams[] | "| \(.diagram_type) | \(.summary) |"' envelope.json
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Artifacts | ${DIAGRAM_LINK} |"
+            echo "| Workflow | [run ${{ github.run_number }}](${RUN_URL}) |"
+            echo ""
+            echo "> Requires GitHub login. Artifact retained 30 days."
+          } > comment.md
+
+      - name: Post sticky PR comment
+        if: steps.envelope.outputs.skipped != 'true'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: archify-diagram
+          path: comment.md
+
+      - name: Upload Stageflow run workspace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stageflow-archify-pr-${{ github.event.pull_request.number }}-${{ github.run_number }}
+          include-hidden-files: true
+          path: |
+            sf-run.json
+            envelope.json
+            deliver-receipts.json
+            diagrams/
+            comment.md
+            .stageflow/state.db
+            .stageflow/state.db-wal
+            .stageflow/state.db-shm
+            .stageflow/runs/
+            !.stageflow/runs/**/.pi-agent/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Archify PR diagrams"
+            echo ""
+            if [ "${{ steps.envelope.outcome }}" != "success" ]; then
+              echo "**Status:** pipeline did not complete envelope extraction."
+            elif [ "${{ steps.envelope.outputs.skipped }}" = "true" ]; then
+              echo "**Status:** skipped — no diagram-relevant changes detected."
+            elif [ -f deliver-receipts.json ]; then
+              COUNT="$(jq 'length' deliver-receipts.json)"
+              echo "**Status:** deliver succeeded for ${COUNT} diagram(s)."
+              echo ""
+              echo '```json'
+              cat deliver-receipts.json
+              echo '```'
+            else
+              echo "**Status:** deliver did not complete."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,0 +1,11 @@
+id: archify-on-pr
+stages:
+  - id: detect-changes
+    uses: ./detect-changes.yaml
+    fork:
+      select: subset
+      allow_none: true
+  - id: author-diagrams
+    uses: ./author-diagrams.yaml
+    needs: detect-changes
+    skill: archify
