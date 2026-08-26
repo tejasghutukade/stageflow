@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   isCursorModelRef,
   resolveCursorExtensionPath,
@@ -6,6 +9,16 @@ import {
 import { findProviderSupport } from "../src/agent/providerSupport.js";
 
 describe("cursor provider support", () => {
+  const prevExt = process.env.STAGEFLOW_CURSOR_EXTENSION;
+
+  afterEach(() => {
+    if (prevExt === undefined) {
+      delete process.env.STAGEFLOW_CURSOR_EXTENSION;
+    } else {
+      process.env.STAGEFLOW_CURSOR_EXTENSION = prevExt;
+    }
+  });
+
   it("detects cursor model refs", () => {
     expect(isCursorModelRef("cursor/composer-2-5")).toBe(true);
     expect(isCursorModelRef("cursor/auto")).toBe(true);
@@ -13,10 +26,24 @@ describe("cursor provider support", () => {
     expect(isCursorModelRef("composer-2-5")).toBe(false);
   });
 
-  it("resolves an installed or sibling pi-cursor-sdk entry", () => {
+  it("resolves STAGEFLOW_CURSOR_EXTENSION when the file exists", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-cursor-ext-"));
+    const entry = path.join(dir, "pi-cursor-sdk", "src", "index.ts");
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, "export {};\n");
+    process.env.STAGEFLOW_CURSOR_EXTENSION = entry;
+
     const resolved = resolveCursorExtensionPath();
-    expect(resolved).toBeTruthy();
-    expect(resolved).toMatch(/pi-cursor-sdk[/\\]src[/\\]index\.ts$/);
+    expect(resolved).toBe(path.resolve(entry));
+  });
+
+  it("skips STAGEFLOW_CURSOR_EXTENSION when the file is missing", () => {
+    process.env.STAGEFLOW_CURSOR_EXTENSION = path.join(
+      tmpdir(),
+      "sf-cursor-missing-does-not-exist.ts",
+    );
+    const resolved = resolveCursorExtensionPath();
+    expect(resolved).not.toBe(process.env.STAGEFLOW_CURSOR_EXTENSION);
   });
 
   it("is registered as StageProviderSupport only for cursor models", () => {

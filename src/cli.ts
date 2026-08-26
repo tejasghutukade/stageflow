@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { PiAgentAdapter } from "./agent/piAdapter.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
+import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
@@ -15,7 +16,7 @@ import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 
 const USAGE = `Usage:
-  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>]
+  sf run --task <path> --pipeline <name-or-path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf validate [--pipeline <name-or-path>] [--strict] [--json]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
@@ -110,6 +111,7 @@ export function parseRunStageArgs(argv: string[]): {
   let resumeAnswer: unknown;
   let attempt: number | undefined;
   let sessionFilePath: string | undefined;
+  let operatorCwd: string | undefined;
   let operatorAgentDir: string | undefined;
   let skipGates = false;
   for (let i = 0; i < argv.length; i++) {
@@ -148,6 +150,11 @@ export function parseRunStageArgs(argv: string[]): {
       if (sessionFilePath === undefined) {
         throw new Error("Missing value for --session-file");
       }
+    } else if (argv[i] === "--operator-cwd") {
+      operatorCwd = argv[++i];
+      if (operatorCwd === undefined) {
+        throw new Error("Missing value for --operator-cwd");
+      }
     } else if (argv[i] === "--operator-agent-dir") {
       operatorAgentDir = argv[++i];
       if (operatorAgentDir === undefined) {
@@ -160,6 +167,11 @@ export function parseRunStageArgs(argv: string[]): {
   if (!runId || !stageId) {
     throw new Error("Missing --run-id and/or --stage-id");
   }
+  const operatorCatalog = resolveOperatorCatalog({
+    flags: { operatorCwd, operatorAgentDir },
+    env: process.env,
+    defaultCwd: process.cwd(),
+  });
   return {
     runId,
     stageId,
@@ -168,9 +180,7 @@ export function parseRunStageArgs(argv: string[]): {
     attempt,
     sessionFilePath,
     skipGates,
-    ...(operatorAgentDir !== undefined
-      ? { operatorCatalog: { cwd: process.cwd(), agentDir: operatorAgentDir } }
-      : {}),
+    operatorCatalog,
   };
 }
 

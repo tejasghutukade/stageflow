@@ -1,0 +1,13 @@
+id: name-selection
+system_prompt: |
+  Your job is to select a name for boy or girl based on the given context.
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload containing boy and girl string fields.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [boy, girl]
+  properties:
+    boy: { type: string }
+    girl: { type: string }
+  additionalProperties: false

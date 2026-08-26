@@ -173,7 +173,9 @@ function parallelRetryFanoutAgent(): { agent: AgentPort; release: () => void } {
   return { agent, release };
 }
 
-function parallelFanoutStuckDesignAgent(): AgentPort {
+function parallelFanoutStuckDesignAgent(
+  options?: { holdDesignRetry?: Promise<void> },
+): AgentPort {
   const stageIndex = new Map<string, number>();
   let designOpens = 0;
 
@@ -205,7 +207,19 @@ function parallelFanoutStuckDesignAgent(): AgentPort {
       const behaviors = behaviorsByStage[stageId] ?? [];
       const behavior = behaviors[index] ?? { type: "never_emit" as const };
       const scripted = scriptedFakeAgent([behavior]);
-      return scripted.openStage(input);
+      const handle = scripted.openStage(input);
+      if (stageId === "design-doc" && options?.holdDesignRetry) {
+        const hold = options.holdDesignRetry;
+        const baseNext = handle.next.bind(handle);
+        handle.next = async () => {
+          const event = await baseNext();
+          if (event.status !== "waiting_for_input") {
+            await hold;
+          }
+          return event;
+        };
+      }
+      return handle;
     },
     async runStage(input) {
       const handle = this.openStage(input);
@@ -2553,7 +2567,13 @@ describe("localhost HTTP API", () => {
       const root = await mkdtemp(
         path.join(tmpdir(), "sf-http-abandon-ae5-par-retry-"),
       );
-      const agent = parallelFanoutStuckDesignAgent();
+      let releaseDesign!: () => void;
+      const designGate = new Promise<void>((resolve) => {
+        releaseDesign = resolve;
+      });
+      const agent = parallelFanoutStuckDesignAgent({
+        holdDesignRetry: designGate,
+      });
       const { server, base, store } = await withServer(root, agent);
 
       try {
@@ -2585,14 +2605,19 @@ describe("localhost HTTP API", () => {
         });
 
         const retryDesign = postRetry(base, runId, "design-doc");
-        await new Promise((r) => setTimeout(r, 50));
-        const retryImpl = postRetry(base, runId, "implementation-plan");
-        const [designResult, implResult] = await Promise.all([
-          retryDesign,
-          retryImpl,
-        ]);
-        expect(designResult.status).toBe(202);
+        await waitFor(async () => {
+          const detail = await store.readRun(runId);
+          return (
+            detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+            "running"
+          );
+        });
+        const implResult = await postRetry(base, runId, "implementation-plan");
         expect(implResult.status).toBe(202);
+
+        releaseDesign();
+        const designResult = await retryDesign;
+        expect(designResult.status).toBe(202);
 
         await waitUntilIdleHealth(base);
 

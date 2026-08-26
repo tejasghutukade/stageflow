@@ -20,6 +20,17 @@ docs/ideation/
 docs/manual-tests/
 docs/random-ideas/
 docs/explainers/
+
+# Public docs (planning subtrees above stay ignored)
+!docs/
+docs/*
+!docs/_config.yml
+!docs/*.md
+!docs/img/
+!docs/img/**
+!docs/providers/
+docs/providers/*
+!docs/providers/*.md
 CONTEXT.md
 .cursor/
 .pi/

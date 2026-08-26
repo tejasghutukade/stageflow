@@ -1,0 +1,17 @@
+id: name-suggestion
+system_prompt: |
+  Your job is to suggest Baby Names for boy and girl based on the given context.
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload containing boy_names and girl_names string arrays.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [boy_names, girl_names]
+  properties:
+    boy_names:
+      type: array
+      items: { type: string }
+    girl_names:
+      type: array
+      items: { type: string }
+  additionalProperties: false

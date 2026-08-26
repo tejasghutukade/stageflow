@@ -1,0 +1,18 @@
+id: plan-review
+gate_kinds:
+  - artifact_backed
+system_prompt: |
+  Your job is to produce a concise feature plan for the task and get operator
+  acceptance before completing this stage.
+
+  1. Write a concise feature plan via write_stage_artifact to a stage artifact
+     path (for example plan.md under stages/plan-review/attempts/1/artifacts/).
+  2. Call ask_operator with kind artifact_backed referencing that artifact path
+     so the operator can review the plan.
+  3. On reject or change text: revise the plan artifact and call ask_operator
+     again with artifact_backed in this same stage. Do not complete yet.
+  4. Call emit_stage_envelope with an advancing success status only after the
+     operator accepts/confirms the plan. Never emit before plan accept.
+  5. Optionally, before the plan gate, you may ask one clarifying free_text or
+     multi_question via ask_operator if needed. Never emit before plan accept.
+model: anthropic/claude-sonnet-4-5

@@ -1,7 +1,7 @@
 {
   "name": "stageflow",
   "version": "0.2.0",
-  "description": "Stageflow — personal CLI pipeline runtime for configurable SDLC stages on Pi",
+  "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "bin": {
     "sf": "./dist/cli.js",
@@ -16,7 +16,7 @@
     "type": "git",
     "url": "git+https://github.com/tejasghutukade/stageflow.git"
   },
-  "homepage": "https://github.com/tejasghutukade/stageflow#readme",
+  "homepage": "https://tejasghutukade.github.io/stageflow/",
   "bugs": {
     "url": "https://github.com/tejasghutukade/stageflow/issues"
   },
@@ -24,8 +24,9 @@
     "cli",
     "pipeline",
     "pi",
-    "sdlc",
-    "agent"
+    "agent",
+    "workflow",
+    "stages"
   ],
   "workspaces": [
     "ui"
@@ -42,6 +43,7 @@
     "ui:astryx": "npm run astryx -w ui",
     "copy:ui-dist": "tsx scripts/copy-ui-dist.ts",
     "verify:pack": "tsx scripts/verify-pack.ts",
+    "validate:examples": "npm run build && tsx scripts/validate-examples.ts",
     "prepublishOnly": "npm run build && npm run ui:build && npm run copy:ui-dist",
     "providers:list-login-capable": "tsx scripts/list-login-capable-providers.ts"
   },

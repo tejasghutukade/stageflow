@@ -648,6 +648,10 @@ describe("runtime stage retry", () => {
   it("allows concurrent retry on different failed stages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-concurrent-diff-"));
     const store = createRunStore({ rootDir: root });
+    let releaseDesign!: () => void;
+    const designGate = new Promise<void>((resolve) => {
+      releaseDesign = resolve;
+    });
     const agent = stageKeyedAgent({
       clarify: [{ type: "emit", envelope: okEnvelope("clarify") }],
       "design-doc": [
@@ -660,6 +664,26 @@ describe("runtime stage retry", () => {
       ],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join") }],
     });
+    let designOpens = 0;
+    const baseOpenStage = agent.openStage.bind(agent);
+    agent.openStage = (input) => {
+      if (input.stage.id === "design-doc") {
+        designOpens += 1;
+        const handle = baseOpenStage(input);
+        if (designOpens >= 2) {
+          const baseNext = handle.next.bind(handle);
+          handle.next = async () => {
+            const event = await baseNext();
+            if (event.status !== "waiting_for_input") {
+              await designGate;
+            }
+            return event;
+          };
+        }
+        return handle;
+      }
+      return baseOpenStage(input);
+    };
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
@@ -679,23 +703,27 @@ describe("runtime stage retry", () => {
     });
 
     const retryDesign = manager.retryStage(started.runId, "design-doc");
-    await new Promise((r) => setTimeout(r, 50));
-    const retryImpl = manager.retryStage(
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+        "running"
+      );
+    });
+    const implResult = await manager.retryStage(
       started.runId,
       "implementation-plan",
     );
-    const [designResult, implResult] = await Promise.all([
-      retryDesign,
-      retryImpl,
-    ]);
-
-    expect(designResult.ok).toBe(true);
     expect(implResult.ok).toBe(true);
-    if (designResult.ok) {
-      expect(designResult.attemptIndex).toBe(2);
-    }
     if (implResult.ok) {
       expect(implResult.attemptIndex).toBe(2);
+    }
+
+    releaseDesign();
+    const designResult = await retryDesign;
+    expect(designResult.ok).toBe(true);
+    if (designResult.ok) {
+      expect(designResult.attemptIndex).toBe(2);
     }
 
     await waitFor(async () => {
@@ -2147,6 +2175,10 @@ describe("runtime stage retry", () => {
   it("AE3c: join downstream waits until both parallel retries succeed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-ae3c-"));
     const store = createRunStore({ rootDir: root });
+    let releaseDesign!: () => void;
+    const designGate = new Promise<void>((resolve) => {
+      releaseDesign = resolve;
+    });
     const agent = stageKeyedAgent({
       clarify: [{ type: "emit", envelope: okEnvelope("clarify") }],
       "design-doc": [
@@ -2159,6 +2191,26 @@ describe("runtime stage retry", () => {
       ],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join") }],
     });
+    let designOpens = 0;
+    const baseOpenStage = agent.openStage.bind(agent);
+    agent.openStage = (input) => {
+      if (input.stage.id === "design-doc") {
+        designOpens += 1;
+        const handle = baseOpenStage(input);
+        if (designOpens >= 2) {
+          const baseNext = handle.next.bind(handle);
+          handle.next = async () => {
+            const event = await baseNext();
+            if (event.status !== "waiting_for_input") {
+              await designGate;
+            }
+            return event;
+          };
+        }
+        return handle;
+      }
+      return baseOpenStage(input);
+    };
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
     const started = await manager.startRun({
@@ -2178,9 +2230,20 @@ describe("runtime stage retry", () => {
     });
 
     const retryDesign = manager.retryStage(started.runId, "design-doc");
-    await new Promise((r) => setTimeout(r, 50));
-    const retryImpl = manager.retryStage(started.runId, "implementation-plan");
-    await Promise.all([retryDesign, retryImpl]);
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+        "running"
+      );
+    });
+    const implResult = await manager.retryStage(
+      started.runId,
+      "implementation-plan",
+    );
+    expect(implResult.ok).toBe(true);
+    releaseDesign();
+    await retryDesign;
 
     await waitFor(async () => {
       const meta = await store.readRunMeta(started.runId);
@@ -2267,17 +2330,22 @@ describe("runtime stage retry", () => {
       return design?.status === "failed" && impl?.status === "failed";
     });
 
-    const retryDesign = manager.retryStage(started.runId, "design-doc");
-    await new Promise((r) => setTimeout(r, 50));
     const retryImpl = manager.retryStage(started.runId, "implementation-plan");
-
     await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "running";
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "implementation-plan")
+          ?.status === "running"
+      );
     });
+    const designResult = await manager.retryStage(
+      started.runId,
+      "design-doc",
+    );
+    expect(designResult.ok).toBe(true);
 
     release();
-    await Promise.all([retryDesign, retryImpl]);
+    await retryImpl;
 
     await waitFor(async () => {
       const meta = await store.readRunMeta(started.runId);
