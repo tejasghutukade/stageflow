@@ -247,9 +247,12 @@ This repo dogfoods [`examples/archify-on-pr/`](../examples/archify-on-pr/) in
 On pull requests, Stageflow agents **detect** diagram-relevant diffs and choose
 one or more Archify types (`architecture`, `workflow`, `sequence`, `dataflow`,
 `lifecycle`). The **author-diagrams** stage writes `{type}.spec.json` per type.
-GitHub Actions then runs Archify `deliver` for each spec, uploads the `diagrams/`
-artifact, and updates a sticky PR comment listing every type with a link to the
-artifact bundle. Agents do not install Archify or post comments.
+The workflow uses [`.github/actions/sf-run`](../.github/actions/sf-run) with
+`export-run: true`, then runs Archify `deliver` for each spec via
+`scripts/deliver-diagrams.sh`, uploads per-type HTML (unzipped for in-browser
+viewing) plus a `diagrams/` bundle, and updates a sticky PR comment. Skill
+provisioning uses `sf skills install --from-zip`; agents do not install Archify
+or post comments.
 
 When detect emits `fork_choice: []` (docs-only changes), GHA skips deliver,
 upload, and comment. Fork PRs cannot receive bot comments with the default token;

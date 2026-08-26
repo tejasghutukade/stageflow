@@ -44,8 +44,14 @@ jobs:
         env:
           ARCHIFY_SOURCE_DIR: ${{ secrets.ARCHIFY_SOURCE_DIR }}
           ARCHIFY_ZIP_URL: ${{ vars.ARCHIFY_ZIP_URL }}
-          ARCHIFY_VERSION: "2.15.0"
-        run: ./scripts/install-archify-skill.sh --version "${ARCHIFY_VERSION}"
+        run: |
+          set -e
+          if [ -n "${ARCHIFY_SOURCE_DIR}" ]; then
+            node dist/cli.js skills install --from-path "${ARCHIFY_SOURCE_DIR}" --skill-name archify
+          else
+            ZIP_URL="${ARCHIFY_ZIP_URL:-https://github.com/tt-a1i/archify/releases/download/v2.15.0/archify.zip}"
+            node dist/cli.js skills install --from-zip "${ZIP_URL}" --skill-name archify
+          fi
 
       - name: Require OPENAI_API_KEY
         env:
@@ -85,6 +91,7 @@ jobs:
             --ci-job-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           detect-stage: detect-changes
           stage: author-diagrams
+          export-run: "true"
 
       - id: deliver
         name: Deliver diagram HTML
@@ -93,7 +100,7 @@ jobs:
           GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_WORKSPACE: ${{ github.workspace }}
-        run: ./scripts/deliver-diagrams.sh envelope.json diagrams
+        run: ./scripts/deliver-diagrams.sh "${{ steps.envelope.outputs.envelope-path }}" diagrams
 
       - id: upload-architecture
         name: Upload architecture.html
@@ -192,7 +199,7 @@ jobs:
                 VIEW="—"
               fi
               echo "| ${TYPE} | ${SUMMARY} | ${VIEW} |"
-            done < <(jq -c '.diagrams[]' envelope.json)
+            done < <(jq -c '.diagrams[]' "${{ steps.envelope.outputs.envelope-path }}")
             echo ""
             echo "| | | |"
             echo "|---|---|---|"
@@ -220,6 +227,7 @@ jobs:
           path: |
             sf-run.json
             envelope.json
+            run-export.json
             deliver-receipts.json
             diagrams/
             comment.md
@@ -238,7 +246,7 @@ jobs:
             echo "## Archify PR diagrams"
             echo ""
             if [ "${{ steps.envelope.outcome }}" != "success" ]; then
-              echo "**Status:** pipeline did not complete envelope extraction."
+              echo "**Status:** Stageflow pipeline did not complete."
             elif [ "${{ steps.envelope.outputs.skipped }}" = "true" ]; then
               echo "**Status:** skipped — no diagram-relevant changes detected."
             elif [ -f deliver-receipts.json ]; then

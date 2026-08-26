@@ -36,22 +36,21 @@ spec artifact per type.
 
 ## Install Archify skill
 
-From the repository git root:
+From the repository git root (after `npm run build`):
 
 ```bash
-./scripts/install-archify-skill.sh --version 2.15.0
+node dist/cli.js skills install \
+  --from-zip "https://github.com/tt-a1i/archify/releases/download/v2.15.0/archify.zip" \
+  --skill-name archify
 ```
 
-With no source flags, the script downloads Archify v2.15.0 from the public
-[GitHub release](https://github.com/tt-a1i/archify/releases/tag/v2.15.0). For
-local development you can point at an existing tree:
+For local development, install from an existing skill tree:
 
 ```bash
-./scripts/install-archify-skill.sh --source-dir ~/.agents/skills/archify
+node dist/cli.js skills install --from-path ~/.agents/skills/archify --skill-name archify
 ```
 
-Override with `ARCHIFY_SOURCE_DIR`, `--zip-url`, or `ARCHIFY_ZIP_URL` when needed.
-The script copies the runtime tree to `.pi/skills/archify/` and runs `archify doctor`.
+Install runs `archify doctor` after copying to `.pi/skills/archify/`.
 
 ## Commands
 
@@ -112,8 +111,9 @@ done < <(jq -c '.diagrams[]' envelope.json)
 | `GITHUB_BASE_REF` | detect-changes | PR base branch (default: `main`) |
 | `GITHUB_HEAD_REF` | detect-changes | PR head branch |
 | `GITHUB_SHA` | detect-changes | Head commit SHA |
-| `ARCHIFY_SOURCE_DIR` | install script | Local Archify skill path (optional override) |
-| `ARCHIFY_ZIP_URL` | install script | Release zip URL (optional override; defaults to Archify v2.15.0 GitHub release) |
+| `GITHUB_REPOSITORY` | author-diagrams, deliver | `owner/repo` for `meta.repository` on architecture specs |
+| `ARCHIFY_SOURCE_DIR` | GHA secret | Local Archify skill path (`sf skills install --from-path`) |
+| `ARCHIFY_ZIP_URL` | GHA variable | Release zip URL (`sf skills install --from-zip`; defaults to Archify v2.15.0) |
 
 ## Fork PR limitation
 
@@ -125,6 +125,11 @@ is deferred.
 ## GitHub Actions
 
 See [`.github/workflows/archify-pr-diagrams.yml`](../../.github/workflows/archify-pr-diagrams.yml).
-Agents author JSON only; GHA runs `archify deliver` for each type, uploads each
-`{type}.html` unzipped (`upload-artifact@v7`, `archive: false`) for in-browser
-viewing, also uploads a zipped `diagrams/` bundle, and updates the sticky comment.
+
+The workflow uses the [`.github/actions/sf-run`](../../.github/actions/sf-run)
+composite to run the pipeline and extract a handoff envelope via
+`sf envelope get --format handoff`. Agents author JSON only; GHA runs
+`deliver-diagrams.sh` (Archify `deliver` per type), uploads each `{type}.html`
+unzipped (`upload-artifact@v7`, `archive: false`) for in-browser viewing, also
+uploads a zipped `diagrams/` bundle, and updates the sticky comment. Debug
+artifacts include `sf-run.json`, `envelope.json`, and `run-export.json`.
