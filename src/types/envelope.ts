@@ -5,6 +5,7 @@ export type StageEnvelope = {
   summary: string;
   artifacts: string[];
   payload?: Record<string, unknown>;
+  fork_choice?: string[];
   stage_id?: string;
   notes?: string;
 };
