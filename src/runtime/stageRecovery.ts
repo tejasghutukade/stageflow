@@ -49,9 +49,10 @@ export async function syncRunStatusFromStages(
   store: RunStore,
   runId: string,
 ): Promise<void> {
+  const meta = await store.readRunMeta(runId);
+  if (meta.status === "succeeded") return;
   const run = await store.readRun(runId);
   const derived = deriveStatusFromStages(run.stages);
-  const meta = await store.readRunMeta(runId);
   if ((meta.status ?? "created") !== derived) {
     await store.updateRunStatus(runId, derived);
   }
