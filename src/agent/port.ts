@@ -1,4 +1,5 @@
 import type { StageEnvelope } from "../types/envelope.js";
+import type { ForkEmitContext } from "../types/forkChoice.js";
 import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
@@ -17,6 +18,7 @@ export type StageRunInput = {
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
   skillFilePath?: string;
+  forkEmitContext?: ForkEmitContext;
 };
 
 export type StageRunResult =

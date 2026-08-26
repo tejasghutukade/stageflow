@@ -914,6 +914,7 @@ async function prepareStageSessionWiring(
   const emitDef = createEmitStageEnvelopeTool(
     capture,
     input.stage.payload_schema,
+    input.forkEmitContext,
   );
   const emitTool = defineTool(emitDef);
 

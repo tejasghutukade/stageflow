@@ -19,6 +19,8 @@ import {
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
 import type { StageEnvelope } from "../types/envelope.js";
+import type { ForkEmitContext } from "../types/forkChoice.js";
+import { EnvelopeError } from "../types/envelope.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
@@ -38,9 +40,38 @@ function toolResult(
   };
 }
 
+export function assertForkChoice(params: unknown, forkEmitContext: ForkEmitContext): void {
+  const record = params as Record<string, unknown>;
+  if (record.status === "failure") return;
+
+  const { immediateSuccessorIds, forkShape } = forkEmitContext;
+
+  if (record.fork_choice === undefined) {
+    throw new EnvelopeError("fork stage must include fork_choice on success");
+  }
+
+  const choices = record.fork_choice as string[];
+  for (const id of choices) {
+    if (!immediateSuccessorIds.includes(id)) {
+      throw new EnvelopeError(`fork_choice contains non-immediate successor: ${id}`);
+    }
+  }
+
+  if (choices.length === 0) {
+    if (forkShape === null || !forkShape.allowNone) {
+      throw new EnvelopeError("fork_choice must not be empty");
+    }
+  }
+
+  if (forkShape !== null && forkShape.cardinality === "one" && choices.length !== 1) {
+    throw new EnvelopeError("fork shape requires exactly one choice");
+  }
+}
+
 export function createEmitStageEnvelopeTool(
   capture: EmitCapture,
   payloadSchema?: unknown,
+  forkEmitContext?: ForkEmitContext,
 ) {
   const compiledPayload =
     payloadSchema !== undefined
@@ -60,6 +91,10 @@ export function createEmitStageEnvelopeTool(
         compiledPayload !== undefined
           ? compiledPayload
           : Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      fork_choice:
+        forkEmitContext !== undefined
+          ? Type.Array(Type.String())
+          : Type.Optional(Type.Array(Type.String())),
       stage_id: Type.Optional(Type.String()),
       notes: Type.Optional(Type.String()),
     }),
@@ -72,6 +107,9 @@ export function createEmitStageEnvelopeTool(
         );
       }
       try {
+        if (forkEmitContext !== undefined) {
+          assertForkChoice(params, forkEmitContext);
+        }
         const envelope = assertRequiredEnvelope(params);
         assertEnvelopePayload(envelope, payloadSchema);
         capture.envelope = envelope;
