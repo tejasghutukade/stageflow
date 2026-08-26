@@ -104,7 +104,7 @@ function AppShell() {
     content = (
       <NewRunPage
         onStarted={(id) => go(runStreamPath(id))}
-        initialPipelineId={route.pipelineId}
+        initialPipelinePath={route.pipelineId}
         initialTaskPath={route.taskPath}
       />
     );

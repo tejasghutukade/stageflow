@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useRunCatalog } from "../catalog/useRunCatalog";
+import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import {
   bucketViews,
   runsFilterCounts,
@@ -82,8 +83,8 @@ export function RunsPage({
             onClick={e => { e.preventDefault(); onOpen(run.run_id); }}
           >
             <span>
-              <span className="rrow__task">{run.task_id ?? run.pipeline_id}</span>
-              <span className="rrow__pipe" style={{ display: "block" }}>{run.pipeline_id} · {run.run_id.slice(0, 8)}</span>
+              <span className="rrow__task">{runTaskLabel(run)}</span>
+              <span className="rrow__pipe" style={{ display: "block" }}>{runLocatorSubtitle(run)} · {run.run_id.slice(0, 8)}</span>
             </span>
             <span>
               <MiniTrack stages={run.stages ?? []} label={miniTrackLabel(run)} />

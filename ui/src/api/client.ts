@@ -19,19 +19,12 @@ import type {
   SkillDiagnostic,
   SkillListing,
   StageAnswer,
-  StageListing,
   StartRunResult,
   TaskListing,
-  ValidStageListing,
+  CreatedStageListing,
   PackageListing,
   ExtensionFileListing,
 } from "./types";
-
-export function isValidStageListing(
-  stage: StageListing,
-): stage is ValidStageListing {
-  return !("error" in stage);
-}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -62,10 +55,6 @@ export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
 
 export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {
   return api("/api/pipelines");
-}
-
-export function fetchStages(): Promise<{ stages: StageListing[] }> {
-  return api("/api/stages");
 }
 
 export function fetchModels(): Promise<{ models: string[] }> {
@@ -110,7 +99,7 @@ export async function createStageWithDetails(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
-    const body = (await res.json().catch(() => ({}))) as ValidStageListing & {
+    const body = (await res.json().catch(() => ({}))) as CreatedStageListing & {
       error?: string;
     };
     if (res.ok && typeof body.id === "string") {

@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { StageGateKind } from "../types/stage.js";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
+import type { PipelineStageSource } from "../types/pipeline.js";
+import { resolveCatalogContext, type CatalogContext } from "./resolveCatalogContext.js";
+import { listModelsFromManifest } from "./listModelsFromManifest.js";
 import { loadPipeline } from "./loadPipeline.js";
 import { loadTask } from "./loadTask.js";
 import { scanCatalogPaths } from "./scanCatalogPaths.js";
@@ -14,6 +17,8 @@ export type TaskListing = {
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];
+  uses_path?: string;
+  inline?: boolean;
 };
 
 export type PipelineListing = {
@@ -44,14 +49,25 @@ export type CatalogListOptions = {
   manifest: LoadedManifest;
 };
 
-const BAKED_MODEL_IDS = [
-  "anthropic/claude-sonnet-4-5",
-  "cursor/auto",
-  "cursor/composer-2-5",
-] as const;
-
 function repoRelPath(projectRoot: string, absPath: string): string {
   return path.relative(projectRoot, absPath).replace(/\\/g, "/");
+}
+
+function mapStageListing(
+  stage: { id: string; gate_kinds?: StageGateKind[] },
+  source: PipelineStageSource | undefined,
+  projectRoot: string,
+): PipelineStageListing {
+  const listing: PipelineStageListing = {
+    id: stage.id,
+    ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
+  };
+  if (source?.kind === "inline") {
+    listing.inline = true;
+  } else if (source?.kind === "file") {
+    listing.uses_path = repoRelPath(projectRoot, source.path);
+  }
+  return listing;
 }
 
 export async function listTasks(options: CatalogListOptions): Promise<TaskListing[]> {
@@ -91,10 +107,9 @@ export async function listPipelines(options: CatalogListOptions): Promise<Pipeli
       listings.push({
         path: repoRelPath(projectRoot, filePath),
         id: loaded.pipeline.id,
-        stages: loaded.stages.map((stage) => ({
-          id: stage.id,
-          ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
-        })),
+        stages: loaded.stages.map((stage) =>
+          mapStageListing(stage, loaded.stageSources?.[stage.id], projectRoot),
+        ),
       });
     } catch {
       // skip invalid
@@ -113,29 +128,10 @@ export async function listStages(_options?: unknown): Promise<StageListing[]> {
   return [];
 }
 
-export async function listModels(cwd: string): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
-  const { readYamlObject } = await import("./readYamlObject.js");
-  const dir = path.join(cwd, "stages");
-  const models = new Set<string>(BAKED_MODEL_IDS);
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [...models].sort((a, b) => a.localeCompare(b));
-  }
-
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    try {
-      const raw = await readYamlObject(path.join(dir, entry.name));
-      if (typeof raw?.model === "string" && raw.model.trim()) {
-        models.add(raw.model);
-      }
-    } catch {
-      // ignore unreadable or invalid stage YAML
-    }
-  }
-
-  return [...models].sort((a, b) => a.localeCompare(b));
+export async function listModels(cwdOrContext: string | CatalogContext): Promise<string[]> {
+  const ctx =
+    typeof cwdOrContext === "string"
+      ? await resolveCatalogContext(cwdOrContext)
+      : cwdOrContext;
+  return listModelsFromManifest(ctx);
 }

@@ -1,5 +1,6 @@
-import type { CapacityHealth, RunSummary } from "../api";
+import type { CapacityHealth, PipelineListing, RunSummary } from "../api";
 import type { CatalogSnapshot } from "./source";
+import { matchPipelineRun } from "./displayCatalogPath.js";
 
 export type CatalogBuckets = {
   waiting: RunSummary[];
@@ -89,10 +90,14 @@ export function runsForTaskView(
 
 export function runsForPipelineView(
   snapshot: CatalogSnapshot,
-  pipelineId: string,
+  pipeline: PipelineListing | string,
 ): RunSummary[] {
   return sortRunsNewest(
-    snapshot.runs.filter((run) => run.pipeline_id === pipelineId),
+    snapshot.runs.filter((run) =>
+      typeof pipeline === "string"
+        ? run.pipeline_id === pipeline
+        : matchPipelineRun(run, pipeline),
+    ),
   );
 }
 

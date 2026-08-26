@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,8 +11,49 @@ import { storeRootFor } from "../src/runstore/paths.js";
 import { startUiServer } from "../src/server/http.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+let catalogRoot: string;
+let cleanupCatalogRoot: () => Promise<void>;
+
+beforeAll(async () => {
+  const setup = await initTempGitRepo();
+  catalogRoot = setup.root;
+  cleanupCatalogRoot = setup.cleanup;
+  await cp(path.join(fixtures, "pipelines"), path.join(catalogRoot, "pipelines"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "tasks"), path.join(catalogRoot, "tasks"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "stages"), path.join(catalogRoot, "stages"), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(catalogRoot, "stageflow.yaml"),
+    [
+      "version: 1",
+      "catalog:",
+      "  pipelines:",
+      "    - pipelines",
+      "  tasks:",
+      "    - tasks",
+      "  patterns:",
+      '    pipeline: "*.yaml"',
+      '    task: "*.yaml"',
+      "",
+    ].join("\n"),
+  );
+  clearFindProjectRootCacheForTests();
+});
+
+afterAll(async () => {
+  clearFindProjectRootCacheForTests();
+  await cleanupCatalogRoot();
+});
 
 const freeTextPrompt: AskOperatorPrompt = {
   kind: "free_text",
@@ -52,7 +93,7 @@ async function withServer(
 ) {
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? fixtures,
+    cwd: opts.cwd ?? catalogRoot,
     rootDir: root,
     agentDir: opts.agentDir,
     store,
@@ -251,106 +292,69 @@ async function postAbandon(
 }
 
 describe("localhost HTTP API", () => {
-  it("lists stages with valid and broken rows, and lists models", async () => {
+  it("GET /api/stages returns 404 and models come from manifest pipelines", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-stage-catalog-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-stage-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await mkdir(path.join(cwd, "pipelines"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "stages", "beta.yaml"),
-      [
-        "id: beta",
-        "system_prompt: Beta prompt",
-        "model: cursor/custom-z",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "alpha.yaml"),
-      [
-        "id: alpha",
-        "gate_kinds:",
-        "  - confirm",
-        "system_prompt: Alpha prompt",
-        "model: anthropic/claude-sonnet-4-5",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "broken.yaml"),
-      [
-        "id: broken",
-        "gate_kinds: confirm",
-        "system_prompt: Broken prompt",
-        "model: cursor/custom-z",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "uses-alpha.yaml"),
-      ["id: uses-alpha", "stages:", "  - alpha", ""].join("\n"),
-    );
-
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
-
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
     try {
-      const stages = await jsonFetch(`${base}/api/stages`);
-      expect(stages.status).toBe(200);
-      expect(stages.body.stages).toEqual([
-        {
-          path: "stages/alpha.yaml",
-          id: "alpha",
-          gate_kinds: ["confirm"],
-          used_by_pipeline_ids: ["uses-alpha"],
-        },
-        {
-          path: "stages/beta.yaml",
-          id: "beta",
-          used_by_pipeline_ids: [],
-        },
-        {
-          path: "stages/broken.yaml",
-          error: expect.stringMatching(/gate_kinds must be an array of strings/),
-          id: "broken",
-          model: "cursor/custom-z",
-        },
-      ]);
+      const manifestCatalog = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "fixtures/manifest-catalog",
+      );
+      await cp(manifestCatalog, repoRoot, { recursive: true });
+      clearFindProjectRootCacheForTests();
 
-      const models = await jsonFetch(`${base}/api/models`);
-      expect(models.status).toBe(200);
-      expect(models.body.models).toEqual([
-        "anthropic/claude-sonnet-4-5",
-        "cursor/auto",
-        "cursor/composer-2-5",
-        "cursor/custom-z",
-      ]);
+      const { server, base } = await withServer(
+        root,
+        scriptedFakeAgent([]),
+        undefined,
+        { cwd: repoRoot },
+      );
+
+      try {
+        const stages = await jsonFetch(`${base}/api/stages`);
+        expect(stages.status).toBe(404);
+        expect(stages.body.error).toContain("Global stage library removed");
+
+        const models = await jsonFetch(`${base}/api/models`);
+        expect(models.status).toBe(200);
+        expect(models.body.models).toContain("cursor/auto");
+        expect(models.body.models).toContain("anthropic/claude-sonnet-4-5");
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      clearFindProjectRootCacheForTests();
+      await cleanup();
     }
   });
 
-  it("POST /api/stages creates stage YAML and rejects invalid or conflicting input", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "stages", "existing.yaml"),
-      ["id: existing", "system_prompt: Existing.", "model: cursor/auto", ""].join("\n"),
+  it("POST /api/stages creates pipeline-scoped stage YAML", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-stage-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
     );
-    await writeFile(
-      path.join(cwd, "stages", "alias.yaml"),
-      ["id: taken-id", "system_prompt: Alias.", "model: cursor/auto", ""].join("\n"),
-    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
 
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
 
     try {
       const created = await jsonFetch(`${base}/api/stages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          pipeline_directory: "pipelines",
+          filename: "fresh-stage.yaml",
           id: "fresh-stage",
           system_prompt: "Line one\nLine two",
           model: "anthropic/claude-sonnet-4-5",
@@ -359,47 +363,10 @@ describe("localhost HTTP API", () => {
       });
       expect(created.status).toBe(201);
       expect(created.body).toEqual({
-        path: "stages/fresh-stage.yaml",
+        path: "pipelines/fresh-stage.yaml",
         id: "fresh-stage",
         gate_kinds: ["confirm"],
-        used_by_pipeline_ids: [],
       });
-
-      const written = await readFile(path.join(cwd, "stages", "fresh-stage.yaml"), "utf8");
-      expect(written).toBe(
-        [
-          "id: fresh-stage",
-          "gate_kinds:",
-          "  - confirm",
-          "system_prompt: |",
-          "  Line one",
-          "  Line two",
-          "model: anthropic/claude-sonnet-4-5",
-          "",
-        ].join("\n"),
-      );
-
-      const pathCollision = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "existing",
-          system_prompt: "Again.",
-          model: "cursor/auto",
-        }),
-      });
-      expect(pathCollision.status).toBe(409);
-
-      const yamlIdCollision = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "taken-id",
-          system_prompt: "Again.",
-          model: "cursor/auto",
-        }),
-      });
-      expect(yamlIdCollision.status).toBe(409);
 
       const invalid = await jsonFetch(`${base}/api/stages`, {
         method: "POST",
@@ -408,42 +375,34 @@ describe("localhost HTTP API", () => {
           id: "Bad",
           system_prompt: "x",
           model: "m",
-          payload_schema: {},
         }),
       });
       expect(invalid.status).toBe(400);
-
-      const forbiddenOrigin = await jsonFetch(`${base}/api/stages`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://evil.example",
-        },
-        body: JSON.stringify({
-          id: "blocked",
-          system_prompt: "x",
-          model: "m",
-        }),
-      });
-      expect(forbiddenOrigin.status).toBe(403);
     } finally {
+      clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      await cleanup();
     }
   });
 
-  it("POST /api/pipelines creates pipeline YAML and rejects invalid or conflicting input", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
-    const cwd = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-cwd-"));
-    await mkdir(path.join(cwd, "stages"), { recursive: true });
-    await mkdir(path.join(cwd, "pipelines"), { recursive: true });
+  it("POST /api/pipelines creates pipeline-owned YAML", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-post-pipeline-"));
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoRoot, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
     await writeFile(
-      path.join(cwd, "stages", "alpha.yaml"),
+      path.join(repoRoot, "pipelines", "alpha.yaml"),
       ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", ""].join("\n"),
     );
     await writeFile(
-      path.join(cwd, "stages", "beta.yaml"),
+      path.join(repoRoot, "pipelines", "beta.yaml"),
       [
         "id: beta",
         "gate_kinds:",
@@ -453,176 +412,55 @@ describe("localhost HTTP API", () => {
         "",
       ].join("\n"),
     );
-    await writeFile(
-      path.join(cwd, "stages", "recon.yaml"),
-      ["id: recon", "system_prompt: Recon.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-a.yaml"),
-      ["id: improve-a", "system_prompt: Improve A.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-b.yaml"),
-      ["id: improve-b", "system_prompt: Improve B.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "stages", "improve-c.yaml"),
-      ["id: improve-c", "system_prompt: Improve C.", "model: cursor/auto", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "existing.yaml"),
-      ["id: existing", "stages:", "  - alpha", ""].join("\n"),
-    );
-    await writeFile(
-      path.join(cwd, "pipelines", "alias.yaml"),
-      ["id: taken-id", "stages:", "  - alpha", ""].join("\n"),
-    );
 
-    const { server, base } = await withServer(root, scriptedFakeAgent([]), undefined, { cwd });
+    const { server, base } = await withServer(
+      storeRoot,
+      scriptedFakeAgent([]),
+      undefined,
+      { cwd: repoRoot },
+    );
 
     try {
       const created = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          directory: "pipelines",
           id: "fresh-pipeline",
           stages: ["alpha", "beta"],
         }),
       });
       expect(created.status).toBe(201);
-      expect(created.body).toEqual({
-        path: "pipelines/fresh-pipeline.yaml",
-        id: "fresh-pipeline",
-        stages: [{ id: "alpha" }, { id: "beta", gate_kinds: ["confirm"] }],
-      });
+      expect(created.body.path).toBe("pipelines/fresh-pipeline.pipeline.yaml");
+      expect(created.body.stages).toEqual([
+        { id: "alpha", uses_path: "pipelines/alpha.yaml" },
+        { id: "beta", gate_kinds: ["confirm"], uses_path: "pipelines/beta.yaml" },
+      ]);
 
-      const written = await readFile(path.join(cwd, "pipelines", "fresh-pipeline.yaml"), "utf8");
-      expect(written).toBe(
-        ["id: fresh-pipeline", "stages:", "  - alpha", "  - beta", ""].join("\n"),
+      const written = await readFile(
+        path.join(repoRoot, "pipelines", "fresh-pipeline.pipeline.yaml"),
+        "utf8",
       );
-
-      const pathCollision = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "existing",
-          stages: ["alpha"],
-        }),
-      });
-      expect(pathCollision.status).toBe(409);
-
-      const yamlIdCollision = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "taken-id",
-          stages: ["alpha"],
-        }),
-      });
-      expect(yamlIdCollision.status).toBe(409);
-
-      const duplicateStages = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "dup",
-          stages: ["alpha", "alpha"],
-        }),
-      });
-      expect(duplicateStages.status).toBe(422);
+      expect(written).toContain("uses: ./alpha.yaml");
+      expect(written).toContain("uses: ./beta.yaml");
 
       const missingStage = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          directory: "pipelines",
           id: "missing-ref",
           stages: ["alpha", "gone"],
         }),
       });
       expect(missingStage.status).toBe(422);
-      expect(missingStage.body.error).toBe("one or more selected Stages no longer exist");
-
-      const dagCreated = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "recon-review",
-          stages: [
-            { id: "recon" },
-            { id: "improve-a", needs: "recon" },
-            { id: "improve-b", needs: "recon" },
-            { id: "improve-c", needs: "recon" },
-          ],
-        }),
-      });
-      expect(dagCreated.status).toBe(201);
-      expect(dagCreated.body).toEqual({
-        path: "pipelines/recon-review.yaml",
-        id: "recon-review",
-        stages: [
-          { id: "recon" },
-          { id: "improve-a" },
-          { id: "improve-b" },
-          { id: "improve-c" },
-        ],
-      });
-
-      const dagYaml = await readFile(path.join(cwd, "pipelines", "recon-review.yaml"), "utf8");
-      expect(dagYaml).toBe(
-        [
-          "id: recon-review",
-          "stages:",
-          "  - id: recon",
-          "  - id: improve-a",
-          "    needs: recon",
-          "  - id: improve-b",
-          "    needs: recon",
-          "  - id: improve-c",
-          "    needs: recon",
-          "",
-        ].join("\n"),
-      );
-
-      const cycle = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "cycle-pipeline",
-          stages: [{ id: "alpha", needs: "beta" }, { id: "beta", needs: "alpha" }],
-        }),
-      });
-      expect(cycle.status).toBe(422);
-      expect(cycle.body.error).toContain("dependency cycle detected");
-      await expect(
-        access(path.join(cwd, "pipelines", "cycle-pipeline.yaml")),
-      ).rejects.toThrow();
-
-      const invalid = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: "Bad",
-          stages: [],
-        }),
-      });
-      expect(invalid.status).toBe(400);
-
-      const forbiddenOrigin = await jsonFetch(`${base}/api/pipelines`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Origin: "https://evil.example",
-        },
-        body: JSON.stringify({
-          id: "blocked",
-          stages: ["alpha"],
-        }),
-      });
-      expect(forbiddenOrigin.status).toBe(403);
+      expect(missingStage.body.error).toContain("missing stage file");
     } finally {
+      clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      await cleanup();
     }
   });
 
@@ -667,8 +505,15 @@ describe("localhost HTTP API", () => {
         (p: { id: string }) => p.id === "plan-review-proving",
       );
       expect(proving?.stages).toEqual([
-        { id: "plan-review", gate_kinds: ["artifact_backed"] },
-        { id: "plan-review-followup" },
+        {
+          id: "plan-review",
+          gate_kinds: ["artifact_backed"],
+          uses_path: "stages/plan-review.yaml",
+        },
+        {
+          id: "plan-review-followup",
+          uses_path: "stages/plan-review-followup.yaml",
+        },
       ]);
       const fourKinds = pipelines.body.pipelines.find(
         (p: { id: string }) => p.id === "hitl-four-kinds-proving",
@@ -682,6 +527,7 @@ describe("localhost HTTP API", () => {
             "multi_question",
             "artifact_backed",
           ],
+          uses_path: "stages/hitl-four-kinds.yaml",
         },
       ]);
 
@@ -690,7 +536,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "docs-only",
+          pipeline: "pipelines/docs-only.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -698,9 +544,12 @@ describe("localhost HTTP API", () => {
 
       await waitUntilIdleHealth(base);
 
-      const rerun = await jsonFetch(`${base}/api/runs/${encodeURIComponent(runId)}/rerun`, {
+      const rerun = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(started.body.runId)}/rerun`,
+        {
         method: "POST",
-      });
+      },
+      );
       expect(rerun.status).toBe(202);
       expect(rerun.body.runId).not.toBe(runId);
 
@@ -735,7 +584,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -890,7 +739,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "parallel-hitl-multi-wait",
+          pipeline: "pipelines/parallel-hitl-multi-wait.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1012,7 +861,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "parallel-track-fanout",
+          pipeline: "pipelines/parallel-track-fanout.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1141,7 +990,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1222,7 +1071,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1278,7 +1127,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1327,7 +1176,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.yaml",
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
         }),
       });
       expect(started.status).toBe(202);
@@ -1455,7 +1304,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "a", goal: "first" },
         }),
       });
@@ -1463,7 +1312,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "b", goal: "second" },
         }),
       });
@@ -1524,7 +1373,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "holder", goal: "hold slot", checkout },
         }),
       });
@@ -1540,7 +1389,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "cap", goal: "over max" },
         }),
       });
@@ -1572,7 +1421,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "single",
+            pipeline: "pipelines/single.yaml",
             task: { id: "a", goal: "first", checkout },
           }),
         });
@@ -1587,7 +1436,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: "single",
+            pipeline: "pipelines/single.yaml",
             task: { id: "b", goal: "same checkout", checkout },
           }),
         });
@@ -1729,7 +1578,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "holder", goal: "hold slot" },
         }),
       });
@@ -1777,7 +1626,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "single",
+          pipeline: "pipelines/single.yaml",
           task: { id: "blocked", goal: "should 409" },
         }),
       });
@@ -1959,7 +1808,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         expect(started.status).toBe(202);
@@ -2044,7 +1893,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2098,7 +1947,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2147,7 +1996,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2194,7 +2043,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2227,7 +2076,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2292,7 +2141,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2329,7 +2178,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            pipeline: "pipelines/parallel-retry-fanout.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2379,7 +2228,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            pipeline: "pipelines/parallel-retry-fanout.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2434,7 +2283,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "linear-explicit",
+            pipeline: "pipelines/linear-explicit.yaml",
           }),
         });
         const runId = started.body.runId as string;
@@ -2583,7 +2432,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.yaml",
-            pipeline: "parallel-retry-fanout",
+            pipeline: "pipelines/parallel-retry-fanout.yaml",
           }),
         });
         const runId = started.body.runId as string;

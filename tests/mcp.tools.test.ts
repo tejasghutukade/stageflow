@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { cp, mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,8 +10,49 @@ import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
 import { projectRunForMcp } from "../src/mcp/projectRun.js";
 import { readRunArtifact } from "../src/mcp/readArtifact.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+let catalogRoot: string;
+let cleanupCatalogRoot: () => Promise<void>;
+
+beforeAll(async () => {
+  const setup = await initTempGitRepo();
+  catalogRoot = setup.root;
+  cleanupCatalogRoot = setup.cleanup;
+  await cp(path.join(fixtures, "pipelines"), path.join(catalogRoot, "pipelines"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "tasks"), path.join(catalogRoot, "tasks"), {
+    recursive: true,
+  });
+  await cp(path.join(fixtures, "stages"), path.join(catalogRoot, "stages"), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(catalogRoot, "stageflow.yaml"),
+    [
+      "version: 1",
+      "catalog:",
+      "  pipelines:",
+      "    - pipelines",
+      "  tasks:",
+      "    - tasks",
+      "  patterns:",
+      '    pipeline: "*.yaml"',
+      '    task: "*.yaml"',
+      "",
+    ].join("\n"),
+  );
+  clearFindProjectRootCacheForTests();
+});
+
+afterAll(async () => {
+  clearFindProjectRootCacheForTests();
+  await cleanupCatalogRoot();
+});
 
 async function jsonFetch(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
@@ -96,6 +137,32 @@ describe("MCP tools and HTTP inline task", () => {
   it("serves MCP tools and starts an inline task run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-"));
     const store = createRunStore({ rootDir: root });
+    const { root: repoRoot, cleanup } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(repoRoot, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(repoRoot, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(repoRoot, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
     const agent = scriptedFakeAgent(
       Array.from({ length: 12 }, (_, i) => ({
         type: "emit" as const,
@@ -110,7 +177,7 @@ describe("MCP tools and HTTP inline task", () => {
 
     const { server, mcpUrl } = await startUiServer({
       agent,
-      cwd: fixtures,
+      cwd: repoRoot,
       store,
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
@@ -128,8 +195,14 @@ describe("MCP tools and HTTP inline task", () => {
       expect(pipelines.status).toBe(200);
       expect(pipelines.isError).toBe(false);
       expect(
-        pipelines.payload.pipelines.some((p: { id: string }) => p.id === "docs-only"),
+        pipelines.payload.pipelines.some(
+          (p: { path: string }) => p.path === "pipelines/docs-only.yaml",
+        ),
       ).toBe(true);
+
+      const tasks = await mcpCall(base, "list_tasks");
+      expect(tasks.isError).toBe(false);
+      expect(tasks.payload.tasks).toEqual(expect.any(Array));
 
       const health = await mcpCall(base, "get_health");
       expect(health.payload).toEqual({
@@ -145,7 +218,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: "docs-only",
+        pipeline: "pipelines/docs-only.yaml",
         task: { id: "mcp-inline", goal: "from mcp" },
       });
       expect(started.isError).toBe(false);
@@ -165,7 +238,7 @@ describe("MCP tools and HTTP inline task", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: "docs-only",
+          pipeline: "pipelines/docs-only.yaml",
           task: { id: "rest-inline", goal: "from rest" },
         }),
       });
@@ -194,9 +267,11 @@ describe("MCP tools and HTTP inline task", () => {
       });
       expect(forbidden.status).toBe(403);
     } finally {
+      clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      await cleanup();
     }
   });
 
@@ -239,7 +314,7 @@ describe("MCP tools and HTTP inline task", () => {
 
     const { server } = await startUiServer({
       agent,
-      cwd: fixtures,
+      cwd: catalogRoot,
       store,
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
@@ -263,7 +338,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: "single",
+        pipeline: "pipelines/single.yaml",
         task: { id: "holder", goal: "hold", checkout },
       });
       expect(first.isError).toBe(false);
@@ -286,7 +361,7 @@ describe("MCP tools and HTTP inline task", () => {
       expect(health.payload).not.toHaveProperty("inFlight");
 
       const overCap = await mcpCall(base, "start_run", {
-        pipeline: "single",
+        pipeline: "pipelines/single.yaml",
         task: { id: "over", goal: "no slot" },
       });
       expect(overCap.isError).toBe(true);
@@ -326,7 +401,7 @@ describe("MCP tools and HTTP inline task", () => {
 
     const { server } = await startUiServer({
       agent,
-      cwd: fixtures,
+      cwd: catalogRoot,
       store,
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
@@ -341,7 +416,7 @@ describe("MCP tools and HTTP inline task", () => {
       const base = `http://127.0.0.1:${address.port}`;
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: "single",
+        pipeline: "pipelines/single.yaml",
         task: { id: "a", goal: "first", checkout },
       });
       expect(first.isError).toBe(false);
@@ -354,7 +429,7 @@ describe("MCP tools and HTTP inline task", () => {
       }
 
       const conflict = await mcpCall(base, "start_run", {
-        pipeline: "single",
+        pipeline: "pipelines/single.yaml",
         task: { id: "b", goal: "same", checkout },
       });
       expect(conflict.isError).toBe(true);

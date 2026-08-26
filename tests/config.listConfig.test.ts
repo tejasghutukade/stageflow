@@ -103,4 +103,22 @@ describe("listConfig manifest-driven", () => {
   it("listStages returns empty array", async () => {
     expect(await listStages()).toEqual([]);
   });
+
+  it("lists pipeline stages with uses_path and inline metadata", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await cp(manifestCatalog, root, { recursive: true });
+      const manifest = await loadManifestFromRepo(root);
+      const pipelines = await listPipelines({ projectRoot: root, manifest });
+      const demo = pipelines.find((p) => p.id === "demo");
+      expect(demo?.stages[0]).toMatchObject({
+        id: "step",
+        uses_path: "pipelines/step.yaml",
+      });
+      const fork = pipelines.find((p) => p.id === "fork-demo");
+      expect(fork?.stages.some((s) => s.uses_path?.includes("decide.yaml"))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  });
 });

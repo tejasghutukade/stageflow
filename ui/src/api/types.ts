@@ -62,6 +62,9 @@ export type RunSummary = {
   run_id: string;
   pipeline_id: string;
   task_id?: string;
+  pipeline_path?: string;
+  task_path?: string;
+  project_root?: string;
   status: RunStatus;
   created_at: string;
   updated_at?: string;
@@ -161,6 +164,8 @@ export type TaskListing = {
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];
+  uses_path?: string;
+  inline?: boolean;
 };
 
 export type PipelineListing = {
@@ -225,22 +230,37 @@ export type ExtensionFileListing = {
 };
 
 export type CreateStageInput = {
+  pipeline_directory: string;
+  filename: string;
   id: string;
   system_prompt: string;
   model: string;
   gate_kinds?: StageGateKind[];
 };
 
+export type CreatedStageListing = {
+  path: string;
+  id: string;
+  gate_kinds?: StageGateKind[];
+};
+
 export type CreateStageResult =
-  | { ok: true; stage: ValidStageListing }
+  | { ok: true; stage: CreatedStageListing }
   | { ok: false; status: number; error: string };
 
 export type CreatePipelineStageRef = {
   id: string;
   needs?: string;
+  uses?: string;
+  inline?: {
+    system_prompt: string;
+    model: string;
+    gate_kinds?: StageGateKind[];
+  };
 };
 
 export type CreatePipelineInput = {
+  directory: string;
   id: string;
   stages: CreatePipelineStageRef[] | string[];
 };

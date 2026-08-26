@@ -6,6 +6,7 @@ import {
 } from "../api";
 import { useRunCatalog } from "../catalog/useRunCatalog";
 import { bucketViews, capacityView } from "../catalog/views";
+import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import {
   miniTrackLabel,
   relativeTime,
@@ -179,10 +180,7 @@ function WaitingCard({
     <article className="block">
       <div className="block__body">
         <div className="block__meta">
-          <a className="block__pipeline" href={`#/pipelines/${run.pipeline_id}`}>{run.pipeline_id}</a>
-          <span className="muted">·</span>
-          {run.task_id ? <span className="mono muted">{run.task_id}</span> : null}
-          {run.task_id ? <span className="muted">·</span> : null}
+          <a className="block__pipeline" href={`#/pipelines/${run.pipeline_id}`}>{runLocatorSubtitle(run)}</a>
           <span className="status status--waiting">{heldMeta(run)}</span>
         </div>
         <p className="block__q">{run.waiting_summary ?? "Waiting for input"}</p>
@@ -294,7 +292,7 @@ export function TodayPage({
                     <a key={run.run_id} className="run-row" href={`#/runs/${run.run_id}`} onClick={e => { e.preventDefault(); onOpen(run.run_id); }}>
                       <span className="run-row__id">
                         <span className="dot dot--running"></span>
-                        <span className="run-row__name">{run.task_id ?? run.pipeline_id} <span>· {currentStageName(run)}</span></span>
+                        <span className="run-row__name">{runTaskLabel(run)} <span>· {currentStageName(run)}</span></span>
                       </span>
                       <span>
                         <span className="track-mini" aria-hidden="true">
@@ -323,7 +321,7 @@ export function TodayPage({
                   <div key={run.run_id} className="fail-row">
                     <span className="dot dot--failed"></span>
                     <span className="fail-row__why">
-                      <b>{run.task_id ?? run.pipeline_id}</b> · {run.pipeline_id}
+                      <b>{runTaskLabel(run)}</b> · {runLocatorSubtitle(run)}
                       {run.failed_reason ? <span>{run.failed_reason}</span> : null}
                     </span>
                     <button className="btn btn--sm" onClick={e => { e.stopPropagation(); onOpen(run.run_id); }}>Open stage</button>
@@ -346,7 +344,7 @@ export function TodayPage({
                       <a key={run.run_id} className="run-row" href={`#/runs/${run.run_id}`} onClick={e => { e.preventDefault(); onOpen(run.run_id); }}>
                         <span className="run-row__id">
                           <span className="dot dot--succeeded"></span>
-                          <span className="run-row__name">{run.task_id ?? run.pipeline_id} <span>· {run.pipeline_id}</span></span>
+                          <span className="run-row__name">{runTaskLabel(run)} <span>· {runLocatorSubtitle(run)}</span></span>
                         </span>
                         <span className="mono muted">{run.stages.length} stages</span>
                         <span className="run-row__right">{relativeTime(run.updated_at ?? run.created_at)}</span>

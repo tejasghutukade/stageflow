@@ -22,7 +22,6 @@ import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
   listModels,
   listPipelines,
-  listStages,
   listTasks,
 } from "../config/listConfig.js";
 import { resolveCatalogContext } from "../config/resolveCatalogContext.js";
@@ -518,7 +517,9 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/stages") {
-        json(res, 200, { stages: await listStages() });
+        json(res, 404, {
+          error: "Global stage library removed; stages are pipeline-scoped",
+        });
         return;
       }
 
@@ -535,7 +536,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const result = await createStage(cwd, parsed);
+        const catalogCtx = await resolveCatalogContext(cwd);
+        if (!catalogCtx.projectRoot) {
+          json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
+          return;
+        }
+        const result = await createStage(catalogCtx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -557,7 +563,12 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           json(res, parsed.status, { error: parsed.error });
           return;
         }
-        const result = await createPipeline(cwd, parsed);
+        const catalogCtx = await resolveCatalogContext(cwd);
+        if (!catalogCtx.projectRoot) {
+          json(res, 400, { error: "Project root not found; initialize stageflow.yaml in a git repo" });
+          return;
+        }
+        const result = await createPipeline(catalogCtx.projectRoot, parsed);
         if (!result.ok) {
           json(res, result.status, { error: result.error });
           return;
@@ -567,7 +578,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/models") {
-        json(res, 200, { models: await listModels(cwd) });
+        const catalogCtx = await resolveCatalogContext(cwd);
+        json(res, 200, { models: await listModels(catalogCtx) });
         return;
       }
 

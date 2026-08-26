@@ -1,9 +1,13 @@
 id: parallel-retry-fanout
 stages:
   - id: clarify
+    uses: ../stages/clarify.yaml
   - id: design-doc
+    uses: ../stages/design-doc.yaml
     needs: clarify
   - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml
     needs: clarify
   - id: join-doc
+    uses: ../stages/join-doc.yaml
     needs: design-doc

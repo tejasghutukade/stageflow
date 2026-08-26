@@ -9,6 +9,7 @@ import {
   type RunDetail,
 } from "../api";
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
+import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
 import { StatusLabel } from "../StatusLabel";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
@@ -324,8 +325,8 @@ export function RunDetailPage({
       <div className="pane" style={{ height: "100%" }}>
         <div className="topbar">
           <a className="topbar__back" href="#/runs" onClick={e => { e.preventDefault(); onBack(); }}>← Runs</a>
-          <h2 className="topbar__title">{run?.pipeline_id ?? runId}</h2>
-          {run?.task_id ? <span className="topbar__sub">{run.task_id}</span> : null}
+          <h2 className="topbar__title">{run ? runTaskLabel(run) : runId}</h2>
+          {run ? <span className="topbar__sub">{runLocatorSubtitle(run)}</span> : null}
           {run ? (
             <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
               <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
