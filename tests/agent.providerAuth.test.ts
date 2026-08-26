@@ -16,6 +16,7 @@ import {
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { sfOwnedAuthPath } from "../src/runtime/credentialBinding.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { withIsolatedHome } from "./helpers/projectContext.js";
 
 function fakeProvider(partial: {
   id: string;
@@ -221,18 +222,19 @@ describe("providerAuth", () => {
   });
 
   it("does not persist api keys into settings.json", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-pa-settings-"));
-    writeCredentialSourceToFile(root, "sf_owned");
-    const runtime = createFakeRuntime();
-    const ctx = makeTestContext(runtime);
-    const marker = "sk-test-secret-marker-SETTINGS";
-    await loginWithApiKey(root, "key-provider", marker, ctx);
-    const settings = await readFile(
-      path.join(storeRootFor(root), "settings.json"),
-      "utf8",
-    );
-    expect(settings).not.toContain(marker);
-    expect(settings).toContain("sf_owned");
-    expect(sfOwnedAuthPath(root).endsWith("auth.json")).toBe(true);
+    await withIsolatedHome(async (home) => {
+      writeCredentialSourceToFile(home, "sf_owned");
+      const runtime = createFakeRuntime();
+      const ctx = makeTestContext(runtime);
+      const marker = "sk-test-secret-marker-SETTINGS";
+      await loginWithApiKey(home, "key-provider", marker, ctx);
+      const settings = await readFile(
+        path.join(storeRootFor(home), "settings.json"),
+        "utf8",
+      );
+      expect(settings).not.toContain(marker);
+      expect(settings).toContain("sf_owned");
+      expect(sfOwnedAuthPath().endsWith("auth.json")).toBe(true);
+    });
   });
 });

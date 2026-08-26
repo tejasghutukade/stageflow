@@ -53,6 +53,7 @@ async function withServer(
   const started = await startUiServer({
     agent,
     cwd: opts.cwd ?? fixtures,
+    rootDir: root,
     agentDir: opts.agentDir,
     store,
     port: 0,
@@ -2729,7 +2730,7 @@ describe("localhost HTTP API", () => {
         expect(status.body.provider.configured).toBe(true);
         expect(JSON.stringify(status.body)).not.toContain(marker);
 
-        const authFile = await readFile(sfOwnedAuthPath(root), "utf8");
+        const authFile = await readFile(sfOwnedAuthPath(), "utf8");
         expect(authFile).toContain(marker);
         expect(authFile).not.toContain("settings");
 

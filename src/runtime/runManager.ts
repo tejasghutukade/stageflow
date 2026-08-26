@@ -28,8 +28,9 @@ import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
-  readMaxConcurrentFromFile,
-  writeMaxConcurrentToFile,
+  projectSettingsContext,
+  readMaxConcurrentFromContext,
+  writeMaxConcurrentToContext,
 } from "./settingsFile.js";
 import {
   StageHitlController,
@@ -155,12 +156,16 @@ export class RunManager {
     },
   };
   private readonly cwd: string;
+  private readonly projectRoot: string;
+  private readonly isGitProject: boolean;
 
   constructor(
     private readonly options: {
       agent: AgentPort;
       store: RunStore;
       cwd?: string;
+      projectRoot?: string;
+      isGitProject?: boolean;
       operatorCatalog?: OperatorCatalog;
       seams?: HitlSeams;
       maxConcurrent?: number;
@@ -170,9 +175,16 @@ export class RunManager {
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
+    this.projectRoot = options.projectRoot ?? this.cwd;
+    this.isGitProject = options.isGitProject ?? false;
+    const settingsCtx = projectSettingsContext(
+      this.cwd,
+      this.projectRoot,
+      this.isGitProject,
+    );
     this.maxConcurrent =
       options.maxConcurrent ??
-      readMaxConcurrentFromFile(this.cwd) ??
+      readMaxConcurrentFromContext(settingsCtx) ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
@@ -202,7 +214,10 @@ export class RunManager {
       throw new Error(INVALID_SLOT_COUNT_MESSAGE);
     }
     this.maxConcurrent = parsed;
-    writeMaxConcurrentToFile(this.cwd, parsed);
+    writeMaxConcurrentToContext(
+      projectSettingsContext(this.cwd, this.projectRoot, this.isGitProject),
+      parsed,
+    );
     return this.getHealth();
   }
 
@@ -690,7 +705,6 @@ export class RunManager {
     stageId: string,
     opaqueAnswer: OpaqueAnswer,
   ): Promise<{ ok: boolean; reason?: string }> {
-    const cwd = this.options.cwd ?? process.cwd();
     const store = this.options.store;
     const launcher = this.stageProcessLauncher;
     if (!launcher) {
@@ -707,7 +721,7 @@ export class RunManager {
       const launchResult = await launcher.launch({
         runId,
         stageId,
-        rootDir: cwd,
+        rootDir: this.projectRoot,
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
@@ -745,7 +759,9 @@ export class RunManager {
       const meta = await store.readRunMeta(runId);
       const taskYaml = await store.readTaskYaml(runId);
       const task = loadTaskFromYaml(taskYaml, `run ${runId} task`);
-      const loaded = await loadPipeline(meta.pipeline_id, { cwd });
+      const loaded = await loadPipeline(meta.pipeline_id, {
+        cwd: this.cwd,
+      });
 
       const rest = await resumeRun({
         prepared: {
@@ -754,7 +770,8 @@ export class RunManager {
           run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
           agent: this.options.agent,
           store,
-          cwd,
+          cwd: this.cwd,
+          projectRoot: this.projectRoot,
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
@@ -810,6 +827,7 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         cwd: this.cwd,
+        factoryCwd: this.projectRoot,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         operatorCatalog: this.options.operatorCatalog,
       });
@@ -861,6 +879,7 @@ export class RunManager {
         taskYaml,
         pipeline: pipelineId,
         cwd,
+        projectRoot: this.projectRoot,
         checkoutOverride,
         gitSha: ciIdentity?.gitSha,
         ciPrUrl: ciIdentity?.ciPrUrl,

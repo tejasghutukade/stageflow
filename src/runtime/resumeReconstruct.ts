@@ -29,6 +29,7 @@ export type PreparedResumeContext = {
   executionMode: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   cwd: string;
+  factoryCwd?: string;
   maxActiveStagesPerRun: number;
   operatorCatalog?: OperatorCatalog;
 };
@@ -58,6 +59,7 @@ export async function reconstructAndContinue(
   ctx: PreparedResumeContext,
 ): Promise<{ ok: boolean; reason?: string }> {
   const { runId, stageId, opaqueAnswer, agent, store, cwd } = ctx;
+  const factoryCwd = ctx.factoryCwd ?? cwd;
 
   try {
     const latestExecution = await store.getLatestStageExecution(runId, stageId);
@@ -91,7 +93,7 @@ export async function reconstructAndContinue(
         checkoutRoot,
         attemptCtx,
       ),
-      cwd,
+      factoryCwd,
     );
 
     const fakeResume = fakeHitlResumePath(roots, stageId);
@@ -120,7 +122,7 @@ export async function reconstructAndContinue(
       dag: loaded.dag,
       checkoutRoot,
       workspaceDir,
-      factoryCwd: cwd,
+      factoryCwd,
       attemptCtx,
       operatorCatalog: ctx.operatorCatalog,
       onActivity: (event) => {
@@ -156,7 +158,7 @@ export async function reconstructAndContinue(
       skipStarted: true,
       existingHandle: opened.handle,
       attemptCtx,
-      factoryCwd: cwd,
+      factoryCwd,
       operatorCatalog: ctx.operatorCatalog,
     });
 
@@ -181,6 +183,7 @@ export async function reconstructAndContinue(
         agent,
         store,
         cwd,
+        projectRoot: factoryCwd,
         checkoutRoot,
         hitl: ctx.hitl,
         operatorCatalog: ctx.operatorCatalog,

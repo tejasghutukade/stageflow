@@ -46,6 +46,7 @@ export type PreparedPipeline = {
   agent: AgentPort;
   store: RunStore;
   cwd: string;
+  projectRoot: string;
   checkoutRoot?: string;
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
@@ -79,6 +80,7 @@ async function preparePipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   gitSha?: string;
   ciPrUrl?: string;
@@ -141,6 +143,7 @@ async function preparePipeline(options: {
     agent: options.agent,
     store: options.store,
     cwd: options.cwd,
+    projectRoot: options.projectRoot ?? options.cwd,
     checkoutRoot,
     hitl: options.hitl,
     executionMode,
@@ -194,6 +197,7 @@ export async function runPipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd?: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
@@ -203,6 +207,7 @@ export async function runPipeline(options: {
   skipGates?: boolean;
 }): Promise<PipelineRunResult> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
     agent: options.agent,
     store: options.store,
@@ -210,6 +215,7 @@ export async function runPipeline(options: {
     taskYaml: options.taskYaml,
     pipeline: options.pipeline,
     cwd,
+    projectRoot,
     checkoutOverride: options.checkoutOverride,
     hitl: options.hitl,
     executionMode: options.executionMode,
@@ -232,6 +238,7 @@ export async function startPipeline(options: {
   taskYaml?: string;
   pipeline: string;
   cwd?: string;
+  projectRoot?: string;
   checkoutOverride?: string;
   gitSha?: string;
   ciPrUrl?: string;
@@ -244,6 +251,7 @@ export async function startPipeline(options: {
   skipGates?: boolean;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
     agent: options.agent,
     store: options.store,
@@ -251,6 +259,7 @@ export async function startPipeline(options: {
     taskYaml: options.taskYaml,
     pipeline: options.pipeline,
     cwd,
+    projectRoot,
     checkoutOverride: options.checkoutOverride,
     gitSha: options.gitSha,
     ciPrUrl: options.ciPrUrl,

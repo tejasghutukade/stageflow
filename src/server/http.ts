@@ -30,6 +30,8 @@ import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
 import { handleMcpHttpRequest } from "../mcp/server.js";
 import { createRunStore, type RunStoreKind } from "../runstore/createStore.js";
+import { resolveProjectContext } from "../project/resolveProjectContext.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
 import {
   RunManager,
@@ -273,9 +275,15 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   manager: RunManager;
   store: RunStore;
 }> {
-  const cwd = options.cwd ?? process.cwd();
+  const invocationCwd = options.cwd ?? process.cwd();
+  const ctx = resolveProjectContext(invocationCwd);
+  const cwd = ctx.invocationCwd;
   const agentDir = options.agentDir ?? getAgentDir();
-  const rootDir = options.rootDir ?? cwd;
+  const rootDir = options.rootDir ?? ctx.projectRoot;
+  const isGitProject =
+    options.rootDir !== undefined
+      ? findProjectRoot(rootDir) !== null
+      : ctx.isGitProject;
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const providerAuthContext = options.providerAuthContext;
@@ -286,6 +294,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   const manager = new RunManager({
     agent: options.agent,
     cwd,
+    projectRoot: rootDir,
+    isGitProject,
     store,
     maxConcurrent: options.maxConcurrent,
     operatorCatalog: { cwd, agentDir },

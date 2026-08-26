@@ -10,6 +10,7 @@ import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
+import { resolveProjectContext } from "./project/resolveProjectContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
@@ -224,26 +225,32 @@ async function main(argv: string[]): Promise<number> {
       return argv.slice(2).length === 0 ? 1 : 0;
     }
 
-    const rootDir = process.cwd();
+    const ctx = resolveProjectContext(process.cwd());
 
     if (parsed.command === "validate") {
-      return runValidateCommand(argv.slice(3), { cwd: rootDir });
+      return runValidateCommand(argv.slice(3), { cwd: ctx.invocationCwd });
     }
 
     if (parsed.command === "run") {
-      return runRunCommand(argv.slice(3), { cwd: rootDir });
+      return runRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+        isGitProject: ctx.isGitProject,
+      });
     }
 
     if (parsed.command === "providers") {
-      return runProvidersCommand(argv.slice(3), rootDir);
+      return runProvidersCommand(argv.slice(3), ctx.invocationCwd);
     }
 
-    const store = createRunStore({ rootDir });
+    const store = createRunStore({ rootDir: ctx.projectRoot });
 
     if (parsed.command === "ui") {
       const { url, mcpUrl } = await startUiServer({
         agent: new PiAgentAdapter(),
         store,
+        cwd: ctx.invocationCwd,
+        rootDir: ctx.projectRoot,
         port: parsed.port,
       });
       console.log(`Operator console: ${url}`);
@@ -272,15 +279,24 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+function normalizeCliEntry(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  let canonical: string;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    canonical = resolved;
+  }
+  return canonical.replace(/\.(?:[cm]?[jt]s)$/i, "");
+}
+
+export function sameCliEntry(a: string, b: string): boolean {
+  return normalizeCliEntry(a) === normalizeCliEntry(b);
+}
+
 function isDirectCliInvocation(): boolean {
   const self = fileURLToPath(import.meta.url);
-  return process.argv.slice(1).some((arg) => {
-    try {
-      return realpathSync(path.resolve(arg)) === realpathSync(self);
-    } catch {
-      return false;
-    }
-  });
+  return process.argv.slice(1).some((arg) => sameCliEntry(arg, self));
 }
 
 if (isDirectCliInvocation()) {
