@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { listPipelines } from "../config/listConfig.js";
+import { resolveCatalogContext } from "../config/resolveCatalogContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -37,7 +38,14 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
       inputSchema: z.object({}),
     },
     async () => {
-      const pipelines = await listPipelines(cwd);
+      const catalogCtx = await resolveCatalogContext(cwd);
+      const pipelines =
+        catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
+          ? await listPipelines({
+              projectRoot: catalogCtx.projectRoot,
+              manifest: catalogCtx.manifest,
+            })
+          : [];
       return textResult({ pipelines });
     },
   );

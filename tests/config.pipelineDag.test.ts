@@ -244,32 +244,9 @@ describe("resolvePipelineDag", () => {
 });
 
 describe("listPipelineUsageByStage with object-form pipelines", () => {
-  it("indexes clarify usage from object-form pipeline yaml", async () => {
-    const tmpRoot = await mkdtemp(path.join(tmpdir(), "sf-dag-usage-"));
-    await mkdir(path.join(tmpRoot, "pipelines"), { recursive: true });
-    await mkdir(path.join(tmpRoot, "stages"), { recursive: true });
-    await writeFile(
-      path.join(tmpRoot, "stages", "clarify.yaml"),
-      await readFile(path.join(stagesDir, "clarify.yaml"), "utf8"),
-    );
-    await writeFile(
-      path.join(tmpRoot, "pipelines", "parallel-after-clarify.yaml"),
-      [
-        "id: parallel-after-clarify",
-        "stages:",
-        "  - id: clarify",
-        "  - id: design-doc",
-        "    needs: clarify",
-        "",
-      ].join("\n"),
-    );
-
-    const stages = await listStages(tmpRoot);
-    const clarify = stages.find((stage) => stage.id === "clarify");
-    expect(clarify && "used_by_pipeline_ids" in clarify
-      ? clarify.used_by_pipeline_ids
-      : undefined,
-    ).toEqual(["parallel-after-clarify"]);
+  it("listStages returns empty in pipeline-owned model", async () => {
+    const stages = await listStages();
+    expect(stages).toEqual([]);
   });
 });
 

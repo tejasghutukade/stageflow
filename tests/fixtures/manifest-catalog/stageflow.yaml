@@ -1,0 +1,9 @@
+version: 1
+catalog:
+  pipelines:
+    - pipelines
+    - pipeline-owned/fork-uses
+  tasks:
+    - tasks
+  exclude:
+    - excluded

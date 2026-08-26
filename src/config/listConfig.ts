@@ -1,14 +1,9 @@
-import { readdir } from "node:fs/promises";
 import path from "node:path";
-import {
-  STAGE_GATE_KINDS,
-  type StageGateKind,
-} from "../types/stage.js";
+import type { StageGateKind } from "../types/stage.js";
+import type { LoadedManifest } from "../types/stageflowManifest.js";
 import { loadPipeline } from "./loadPipeline.js";
-import { loadStage } from "./loadStage.js";
 import { loadTask } from "./loadTask.js";
-import { readYamlObject } from "./readYamlObject.js";
-import { extractPipelineStageIds } from "./resolvePipelineDag.js";
+import { scanCatalogPaths } from "./scanCatalogPaths.js";
 
 export type TaskListing = {
   path: string;
@@ -44,71 +39,31 @@ export type BrokenStageListing = {
 
 export type StageListing = ValidStageListing | BrokenStageListing;
 
+export type CatalogListOptions = {
+  projectRoot: string;
+  manifest: LoadedManifest;
+};
+
 const BAKED_MODEL_IDS = [
   "anthropic/claude-sonnet-4-5",
   "cursor/auto",
   "cursor/composer-2-5",
 ] as const;
 
-function parseSafeGateKinds(raw: unknown): StageGateKind[] | undefined {
-  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
-    return undefined;
-  }
-  const allowed = new Set<string>(STAGE_GATE_KINDS);
-  const gateKinds = raw.filter((item): item is StageGateKind => allowed.has(item));
-  return gateKinds.length > 0 ? gateKinds : undefined;
+function repoRelPath(projectRoot: string, absPath: string): string {
+  return path.relative(projectRoot, absPath).replace(/\\/g, "/");
 }
 
-async function listPipelineUsageByStage(cwd: string): Promise<Map<string, Set<string>>> {
-  const dir = path.join(cwd, "pipelines");
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return new Map();
-  }
-
-  const usage = new Map<string, Set<string>>();
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    const filePath = path.join(dir, entry.name);
-    try {
-      const raw = await readYamlObject(filePath);
-      if (typeof raw?.id !== "string" || !Array.isArray(raw.stages)) continue;
-      const stageIds = extractPipelineStageIds(raw.stages);
-      if (!stageIds) continue;
-      for (const stageId of stageIds) {
-        let pipelineIds = usage.get(stageId);
-        if (!pipelineIds) {
-          pipelineIds = new Set<string>();
-          usage.set(stageId, pipelineIds);
-        }
-        pipelineIds.add(raw.id);
-      }
-    } catch {
-      // skip invalid pipeline files
-    }
-  }
-  return usage;
-}
-
-export async function listTasks(cwd: string): Promise<TaskListing[]> {
-  const dir = path.join(cwd, "tasks");
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
+export async function listTasks(options: CatalogListOptions): Promise<TaskListing[]> {
+  const { projectRoot, manifest } = options;
+  const filePaths = await scanCatalogPaths(manifest, "task");
   const listings: TaskListing[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    const filePath = path.join(dir, entry.name);
+
+  for (const filePath of filePaths) {
     try {
       const task = await loadTask(filePath);
       listings.push({
-        path: path.relative(cwd, filePath),
+        path: repoRelPath(projectRoot, filePath),
         id: task.id,
         goal: task.goal,
       });
@@ -116,27 +71,25 @@ export async function listTasks(cwd: string): Promise<TaskListing[]> {
       // skip invalid
     }
   }
-  listings.sort((a, b) => a.id.localeCompare(b.id));
+
+  listings.sort((a, b) => {
+    const pathCmp = a.path.localeCompare(b.path);
+    if (pathCmp !== 0) return pathCmp;
+    return a.id.localeCompare(b.id);
+  });
   return listings;
 }
 
-export async function listPipelines(cwd: string): Promise<PipelineListing[]> {
-  const dir = path.join(cwd, "pipelines");
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
+export async function listPipelines(options: CatalogListOptions): Promise<PipelineListing[]> {
+  const { projectRoot, manifest } = options;
+  const filePaths = await scanCatalogPaths(manifest, "pipeline");
   const listings: PipelineListing[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    const filePath = path.join(dir, entry.name);
+
+  for (const filePath of filePaths) {
     try {
-      const loaded = await loadPipeline(filePath, { cwd });
+      const loaded = await loadPipeline(filePath, { cwd: projectRoot });
       listings.push({
-        path: path.relative(cwd, filePath),
+        path: repoRelPath(projectRoot, filePath),
         id: loaded.pipeline.id,
         stages: loaded.stages.map((stage) => ({
           id: stage.id,
@@ -147,60 +100,22 @@ export async function listPipelines(cwd: string): Promise<PipelineListing[]> {
       // skip invalid
     }
   }
-  listings.sort((a, b) => a.id.localeCompare(b.id));
+
+  listings.sort((a, b) => {
+    const pathCmp = a.path.localeCompare(b.path);
+    if (pathCmp !== 0) return pathCmp;
+    return a.id.localeCompare(b.id);
+  });
   return listings;
 }
 
-export async function listStages(cwd: string): Promise<StageListing[]> {
-  const dir = path.join(cwd, "stages");
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-
-  const usageByStage = await listPipelineUsageByStage(cwd);
-  const valid: ValidStageListing[] = [];
-  const broken: BrokenStageListing[] = [];
-
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".yaml")) continue;
-    const filePath = path.join(dir, entry.name);
-    const relPath = path.relative(cwd, filePath);
-    try {
-      const stage = await loadStage(filePath);
-      valid.push({
-        path: relPath,
-        id: stage.id,
-        used_by_pipeline_ids: [...(usageByStage.get(stage.id) ?? new Set<string>())].sort(),
-        ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const brokenRow: BrokenStageListing = {
-        path: relPath,
-        error: message,
-      };
-      try {
-        const raw = await readYamlObject(filePath);
-        if (typeof raw?.id === "string") brokenRow.id = raw.id;
-        if (typeof raw?.model === "string") brokenRow.model = raw.model;
-        const gateKinds = parseSafeGateKinds(raw?.gate_kinds);
-        if (gateKinds) brokenRow.gate_kinds = gateKinds;
-      } catch {
-        // keep path + error only when parsing itself fails
-      }
-      broken.push(brokenRow);
-    }
-  }
-
-  valid.sort((a, b) => a.id.localeCompare(b.id));
-  broken.sort((a, b) => a.path.localeCompare(b.path));
-  return [...valid, ...broken];
+export async function listStages(_options?: unknown): Promise<StageListing[]> {
+  return [];
 }
 
 export async function listModels(cwd: string): Promise<string[]> {
+  const { readdir } = await import("node:fs/promises");
+  const { readYamlObject } = await import("./readYamlObject.js");
   const dir = path.join(cwd, "stages");
   const models = new Set<string>(BAKED_MODEL_IDS);
   let entries;

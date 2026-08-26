@@ -1,0 +1,4 @@
+id: hidden
+stages:
+  - id: step
+    uses: ../pipelines/step.yaml

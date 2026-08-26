@@ -25,6 +25,7 @@ import {
   listStages,
   listTasks,
 } from "../config/listConfig.js";
+import { resolveCatalogContext } from "../config/resolveCatalogContext.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
@@ -494,17 +495,30 @@ export async function startUiServer(options: UiServerOptions): Promise<{
       }
 
       if (method === "GET" && pathname === "/api/tasks") {
-        json(res, 200, { tasks: await listTasks(cwd) });
+        const catalogCtx = await resolveCatalogContext(cwd);
+        const tasks =
+          catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
+            ? await listTasks({ projectRoot: catalogCtx.projectRoot, manifest: catalogCtx.manifest })
+            : [];
+        json(res, 200, { tasks });
         return;
       }
 
       if (method === "GET" && pathname === "/api/pipelines") {
-        json(res, 200, { pipelines: await listPipelines(cwd) });
+        const catalogCtx = await resolveCatalogContext(cwd);
+        const pipelines =
+          catalogCtx.manifestStatus === "ok" && catalogCtx.projectRoot && catalogCtx.manifest
+            ? await listPipelines({
+                projectRoot: catalogCtx.projectRoot,
+                manifest: catalogCtx.manifest,
+              })
+            : [];
+        json(res, 200, { pipelines });
         return;
       }
 
       if (method === "GET" && pathname === "/api/stages") {
-        json(res, 200, { stages: await listStages(cwd) });
+        json(res, 200, { stages: await listStages() });
         return;
       }
 
