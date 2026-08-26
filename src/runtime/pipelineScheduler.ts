@@ -1,4 +1,5 @@
 import type { AgentPort } from "../agent/port.js";
+import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import type { RunStore, StageSnapshot } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
@@ -311,6 +312,30 @@ export async function retryRun(
   });
 }
 
+function applyForkChoiceToSchedule(
+  dag: ResolvedPipelineDag,
+  forkStageId: string,
+  chosen: Set<string>,
+  states: Map<string, StageScheduleState>,
+  options?: { onSkip?: (childId: string) => void },
+): void {
+  const skipPending = (stageId: string) => {
+    if (states.get(stageId) === "pending") {
+      states.set(stageId, "skipped");
+      options?.onSkip?.(stageId);
+    }
+  };
+
+  for (const childId of dag.childrenOf[forkStageId] ?? []) {
+    if (!chosen.has(childId)) {
+      skipPending(childId);
+      for (const desc of collectDownstreamStageIds(dag, childId)) {
+        skipPending(desc);
+      }
+    }
+  }
+}
+
 export function applyForkSkipsFromEnvelopes(
   dag: ResolvedPipelineDag,
   states: Map<string, StageScheduleState>,
@@ -320,19 +345,8 @@ export function applyForkSkipsFromEnvelopes(
     if (!node.fork) continue;
     const envelope = completedEnvelopes.get(node.id);
     if (!envelope) continue;
-    const chosen = new Set(envelope.fork_choice ?? []);
-    for (const childId of dag.childrenOf[node.id] ?? []) {
-      if (!chosen.has(childId)) {
-        if (states.get(childId) === "pending") {
-          states.set(childId, "skipped");
-        }
-        for (const desc of collectDownstreamStageIds(dag, childId)) {
-          if (states.get(desc) === "pending") {
-            states.set(desc, "skipped");
-          }
-        }
-      }
-    }
+    const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+    applyForkChoiceToSchedule(dag, node.id, chosen, states);
   }
 }
 
@@ -588,16 +602,10 @@ export async function runPipelineDag(
     notifyRetryRootTerminal(stageId, "succeeded");
     const node = dag.nodes.find((n) => n.id === stageId);
     if (node?.fork) {
-      const chosen = new Set(envelope.fork_choice ?? []);
-      for (const childId of dag.childrenOf[stageId] ?? []) {
-        if (!chosen.has(childId)) {
-          if (states.get(childId) === "pending") {
-            states.set(childId, "skipped");
-            notifyRetryRootTerminal(childId, "skipped");
-          }
-          markBranchDownstreamSkipped(childId);
-        }
-      }
+      const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+      applyForkChoiceToSchedule(dag, stageId, chosen, states, {
+        onSkip: (id) => notifyRetryRootTerminal(id, "skipped"),
+      });
     }
   };
 

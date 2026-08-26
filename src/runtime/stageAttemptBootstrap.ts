@@ -1,9 +1,8 @@
 import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
-import { resolveForkChoiceShape } from "../config/resolveForkChoiceShape.js";
+import { resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { ForkEmitContext } from "../types/forkChoice.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
@@ -136,12 +135,7 @@ export async function openStageAttempt(
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, input.stage.id, attempt);
 
-  const immediateSuccessorIds = input.dag.childrenOf[input.stage.id] ?? [];
-  const dagNode = input.dag.nodes.find((n) => n.id === input.stage.id);
-  const forkShape = resolveForkChoiceShape(dagNode?.fork);
-  const forkEmitContext: ForkEmitContext | undefined = dagNode?.fork
-    ? { immediateSuccessorIds, forkShape }
-    : undefined;
+  const forkEmitContext = resolveForkEmitContext(input.dag, input.stage.id);
 
   const opened = await openStageWithOperatorCatalog(
     input.agent,

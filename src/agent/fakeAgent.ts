@@ -5,7 +5,7 @@ import {
   isAdvancingEnvelope,
 } from "../envelope/check.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
-import { assertForkChoice } from "../tools/emitStageEnvelope.js";
+import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
   assertAnswerMatchesPrompt,
@@ -200,7 +200,7 @@ export class FakeAgent implements AgentPort {
       try {
         const envelope = assertRequiredEnvelope(envelopeValue);
         if (input.forkEmitContext !== undefined) {
-          assertForkChoice(envelope, input.forkEmitContext);
+          assertForkEnvelope(envelope, input.forkEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
         if (!isAdvancingEnvelope(envelope)) {
