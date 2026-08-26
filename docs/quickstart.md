@@ -130,7 +130,7 @@ stages:
 
 Canonical example: [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-Parallel fan-out uses the same `needs` field — see [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog](yaml-catalog.md).
+Parallel fan-out uses the same `needs` field — see [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog](yaml-catalog.md). For conditional routing (the deciding stage chooses one or more branches at runtime), see [Fork pipelines](yaml-catalog.md#fork-pipelines) in the YAML catalog.
 
 ## Headless / CI
 
