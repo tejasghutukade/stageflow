@@ -1,0 +1,14 @@
+id: archify-on-pr
+goal: |
+  Detect pull-request changes that warrant diagrams and author one or more Archify
+  JSON specs (architecture, workflow, sequence, dataflow, lifecycle) when warranted.
+context: |
+  GHA runs scripts/prepare-ci-context.sh before this pipeline, writing ci-context.json
+  at the repo root with head_sha, repo_url, changed_files, and verified_paths. Both
+  stages read ci-context.json as the single source of truth for git/PR identity.
+  Stage 1 selects applicable diagram types and may skip downstream work. Stage 2
+  writes one spec artifact per selected type for GHA to deliver as HTML outside the agent.
+constraints: |
+  No HITL. Do not call ask_operator. The author stage must not install Archify,
+  run npm install, or call deliver or doctor — GHA owns tool provisioning and HTML
+  delivery after the run completes.

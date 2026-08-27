@@ -1,5 +1,6 @@
 import { PiAgentAdapter } from "../agent/piAdapter.js";
 import { createRunStore } from "../runstore/createStore.js";
+import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
 import { RunManager, type StartRunResult } from "../runtime/runManager.js";
 import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
@@ -17,7 +18,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 
@@ -29,6 +30,7 @@ const defaultIo: RunCommandIo = {
 type ParsedRunArgs = {
   help: boolean;
   json: boolean;
+  includeStages: boolean;
   skipGates: boolean;
   task?: string;
   pipeline?: string;
@@ -52,10 +54,10 @@ export type StartRunFn = (input: {
 
 function parseRunArgs(args: string[]): ParsedRunArgs {
   if (args.length === 0) {
-    return { help: false, json: false, skipGates: false };
+    return { help: false, json: false, includeStages: false, skipGates: false };
   }
   if (args[0] === "--help" || args[0] === "-h") {
-    return { help: true, json: false, skipGates: false };
+    return { help: true, json: false, includeStages: false, skipGates: false };
   }
 
   let task: string | undefined;
@@ -67,6 +69,7 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let operatorCwd: string | undefined;
   let operatorAgentDir: string | undefined;
   let json = false;
+  let includeStages = false;
   let skipGates = false;
   let help = false;
 
@@ -124,6 +127,16 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
       operatorAgentDir = value;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--include") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --include");
+      }
+      if (value === "stages") {
+        includeStages = true;
+      } else {
+        throw new Error(`Unknown --include value: ${value}`);
+      }
     } else if (arg === "--skip-gates") {
       skipGates = true;
     } else if (arg.startsWith("-")) {
@@ -136,6 +149,7 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   return {
     help,
     json,
+    includeStages,
     skipGates,
     task,
     pipeline,
@@ -172,10 +186,22 @@ function defaultStartRun(
 export async function completeCliRun(
   started: Extract<StartRunResult, { ok: true }>,
   io: RunCommandIo = defaultIo,
-  options: { json?: boolean } = {},
+  options: {
+    json?: boolean;
+    store?: RunStore;
+    includeStages?: boolean;
+  } = {},
 ): Promise<number> {
   const result = await started.done;
-  return reportCliRun({ kind: "completion", result }, { json: options.json, io });
+  return reportCliRun(
+    { kind: "completion", result },
+    {
+      json: options.json,
+      io,
+      store: options.store,
+      includeStages: options.includeStages,
+    },
+  );
 }
 
 export async function runRunCommand(
@@ -186,6 +212,7 @@ export async function runRunCommand(
     isGitProject?: boolean;
     io?: Partial<RunCommandIo>;
     startRun?: StartRunFn;
+    store?: RunStore;
     env?: Record<string, string | undefined>;
   } = {},
 ): Promise<number> {
@@ -215,6 +242,11 @@ export async function runRunCommand(
     return 1;
   }
 
+  if (parsed.includeStages && !parsed.json) {
+    out.error("error: --include stages requires --json");
+    return 1;
+  }
+
   const operatorCatalog = resolveOperatorCatalog({
     flags: {
       operatorCwd: parsed.operatorCwd,
@@ -235,6 +267,12 @@ export async function runRunCommand(
     env: options.env ?? process.env,
   });
 
+  const store =
+    options.store ??
+    (parsed.includeStages
+      ? createRunStore({ rootDir: projectRoot })
+      : undefined);
+
   try {
     const started = await startRun({
       task: parsed.task,
@@ -249,7 +287,11 @@ export async function runRunCommand(
         { json: parsed.json, io: out },
       );
     }
-    return completeCliRun(started, out, { json: parsed.json });
+    return completeCliRun(started, out, {
+      json: parsed.json,
+      includeStages: parsed.includeStages,
+      store,
+    });
   } catch (err) {
     if (err instanceof PipelineValidationError) {
       if (parsed.json) {

@@ -36,7 +36,21 @@ function extractBodyRaw(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 function hasBodyKey(raw: Record<string, unknown>): boolean {
-  return Object.keys(raw).some((key) => BODY_KEYS.has(key));
+  return Object.keys(raw).some((key) => BODY_KEYS.has(key) && key !== "skill");
+}
+
+function readSkill(raw: Record<string, unknown>): LoadOutcome<string> | undefined {
+  if (raw.skill === undefined) return undefined;
+  if (typeof raw.skill !== "string" || raw.skill.trim() === "") {
+    return loadFailure([
+      {
+        code: "stage.invalid_skill",
+        message: "skill must be a non-empty string",
+        category: "stage",
+      },
+    ]);
+  }
+  return loadSuccess(raw.skill.trim());
 }
 
 function stringStageRefMessage(
@@ -96,6 +110,11 @@ export function normalizePipelineStageEntries(
 
     const uses = typeof raw.uses === "string" ? raw.uses : undefined;
     const hasBody = hasBodyKey(raw);
+    const skillOutcome = readSkill(raw);
+    if (skillOutcome !== undefined && !skillOutcome.ok) {
+      return skillOutcome;
+    }
+    const skill = skillOutcome?.ok ? skillOutcome.value : undefined;
 
     if (uses && hasBody) {
       return loadFailure([
@@ -189,6 +208,7 @@ export function normalizePipelineStageEntries(
       body,
       ...(typeof raw.needs === "string" ? { needs: raw.needs } : {}),
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
+      ...(skill !== undefined ? { skill } : {}),
     };
 
     const priorPath = normalized.find((e) => e.id === id)?.declaringPath;

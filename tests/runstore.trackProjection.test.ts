@@ -188,6 +188,30 @@ describe("buildPipelineTrack", () => {
     );
   });
 
+  it("marks fork-skipped stages with skipped readiness", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author"] },
+      nodes: [
+        { id: "detect", needs: null, ancestors: [], stageIndex: 0 },
+        { id: "author", needs: "detect", ancestors: ["detect"], stageIndex: 1 },
+      ],
+    };
+    const stages = [
+      snap("detect", "succeeded"),
+      snap("author", "skipped"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages,
+      runStatus: "succeeded",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "author")?.readiness).toBe(
+      "skipped",
+    );
+  });
+
   it("falls back to linear compat when dag snapshot is missing", () => {
     const stages = [
       snap("alpha", "succeeded"),

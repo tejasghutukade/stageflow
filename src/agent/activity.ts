@@ -118,7 +118,8 @@ export type StageLifecycleEvent =
   | { event: "waiting_for_input" }
   | { event: "resumed" }
   | { event: "succeeded" }
-  | { event: "failed"; reason: string };
+  | { event: "failed"; reason: string }
+  | { event: "skipped" };
 
 export type StageLogLine = StageActivityEvent | StageLifecycleEvent;
 

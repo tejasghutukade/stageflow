@@ -126,7 +126,11 @@ async function loadPipelineFromPath(
       ]);
     }
 
-    stages.push(stageOutcome.value);
+    const stage: StageConfig = {
+      ...stageOutcome.value,
+      ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
+    };
+    stages.push(stage);
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 

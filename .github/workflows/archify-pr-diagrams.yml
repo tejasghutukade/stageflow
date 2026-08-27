@@ -1,0 +1,272 @@
+name: Archify PR diagrams
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "src/**"
+      - "examples/**"
+      - "ui/src/**"
+      - "stageflow.yaml"
+      - ".github/workflows/**"
+      - "scripts/**"
+
+permissions:
+  contents: read
+  actions: write
+  pull-requests: write
+
+jobs:
+  diagram:
+    runs-on: ubuntu-latest
+    env:
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.event.pull_request.base.ref }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Build Stageflow CLI
+        run: npm ci && npm run build
+
+      - name: Install Archify skill
+        env:
+          ARCHIFY_SOURCE_DIR: ${{ secrets.ARCHIFY_SOURCE_DIR }}
+          ARCHIFY_ZIP_URL: ${{ vars.ARCHIFY_ZIP_URL }}
+        run: |
+          set -e
+          if [ -n "${ARCHIFY_SOURCE_DIR}" ]; then
+            node dist/cli.js skills install --from-path "${ARCHIFY_SOURCE_DIR}" --skill-name archify
+          else
+            ZIP_URL="${ARCHIFY_ZIP_URL:-https://github.com/tt-a1i/archify/releases/download/v2.15.0/archify.zip}"
+            node dist/cli.js skills install --from-zip "${ZIP_URL}" --skill-name archify
+          fi
+
+      - name: Require OPENAI_API_KEY
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY is empty. Add it as a repository Actions secret (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      - name: Validate pipeline catalog
+        run: node dist/cli.js validate --strict --json
+
+      - name: Provider login
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node dist/cli.js providers login openai --type api_key --api-key-env OPENAI_API_KEY
+
+      - name: Prepare CI context
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: ./scripts/prepare-ci-context.sh ci-context.json
+
+      - id: envelope
+        name: Run Archify-on-PR pipeline
+        uses: ./.github/actions/sf-run
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        with:
+          pipeline: examples/archify-on-pr/archify-on-pr.pipeline.yaml
+          task: examples/archify-on-pr/archify-on-pr.task.yaml
+          checkout: ${{ github.workspace }}
+          extra-args: >-
+            --skip-gates
+            --git-sha ${{ github.event.pull_request.head.sha }}
+            --ci-job-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          detect-stage: detect-changes
+          stage: author-diagrams
+          export-run: "true"
+
+      - id: deliver
+        name: Deliver diagram HTML
+        if: steps.envelope.outputs.skipped != 'true'
+        env:
+          CI_CONTEXT_FILE: ci-context.json
+          GITHUB_WORKSPACE: ${{ github.workspace }}
+        run: ./scripts/deliver-diagrams.sh "${{ steps.envelope.outputs.envelope-path }}" diagrams
+
+      - id: upload-architecture
+        name: Upload architecture.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/architecture.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/architecture.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-workflow
+        name: Upload workflow.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/workflow.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/workflow.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-sequence
+        name: Upload sequence.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/sequence.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/sequence.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-dataflow
+        name: Upload dataflow.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/dataflow.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/dataflow.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-lifecycle
+        name: Upload lifecycle.html
+        if: steps.envelope.outputs.skipped != 'true' && hashFiles('diagrams/lifecycle.html') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          path: diagrams/lifecycle.html
+          archive: false
+          retention-days: 30
+
+      - id: upload-diagrams-bundle
+        name: Upload diagram bundle (zip)
+        if: steps.envelope.outputs.skipped != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: archify-diagrams-pr-${{ github.event.pull_request.number }}
+          path: diagrams/
+          retention-days: 30
+
+      - name: Build PR comment
+        if: steps.envelope.outputs.skipped != 'true'
+        env:
+          URL_ARCHITECTURE: ${{ steps.upload-architecture.outputs.artifact-url }}
+          URL_WORKFLOW: ${{ steps.upload-workflow.outputs.artifact-url }}
+          URL_SEQUENCE: ${{ steps.upload-sequence.outputs.artifact-url }}
+          URL_DATAFLOW: ${{ steps.upload-dataflow.outputs.artifact-url }}
+          URL_LIFECYCLE: ${{ steps.upload-lifecycle.outputs.artifact-url }}
+          BUNDLE_URL: ${{ steps.upload-diagrams-bundle.outputs.artifact-url }}
+        run: |
+          set -e
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          artifact_url_for_type() {
+            case "$1" in
+              architecture) echo "${URL_ARCHITECTURE}" ;;
+              workflow) echo "${URL_WORKFLOW}" ;;
+              sequence) echo "${URL_SEQUENCE}" ;;
+              dataflow) echo "${URL_DATAFLOW}" ;;
+              lifecycle) echo "${URL_LIFECYCLE}" ;;
+              *) echo "" ;;
+            esac
+          }
+
+          {
+            echo "## Diagrams (Archify)"
+            echo ""
+            echo "Updated for \`${SHORT_SHA}\`."
+            echo ""
+            echo "| Type | Summary | View |"
+            echo "|---|---|---|"
+            while IFS= read -r diagram; do
+              TYPE="$(echo "$diagram" | jq -r '.diagram_type')"
+              SUMMARY="$(echo "$diagram" | jq -r '.summary')"
+              URL="$(artifact_url_for_type "$TYPE")"
+              if [ -n "$URL" ]; then
+                VIEW="[open in browser](${URL})"
+              else
+                VIEW="—"
+              fi
+              echo "| ${TYPE} | ${SUMMARY} | ${VIEW} |"
+            done < <(jq -c '.diagrams[]' "${{ steps.envelope.outputs.envelope-path }}")
+            echo ""
+            echo "| | | |"
+            echo "|---|---|---|"
+            if [ -n "${BUNDLE_URL}" ]; then
+              echo "| Download all | ZIP bundle | [download](${BUNDLE_URL}) |"
+            fi
+            echo "| Workflow | run ${{ github.run_number }} | [logs](${RUN_URL}) |"
+            echo ""
+            echo "> View links open HTML in your browser (GitHub login required). Artifacts retained 30 days."
+          } > comment.md
+
+      - name: Post sticky PR comment
+        if: steps.envelope.outputs.skipped != 'true'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: archify-diagram
+          path: comment.md
+
+      - name: Upload Stageflow run workspace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stageflow-archify-pr-${{ github.event.pull_request.number }}-${{ github.run_number }}
+          include-hidden-files: true
+          path: |
+            sf-run.json
+            ci-context.json
+            envelope.json
+            run-export.json
+            deliver-receipts.json
+            diagrams/
+            comment.md
+            .stageflow/state.db
+            .stageflow/state.db-wal
+            .stageflow/state.db-shm
+            .stageflow/runs/
+            !.stageflow/runs/**/.pi-agent/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Archify PR diagrams"
+            echo ""
+            if [ "${{ steps.envelope.outcome }}" != "success" ]; then
+              echo "**Status:** Stageflow pipeline did not complete."
+            elif [ "${{ steps.envelope.outputs.skipped }}" = "true" ]; then
+              echo "**Status:** skipped — no diagram-relevant changes detected."
+            elif [ -f deliver-receipts.json ]; then
+              COUNT="$(jq 'length' deliver-receipts.json)"
+              echo "**Status:** deliver succeeded for ${COUNT} diagram(s)."
+              echo ""
+              echo '```json'
+              cat deliver-receipts.json
+              echo '```'
+            else
+              echo "**Status:** deliver did not complete."
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"

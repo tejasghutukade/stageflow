@@ -6,12 +6,14 @@ catalog:
     - examples/plan-review
     - examples/github-release
     - examples/ci-validate
+    - examples/archify-on-pr
   tasks:
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review
     - examples/github-release
     - examples/ci-validate
+    - examples/archify-on-pr
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

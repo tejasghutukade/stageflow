@@ -115,9 +115,36 @@ Inspect envelopes in the operator console: run detail → stage → envelope vie
 
 MCP `get_run` returns envelope summary and artifact paths without full event streams.
 
+### CI consumption {#ci-consumption}
+
+In headless CI, downstream shell steps read envelopes via the CLI instead of querying SQLite or scraping transcripts.
+
+**Raw envelope** (stage contract as emitted):
+
+```bash
+sf envelope get --from sf-run.json --stage detect-changes --format envelope --json
+```
+
+**Handoff deliverables** (normalized shape for GHA scripts — absolute artifact paths, fork skip detection):
+
+```bash
+sf envelope get --from sf-run.json --stage author-diagrams \
+  --detect-stage detect-changes --format handoff --json > envelope.json
+```
+
+When the detect stage emits `fork_choice: []`, handoff output is `{ "skipped": true }` and downstream deliver/upload steps can no-op.
+
+Typical CI flow:
+
+1. `sf run --json --include stages > sf-run.json`
+2. `sf envelope get --format handoff …` → `envelope.json`
+3. Shell script consumes `envelope.json` (see [`examples/archify-on-pr/`](../examples/archify-on-pr/))
+
+Full recipe: [CI / headless](ci.md#handoff-envelope-extraction) · CLI flags: [`sf envelope get`](cli-reference.md#sf-envelope-get)
+
 ## See also
 
 - [YAML catalog](yaml-catalog.md) — `payload_schema` on stages
 - [HITL](hitl.md) — gates before emit
-- [Quick start](quickstart.md) — end-to-end first run
+- [CLI reference](cli-reference.md) — `sf envelope get`, handoff format
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — stages that exercise emit + artifacts

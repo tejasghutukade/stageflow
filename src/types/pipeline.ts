@@ -38,6 +38,7 @@ export type NormalizedPipelineStageEntry = {
   id: string;
   needs?: string;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
+  skill?: string;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
     | { kind: "uses"; path: string; absolutePath: string };

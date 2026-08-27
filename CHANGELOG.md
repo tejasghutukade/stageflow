@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
+### Added
+
+- CI headless run access: `sf run --json --include stages`, `sf envelope get` (`envelope` / `handoff` formats), `sf export-run`, `sf artifact read`
+- `sf skills list` / `sf skills install` (`--from-path`, `--from-zip`) for provisioning Pi skills in CI
+- Pipeline stage entry `skill:` binding (resolved at stage start; missing skill fails the stage)
+- `.github/actions/sf-run` composite for run + optional handoff extraction + export
+- `examples/archify-on-pr/` — PR diagram automation dogfood (conditional fork, Archify skill, GHA deliver)
+- `scripts/prepare-ci-context.sh` and `scripts/deliver-diagrams.sh` for deterministic CI context and Archify deliver
+- Fork-skipped stages persist as `skipped` in the run store and appear correctly in CLI/MCP projections
+
+### Fixed
+
+- Architecture deliver no longer pins evidence to the ephemeral `pull_request` merge commit (`GITHUB_SHA`); uses PR head SHA via `ci-context.json`
+
+## [0.3.0] - 2026-08-26
+
 ### Added
 
 - Conditional stage routing: pipeline `fork` field (`select: one | subset`, optional `allow_none`) and envelope `fork_choice`; unchosen branches and descendants are `skipped`
@@ -54,6 +72,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tejasghutukade/stageflow/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/tejasghutukade/stageflow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tejasghutukade/stageflow/compare/a30b7b4...v0.2.0
 [0.1.0]: https://github.com/tejasghutukade/stageflow/commit/a30b7b4

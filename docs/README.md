@@ -16,7 +16,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Pipeline, stage, and task file schema |
-| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf ui`, `sf providers` |
+| [CLI reference](cli-reference.md) | `sf run`, `sf validate`, `sf envelope`, `sf skills`, `sf ui`, `sf providers` |
 
 ## Core concepts
 
@@ -32,7 +32,11 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Operator console](operator-console.md) | Console pages, navigation, settings |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` is running |
-| [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions |
+| [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions, PR diagram dogfood |
+
+## Featured example
+
+**[Archify on PR](../examples/archify-on-pr/)** — pull-request diagram automation dogfooding Stageflow in GitHub Actions: conditional fork skip, pipeline skill binding, `sf envelope get --format handoff`, and deterministic Archify deliver outside the agent. See [CI: PR diagrams (Archify)](ci.md#pr-diagrams-archify) and [examples/archify-on-pr/README.md](../examples/archify-on-pr/README.md).
 
 ## Positioning
 

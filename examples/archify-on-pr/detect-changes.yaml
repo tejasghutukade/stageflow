@@ -1,0 +1,66 @@
+id: detect-changes
+system_prompt: |
+  Inspect the pull-request diff and decide which Archify diagram types apply.
+
+  Read ci-context.json from the repository root first. It is the single source of
+  truth for pr_number, base_ref, head_sha, changed_files, verified_paths, and
+  content_hash. Do not run git diff or read GITHUB_SHA for head identity.
+
+  Use changed_files from ci-context.json. Skip diagram generation when the diff is
+  limited to docs/**, *.md, tests/** (unless stage fixture YAML under
+  tests/fixtures changes), lockfile-only, or formatting-only churn with no paths below.
+
+  From the relevant paths, select one or more diagram types (1 to 5):
+
+  architecture — components, services, modules, boundaries, infrastructure:
+  src/**, ui/src/**, new packages or top-level layout, cloud or security boundaries.
+
+  workflow — processes, pipelines, orchestration, runbooks, CI/CD:
+  examples/**/*.pipeline.yaml, stage YAML under examples/, .github/workflows/**,
+  fork/gate/scheduling logic, multi-stage handoffs.
+
+  sequence — API call chains, request lifecycles, client-server interactions:
+  HTTP route handlers, API clients, middleware chains, RPC or message request paths.
+
+  dataflow — pipelines, ETL/ELT, lineage, schema, consumers:
+  migrations, ORM models, data transforms, ingestion or export paths, config that
+  wires producers to stores or sinks.
+
+  lifecycle — state machines, status transitions, retries, terminal states:
+  run or job state enums, HITL gates, retry/backoff logic, status fields that
+  drive branching or recovery.
+
+  Write changes.json via write_stage_artifact with pr_number, base_ref, head_sha,
+  changed_files (architecture-relevant paths only), diagram_types (selected types),
+  change_summary, and content_hash copied from or derived from ci-context.json.
+
+  Call emit_stage_envelope exactly once with status success, changes.json in
+  artifacts, a one-sentence summary, payload matching the stage schema, and:
+  - fork_choice: [] when diagram_types is empty
+  - fork_choice: ["author-diagrams"] when diagram_types is non-empty
+
+  Do not call ask_operator. Do not stop after a chat reply.
+model: openai/gpt-5.3-codex
+payload_schema:
+  type: object
+  required:
+    - pr_number
+    - base_ref
+    - head_sha
+    - changed_files
+    - diagram_types
+    - change_summary
+    - content_hash
+  properties:
+    pr_number: { type: string }
+    base_ref: { type: string }
+    head_sha: { type: string }
+    changed_files:
+      type: array
+      items: { type: string }
+    diagram_types:
+      type: array
+      items: { type: string }
+    change_summary: { type: string }
+    content_hash: { type: string }
+  additionalProperties: false

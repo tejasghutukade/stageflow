@@ -94,7 +94,69 @@ One document per invocation with `--json`:
 
 `ok` is `true` only for `succeeded`.
 
+### Including stage projections {#including-stage-projections}
+
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. The projection matches MCP/console run detail (stage id, status, envelope, artifacts). `--include stages` without `--json` exits `1`.
+
+```bash
+sf run --task examples/hello-world/my-task.task.yaml \
+  --pipeline examples/hello-world/hello.pipeline.yaml \
+  --json --include stages > sf-run.json
+```
+
+On success the document adds `stages[]` alongside the usual root keys (`ok`, `outcome`, `runId`, `runDir`). Without `--include`, the baseline shape is unchanged — no `stages` key.
+
+If the run store cannot be read after completion (for example, a locked database), the command exits non-zero and prints an error to stderr instead of emitting JSON without `stages[]`.
+
 Run records store optional **`pipeline_path`** and **`task_path`** catalog locators (for resume and triage). These appear on MCP `get_run` and console run detail — not in CLI `--json` stdout.
+
+### Handoff envelope extraction {#handoff-envelope-extraction}
+
+After `sf run --json`, read stage deliverables without querying SQLite:
+
+```bash
+sf envelope get --from sf-run.json --stage author-diagrams \
+  --detect-stage detect-changes --format handoff --json > envelope.json
+```
+
+| `--format` | Output |
+|------------|--------|
+| `envelope` (default) | Raw stage envelope JSON |
+| `handoff` | CI deliverables shape: `{ skipped: true }` when detect emits `fork_choice: []`, otherwise `{ skipped: false, runId, runDir, stageId, diagrams: [{ diagram_type, spec_path, summary }] }` with absolute `spec_path` values |
+
+Use `--from sf-run.json` to read `runId` and `runDir` from a prior `sf run --json` output file. `--detect-stage` is optional; when set, an empty `fork_choice` on that stage emits `{ skipped: true }` and exits `0`.
+
+### Composite action
+
+This repo ships [`.github/actions/sf-run`](../.github/actions/sf-run) for same-repo workflows. It runs `sf run --json --include stages`, optionally extracts a handoff envelope, and optionally writes `run-export.json`.
+
+```yaml
+- id: sf-run
+  uses: ./.github/actions/sf-run
+  with:
+    pipeline: examples/archify-on-pr/archify-on-pr.pipeline.yaml
+    task: examples/archify-on-pr/archify-on-pr.task.yaml
+    checkout: ${{ github.workspace }}
+    extra-args: --skip-gates --git-sha ${{ github.sha }}
+    detect-stage: detect-changes
+    stage: author-diagrams
+```
+
+| Input | Description |
+|-------|-------------|
+| `pipeline`, `task` | Required pipeline and task YAML paths |
+| `checkout` | Checkout path for `sf run` (default: `${{ github.workspace }}`) |
+| `extra-args` | Additional `sf run` flags |
+| `detect-stage` | Stage id for fork skip detection in handoff extraction |
+| `stage` | Stage id for handoff extraction (writes `envelope.json`) |
+| `export-run` | Set to `true` to write `run-export.json` via `sf export-run` |
+
+| Output | Description |
+|--------|-------------|
+| `run-id`, `run-dir` | From `sf-run.json` |
+| `skipped` | `"true"` when handoff JSON has `skipped: true` |
+| `envelope-path` | Path to `envelope.json` when `stage` is set |
+| `run-export-path` | Path to `run-export.json` when `export-run` is `true` |
 
 ## CI identity metadata
 
@@ -108,7 +170,7 @@ Optional flags on `sf run` (auto-detected on GitHub Actions when omitted):
 
 Recorded on the run for operator triage in the console.
 
-## Skills in CI
+## Skills in CI {#skills-in-ci}
 
 Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator checkout** `{ cwd, agentDir }`:
 
@@ -176,6 +238,25 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 ## State in CI
 
 Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
+
+## PR diagrams (Archify) {#pr-diagrams-archify}
+
+This repo dogfoods [`examples/archify-on-pr/`](../examples/archify-on-pr/) in
+[`.github/workflows/archify-pr-diagrams.yml`](../.github/workflows/archify-pr-diagrams.yml).
+
+On pull requests, Stageflow agents **detect** diagram-relevant diffs and choose
+one or more Archify types (`architecture`, `workflow`, `sequence`, `dataflow`,
+`lifecycle`). The **author-diagrams** stage writes `{type}.spec.json` per type.
+The workflow uses [`.github/actions/sf-run`](../.github/actions/sf-run) with
+`export-run: true`, then runs Archify `deliver` for each spec via
+`scripts/deliver-diagrams.sh`, uploads per-type HTML (unzipped for in-browser
+viewing) plus a `diagrams/` bundle, and updates a sticky PR comment. Skill
+provisioning uses `sf skills install --from-zip`; agents do not install Archify
+or post comments.
+
+When detect emits `fork_choice: []` (docs-only changes), GHA skips deliver,
+upload, and comment. Fork PRs cannot receive bot comments with the default token;
+see the example README.
 
 ## See also
 

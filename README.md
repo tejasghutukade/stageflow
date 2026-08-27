@@ -155,6 +155,16 @@ The process exits `0` when the Run succeeded, `1` when it failed (including a bu
 
 On a mixed Pipeline, default wait parks the Run (exit `2`). `--skip-gates` fails the Stage (exit `1`). A Pipeline with no HITL does not need the flag.
 
+Post-run extraction (dogfooded in [Archify PR diagrams](examples/archify-on-pr/)):
+
+```bash
+sf run ... --json --include stages > sf-run.json
+sf envelope get --from sf-run.json --stage author-diagrams --format handoff --json
+sf skills install --from-zip <url> --skill-name archify
+```
+
+See [docs/ci.md](docs/ci.md) for the full CI recipe and [`.github/actions/sf-run`](.github/actions/sf-run) composite action.
+
 ## State
 
 Runtime state lives in **`<git-root>/.stageflow/`** when inside a git repository (SQLite + per-run workspaces under `.stageflow/runs/`). Global config and `sf_owned` auth live under **`~/.stageflow/`**. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
@@ -187,8 +197,10 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 
 | Example | Description |
 |---------|-------------|
+| **[archify-on-pr](examples/archify-on-pr/)** | **Featured** — PR diagram automation: conditional fork, skill binding, envelope handoff, GHA deliver |
 | [hello-world](examples/hello-world/) | Single stage, domain-neutral |
 | [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** |
+| [conditional-fork](examples/conditional-fork/) | Exclusive fork routing with operator branch choice |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
 | [ci-validate](examples/ci-validate/) | Strict validate in CI |
 
@@ -203,7 +215,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/README.md](docs/README.md) | Documentation index |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
-| [docs/cli-reference.md](docs/cli-reference.md) | `sf run`, `sf validate`, `sf ui`, `sf providers` |
+| [docs/cli-reference.md](docs/cli-reference.md) | `sf run`, `sf envelope`, `sf skills`, `sf validate`, `sf ui`, `sf providers` |
 | [docs/envelopes.md](docs/envelopes.md) | Handoff envelope contract |
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |

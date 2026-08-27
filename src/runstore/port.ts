@@ -74,7 +74,13 @@ export type StageLogEvent = StageLogLine & {
 
 export type StageSnapshot = {
   stage_id: string;
-  status: "pending" | "running" | "waiting_for_input" | "succeeded" | "failed";
+  status:
+    | "pending"
+    | "running"
+    | "waiting_for_input"
+    | "succeeded"
+    | "failed"
+    | "skipped";
   events: StageLogEvent[];
   envelope: StageEnvelope | null;
   artifacts: string[];
@@ -219,6 +225,7 @@ export function stageStatusFromEvents(
     if (ev.event === "waiting_for_input") status = "waiting_for_input";
     if (ev.event === "succeeded") status = "succeeded";
     if (ev.event === "failed") status = "failed";
+    if (ev.event === "skipped") status = "skipped";
   }
   return status;
 }
@@ -226,7 +233,9 @@ export function stageStatusFromEvents(
 export function deriveStatusFromStages(stages: StageSnapshot[]): RunStatus {
   if (stages.length === 0) return "created";
   if (stages.some((s) => s.status === "failed")) return "failed";
-  if (stages.every((s) => s.status === "succeeded")) return "succeeded";
+  if (stages.every((s) => s.status === "succeeded" || s.status === "skipped")) {
+    return "succeeded";
+  }
   if (
     stages.some(
       (s) =>
