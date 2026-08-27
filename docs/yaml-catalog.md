@@ -161,6 +161,32 @@ Fixtures:
 
 Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
 
+### Skill binding {#skill-binding}
+
+Bind a Pi skill to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The skill name is merged into the resolved stage config at load time — do not put `skill:` in external stage files referenced via `uses:`.
+
+```yaml
+stages:
+  - id: author-diagrams
+    uses: ./author-diagrams.yaml
+    needs: detect-changes
+    skill: archify
+```
+
+| Behavior | Detail |
+|----------|--------|
+| Resolution | Looks up `.pi/skills/<name>/SKILL.md` under the operator checkout (`--operator-cwd` / `STAGEFLOW_OPERATOR_CWD`) and the Pi agent skills dir |
+| Startup | Stage fails before the agent session if the skill is not installed |
+| Agent prompt | Skill instructions are injected for the stage attempt |
+
+Install skills before `sf run` in CI:
+
+```bash
+sf skills install --from-zip <url> --skill-name archify
+```
+
+Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA provisions Archify, agents author JSON specs only; shell steps run `deliver` outside the agent.
+
 ## External stage files
 
 Stage YAML (referenced via `uses:`) requires:
@@ -171,7 +197,7 @@ Stage YAML (referenced via `uses:`) requires:
 | `system_prompt` | Agent instructions |
 | `model` | Provider/model string |
 
-Optional: `gate_kinds`, `payload_schema`, `skill`.
+Optional: `gate_kinds`, `payload_schema`. (`skill:` is set on the pipeline entry, not in external stage files — see [Skill binding](#skill-binding).)
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 

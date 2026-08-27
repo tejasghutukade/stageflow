@@ -94,7 +94,7 @@ One document per invocation with `--json`:
 
 `ok` is `true` only for `succeeded`.
 
-### Including stage projections
+### Including stage projections {#including-stage-projections}
 
 Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. The projection matches MCP/console run detail (stage id, status, envelope, artifacts). `--include stages` without `--json` exits `1`.
 
@@ -110,7 +110,7 @@ If the run store cannot be read after completion (for example, a locked database
 
 Run records store optional **`pipeline_path`** and **`task_path`** catalog locators (for resume and triage). These appear on MCP `get_run` and console run detail — not in CLI `--json` stdout.
 
-### Handoff envelope extraction
+### Handoff envelope extraction {#handoff-envelope-extraction}
 
 After `sf run --json`, read stage deliverables without querying SQLite:
 
@@ -170,7 +170,7 @@ Optional flags on `sf run` (auto-detected on GitHub Actions when omitted):
 
 Recorded on the run for operator triage in the console.
 
-## Skills in CI
+## Skills in CI {#skills-in-ci}
 
 Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator checkout** `{ cwd, agentDir }`:
 
@@ -239,7 +239,7 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 
 Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
 
-## PR diagrams (Archify)
+## PR diagrams (Archify) {#pr-diagrams-archify}
 
 This repo dogfoods [`examples/archify-on-pr/`](../examples/archify-on-pr/) in
 [`.github/workflows/archify-pr-diagrams.yml`](../.github/workflows/archify-pr-diagrams.yml).

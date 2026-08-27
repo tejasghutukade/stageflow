@@ -54,6 +54,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gate
 | `--pipeline` | Filesystem path to a pipeline YAML file (required) |
 | `--checkout` | Override task `checkout` with a working tree path |
 | `--json` | Print one JSON document to stdout |
+| `--include stages` | With `--json`, append `stages[]` run projection (requires `--json`) |
 | `--skip-gates` | Fail the stage instead of waiting on HITL (see [HITL](hitl.md)) |
 | `--git-sha` | Record git SHA on the run (CI identity) |
 | `--ci-pr-url` | Record PR URL on the run |
@@ -85,6 +86,126 @@ Example:
 ```bash
 sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/single.pipeline.yaml --json
 ```
+
+With stage projections (CI / post-run extraction):
+
+```bash
+sf run --task examples/hello-world/my-task.task.yaml \
+  --pipeline examples/hello-world/hello.pipeline.yaml \
+  --json --include stages > sf-run.json
+```
+
+`--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
+
+## `sf envelope get`
+
+Read a stage envelope or CI handoff JSON from the run store.
+
+```bash
+sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (optional when `--from` provides `runId`) |
+| `--stage` | Stage id to read (required) |
+| `--from` | Read `runId` / `runDir` from a prior `sf run --json` output file |
+| `--detect-stage` | For `--format handoff`: when this stage emitted `fork_choice: []`, output `{ skipped: true }` and exit `0` |
+| `--format` | `envelope` (default) — raw stage envelope; `handoff` — downstream deliverables shape |
+| `--json` | Print JSON to stdout |
+
+**Handoff format** (`--format handoff`):
+
+| Shape | When |
+|-------|------|
+| `{ "skipped": true }` | Detect stage emitted `fork_choice: []` (when `--detect-stage` is set) |
+| `{ skipped: false, runId, runDir, stageId, diagrams: [{ diagram_type, spec_path, summary }] }` | Author stage succeeded with spec artifacts |
+
+With `--from sf-run.json`, handoff requires the run document to have `outcome: "succeeded"` and `ok: true`.
+
+**Exit codes:** `0` success, `1` error (missing args, envelope not found, handoff build failure).
+
+Example (Archify-on-PR):
+
+```bash
+sf envelope get --from sf-run.json --stage author-diagrams \
+  --detect-stage detect-changes --format handoff --json > envelope.json
+```
+
+See [CI: handoff envelope extraction](ci.md#handoff-envelope-extraction) and [Envelopes: CI consumption](envelopes.md#ci-consumption).
+
+## `sf export-run`
+
+Export a portable run projection for debug or audit.
+
+```bash
+sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (optional when `--from` provides `runId`) |
+| `--from` | Read `runId` from a prior `sf run --json` output file |
+| `--out` | Write JSON to a file under the current working directory (stdout when omitted) |
+
+The run must be complete (`succeeded` or `failed`). In-progress runs exit `1`.
+
+**Exit codes:** `0` success, `1` error.
+
+## `sf artifact read`
+
+Read a run workspace artifact file safely (path confined to the run workspace).
+
+```bash
+sf artifact read --run <runId> --path <relPath> [--out <file>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--path` | Run-relative artifact path (as returned in envelope `artifacts[]`) |
+| `--out` | Write contents to a file under cwd (stdout when omitted) |
+
+**Exit codes:** `0` success, `1` error (missing artifact, path escape).
+
+Example:
+
+```bash
+sf artifact read --run "$RUN_ID" \
+  --path stages/detect-changes/attempts/1/artifacts/changes.json
+```
+
+## `sf skills`
+
+List and install Pi skills under `<git-root>/.pi/skills/` for pipeline stages that bind `skill:`.
+
+```bash
+sf skills list
+sf skills install --from-path <dir> [--skill-name <name>]
+sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | Installed project skills under `.pi/skills/` |
+| `install --from-path` | Copy a local skill tree into `.pi/skills/<name>/` |
+| `install --from-zip` | Download or read a zip, locate skill root, copy, then run skill `doctor` |
+
+| Flag | Description |
+|------|-------------|
+| `--skill-name` | Destination name (default: inferred from path or zip) |
+| `--checksum` | Optional `sha256:<hex>` integrity check for zip installs |
+
+Install runs the skill's `bin/<name>.mjs doctor` after copy. Missing or failing doctor exits `1`.
+
+Example (CI):
+
+```bash
+sf skills install --from-zip "https://github.com/tt-a1i/archify/releases/download/v2.15.0/archify.zip" \
+  --skill-name archify
+```
+
+See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding).
 
 ## `sf validate`
 
