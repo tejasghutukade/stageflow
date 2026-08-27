@@ -72,6 +72,14 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: node dist/cli.js providers login openai --type api_key --api-key-env OPENAI_API_KEY
 
+      - name: Prepare CI context
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: ./scripts/prepare-ci-context.sh ci-context.json
+
       - id: envelope
         name: Run Archify-on-PR pipeline
         uses: ./.github/actions/sf-run
@@ -99,8 +107,7 @@ jobs:
         name: Deliver diagram HTML
         if: steps.envelope.outputs.skipped != 'true'
         env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_CONTEXT_FILE: ci-context.json
           GITHUB_WORKSPACE: ${{ github.workspace }}
         run: ./scripts/deliver-diagrams.sh "${{ steps.envelope.outputs.envelope-path }}" diagrams
 
@@ -228,6 +235,7 @@ jobs:
           include-hidden-files: true
           path: |
             sf-run.json
+            ci-context.json
             envelope.json
             run-export.json
             deliver-receipts.json

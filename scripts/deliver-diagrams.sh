@@ -6,6 +6,7 @@ usage() {
 Usage: $(basename "$0") <envelope.json> [output-dir]
 
 Deliver Archify diagram specs listed in envelope.json to HTML.
+Reads head_sha and repo_url from ci-context.json when present (CI_CONTEXT_FILE).
 Writes deliver-receipts.json and exits non-zero if any deliver fails.
 EOF
   exit 1
@@ -24,12 +25,42 @@ require_cmd node
 ENVELOPE="${1:-}"
 OUT_DIR="${2:-diagrams}"
 ARCHIFY="${ARCHIFY_BIN:-.pi/skills/archify/bin/archify.mjs}"
-REPO_URL="${GITHUB_REPOSITORY:+https://github.com/${GITHUB_REPOSITORY}}"
 REPO_ROOT="${REPO_ROOT:-${GITHUB_WORKSPACE:-}}"
+CI_CONTEXT_FILE="${CI_CONTEXT_FILE:-ci-context.json}"
+
+load_ci_context() {
+  if [[ ! -f "$CI_CONTEXT_FILE" ]]; then
+    return 1
+  fi
+  jq -e '.head_sha and (.repo_url // .repository)' "$CI_CONTEXT_FILE" >/dev/null 2>&1
+}
+
+resolve_repo_url() {
+  if load_ci_context; then
+    local url repo
+    url="$(jq -r '.repo_url // empty' "$CI_CONTEXT_FILE")"
+    if [[ -n "$url" ]]; then
+      printf '%s' "$url"
+      return
+    fi
+    repo="$(jq -r '.repository // empty' "$CI_CONTEXT_FILE")"
+    if [[ -n "$repo" ]]; then
+      printf 'https://github.com/%s' "$repo"
+      return
+    fi
+  fi
+  if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+    printf 'https://github.com/%s' "$GITHUB_REPOSITORY"
+  fi
+}
 
 resolve_head_sha() {
+  if load_ci_context; then
+    jq -r '.head_sha' "$CI_CONTEXT_FILE"
+    return
+  fi
   if [[ -n "${PR_HEAD_SHA:-}" ]]; then
-    printf '%s\n' "$PR_HEAD_SHA"
+    printf '%s' "$PR_HEAD_SHA"
     return
   fi
   if [[ -n "$REPO_ROOT" ]] && git -C "$REPO_ROOT" rev-parse HEAD >/dev/null 2>&1; then
@@ -37,10 +68,11 @@ resolve_head_sha() {
     return
   fi
   if [[ -n "${GITHUB_SHA:-}" ]]; then
-    printf '%s\n' "$GITHUB_SHA"
+    printf '%s' "$GITHUB_SHA"
   fi
 }
 
+REPO_URL="$(resolve_repo_url)"
 HEAD_SHA="$(resolve_head_sha)"
 
 spec_has_sources() {

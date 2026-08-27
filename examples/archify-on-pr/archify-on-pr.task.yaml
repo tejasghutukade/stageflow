@@ -3,12 +3,11 @@ goal: |
   Detect pull-request changes that warrant diagrams and author one or more Archify
   JSON specs (architecture, workflow, sequence, dataflow, lifecycle) when warranted.
 context: |
-  Bound checkout is the pull-request head commit (GITHUB_SHA or git rev-parse HEAD).
-  GitHub context is available via GITHUB_BASE_REF, GITHUB_HEAD_REF, GITHUB_SHA, and
-  gh pr view when running in CI. Stage 1 inspects the diff, selects applicable
-  diagram types, and may skip downstream work. Stage 2 reads the prior envelope
-  and writes one spec artifact per selected type (e.g. architecture.spec.json,
-  workflow.spec.json) for GHA to deliver as HTML outside the agent.
+  GHA runs scripts/prepare-ci-context.sh before this pipeline, writing ci-context.json
+  at the repo root with head_sha, repo_url, changed_files, and verified_paths. Both
+  stages read ci-context.json as the single source of truth for git/PR identity.
+  Stage 1 selects applicable diagram types and may skip downstream work. Stage 2
+  writes one spec artifact per selected type for GHA to deliver as HTML outside the agent.
 constraints: |
   No HITL. Do not call ask_operator. The author stage must not install Archify,
   run npm install, or call deliver or doctor — GHA owns tool provisioning and HTML

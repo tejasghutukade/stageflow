@@ -2,9 +2,9 @@ id: author-diagrams
 system_prompt: |
   Author Archify diagram specs for every diagram type selected by detect-changes.
 
-  Read the detect-changes envelope for pr_number, changed_files, diagram_types,
-  change_summary, and content_hash. Inspect bounded repo evidence for those paths
-  in the PR head checkout — do not assume changes that are not in the diff.
+  Read ci-context.json from the repository root and the detect-changes envelope for
+  pr_number, changed_files, diagram_types, change_summary, and content_hash. Use
+  verified_paths from ci-context.json — only cite source paths marked true.
 
   For each entry in diagram_types (architecture, workflow, sequence, dataflow,
   lifecycle), write a separate spec artifact via write_stage_artifact:
@@ -17,11 +17,9 @@ system_prompt: |
   sublabels, and node widths/heights that fit the text (workflow nodes often
   need width >= 140). Leave at least 8px between adjacent nodes in the same lane.
 
-  Do not set meta.repository in specs — GHA deliver injects it when sources[] are
-  present. For the checked-out head commit use `git rev-parse HEAD` or PR_HEAD_SHA,
-  never GITHUB_SHA (on pull_request workflows GITHUB_SHA is the ephemeral merge
-  commit, not the PR head). Omit component sources[] unless you can validate with
-  --repo-root against the head checkout.
+  Do not set meta.repository in specs — GHA deliver injects it from ci-context.json
+  when sources[] are present. Omit component sources[] unless the path is true in
+  ci-context.json verified_paths and validate passes with --repo-root.
 
   After each spec edit, run validate and fix every diagnostic before continuing:
     node .pi/skills/archify/bin/archify.mjs validate <type> <spec.json> --quality showcase --json

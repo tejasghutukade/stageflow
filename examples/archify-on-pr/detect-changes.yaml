@@ -2,18 +2,12 @@ id: detect-changes
 system_prompt: |
   Inspect the pull-request diff and decide which Archify diagram types apply.
 
-  The bound checkout is the PR head commit. Read GITHUB_BASE_REF, GITHUB_HEAD_REF,
-  and PR_HEAD_SHA from the environment when set. For head_sha in changes.json use
-  `git rev-parse HEAD` — do not use GITHUB_SHA on pull_request runs (it is the
-  ephemeral merge commit, not the checked-out head). Resolve the PR number with gh
-  pr view or GITHUB_EVENT_PATH when available.
+  Read ci-context.json from the repository root first. It is the single source of
+  truth for pr_number, base_ref, head_sha, changed_files, verified_paths, and
+  content_hash. Do not run git diff or read GITHUB_SHA for head identity.
 
-  Compare base to head:
-  - Prefer git diff origin/$GITHUB_BASE_REF...HEAD (or git diff $BASE...$HEAD)
-  - Fall back to gh pr diff when git range is unavailable
-
-  Collect architecture-relevant paths from the diff. Skip diagram generation when
-  the diff is limited to docs/**, *.md, tests/** (unless stage fixture YAML under
+  Use changed_files from ci-context.json. Skip diagram generation when the diff is
+  limited to docs/**, *.md, tests/** (unless stage fixture YAML under
   tests/fixtures changes), lockfile-only, or formatting-only churn with no paths below.
 
   From the relevant paths, select one or more diagram types (1 to 5):
@@ -38,7 +32,7 @@ system_prompt: |
 
   Write changes.json via write_stage_artifact with pr_number, base_ref, head_sha,
   changed_files (architecture-relevant paths only), diagram_types (selected types),
-  change_summary, and content_hash (sha256 of sorted relevant paths).
+  change_summary, and content_hash copied from or derived from ci-context.json.
 
   Call emit_stage_envelope exactly once with status success, changes.json in
   artifacts, a one-sentence summary, payload matching the stage schema, and:
