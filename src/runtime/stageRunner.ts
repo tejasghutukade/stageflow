@@ -60,6 +60,7 @@ export type RunStageOptions = {
   operatorCatalog?: OperatorCatalog;
   completedEnvelopes?: Map<string, StageEnvelope>;
   skipGates?: boolean;
+  stageId?: string;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -226,12 +227,13 @@ export async function runStage(
     completedEnvelopes,
     skipGates,
   } = options;
+  const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
   const baseRoots =
     rootsOverride ??
     buildStageRoots(
       workspaceDir ?? store.getWorkspaceDir(runId),
-      stage.id,
+      stageId,
       checkoutRoot,
       attemptCtx,
     );
@@ -240,23 +242,23 @@ export async function runStage(
       ? withResolvedAuthPath(baseRoots, factoryCwd)
       : baseRoots;
   const attempt = attemptCtx?.attempt ?? 1;
-  await ensureStageExecutionForAttempt(store, runId, stage.id, attempt);
-  await store.ensureAttemptWorkspace(runId, stage.id, attempt);
+  await ensureStageExecutionForAttempt(store, runId, stageId, attempt);
+  await store.ensureAttemptWorkspace(runId, stageId, attempt);
   if (!skipStarted) {
     await appendLifecycleEventAndPatchExecution({
       store,
       runId,
-      stageId: stage.id,
+      stageId,
       event: { event: "started" },
       attemptCtx,
     });
   }
-  console.error(`Running stage ${stage.id} (${stage.model})...`);
+  console.error(`Running stage ${stageId} (${stage.model})...`);
 
   let activityChain = Promise.resolve();
   const enqueueActivity = (event: StageLogLine) => {
     activityChain = activityChain.then(() =>
-      store.appendStageEvent(runId, stage.id, event, attemptOpt),
+      store.appendStageEvent(runId, stageId, event, attemptOpt),
     );
   };
 
@@ -269,12 +271,13 @@ export async function runStage(
       store,
       runId,
       stage,
+      stageId,
       task,
       dag: dag ?? {
         nodes: [
-          { id: stage.id, needs: null, ancestors: [], stageIndex: 0 },
+          { id: stageId, needs: null, ancestors: [], stageIndex: 0 },
         ],
-        roots: [stage.id],
+        roots: [stageId],
         childrenOf: {},
       },
       checkoutRoot,
@@ -292,11 +295,11 @@ export async function runStage(
       await appendLifecycleEventAndPatchExecution({
         store,
         runId,
-        stageId: stage.id,
+        stageId,
         event: { event: "failed", reason: opened.reason },
         attemptCtx,
       });
-      console.error(`Stage ${stage.id} failed: ${opened.reason}`);
+      console.error(`Stage ${stageId} failed: ${opened.reason}`);
       return { ok: false, reason: opened.reason };
     }
     handle = opened.handle;
@@ -307,7 +310,7 @@ export async function runStage(
     outcome = await runStageYieldLoop({
       handle,
       runId,
-      stageId: stage.id,
+      stageId,
       hitl,
       workerMode,
       store: workerMode ? store : undefined,
@@ -317,15 +320,15 @@ export async function runStage(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     await activityChain;
-    hitl?.clearLiveWait(runId, stage.id);
+    hitl?.clearLiveWait(runId, stageId);
     await appendLifecycleEventAndPatchExecution({
       store,
       runId,
-      stageId: stage.id,
+      stageId,
       event: { event: "failed", reason },
       attemptCtx,
     });
-    console.error(`Stage ${stage.id} failed: ${reason}`);
+    console.error(`Stage ${stageId} failed: ${reason}`);
     await handle.close().catch(() => undefined);
     return { ok: false, reason };
   }
@@ -340,7 +343,7 @@ export async function runStage(
     return await finalizeStageResult({
       store,
       runId,
-      stageId: stage.id,
+      stageId,
       result: outcome,
       activityChain,
       attemptCtx,

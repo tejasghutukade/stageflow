@@ -1,0 +1,9 @@
+id: fanout-mix
+goal: |
+  Dummy mix walkthrough. At decide, reply with exactly mix. That fans out two
+  work clones in parallel and also runs the named sibling side.
+context: |
+  side should start with the first work clone, not after the last clone.
+  Answer each work clone with ok <codeword> (different words). Each success
+  writes codeword.md as a stage artifact. collect waits on the work clones
+  only and must list both codewords.

@@ -3,7 +3,11 @@ import type { PendingPrompt, PipelineTrackNode, RunDetail, StageSnapshot } from 
 import type { DetailView } from "../routes";
 import { statusCopy } from "../status/runStatus";
 import {
+  envelopeAsidePath,
+  formatCloneLabel,
+  parseEnvelopeAsidePath,
   resolveRunWorkspace,
+  runDetailShouldPoll,
   type OperatorSelection,
 } from "./resolveRunWorkspace";
 
@@ -721,5 +725,462 @@ describe("DAG track layout", () => {
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
     expect(workspace.trackLayout.mode).toBe("linear");
+  });
+});
+
+describe("formatCloneLabel", () => {
+  it("returns stageId when definitionId is missing", () => {
+    expect(formatCloneLabel("author-diagrams~1")).toBe("author-diagrams~1");
+  });
+
+  it("returns definitionId when stageId equals definitionId", () => {
+    expect(formatCloneLabel("collect", "collect")).toBe("collect");
+  });
+
+  it("returns definition plus 1-based ordinal for fan-out instances", () => {
+    expect(formatCloneLabel("author-diagrams~1", "author-diagrams", 1)).toBe(
+      "author-diagrams · 1",
+    );
+  });
+});
+
+function cloneTrackNode(
+  overrides: Partial<PipelineTrackNode> & Pick<PipelineTrackNode, "stage_id">,
+): PipelineTrackNode {
+  return {
+    status: "pending",
+    readiness: "blocked",
+    layer: 0,
+    layer_order: 0,
+    ...overrides,
+  };
+}
+
+const threeCloneTrack = {
+  nodes: [
+    cloneTrackNode({
+      stage_id: "detect-changes",
+      definition_id: "detect-changes",
+      status: "succeeded",
+      readiness: "succeeded",
+      layer: 0,
+      layer_order: 0,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~1",
+      definition_id: "author-diagrams",
+      status: "succeeded",
+      readiness: "succeeded",
+      layer: 1,
+      layer_order: 0,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~2",
+      definition_id: "author-diagrams",
+      status: "waiting_for_input",
+      readiness: "waiting",
+      layer: 1,
+      layer_order: 1,
+    }),
+    cloneTrackNode({
+      stage_id: "author-diagrams~3",
+      definition_id: "author-diagrams",
+      status: "running",
+      readiness: "running",
+      layer: 1,
+      layer_order: 2,
+    }),
+    cloneTrackNode({
+      stage_id: "collect",
+      definition_id: "collect",
+      status: "pending",
+      readiness: "blocked",
+      layer: 2,
+      layer_order: 0,
+      blocked_by: ["author-diagrams~2", "author-diagrams~3"],
+    }),
+  ],
+  edges: [
+    { from: "detect-changes", to: "author-diagrams~1" },
+    { from: "detect-changes", to: "author-diagrams~2" },
+    { from: "detect-changes", to: "author-diagrams~3" },
+    { from: "author-diagrams~1", to: "collect" },
+    { from: "author-diagrams~2", to: "collect" },
+    { from: "author-diagrams~3", to: "collect" },
+  ],
+};
+
+describe("AE-console-nodes clone labels", () => {
+  it("renders three clone nodes with definition-plus-index labels in dag mode", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "detect-changes", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams~1", status: "succeeded" }),
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({ stage_id: "author-diagrams~3", status: "running" }),
+        stage({ stage_id: "collect", status: "pending" }),
+      ],
+      {
+        pipeline_track: threeCloneTrack,
+        waiting_stage_id: "author-diagrams~1",
+        waiting_stage_ids: ["author-diagrams~2"],
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.trackLayout.mode).toBe("dag");
+    if (workspace.trackLayout.mode !== "dag") return;
+    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.id)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+      "author-diagrams~3",
+    ]);
+    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.label)).toEqual([
+      "author-diagrams · 1",
+      "author-diagrams · 2",
+      "author-diagrams · 3",
+    ]);
+    expect(workspace.trackStages.find((s) => s.id === "detect-changes")?.label).toBe(
+      "detect-changes",
+    );
+    expect(workspace.trackStages.find((s) => s.id === "collect")?.label).toBe(
+      "collect",
+    );
+    expect(
+      workspace.detailListRows.find((r) => r.stageId === "author-diagrams~2")?.label,
+    ).toBe("author-diagrams · 2");
+
+    const picked = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~2", userPicked: true }),
+    );
+    expect(picked.selectedStageId).toBe("author-diagrams~2");
+    expect(picked.trackStages.find((s) => s.selected)?.label).toBe(
+      "author-diagrams · 2",
+    );
+  });
+
+  it("labels a run-once author-diagrams node with the catalog id", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "detect-changes", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams", status: "running" }),
+        stage({ stage_id: "collect", status: "pending" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "detect-changes",
+              definition_id: "detect-changes",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams",
+              definition_id: "author-diagrams",
+              layer: 1,
+              status: "running",
+              readiness: "running",
+            }),
+            cloneTrackNode({
+              stage_id: "collect",
+              definition_id: "collect",
+              layer: 2,
+              status: "pending",
+              readiness: "blocked",
+            }),
+          ],
+          edges: [
+            { from: "detect-changes", to: "author-diagrams" },
+            { from: "author-diagrams", to: "collect" },
+          ],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.trackStages.find((s) => s.id === "author-diagrams")?.label).toBe(
+      "author-diagrams",
+    );
+  });
+});
+
+describe("AE-today-first-waiter clone waiters", () => {
+  it("defaults to waiting_stage_id, sticks a user pick of ~2, and marks both waiters", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "author-diagrams~1",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p2", message: "OK?" },
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "author-diagrams~1",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 0,
+              status: "waiting_for_input",
+              readiness: "waiting",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~2",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 1,
+              status: "waiting_for_input",
+              readiness: "waiting",
+            }),
+          ],
+          edges: [],
+        },
+        waiting_stage_id: "author-diagrams~1",
+        waiting_stage_ids: ["author-diagrams~1", "author-diagrams~2"],
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBe("author-diagrams~1");
+    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention).map((r) => r.stageId)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+    ]);
+
+    const picked = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~2", userPicked: true }),
+    );
+    expect(picked.selectedStageId).toBe("author-diagrams~2");
+  });
+});
+
+describe("AE-skipped-leftovers", () => {
+  it("shows sequential leftover clones as selectable skipped inspect nodes", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "author-diagrams~1", status: "succeeded" }),
+        stage({ stage_id: "author-diagrams~2", status: "failed" }),
+        stage({ stage_id: "author-diagrams~3", status: "skipped" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "author-diagrams~1",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~2",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 1,
+              status: "failed",
+              readiness: "failed",
+            }),
+            cloneTrackNode({
+              stage_id: "author-diagrams~3",
+              definition_id: "author-diagrams",
+              layer: 0,
+              layer_order: 2,
+              status: "skipped",
+              readiness: "skipped",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "author-diagrams~3", userPicked: true }),
+    );
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+      "author-diagrams~3",
+    ]);
+    expect(workspace.selectedStageId).toBe("author-diagrams~3");
+    expect(workspace.selectedStage?.status).toBe("skipped");
+    expect(workspace.trackStages.find((s) => s.id === "author-diagrams~3")?.status).toBe(
+      "skipped",
+    );
+    expect(workspace.composer).toEqual({ kind: "idle", label: "Session closed" });
+    expect(workspace.sessionChip).toBe("closed");
+  });
+});
+
+describe("handoff envelope aside", () => {
+  it("prepends a Handoff envelope row when the selected stage has an envelope", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "clarify", userPicked: true }),
+    );
+    expect(workspace.artifactFiles[0]).toEqual({
+      path: envelopeAsidePath("clarify"),
+      label: "Handoff envelope",
+      meta: "clarify",
+    });
+    expect(workspace.artifactFiles.slice(1)).toEqual([
+      { path: "notes.md", meta: "clarify" },
+      { path: "plan.md", meta: "review" },
+    ]);
+  });
+
+  it("omits the envelope row when the selected stage has no envelope", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "review", userPicked: true }),
+    );
+    expect(workspace.artifactFiles.every((f) => f.label !== "Handoff envelope")).toBe(
+      true,
+    );
+    expect(workspace.artifactFiles).toEqual([
+      { path: "notes.md", meta: "clarify" },
+      { path: "plan.md", meta: "review" },
+    ]);
+  });
+
+  it("selects the envelope sentinel while the envelope view is open", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection(),
+    );
+    expect(workspace.kind).toBe("envelope");
+    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
+  });
+
+  it("focuses the envelope stage in Files when the envelope route is open", () => {
+    const run = detail([
+      stage({
+        stage_id: "clarify",
+        status: "succeeded",
+        envelope,
+      }),
+      stage({
+        stage_id: "review",
+        status: "running",
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection({ previousStageId: "review", userPicked: true }),
+    );
+    expect(workspace.selectedStageId).toBe("clarify");
+    expect(workspace.artifactFiles[0]).toEqual({
+      path: envelopeAsidePath("clarify"),
+      label: "Handoff envelope",
+      meta: "clarify",
+    });
+    expect(workspace.selectedPath).toBe(envelopeAsidePath("clarify"));
+  });
+
+  it("parses envelope aside paths and rejects ordinary artifact paths", () => {
+    expect(parseEnvelopeAsidePath(envelopeAsidePath("clarify"))).toBe("clarify");
+    expect(parseEnvelopeAsidePath(envelopeAsidePath("author-diagrams~2"))).toBe(
+      "author-diagrams~2",
+    );
+    expect(parseEnvelopeAsidePath("notes.md")).toBeNull();
+    expect(parseEnvelopeAsidePath("stageflow:envelope:")).toBeNull();
+    expect(parseEnvelopeAsidePath("stageflow:other:clarify")).toBeNull();
+  });
+});
+
+describe("runDetailShouldPoll", () => {
+  const idle = { retrying: false, abandoning: false };
+
+  it("polls a failed run while a clone is still waiting", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({
+          stage_id: "work~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { status: "failed", waiting_stage_id: "work~2" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(true);
+  });
+
+  it("polls a failed run while a retried clone is running", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({ stage_id: "work~2", status: "running" }),
+      ],
+      { status: "failed" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(true);
+  });
+
+  it("stops polling when every stage has finished and nothing is retrying", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "work~1", status: "failed" }),
+        stage({ stage_id: "work~2", status: "failed" }),
+      ],
+      { status: "failed" },
+    );
+    expect(runDetailShouldPoll(run, idle)).toBe(false);
+    expect(runDetailShouldPoll(run, { retrying: true, abandoning: false })).toBe(
+      true,
+    );
   });
 });

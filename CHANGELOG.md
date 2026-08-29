@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-28
+
+### Added
+
+- Clonable successors: pipeline `clonable` / `clone_cap` and envelope `clone_forks` (`skip` | `once` | `fanout`) so a completing stage can clone one successor N times, then join
+- Parallel clone join receives every clone envelope (including failures); sequential clones fail-fast
+- Fan-out instance ids (`{catalogId}~{n}`) in the run store, CLI `--stage`, console, and MCP
+- Operator console clone tracks and HITL on a selected clone instance
+- `examples/clonable-fanout/` walkthrough (skip / once / parallel / sequential / mix)
+
 ## [0.4.0] - 2026-08-27
 
 ### Added
@@ -72,7 +82,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tejasghutukade/stageflow/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tejasghutukade/stageflow/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/tejasghutukade/stageflow/compare/a30b7b4...v0.2.0

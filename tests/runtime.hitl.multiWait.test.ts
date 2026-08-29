@@ -10,6 +10,7 @@ import {
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
+import { waitKey } from "../src/runtime/stageHitl.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { pipelinePath, catalogLocators, SAMPLE_TASK } from "./helpers/fixturePaths.js";
@@ -154,6 +155,14 @@ async function waitForDualWait(
     return a?.status === "waiting_for_input" && b?.status === "waiting_for_input";
   });
 }
+
+describe("HITL waitKey instance identity", () => {
+  it("clone instance ids get distinct waitKeys", () => {
+    expect(waitKey("run-1", "author-diagrams~1")).not.toBe(
+      waitKey("run-1", "author-diagrams~2"),
+    );
+  });
+});
 
 describe("runtime HITL multi-wait (T3 U3)", () => {
   it("AE1: simultaneous sibling waits with distinct pending prompts", async () => {

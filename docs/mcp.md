@@ -157,7 +157,7 @@ Read a text artifact from a run workspace.
 
 Path must be contained under the run workspace. Returns `404` for missing run or artifact.
 
-Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories.
+Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories. After clonable fan-out, `stageId` is the instance id (`author-diagrams~2`); run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
 ## Cursor configuration
 

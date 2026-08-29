@@ -1,0 +1,21 @@
+id: clonable-nested-fanout
+stages:
+  - id: A
+    system_prompt: Stage A.
+    model: anthropic/claude-sonnet-4-5
+  - id: B
+    needs: A
+    clonable: true
+    clone_cap: 5
+    system_prompt: Stage B.
+    model: anthropic/claude-sonnet-4-5
+  - id: C
+    needs: B
+    clonable: true
+    clone_cap: 5
+    system_prompt: Stage C.
+    model: anthropic/claude-sonnet-4-5
+  - id: join
+    needs: C
+    system_prompt: Join after C.
+    model: anthropic/claude-sonnet-4-5

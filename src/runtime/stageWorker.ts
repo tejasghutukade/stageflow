@@ -1,4 +1,5 @@
 import { PiAgentAdapter } from "../agent/piAdapter.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { createRunStore } from "../runstore/createStore.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
@@ -31,13 +32,16 @@ export async function runStageWorker(
     input.runId,
     input.rootDir,
   );
-  const stage = loaded.stages.find((s) => s.id === input.stageId);
+  const definitionId = definitionIdForInstance(meta.pipeline_dag, input.stageId);
+  const stage = loaded.stages.find((s) => s.id === definitionId);
   if (!stage) {
     return {
       ok: false,
       reason: `Stage ${input.stageId} not in pipeline ${meta.pipeline_id}`,
     };
   }
+
+  const dag = meta.pipeline_dag ?? loaded.dag;
 
   const agent = new PiAgentAdapter();
   const workspaceDir = store.getWorkspaceDir(input.runId);
@@ -66,8 +70,9 @@ export async function runStageWorker(
         store,
         runId: input.runId,
         stage,
+        stageId: input.stageId,
         task,
-        dag: loaded.dag,
+        dag,
         checkoutRoot,
         workspaceDir,
         factoryCwd: input.rootDir,
@@ -93,12 +98,14 @@ export async function runStageWorker(
         store,
         runId: input.runId,
         stage,
+        stageId: input.stageId,
         task,
-        dag: loaded.dag,
+        dag,
         checkoutRoot,
         workspaceDir,
         skipStarted: true,
         existingHandle: opened.handle,
+        workerMode: true,
         roots,
         attemptCtx,
         factoryCwd: input.rootDir,
@@ -113,8 +120,9 @@ export async function runStageWorker(
       store,
       runId: input.runId,
       stage,
+      stageId: input.stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
       workerMode: true,

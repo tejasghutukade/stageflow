@@ -1,0 +1,17 @@
+id: fanout-mix
+stages:
+  - id: decide-mix
+    uses: ./decide-mix.yaml
+    fork:
+      select: subset
+  - id: work
+    uses: ./work.yaml
+    needs: decide-mix
+    clonable: true
+    clone_cap: 3
+  - id: side
+    uses: ./side.yaml
+    needs: decide-mix
+  - id: collect
+    uses: ./collect.yaml
+    needs: work

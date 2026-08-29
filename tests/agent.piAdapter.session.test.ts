@@ -2,12 +2,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import {
   createStageSessionManager,
   ensureStageSessionFlushed,
   injectOpaqueAnswerIntoSession,
   openStageSessionManager,
   PiAgentAdapter,
+  resolveStageSessionFile,
   stageSessionFilePath,
   StageSessionReconstructError,
 } from "../src/agent/piAdapter.js";
@@ -369,5 +371,39 @@ describe("Pi stage session path layout (U3)", () => {
         resumeToken,
       }),
     ).toThrow(StageSessionReconstructError);
+  });
+
+  it("resolveStageSessionFile keeps clone sessions on the instance path", () => {
+    const roots = buildStageRoots("/tmp/run-ws", "work~2");
+    const input = {
+      roots,
+      stage: {
+        id: "work",
+        system_prompt: "work",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      stageId: "work~2",
+      task: { id: "t1", goal: "goal" },
+      priorEnvelope: null,
+    };
+    expect(resolveStageSessionFile(input)).toBe(
+      attemptSessionPath("/tmp/run-ws", "work~2", 1),
+    );
+    expect(resolveStageSessionFile(input)).not.toBe(
+      attemptSessionPath("/tmp/run-ws", "work", 1),
+    );
+  });
+
+  it("creates a missing session at resumeToken, not catalog stage.id", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "work~2");
+    const resumeToken = attemptSessionPath(runWs, "work~2", 1);
+    const catalogFile = attemptSessionPath(runWs, "work", 1);
+
+    const sm = await createStageSessionManager(roots, "work", resumeToken);
+    ensureStageSessionFlushed(sm, "work~2");
+
+    expect(existsSync(resumeToken)).toBe(true);
+    expect(existsSync(catalogFile)).toBe(false);
   });
 });

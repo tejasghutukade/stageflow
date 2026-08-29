@@ -45,6 +45,7 @@ export type PipelineTrackNode = {
   blocked_by?: string[];
   gate_kinds?: StageGateKind[];
   attempt_count?: number;
+  definition_id?: string;
 };
 
 export type PipelineTrackEdge = {
@@ -87,6 +88,8 @@ export type StageEnvelopeView = {
   notes?: string;
   payload?: Record<string, unknown>;
   stage_id?: string;
+  fork_choice?: string[];
+  clone_forks?: unknown[];
 };
 
 export type Decision = "accept" | "reject";
@@ -140,7 +143,13 @@ export type StageAnswer =
 
 export type StageSnapshot = {
   stage_id: string;
-  status: "pending" | "running" | "waiting_for_input" | "succeeded" | "failed";
+  status:
+    | "pending"
+    | "running"
+    | "waiting_for_input"
+    | "succeeded"
+    | "failed"
+    | "skipped";
   events: StageLogEvent[];
   envelope: StageEnvelopeView | null;
   artifacts: string[];

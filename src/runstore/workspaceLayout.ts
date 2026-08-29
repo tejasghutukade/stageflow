@@ -3,7 +3,7 @@ import path from "node:path";
 
 export { stageDir } from "./paths.js";
 
-function guardStageId(stageId: string): void {
+export function guardStageId(stageId: string): void {
   if (
     stageId.includes("..") ||
     stageId.includes("/") ||

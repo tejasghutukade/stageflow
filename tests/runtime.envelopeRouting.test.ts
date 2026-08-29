@@ -5,11 +5,16 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import { formatPriorEnvelope } from "../src/prompt/priorEnvelope.js";
 import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
   resolvePriorEnvelope,
 } from "../src/runtime/envelopeRouting.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -257,5 +262,110 @@ describe.each(storeKinds)("buildCompletedEnvelopesFromRun (%s)", (kind) => {
     });
 
     expect(result).toEqual({ ok: true, prior: upstreamEnvelope });
+  });
+});
+
+describe("resolvePriorEnvelope clone join list (U2 / U5)", () => {
+  it("once successor prior is the item envelope, not the predecessor", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const parent: StageEnvelope = {
+      status: "success",
+      summary: "clarify-summary",
+      artifacts: [],
+      clone_forks: [
+        {
+          successor_id: "design-doc",
+          action: "once",
+          envelope: {
+            status: "success",
+            summary: "once-prior",
+            artifacts: [],
+          },
+        },
+      ],
+    };
+    const result = await resolvePriorEnvelope({
+      dag: loaded.dag,
+      stageId: "design-doc",
+      completedEnvelopes: new Map([["clarify", parent]]),
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.prior?.summary).toBe("once-prior");
+    expect(result.joinPriors).toBeUndefined();
+  });
+
+  it("join of three clones fills joinPriors in clone-list order", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const base = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(base, {
+      catalogId: "design-doc",
+      predecessorId: "clarify",
+      count: 3,
+    });
+    const completed = new Map<string, StageEnvelope>([
+      ["design-doc~1", { status: "success", summary: "a", artifacts: [] }],
+      ["design-doc~2", { status: "failure", summary: "b-fail", artifacts: [] }],
+      ["design-doc~3", { status: "success", summary: "c", artifacts: [] }],
+    ]);
+    const result = await resolvePriorEnvelope({
+      dag: snapshot,
+      stageId: "join-doc",
+      completedEnvelopes: completed,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.prior).toBeNull();
+    expect(result.joinPriors?.map((e) => e.summary)).toEqual([
+      "a",
+      "b-fail",
+      "c",
+    ]);
+  });
+
+  it("missing succeeded-clone envelope fails closed", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const base = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(base, {
+      catalogId: "design-doc",
+      predecessorId: "clarify",
+      count: 2,
+    });
+    const result = await resolvePriorEnvelope({
+      dag: snapshot,
+      stageId: "join-doc",
+      completedEnvelopes: new Map([
+        ["design-doc~1", { status: "success", summary: "a", artifacts: [] }],
+      ]),
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("root stage still has prior null and no joinPriors", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const result = await resolvePriorEnvelope({
+      dag: loaded.dag,
+      stageId: "clarify",
+      completedEnvelopes: new Map(),
+    });
+    expect(result).toEqual({ ok: true, prior: null });
+  });
+
+  it("formatPriorEnvelope renders clone-list JSON when joinPriors present", () => {
+    const text = formatPriorEnvelope(null, [
+      { status: "success", summary: "a", artifacts: [] },
+      { status: "failure", summary: "b", artifacts: [] },
+    ]);
+    expect(text).toContain("Prior envelopes (2 clones, clone-list order):");
+    expect(text).toContain('"summary": "a"');
+    expect(text).toContain('"summary": "b"');
   });
 });

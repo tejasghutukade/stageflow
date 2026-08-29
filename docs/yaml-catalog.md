@@ -55,7 +55,7 @@ Each stage is an object with `id` and one of:
 | External | `uses: <path>` | Stage body lives in another YAML file |
 | Inline | `system_prompt`, `model`, … | Single-file pipeline |
 
-Optional on any entry: `needs`, `fork`, `gate_kinds`, `payload_schema`, `skill`.
+Optional on any entry: `needs`, `fork`, `clonable`, `clone_cap`, `gate_kinds`, `payload_schema`, `skill`.
 
 **`uses:` paths are relative to the pipeline file's directory.**
 
@@ -160,6 +160,47 @@ Fixtures:
 - [`fork-route-allow-none.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-allow-none.pipeline.yaml) — `allow_none: true`, empty choice valid
 
 Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
+
+### Clonable successors {#clonable-successors}
+
+A successor object entry may set `clonable: true`. The completing predecessor must then emit `clone_forks` for that successor (see [Envelopes](envelopes.md#clonable-successors)). Optional `clone_cap` is an integer; omit the field to take the default 5. When `clone_cap` is set, it must be an integer ≥ 2 — setting `1` is a catalog validation error. Bare string refs cannot carry `clonable`. Over-cap fails the predecessor.
+
+```yaml
+id: clonable-demo
+stages:
+  - id: detect-changes
+    uses: ./detect-changes.yaml
+  - id: author-diagrams
+    uses: ./author-diagrams.yaml
+    needs: detect-changes
+    clonable: true
+    clone_cap: 5
+  - id: collect
+    uses: ./collect.yaml
+    needs: author-diagrams
+```
+
+A clone may skip, run once, or fan out its own successor only when that successor is also `clonable`. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). v1 does not support two clones both fanning out the same successor.
+
+A clonable successor is not selected via `fork_choice`. `clone_forks` is the only include/skip/N control for that successor. Named siblings still use `fork_choice` when the parent has `fork`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (`fork.select: subset` plus clonable `design-doc` and named `implementation-plan`).
+
+#### Instance ids {#clonable-instance-ids}
+
+Run-once keeps the catalog id. Fan-out mints `{catalogId}~{n}` with 1-based `n` in the predecessor's clone-list order. YAML `needs` stays the catalog id. Instance ids must not contain `/`, `\`, or `..`. The operator console labels clones `definition · N` (see [Operator console](operator-console.md#clone-tracks)); disk paths and API keys stay the raw instance id.
+
+Sequential versus parallel join rules for clones are documented on [envelopes](envelopes.md#clonable-successors).
+
+Fixtures:
+
+- [`clonable-default-cap.pipeline.yaml`](../tests/fixtures/pipelines/clonable-default-cap.pipeline.yaml) — `clonable: true` with default cap 5
+- [`clone-fanout-join.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-join.pipeline.yaml) — fan-out then join
+- [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) — mix with named sibling + fork
+- [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) — clone toward a non-clonable collect
+- [`clonable-nested-fanout.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-fanout.pipeline.yaml) — clonable successor of a clone, then a non-clonable join
+
+Walkthrough: [`examples/clonable-fanout/`](../examples/clonable-fanout/).
+
+Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; that example remains a single `author-diagrams` session until a later change.
 
 ### Skill binding {#skill-binding}
 

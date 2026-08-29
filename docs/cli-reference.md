@@ -108,7 +108,7 @@ sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] 
 | Flag | Description |
 |------|-------------|
 | `--run` | Run id (optional when `--from` provides `runId`) |
-| `--stage` | Stage id to read (required) |
+| `--stage` | Stage id to read (required). After clonable fan-out this is the instance id (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids). |
 | `--from` | Read `runId` / `runDir` from a prior `sf run --json` output file |
 | `--detect-stage` | For `--format handoff`: when this stage emitted `fork_choice: []`, output `{ skipped: true }` and exit `0` |
 | `--format` | `envelope` (default) — raw stage envelope; `handoff` — downstream deliverables shape |

@@ -17,6 +17,18 @@ import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PI
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
+describe("HTTP stage id capture", () => {
+  it("AE6: tilde instance ids are one path segment", () => {
+    const stageId = "author-diagrams~1";
+    const pathname = `/api/runs/r1/stages/${encodeURIComponent(stageId)}/answer`;
+    const match = pathname.match(
+      /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/answer$/,
+    );
+    expect(match).not.toBeNull();
+    expect(decodeURIComponent(match?.[2] ?? "")).toBe(stageId);
+  });
+});
+
 let catalogRoot: string;
 let cleanupCatalogRoot: () => Promise<void>;
 

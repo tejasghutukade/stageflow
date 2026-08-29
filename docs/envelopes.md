@@ -20,6 +20,7 @@ type StageEnvelope = {
   artifacts: string[];
   payload?: Record<string, unknown>;
   fork_choice?: string[];
+  clone_forks?: CloneForkItem[];
   stage_id?: string;
   notes?: string;
 };
@@ -32,10 +33,11 @@ type StageEnvelope = {
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
 | `payload` | no | Structured data for downstream stages |
 | `fork_choice` | no* | Named immediate successor ids to run; required on success when the stage has a `fork` field |
+| `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
-\* Required for fork stages on success. On non-fork stages the field is optional and ignored for routing.
+\* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On stages without those fields the extra keys are optional; extra `clone_forks` for a non-clonable successor is ignored, not an emit error.
 
 ## Emitting an envelope
 
@@ -79,6 +81,43 @@ Rules:
 
 Unchosen successors are `skipped` — the same status used when a parent fails. See [YAML catalog](yaml-catalog.md#fork-pipelines) for the `fork` field.
 
+### Clonable successors {#clonable-successors}
+
+If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout`. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
+
+Item shape:
+
+- `{ successor_id, action }` for every item
+- plus `envelope` when `action` is `once`
+- plus `mode` (`parallel` | `sequential`) and `clones` when `action` is `fanout`
+
+```json
+{
+  "status": "success",
+  "summary": "Fan-out author-diagrams.",
+  "artifacts": [],
+  "clone_forks": [
+    {
+      "successor_id": "author-diagrams",
+      "action": "fanout",
+      "mode": "parallel",
+      "clones": [
+        { "envelope": { "status": "success", "summary": "clone 1", "artifacts": [] } },
+        { "envelope": { "status": "success", "summary": "clone 2", "artifacts": [] } }
+      ]
+    }
+  ]
+}
+```
+
+Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**, the join waits until every clone is finished, including failures, then receives every envelope. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
+
+`clone_forks` is required for each clonable successor. When the parent also has `fork`, `fork_choice` names only non-clonable siblings. A fork parent whose every child is clonable does not require `fork_choice`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario F.
+
+A clone may skip / once / fan-out its next stage only when that successor is clonable. A non-clonable successor is silence-is-valid: omit `clone_forks`; extra `clone_forks` for that successor is ignored, not an emit error. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). Two clones fanning out the same successor is unsupported in v1 because instance ids are `{catalogId}~{n}`. Dual-parent nested fan-out is fail-closed at apply.
+
+After fan-out, workspace paths and `--stage` keys use the instance id (`{catalogId}~{n}`); run-once keeps the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+
 ## Artifacts
 
 Use **`write_stage_artifact`** to create files under the stage attempt directory:
@@ -98,7 +137,7 @@ Artifact-backed HITL gates reference these paths in `ask_operator` — see [HITL
 
 ## Storage
 
-Accepted envelopes are written to the run workspace as `envelope.json` under the stage attempt. The SQLite run store also persists envelope JSON for console and MCP queries.
+Accepted envelopes persist in the SQLite run store (`SF_STORE=sqlite` only; see [CLI storage](cli-reference.md#storage-locations)). Artifacts still live under `stages/<stageId>/attempts/<n>/artifacts/`. CI recipes that write `envelope.json` (see [CI consumption](#ci-consumption) below) are `sf envelope get` exports, not run-workspace storage.
 
 ## Rules
 
@@ -110,6 +149,8 @@ Accepted envelopes are written to the run workspace as `envelope.json` under the
 ## Downstream consumption
 
 Later stages receive prior envelope context through the stage bootstrap (task + upstream summaries/payloads). Exact prompt assembly is handled by the runtime; authors focus on meaningful `payload` and `summary` content.
+
+After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order. After parallel clones the list includes failed clones. After sequential clones the join stage only runs if every clone succeeded. See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
 
 Inspect envelopes in the operator console: run detail → stage → envelope view (`#/runs/<runId>/stages/<stageId>/envelope`).
 
