@@ -15,8 +15,8 @@ Two pipelines:
 
 ## Prerequisites
 
-This feature is on the local branch. Use the **repo CLI**, not a global `sf`
-from npm — that binary does not have clonable fan-out yet.
+Use this repo's CLI (`npm run build` / `npm run dev`) or a Stageflow release
+that includes clonable fan-out. A globally installed `sf` from npm may lag.
 
 - Node.js ≥ 20
 - From repo root: `npm run build` and `npm run ui:build`

@@ -96,7 +96,7 @@ One document per invocation with `--json`:
 
 ### Including stage projections {#including-stage-projections}
 
-Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. The projection matches MCP/console run detail (stage id, status, envelope, artifacts). `--include stages` without `--json` exits `1`.
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. The projection matches MCP/console run detail (stage id, status, envelope, artifacts). `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
 ```bash
 sf run --task examples/hello-world/my-task.task.yaml \

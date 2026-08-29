@@ -341,4 +341,12 @@ describe("clonable successor fixtures", () => {
     expect(byId.get("C")).toMatchObject({ clonable: true, clone_cap: 5 });
     expect(byId.get("join")?.clonable).toBeUndefined();
   });
+
+  it("loads clone-fanout-mix with design-doc clonable and implementation-plan not", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-mix"));
+    const byId = new Map(loaded.dag.nodes.map((n) => [n.id, n]));
+    expect(byId.get("design-doc")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("implementation-plan")?.clonable).toBeUndefined();
+    expect(byId.get("join-doc")?.clonable).toBeUndefined();
+  });
 });
