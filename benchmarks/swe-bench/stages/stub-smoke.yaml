@@ -1,0 +1,10 @@
+id: stub-smoke
+system_prompt: |
+  You are running a SWE-bench wiring smoke test inside /testbed.
+
+  1. Run `git -C /testbed status` via bash to confirm repository access.
+  2. Do not modify any source files.
+  3. Call emit_stage_envelope with status success, a one-line summary, and an empty artifacts list.
+
+  This stage validates harness wiring only; a real solve pipeline replaces it later.
+model: anthropic/claude-sonnet-4-5

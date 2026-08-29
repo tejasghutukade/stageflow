@@ -42,3 +42,6 @@ software-factory-naming-research.json
 software-factory-usecases-pitch-targets.json
 software-factory-usecases-pitch-targets.md
 .worktrees/
+benchmarks/swe-bench/runs/
+benchmarks/swe-bench/**/__pycache__/
+benchmarks/swe-bench/**/*.egg-info/

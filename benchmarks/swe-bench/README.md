@@ -1,0 +1,159 @@
+# SWE-bench harness for Stageflow
+
+Batch runner that executes Stageflow pipelines **inside official SWE-bench Docker images** (`/testbed`), collects patches and reasoning traces, and delegates grading to the official SWE-bench tooling.
+
+Pipeline YAML (the actual solve workflow) is swappable; this package is the surrounding infrastructure.
+
+## Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| Docker | x86_64 eval images from Docker Hub (`swebench/sweb.eval.x86_64.*`) |
+| Python 3.11+ | Harness orchestrator |
+| Built Stageflow | `npm run build` at repo root (`dist/cli.js` required) |
+| LLM credentials | e.g. `ANTHROPIC_API_KEY`, or mount `~/.stageflow/agent/auth.json` |
+| Disk / RAM | 120 GB+ free recommended; 16 GB RAM; keep workers below `min(0.75 * cpu, 24)` |
+
+Install harness dependencies:
+
+```bash
+pip install -e benchmarks/swe-bench
+pip install -e 'benchmarks/swe-bench[eval]'   # optional: local swebench eval
+pip install sb-cli                           # optional: cloud grading
+```
+
+### Smoke verification (without Docker)
+
+When Docker is unavailable, verify wiring with:
+
+```bash
+npm run build
+cd benchmarks/swe-bench
+python3 -m pytest tests/ -q
+python3 -m harness batch --subset lite --split dev --slice 0:2 --dry-run --output-dir /tmp/swe-dry-run
+```
+
+With Docker and LLM credentials, run the full stub smoke:
+
+```bash
+./scripts/swe-bench-run-batch.sh benchmarks/swe-bench/runs/smoke lite dev 1 0:2
+```
+
+
+### Dry run (no Docker)
+
+Validate dataset loading and task rendering:
+
+```bash
+python3 -m harness batch \
+  --subset lite \
+  --split dev \
+  --slice 0:2 \
+  --dry-run \
+  --output-dir runs/dry-run
+```
+
+## Output layout
+
+```text
+runs/my_run/
+  all_preds.jsonl
+  preds.json
+  summary.json
+  trajs/{instance_id}.json
+  instances/{instance_id}/
+    task.yaml
+    sf-run.json
+    run-export.json
+    container.log
+  workers/{n}/.stageflow/    # isolated run store per worker
+```
+
+## Commands
+
+### Batch infer
+
+```bash
+python3 -m harness batch \
+  --subset verified \
+  --split test \
+  --workers 4 \
+  --output-dir runs/verified-run1 \
+  --pipeline pipelines/stub.pipeline.yaml \
+  --resume
+```
+
+Flags:
+
+- `--subset lite|verified`
+- `--split dev|test`
+- `--instance-ids id1 id2` — run specific instances
+- `--slice 0:10` — slice after filtering
+- `--resume` — skip instances already in `all_preds.jsonl`
+- `--model-name-or-path` — prediction metadata (default `stageflow/claude-sonnet-4-5`)
+
+### Grade locally
+
+```bash
+python3 -m harness grade \
+  --output-dir runs/verified-run1 \
+  --subset verified \
+  --run-id stageflow_verified_run1 \
+  --workers 8
+```
+
+Change `--run-id` when re-grading different patches for the same instances (SWE-bench caches by `run_id` + `instance_id`).
+
+### Grade in cloud (sb-cli)
+
+```bash
+python3 -m harness grade \
+  --output-dir runs/verified-run1 \
+  --subset verified \
+  --split test \
+  --run-id stageflow_verified_run1 \
+  --cloud
+```
+
+### Package leaderboard submission folder
+
+```bash
+python3 -m harness submit \
+  --output-dir runs/verified-run1 \
+  --subset verified \
+  --name 20260829_stageflow_claude
+```
+
+Produces a folder under `runs/verified-run1/submission/` with `all_preds.jsonl`, `trajs/`, `metadata.yaml`, and `README.md`. Copy official eval `logs/` into the output dir before submitting if grading locally.
+
+## Stageflow CLI helpers
+
+After a run:
+
+```bash
+sf export-run --from instances/foo/sf-run.json --out instances/foo/run-export.json
+sf export-trace --from instances/foo/sf-run.json --instance-id foo --out trajs/foo.json
+```
+
+## Swap in the real pipeline
+
+Replace `pipelines/stub.pipeline.yaml` with your solve pipeline and pass `--pipeline` to `batch`. The harness does not need changes.
+
+Requirements for benchmark pipelines:
+
+- No `ask_operator` / HITL gates (always runs with `--skip-gates`)
+- Agents edit `/testbed` via Pi `bash` / `read` / `write` / `edit`
+- Final stage calls `emit_stage_envelope`; patch is captured via `git diff` in `/testbed`
+
+## Leaderboard notes
+
+Official submission requires [SWE-bench/experiments](https://github.com/SWE-bench/experiments) PR with predictions, traces, logs, and a technical report. Since 2025-11-18, **SWE-bench Verified** also requires academic affiliation and an open publication.
+
+## Architecture
+
+1. Pull official `swebench/sweb.eval.x86_64.{instance}` image
+2. Start container with repo at `/testbed`
+3. Bootstrap Node 20 inside the container (eval images are Python-only)
+4. Mount Stageflow repo at `/opt/stageflow` and run `sf run --checkout /testbed`
+5. Extract `git -C /testbed diff` and bundle `pi-session.jsonl` traces
+6. Grade with `swebench eval` or `sb-cli submit` — do not reimplement test parsing

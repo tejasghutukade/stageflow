@@ -1,0 +1,4 @@
+id: stub
+stages:
+  - id: stub-smoke
+    uses: ../stages/stub-smoke.yaml
