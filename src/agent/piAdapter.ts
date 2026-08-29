@@ -75,7 +75,7 @@ import type {
   StageRunInput,
   StageRunResult,
 } from "./port.js";
-import { DEFAULT_STAGE_TIMEOUT_MS, runStageViaOpen } from "./port.js";
+import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 
 /**
  * Stage tool allowlist for sealed Pi sessions.
@@ -478,7 +478,7 @@ function buildUserPrompt(
   }
 
   const attempt = input.roots.attempt ?? 1;
-  const attemptArtifactsPath = `stages/${input.stage.id}/attempts/${attempt}/artifacts/`;
+  const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
   const skillBaseDir =
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
@@ -506,11 +506,11 @@ function buildUserPrompt(
 
   return [
     `Task id: ${input.task.id}`,
-    `Stage id: ${input.stage.id}`,
+    `Stage id: ${runtimeStageId(input)}`,
     `Goal: ${input.task.goal}`,
     input.task.context ? `Context: ${input.task.context}` : "",
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
-    formatPriorEnvelope(input.priorEnvelope),
+    formatPriorEnvelope(input.priorEnvelope, input.priorEnvelopes),
     "",
     artifactGuidance,
     emitHint,
@@ -631,6 +631,13 @@ export function stageSessionFilePath(
   return ctx.sessionPath(roots.runWorkspaceDir, stageId);
 }
 
+export function resolveStageSessionFile(input: StageRunInput): string {
+  return (
+    input.resumeToken ??
+    stageSessionFilePath(input.roots, runtimeStageId(input))
+  );
+}
+
 export class StageSessionReconstructError extends Error {
   readonly stageId: string;
   readonly sessionFile: string;
@@ -653,8 +660,8 @@ export class StageSessionReconstructError extends Error {
 export async function createStageSessionManager(
   roots: StageRoots,
   stageId: string,
+  sessionFile = stageSessionFilePath(roots, stageId),
 ): Promise<SessionManager> {
-  const sessionFile = stageSessionFilePath(roots, stageId);
   await mkdir(path.dirname(sessionFile), { recursive: true });
   if (!(await fileExists(sessionFile))) {
     await writeFile(sessionFile, "");
@@ -915,6 +922,7 @@ async function prepareStageSessionWiring(
     capture,
     input.stage.payload_schema,
     input.forkEmitContext,
+    input.cloneEmitContext,
   );
   const emitTool = defineTool(emitDef);
 
@@ -925,7 +933,7 @@ async function prepareStageSessionWiring(
 
   const artifactDef = createWriteStageArtifactTool({
     runWorkspaceDir: roots.runWorkspaceDir,
-    stageId: input.stage.id,
+    stageId: runtimeStageId(input),
     attempt: roots.attempt ?? 1,
   });
   const artifactTool = defineTool(artifactDef);
@@ -1041,9 +1049,9 @@ export async function reconstructStageSessionForAnswer(
 ): Promise<ReconstructedStageSession> {
   const sessionManager = await openStageSessionManager(
     input.roots,
-    input.stage.id,
+    runtimeStageId(input),
   );
-  const sessionFile = ensureStageSessionFlushed(sessionManager, input.stage.id);
+  const sessionFile = ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
 
   let injection: InjectOpaqueAnswerResult;
   try {
@@ -1051,7 +1059,7 @@ export async function reconstructStageSessionForAnswer(
   } catch (err) {
     throw new StageSessionReconstructError(
       `failed to inject answer into stage session: ${sessionFile}`,
-      { stageId: input.stage.id, sessionFile, cause: err },
+      { stageId: runtimeStageId(input), sessionFile, cause: err },
     );
   }
 
@@ -1059,7 +1067,7 @@ export async function reconstructStageSessionForAnswer(
   if (isStageRunResult(wiring)) {
     throw new StageSessionReconstructError(
       wiring.ok === false ? wiring.reason : "stage session reconstruct failed",
-      { stageId: input.stage.id, sessionFile },
+      { stageId: runtimeStageId(input), sessionFile },
     );
   }
 
@@ -1085,7 +1093,7 @@ export async function reconstructStageSessionForAnswer(
     if (resolved.error || !resolved.model) {
       throw new StageSessionReconstructError(
         resolved.error ?? `Model not found: ${input.stage.model}`,
-        { stageId: input.stage.id, sessionFile },
+        { stageId: runtimeStageId(input), sessionFile },
       );
     }
     await session.setModel(resolved.model);
@@ -1115,7 +1123,7 @@ export async function reconstructStageSessionForAnswer(
       `failed to reconstruct stage session: ${
         err instanceof Error ? err.message : String(err)
       }`,
-      { stageId: input.stage.id, sessionFile, cause: err },
+      { stageId: runtimeStageId(input), sessionFile, cause: err },
     );
   }
 }
@@ -1137,7 +1145,7 @@ async function bindStageSession(
     settingsManager: wiring.settingsManager,
   });
   const session = created.session;
-  ensureStageSessionFlushed(sessionManager, input.stage.id);
+  ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
   await session.bindExtensions({});
 
   const resolved = resolveCliModel({
@@ -1179,8 +1187,7 @@ export class PiAgentAdapter implements AgentPort {
   openStage(input: StageRunInput): StageHandle {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();
-    const sessionFile =
-      input.resumeToken ?? stageSessionFilePath(input.roots, input.stage.id);
+    const sessionFile = resolveStageSessionFile(input);
 
     let sessionManager: SessionManager | undefined;
     let resumeWaiting = false;
@@ -1196,17 +1203,17 @@ export class PiAgentAdapter implements AgentPort {
         throw new StageSessionReconstructError(
           `stage session file corrupt or unreadable for resume: ${sessionFile}`,
           {
-            stageId: input.stage.id,
+            stageId: runtimeStageId(input),
             sessionFile,
             cause: err,
           },
         );
       }
-      ensureStageSessionFlushed(sessionManager, input.stage.id);
+      ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
       if (!findOpenToolCall(sessionManager)) {
         throw new StageSessionReconstructError(
           `stage session has no open tool call for resume: ${sessionFile}`,
-          { stageId: input.stage.id, sessionFile },
+          { stageId: runtimeStageId(input), sessionFile },
         );
       }
       resumeWaiting = true;
@@ -1221,7 +1228,8 @@ export class PiAgentAdapter implements AgentPort {
       if (!sessionManager) {
         sessionManager = await createStageSessionManager(
           input.roots,
-          input.stage.id,
+          runtimeStageId(input),
+          sessionFile,
         );
       }
       const prepared = await prepareStageSessionWiring(
@@ -1280,11 +1288,11 @@ export class PiAgentAdapter implements AgentPort {
     };
 
     return createConnectedAskWaitStageHandle({
-      stageId: input.stage.id,
+      stageId: runtimeStageId(input),
       askWaitChannel,
       onBeforeWaitYield: () => {
         if (sessionManager) {
-          ensureStageSessionFlushed(sessionManager, input.stage.id);
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
         }
       },
       run: async () => {
@@ -1304,7 +1312,7 @@ export class PiAgentAdapter implements AgentPort {
               if (!sessionManager) {
                 throw new StageSessionReconstructError(
                   "stage session missing during resume deliver",
-                  { stageId: input.stage.id, sessionFile },
+                  { stageId: runtimeStageId(input), sessionFile },
                 );
               }
               injectOpaqueAnswerIntoSession(sessionManager, answer);
@@ -1317,7 +1325,7 @@ export class PiAgentAdapter implements AgentPort {
                 if (!session || !sessionManager) {
                   throw new StageSessionReconstructError(
                     "stage session missing during resume continue",
-                    { stageId: input.stage.id, sessionFile },
+                    { stageId: runtimeStageId(input), sessionFile },
                   );
                 }
                 syncAgentMessagesFromSession(session, sessionManager);
@@ -1330,7 +1338,7 @@ export class PiAgentAdapter implements AgentPort {
         await preparePromise.catch(() => undefined);
         if (closeOptions?.park) {
           if (sessionManager) {
-            ensureStageSessionFlushed(sessionManager, input.stage.id);
+            ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
             if (askWaitChannel.hasPending) {
               await repairPrematureAskOperatorClosure(sessionFile);
             }

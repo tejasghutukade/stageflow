@@ -242,6 +242,131 @@ describe("resolvePipelineDag", () => {
       { id: "design-doc", needs: "clarify" },
     ]);
   });
+
+  it("parsePipelineStageEntries copies clonable and clone_cap when present", () => {
+    const entries = parsePipelineStageEntries(
+      [{ id: "author", clonable: true, clone_cap: 3 }],
+      ctx("clonable-parse"),
+    );
+    expect(entries).toEqual([{ id: "author", clonable: true, clone_cap: 3 }]);
+  });
+
+  it("extractPipelineStageIds accepts clonable keys on object entries", () => {
+    expect(
+      extractPipelineStageIds([
+        { id: "detect" },
+        { id: "author", needs: "detect", clonable: true },
+        { id: "collect", needs: "author" },
+      ]),
+    ).toEqual(["detect", "author", "collect"]);
+  });
+
+  it("AE1: clonable without clone_cap defaults to 5; siblings omit fields", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "detect" },
+        { id: "author", needs: "detect", clonable: true },
+        { id: "collect", needs: "author" },
+      ],
+      ctx("clonable-default"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("author")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("detect")?.clonable).toBeUndefined();
+    expect(byId.get("detect")?.clone_cap).toBeUndefined();
+    expect(byId.get("collect")?.clonable).toBeUndefined();
+    expect(byId.get("collect")?.clone_cap).toBeUndefined();
+  });
+
+  it("AE2: explicit clone_cap 3 is stored on the clonable node", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "detect" },
+        { id: "author", needs: "detect", clonable: true, clone_cap: 3 },
+        { id: "collect", needs: "author" },
+      ],
+      ctx("clonable-cap-3"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("author")).toMatchObject({ clonable: true, clone_cap: 3 });
+  });
+
+  it("AE4: clone_cap without clonable is rejected", () => {
+    const run = () =>
+      resolvePipelineDag(
+        [
+          { id: "detect" },
+          { id: "author", needs: "detect", clone_cap: 5 },
+          { id: "collect", needs: "author" },
+        ],
+        ctx("cap-without-flag"),
+      );
+    expect(run).toThrow(/clone_cap/);
+    expect(run).toThrow(/clonable/);
+  });
+
+  it.each([1, 6.5, 0])("AE5: clone_cap %s is rejected", (cloneCap) => {
+    const run = () =>
+      resolvePipelineDag(
+        [
+          { id: "detect" },
+          { id: "author", needs: "detect", clonable: true, clone_cap: cloneCap },
+          { id: "collect", needs: "author" },
+        ],
+        ctx("bad-clone-cap"),
+      );
+    expect(run).toThrow(/clone_cap/);
+    expect(run).toThrow(/2/);
+  });
+
+  it("AE6: clonable on a leaf stage is rejected", () => {
+    expect(() =>
+      resolvePipelineDag([{ id: "leaf", clonable: true }], ctx("clonable-leaf")),
+    ).toThrow(/clonable.*leaf.*no children/i);
+  });
+
+  it("clonable: false on a non-leaf omits resolved clonable fields", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "detect" },
+        { id: "author", needs: "detect", clonable: false },
+        { id: "collect", needs: "author" },
+      ],
+      ctx("clonable-false"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("author")?.clonable).toBeUndefined();
+    expect(byId.get("author")?.clone_cap).toBeUndefined();
+  });
+
+  it("clone_cap with clonable: false is rejected", () => {
+    const run = () =>
+      resolvePipelineDag(
+        [
+          { id: "detect" },
+          { id: "author", needs: "detect", clonable: false, clone_cap: 5 },
+          { id: "collect", needs: "author" },
+        ],
+        ctx("cap-with-flag-false"),
+      );
+    expect(run).toThrow(/clone_cap/);
+    expect(run).toThrow(/clonable/);
+  });
+
+  it("allows fork and clonable on the same entry", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "detect" },
+        { id: "author", needs: "detect", clonable: true, fork: { select: "one" } },
+        { id: "collect", needs: "author" },
+      ],
+      ctx("fork-and-clonable"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("author")?.clonable).toBe(true);
+    expect(byId.get("author")?.clone_cap).toBe(5);
+    expect(byId.get("author")?.fork).toEqual({ select: "one", allow_none: false });
+  });
 });
 
 describe("listPipelineUsageByStage with object-form pipelines", () => {
@@ -331,5 +456,27 @@ describe("loadPipeline fork fixtures", () => {
     expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
     expect(byId.get("branch-a")?.fork).toBeUndefined();
     expect(byId.get("branch-b")?.fork).toBeUndefined();
+  });
+});
+
+describe("loadPipeline clonable fixtures", () => {
+  it("AE1: clonable-default-cap loads with default clone_cap 5", async () => {
+    const { dag } = await loadPipeline(pipelinePath("clonable-default-cap"));
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("design-doc")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("clarify")?.clonable).toBeUndefined();
+    expect(byId.get("clarify")?.clone_cap).toBeUndefined();
+    expect(byId.get("implementation-plan")?.clonable).toBeUndefined();
+    expect(byId.get("implementation-plan")?.clone_cap).toBeUndefined();
+  });
+
+  it("AE7: fork-one-of-two leaves clonable fields absent on every node", async () => {
+    const { dag } = await loadPipeline(pipelinePath("fork-one-of-two"));
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("clarify")?.fork).toEqual({ select: "one", allow_none: false });
+    for (const node of dag.nodes) {
+      expect(node.clonable).toBeUndefined();
+      expect(node.clone_cap).toBeUndefined();
+    }
   });
 });

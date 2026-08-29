@@ -20,6 +20,7 @@ type StageEnvelope = {
   artifacts: string[];
   payload?: Record<string, unknown>;
   fork_choice?: string[];
+  clone_forks?: CloneForkItem[];
   stage_id?: string;
   notes?: string;
 };
@@ -32,10 +33,11 @@ type StageEnvelope = {
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
 | `payload` | no | Structured data for downstream stages |
 | `fork_choice` | no* | Named immediate successor ids to run; required on success when the stage has a `fork` field |
+| `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
-\* Required for fork stages on success. On non-fork stages the field is optional and ignored for routing.
+\* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On stages without those fields the extra keys are optional; extra `clone_forks` for a non-clonable successor is ignored, not an emit error.
 
 ## Emitting an envelope
 
@@ -78,6 +80,39 @@ Rules:
 - `fork_choice` on a failure emit is ignored; no successor is named.
 
 Unchosen successors are `skipped` — the same status used when a parent fails. See [YAML catalog](yaml-catalog.md#fork-pipelines) for the `fork` field.
+
+### Clonable successors {#clonable-successors}
+
+If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout`. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
+
+Item shape:
+
+- `{ successor_id, action }` for every item
+- plus `envelope` when `action` is `once`
+- plus `mode` (`parallel` | `sequential`) and `clones` when `action` is `fanout`
+
+```json
+{
+  "status": "success",
+  "summary": "Fan-out author-diagrams.",
+  "artifacts": [],
+  "clone_forks": [
+    {
+      "successor_id": "author-diagrams",
+      "action": "fanout",
+      "mode": "parallel",
+      "clones": [
+        { "envelope": { "status": "success", "summary": "clone 1", "artifacts": [] } },
+        { "envelope": { "status": "success", "summary": "clone 2", "artifacts": [] } }
+      ]
+    }
+  ]
+}
+```
+
+Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**, the join waits until every clone is finished, including failures, then receives every envelope. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
+
+A clone may skip / once / fan-out its next stage only when that successor is clonable. Non-clonable collect (AE7) is silence-is-valid: omit `clone_forks`; extra `clone_forks` for collect is ignored, not an emit error. See [nested clonable gate](plans/clonable-stage-fanout-diagrams/nested-clonable-gate.workflow.html). Two clones fanning out the same successor is unsupported in v1 because instance ids are `{catalogId}~{n}`. Dual-parent nested fan-out is fail-closed at apply.
 
 ## Artifacts
 

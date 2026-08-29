@@ -1,6 +1,9 @@
 import type { StageSnapshot } from "./port.js";
 
-export function syntheticPendingSnapshot(stageId: string): StageSnapshot {
+export function syntheticPendingSnapshot(
+  stageId: string,
+  definitionId?: string,
+): StageSnapshot {
   return {
     stage_id: stageId,
     status: "pending" as const,
@@ -8,5 +11,6 @@ export function syntheticPendingSnapshot(stageId: string): StageSnapshot {
     envelope: null,
     artifacts: [],
     attempt_count: 1,
+    ...(definitionId !== undefined ? { definition_id: definitionId } : {}),
   };
 }

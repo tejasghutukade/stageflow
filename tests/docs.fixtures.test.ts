@@ -304,3 +304,41 @@ describe("hitl-four-kinds-proving catalog", () => {
     }
   });
 });
+
+describe("clonable successor fixtures", () => {
+  it("loads clonable-default-cap with design-doc clonable", async () => {
+    const loaded = await loadPipeline(pipelinePath("clonable-default-cap"));
+    expect(loaded.pipeline.stages).toEqual([
+      "clarify",
+      "design-doc",
+      "implementation-plan",
+    ]);
+    const byId = new Map(loaded.dag.nodes.map((n) => [n.id, n]));
+    expect(byId.get("design-doc")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("implementation-plan")?.clonable).toBeUndefined();
+  });
+
+  it("loads clonable-nested-gate with collect not clonable", async () => {
+    const loaded = await loadPipeline(pipelinePath("clonable-nested-gate"));
+    expect(loaded.pipeline.stages).toEqual([
+      "detect-changes",
+      "author-diagrams",
+      "collect",
+    ]);
+    const byId = new Map(loaded.dag.nodes.map((n) => [n.id, n]));
+    expect(byId.get("author-diagrams")).toMatchObject({
+      clonable: true,
+      clone_cap: 5,
+    });
+    expect(byId.get("collect")?.clonable).toBeUndefined();
+  });
+
+  it("loads clonable-nested-fanout with C clonable and join not", async () => {
+    const loaded = await loadPipeline(pipelinePath("clonable-nested-fanout"));
+    expect(loaded.pipeline.stages).toEqual(["A", "B", "C", "join"]);
+    const byId = new Map(loaded.dag.nodes.map((n) => [n.id, n]));
+    expect(byId.get("B")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("C")).toMatchObject({ clonable: true, clone_cap: 5 });
+    expect(byId.get("join")?.clonable).toBeUndefined();
+  });
+});

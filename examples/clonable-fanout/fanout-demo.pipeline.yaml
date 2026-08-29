@@ -1,0 +1,12 @@
+id: fanout-demo
+stages:
+  - id: decide
+    uses: ./decide.yaml
+  - id: work
+    uses: ./work.yaml
+    needs: decide
+    clonable: true
+    clone_cap: 3
+  - id: collect
+    uses: ./collect.yaml
+    needs: work

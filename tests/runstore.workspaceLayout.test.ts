@@ -16,6 +16,7 @@ import {
   listArtifactNames,
   resolveArtifactTarget,
   stageArtifactsDir,
+  stageDir,
   stageLogPath,
 } from "../src/runstore/workspaceLayout.js";
 
@@ -79,6 +80,20 @@ describe("RunWorkspaceLayout", () => {
     const ws = "/tmp/run-1";
     expect(() => attemptLogPath(ws, "../x", 1)).toThrow(/stageId/);
     expect(() => attemptWorkspaceDir(ws, "a/b", 2)).toThrow(/stageId/);
+    expect(() => stageDir(ws, "a/b")).toThrow(/stageId/);
+  });
+
+  it("clone instance ids get distinct attempt workspaces", () => {
+    const ws = "/tmp/run-1";
+    expect(attemptWorkspaceDir(ws, "author-diagrams~1", 1)).toBe(
+      path.join(ws, "stages", "author-diagrams~1", "attempts", "1"),
+    );
+    expect(attemptWorkspaceDir(ws, "author-diagrams~2", 1)).toBe(
+      path.join(ws, "stages", "author-diagrams~2", "attempts", "1"),
+    );
+    expect(attemptWorkspaceDir(ws, "author-diagrams~1", 1)).not.toBe(
+      attemptWorkspaceDir(ws, "author-diagrams~2", 1),
+    );
   });
 
   it("resolveArtifactTarget rejects escapes and accepts nested paths", () => {

@@ -212,6 +212,256 @@ describe("buildPipelineTrack", () => {
     );
   });
 
+  it("AE1: freeze-shaped chain track nodes carry definition_id", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams", "collect"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author-diagrams"], "author-diagrams": ["collect"] },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 2,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(track.nodes.map((n) => [n.stage_id, n.definition_id])).toEqual([
+      ["detect", "detect"],
+      ["author-diagrams", "author-diagrams"],
+      ["collect", "collect"],
+    ]);
+  });
+
+  it("resolves gate_kinds for a clone instance via definition_id", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams~1", "collect"],
+      roots: ["detect"],
+      childrenOf: {
+        detect: ["author-diagrams~1"],
+        "author-diagrams": ["collect"],
+      },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams~1",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 2,
+          definition_id: "collect",
+        },
+      ],
+      gate_kinds: { "author-diagrams": ["confirm"] },
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(
+      track.nodes.find((n) => n.stage_id === "author-diagrams~1")?.gate_kinds,
+    ).toEqual(["confirm"]);
+    expect(
+      track.nodes.find((n) => n.stage_id === "author-diagrams~1")?.definition_id,
+    ).toBe("author-diagrams");
+  });
+
+  it("AE5: two clone instance ids are distinct track nodes", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams~1", "author-diagrams~2", "collect"],
+      roots: ["detect"],
+      childrenOf: {
+        detect: ["author-diagrams~1", "author-diagrams~2"],
+        "author-diagrams": ["collect"],
+      },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams~1",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "author-diagrams~2",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 2,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 3,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    const clones = track.nodes.filter(
+      (n) => n.definition_id === "author-diagrams",
+    );
+    expect(clones.map((n) => n.stage_id)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+    ]);
+    expect(track.nodes.map((n) => n.stage_id)).not.toContain("author-diagrams");
+    expect(clones.every((n) => n.layer === 1)).toBe(true);
+    expect(track.nodes.find((n) => n.stage_id === "collect")?.layer).toBe(2);
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        { from: "detect", to: "author-diagrams~1" },
+        { from: "detect", to: "author-diagrams~2" },
+        { from: "author-diagrams~1", to: "collect" },
+        { from: "author-diagrams~2", to: "collect" },
+      ]),
+    );
+    expect(track.edges).not.toEqual(
+      expect.arrayContaining([{ from: "author-diagrams", to: "collect" }]),
+    );
+    expect(
+      track.nodes.find((n) => n.stage_id === "collect")?.blocked_by,
+    ).toEqual(["author-diagrams~1", "author-diagrams~2"]);
+  });
+
+  it("AE5: clone join edges carry each instance envelope summary", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["detect", "author-diagrams~1", "author-diagrams~2", "collect"],
+      roots: ["detect"],
+      childrenOf: {
+        detect: ["author-diagrams~1", "author-diagrams~2"],
+        "author-diagrams": ["collect"],
+      },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams~1",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "author-diagrams~2",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 2,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 3,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const stages = [
+      snap("detect", "succeeded", {
+        envelope: { status: "success", summary: "detect done", artifacts: [] },
+      }),
+      snap("author-diagrams~1", "succeeded", {
+        envelope: { status: "success", summary: "clone 1 done", artifacts: [] },
+      }),
+      snap("author-diagrams~2", "succeeded", {
+        envelope: { status: "success", summary: "clone 2 done", artifacts: [] },
+      }),
+      snap("collect", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "detect")?.layer).toBe(0);
+    expect(
+      track.nodes
+        .filter((n) => n.definition_id === "author-diagrams")
+        .every((n) => n.layer === 1),
+    ).toBe(true);
+    expect(track.nodes.find((n) => n.stage_id === "collect")?.layer).toBe(2);
+    expect(track.nodes.find((n) => n.stage_id === "collect")?.readiness).toBe(
+      "ready",
+    );
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        {
+          from: "detect",
+          to: "author-diagrams~1",
+          envelope_summary: "detect done",
+        },
+        {
+          from: "detect",
+          to: "author-diagrams~2",
+          envelope_summary: "detect done",
+        },
+        {
+          from: "author-diagrams~1",
+          to: "collect",
+          envelope_summary: "clone 1 done",
+        },
+        {
+          from: "author-diagrams~2",
+          to: "collect",
+          envelope_summary: "clone 2 done",
+        },
+      ]),
+    );
+    expect(track.edges.some((e) => e.from === "author-diagrams")).toBe(false);
+  });
+
   it("falls back to linear compat when dag snapshot is missing", () => {
     const stages = [
       snap("alpha", "succeeded"),

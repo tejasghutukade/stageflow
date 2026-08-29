@@ -7,7 +7,10 @@ import type {
   StageReadiness,
   StageSnapshot,
 } from "./port.js";
-import { linearCompatDagSnapshot } from "./pipelineDagSnapshot.js";
+import {
+  instancesOfDefinition,
+  linearCompatDagSnapshot,
+} from "./pipelineDagSnapshot.js";
 
 export type BuildPipelineTrackInput = {
   dagSnapshot: RunPipelineDagSnapshot | null | undefined;
@@ -23,6 +26,14 @@ function runHalted(stages: StageSnapshot[]): boolean {
   return stages.some((s) => s.status === "failed");
 }
 
+function predecessorIds(
+  dag: RunPipelineDagSnapshot,
+  needs: string,
+): string[] {
+  const preds = instancesOfDefinition(dag, needs);
+  return preds.length > 0 ? preds : [needs];
+}
+
 function computeLayers(dag: RunPipelineDagSnapshot): Map<string, number> {
   const layers = new Map<string, number>();
   const nodeById = new Map(dag.nodes.map((n) => [n.id, n]));
@@ -35,7 +46,8 @@ function computeLayers(dag: RunPipelineDagSnapshot): Map<string, number> {
       layers.set(id, 0);
       return 0;
     }
-    const l = layerFor(node.needs) + 1;
+    const fromIds = predecessorIds(dag, node.needs);
+    const l = Math.max(...fromIds.map(layerFor)) + 1;
     layers.set(id, l);
     return l;
   }
@@ -66,9 +78,13 @@ function deriveReadiness(
   const node = dag.nodes.find((n) => n.id === stage.stage_id);
   const need = node?.needs;
   if (need) {
-    const predecessor = snapshotsById.get(need);
-    if (!predecessor || predecessor.status !== "succeeded") {
-      return { readiness: "blocked", blocked_by: [need] };
+    const fromIds = predecessorIds(dag, need);
+    const unresolved = fromIds.filter((id) => {
+      const predecessor = snapshotsById.get(id);
+      return !predecessor || predecessor.status !== "succeeded";
+    });
+    if (unresolved.length > 0) {
+      return { readiness: "blocked", blocked_by: unresolved };
     }
   }
 
@@ -101,6 +117,7 @@ export function buildPipelineTrack(
       snapshotsById,
       halted,
     );
+    const definitionId = node?.definition_id ?? stage.definition_id ?? stageId;
     const trackNode: PipelineTrackNode = {
       stage_id: stageId,
       status: stage.status,
@@ -108,9 +125,10 @@ export function buildPipelineTrack(
       layer: layers.get(stageId) ?? 0,
       layer_order: node?.stageIndex ?? dag.stage_ids.indexOf(stageId),
       attempt_count: stage.attempt_count,
+      definition_id: definitionId,
     };
     if (blocked_by?.length) trackNode.blocked_by = blocked_by;
-    const gateKinds = dag.gate_kinds?.[stageId];
+    const gateKinds = dag.gate_kinds?.[definitionId] ?? dag.gate_kinds?.[stageId];
     if (gateKinds?.length) trackNode.gate_kinds = gateKinds;
     return trackNode;
   });
@@ -118,15 +136,18 @@ export function buildPipelineTrack(
   const edges: PipelineTrackEdge[] = [];
   for (const node of dag.nodes) {
     if (!node.needs) continue;
-    const fromStage = snapshotsById.get(node.needs);
-    const edge: PipelineTrackEdge = { from: node.needs, to: node.id };
-    if (
-      fromStage?.status === "succeeded" &&
-      fromStage.envelope?.summary
-    ) {
-      edge.envelope_summary = fromStage.envelope.summary;
+    const fromIds = predecessorIds(dag, node.needs);
+    for (const fromId of fromIds) {
+      const fromStage = snapshotsById.get(fromId);
+      const edge: PipelineTrackEdge = { from: fromId, to: node.id };
+      if (
+        fromStage?.status === "succeeded" &&
+        fromStage.envelope?.summary
+      ) {
+        edge.envelope_summary = fromStage.envelope.summary;
+      }
+      edges.push(edge);
     }
-    edges.push(edge);
   }
 
   return { nodes, edges };

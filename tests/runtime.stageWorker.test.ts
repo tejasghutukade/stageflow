@@ -3,9 +3,14 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { FakeAgent, fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import { reconstructAndContinue } from "../src/runtime/resumeReconstruct.js";
 import { StageHitlController } from "../src/runtime/stageHitl.js";
 import { bindPiAgentDirEnv, buildStageRoots } from "../src/runtime/stageRoots.js";
@@ -140,6 +145,64 @@ describe("runStage workerMode", () => {
     const events = await store.listStageEvents(run.runId, "clarify");
     expect(events.some((e) => e.event === "waiting_for_input")).toBe(true);
     expect(events.some((e) => e.event === "succeeded")).toBe(false);
+  });
+
+  it("worker resume parks a later wait instead of failing without HITL", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-resume-wait-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const stage = {
+      id: "work",
+      system_prompt: "x",
+      model: "anthropic/claude-sonnet-4-5",
+    };
+    const task = { id: "t", goal: "g" };
+    const twoWaits = {
+      type: "wait_then_emit" as const,
+      waitRequests: ["first", "second"],
+      envelope: { status: "success", summary: "done", artifacts: [] },
+    };
+
+    const parked = await runStage({
+      agent: scriptedFakeAgent([twoWaits]),
+      store,
+      runId: run.runId,
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+      workerMode: true,
+    });
+    expect(parked).toEqual({ waiting: true });
+
+    const resumeAgent = new FakeAgent(twoWaits);
+    const handle = resumeAgent.openStage({
+      roots: buildStageRoots(store.getWorkspaceDir(run.runId), "work~2"),
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+    });
+    handle.deliverAnswer("ok");
+    const resumed = await runStage({
+      agent: resumeAgent,
+      store,
+      runId: run.runId,
+      stage,
+      stageId: "work~2",
+      task,
+      priorEnvelope: null,
+      skipStarted: true,
+      existingHandle: handle,
+      workerMode: true,
+    });
+    expect(resumed).toEqual({ waiting: true });
+    const events = await store.listStageEvents(run.runId, "work~2");
+    expect(events.filter((e) => e.event === "waiting_for_input").length).toBeGreaterThanOrEqual(2);
+    expect(events.some((e) => e.event === "failed")).toBe(false);
   });
 });
 
@@ -589,3 +652,192 @@ describe("stage worker prior StageEnvelope", () => {
     });
   });
 });
+
+describe("clone instance definition lookup", () => {
+  async function writeAuthorDiagramsPipeline(root: string): Promise<string> {
+    await mkdir(path.join(root, "pipelines"), { recursive: true });
+    await mkdir(path.join(root, "stages"), { recursive: true });
+    const pipelineFile = path.join(
+      root,
+      "pipelines",
+      "author-diagrams.pipeline.yaml",
+    );
+    await writeFile(
+      pipelineFile,
+      [
+        "id: author-diagrams-pipe",
+        "stages:",
+        "  - id: detect",
+        "    uses: ../stages/detect.yaml",
+        "  - id: author-diagrams",
+        "    uses: ../stages/author-diagrams.yaml",
+        "    needs: detect",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "stages", "detect.yaml"),
+      [
+        "id: detect",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(root, "stages", "author-diagrams.yaml"),
+      [
+        "id: author-diagrams",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    return pipelineFile;
+  }
+
+  it("AE4: worker loads StageConfig via definition_id for author-diagrams~2", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-def-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "author-diagrams",
+      predecessorId: "detect",
+      count: 2,
+    });
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: snapshot,
+    });
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      rootDir: root,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome).toMatchObject({
+      reason: expect.not.stringMatching(/not in pipeline/),
+    });
+    expect(outcome).toMatchObject({
+      reason: expect.stringMatching(/missing envelope for upstream stage "detect"/),
+    });
+  });
+
+  it("does not recover catalog id by parsing tilde when the DAG node is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-tilde-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      rootDir: root,
+    });
+
+    expect(outcome).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/not in pipeline/),
+    });
+  });
+
+  it("reconstructAndContinue looks up config by definition_id", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-recon-def-"));
+    const pipelineFile = await writeAuthorDiagramsPipeline(root);
+    const loaded = await loadPipeline(pipelineFile);
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "author-diagrams",
+      predecessorId: "detect",
+      count: 2,
+    });
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      pipelinePath: pipelineFile,
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: snapshot,
+    });
+    const hitl = new StageHitlController({ store });
+    const outcome = await reconstructAndContinue({
+      runId: run.runId,
+      stageId: "author-diagrams~2",
+      opaqueAnswer: "ok",
+      agent: scriptedFakeAgent([
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "done", artifacts: [] },
+        },
+      ]),
+      store,
+      hitl,
+      executionMode: "inprocess",
+      cwd: root,
+      maxActiveStagesPerRun: 4,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.reason).not.toMatch(/not in pipeline/);
+  });
+
+  it("runStage keys store events by instance stageId", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-runstage-inst-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: ["need-input"],
+        envelope: { status: "success", summary: "done", artifacts: [] },
+      },
+    ]);
+
+    const outcome = await runStage({
+      agent,
+      store,
+      runId: run.runId,
+      stage: {
+        id: "author-diagrams",
+        system_prompt: "x",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      stageId: "author-diagrams~1",
+      task: { id: "t", goal: "g" },
+      workerMode: true,
+    });
+
+    expect(outcome).toEqual({ waiting: true });
+    const instanceEvents = await store.listStageEvents(
+      run.runId,
+      "author-diagrams~1",
+    );
+    expect(instanceEvents.some((e) => e.event === "waiting_for_input")).toBe(
+      true,
+    );
+    expect(await store.listStageEvents(run.runId, "author-diagrams")).toEqual(
+      [],
+    );
+  });
+});
+

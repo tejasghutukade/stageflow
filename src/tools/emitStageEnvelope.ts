@@ -14,13 +14,14 @@ import {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "../envelope/check.js";
+import { assertCloneForks } from "../envelope/cloneForks.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import {
   assertEnvelopePayload,
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { ForkEmitContext } from "../types/forkChoice.js";
+import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
@@ -44,11 +45,34 @@ export function createEmitStageEnvelopeTool(
   capture: EmitCapture,
   payloadSchema?: unknown,
   forkEmitContext?: ForkEmitContext,
+  cloneEmitContext?: CloneEmitContext,
 ) {
   const compiledPayload =
     payloadSchema !== undefined
       ? compilePayloadSchema(payloadSchema)
       : undefined;
+
+  const cloneForksSchema = Type.Array(
+    Type.Object({
+      successor_id: Type.String(),
+      action: Type.Union([
+        Type.Literal("skip"),
+        Type.Literal("once"),
+        Type.Literal("fanout"),
+      ]),
+      envelope: Type.Optional(Type.Unknown()),
+      mode: Type.Optional(
+        Type.Union([Type.Literal("parallel"), Type.Literal("sequential")]),
+      ),
+      clones: Type.Optional(
+        Type.Array(
+          Type.Object({
+            envelope: Type.Unknown(),
+          }),
+        ),
+      ),
+    }),
+  );
 
   return {
     name: "emit_stage_envelope",
@@ -67,6 +91,7 @@ export function createEmitStageEnvelopeTool(
         forkEmitContext !== undefined
           ? Type.Array(Type.String())
           : Type.Optional(Type.Array(Type.String())),
+      ...(cloneEmitContext !== undefined ? { clone_forks: cloneForksSchema } : {}),
       stage_id: Type.Optional(Type.String()),
       notes: Type.Optional(Type.String()),
     }),
@@ -79,15 +104,16 @@ export function createEmitStageEnvelopeTool(
         );
       }
       try {
-        if (forkEmitContext !== undefined) {
-          const record = params as Record<string, unknown>;
-          if (record.status !== "failure") {
-            normalizeForkChoice(
-              record.fork_choice as string[] | undefined,
-              "emit",
-              forkEmitContext,
-            );
-          }
+        const record = params as Record<string, unknown>;
+        if (record.status !== "failure" && forkEmitContext !== undefined) {
+          normalizeForkChoice(
+            record.fork_choice as string[] | undefined,
+            "emit",
+            forkEmitContext,
+          );
+        }
+        if (record.status !== "failure" && cloneEmitContext !== undefined) {
+          assertCloneForks(params, cloneEmitContext);
         }
         const envelope = assertRequiredEnvelope(params);
         assertEnvelopePayload(envelope, payloadSchema);

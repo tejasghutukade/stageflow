@@ -31,7 +31,9 @@ import {
   useStageRetry,
 } from "../stageAction";
 import {
+  parseEnvelopeAsidePath,
   resolveRunWorkspace,
+  runDetailShouldPoll,
   type RunWorkspace,
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
@@ -125,6 +127,14 @@ export function RunDetailPage({
     clearError: clearRetryError,
   } = useStageRetry(runId, onStageActionSuccess);
 
+  const retryAndSelect = useCallback(
+    (stageId: string) => {
+      setUserPickedStageId(stageId);
+      retry(stageId);
+    },
+    [retry],
+  );
+
   const {
     abandoningStageId,
     error: abandonError,
@@ -164,16 +174,16 @@ export function RunDetailPage({
     };
   }, []);
 
+  const live = runDetailShouldPoll(run, {
+    retrying: retryingStageIds.size > 0,
+    abandoning: abandoningStageId !== null,
+  });
+
   useEffect(() => {
-    const live =
-      run?.status === "created" ||
-      run?.status === "running" ||
-      retryingStageIds.size > 0 ||
-      abandoningStageId !== null;
     if (!live) return;
     const id = window.setInterval(() => void load(), 1000);
     return () => window.clearInterval(id);
-  }, [load, run?.status, retryingStageIds, abandoningStageId]);
+  }, [load, live]);
 
   const plannedStageIds =
     pipelines?.find((p) => p.id === run?.pipeline_id)?.stages.map((s) => s.id) ??
@@ -278,7 +288,10 @@ export function RunDetailPage({
   } else if (stage) {
     body = (
       <TranscriptStream
-        stageName={stage.stage_id}
+        stageName={
+          workspace.trackStages.find((s) => s.id === stage.stage_id)?.label ??
+          stage.stage_id
+        }
         status={
           <>
             <StatusLabel status={stage.status} />
@@ -289,7 +302,7 @@ export function RunDetailPage({
                 type="button"
                 className="btn btn--sm"
                 disabled={isStageActionBusy(actionBusy, stage.stage_id)}
-                onClick={() => retry(stage.stage_id)}
+                onClick={() => retryAndSelect(stage.stage_id)}
               >
                 {retryingStageIds.has(stage.stage_id)
                   ? "Retrying…"
@@ -366,7 +379,7 @@ export function RunDetailPage({
             onEnvelopeClick={(fromStageId) => setDrawerStageId(fromStageId)}
             activeEnvelopeId={workspace.activeEnvelopeId}
             retryingStageIds={retryingStageIds}
-            onRetryStage={retry}
+            onRetryStage={retryAndSelect}
             abandoningStageId={abandoningStageId}
             onAbandonStage={abandon}
           />
@@ -378,7 +391,15 @@ export function RunDetailPage({
               <ArtifactAside
                 files={workspace.artifactFiles}
                 selectedPath={selectedPath}
-                onSelect={onOpenArtifact}
+                onSelect={(path) => {
+                  const envelopeStageId = parseEnvelopeAsidePath(path);
+                  if (envelopeStageId) {
+                    setUserPickedStageId(envelopeStageId);
+                    onOpenEnvelope(envelopeStageId);
+                    return;
+                  }
+                  onOpenArtifact(path);
+                }}
                 footer={
                   <Collapsible
                     trigger={<span style={{ fontSize: "var(--font-size-sm)", fontWeight: 500 }}>Input</span>}

@@ -1,0 +1,12 @@
+id: clone-fanout-join
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    needs: clarify
+    clonable: true
+    clone_cap: 5
+    uses: ../stages/design-doc.yaml
+  - id: join-doc
+    needs: design-doc
+    uses: ../stages/join-doc.yaml

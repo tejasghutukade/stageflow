@@ -1,0 +1,11 @@
+id: clonable-default-cap
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    needs: clarify
+    clonable: true
+    uses: ../stages/design-doc.yaml
+  - id: implementation-plan
+    needs: design-doc
+    uses: ../stages/implementation-plan.yaml

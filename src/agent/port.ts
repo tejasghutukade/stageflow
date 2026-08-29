@@ -1,5 +1,5 @@
 import type { StageEnvelope } from "../types/envelope.js";
-import type { ForkEmitContext } from "../types/forkChoice.js";
+import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
@@ -11,15 +11,23 @@ export type StageResumeToken = string;
 export type StageRunInput = {
   roots: StageRoots;
   stage: StageConfig;
+  /** Runtime instance id (`work~2`). Defaults to `stage.id` when omitted. */
+  stageId?: string;
   task: TaskFile;
   priorEnvelope: StageEnvelope | null;
+  priorEnvelopes?: StageEnvelope[];
   timeoutMs?: number;
   resumeToken?: StageResumeToken;
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
   skillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
+  cloneEmitContext?: CloneEmitContext;
 };
+
+export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {
+  return input.stageId ?? input.stage.id;
+}
 
 export type StageRunResult =
   | { ok: true; envelope: StageEnvelope }

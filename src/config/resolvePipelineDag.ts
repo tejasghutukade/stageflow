@@ -13,6 +13,8 @@ type NormalizedEdge = {
   needs: string | null;
   stageIndex: number;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
+  clonable?: boolean;
+  clone_cap?: number;
 };
 
 export type ResolvePipelineDagContext = {
@@ -83,8 +85,17 @@ export function parsePipelineStageEntries(
       forkValue = entry.fork as { select: "one" | "subset"; allow_none?: boolean };
     }
 
+    const clonableFields: Pick<PipelineStageYamlEntry, "clonable" | "clone_cap"> = {
+      ...(entry.clonable !== undefined ? { clonable: entry.clonable as boolean } : {}),
+      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap as number } : {}),
+    };
+
     if (entry.needs === undefined) {
-      entries.push(forkValue !== undefined ? { id: entry.id, fork: forkValue } : { id: entry.id });
+      entries.push({
+        id: entry.id,
+        ...(forkValue !== undefined ? { fork: forkValue } : {}),
+        ...clonableFields,
+      });
       continue;
     }
 
@@ -103,9 +114,12 @@ export function parsePipelineStageEntries(
       throw new Error(formatError(ctx, `stage "${entry.id}": needs must be a non-empty string`));
     }
 
-    entries.push(forkValue !== undefined
-      ? { id: entry.id, needs: entry.needs, fork: forkValue }
-      : { id: entry.id, needs: entry.needs });
+    entries.push({
+      id: entry.id,
+      needs: entry.needs,
+      ...(forkValue !== undefined ? { fork: forkValue } : {}),
+      ...clonableFields,
+    });
   }
 
   return entries;
@@ -117,6 +131,8 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
     needs: entry.needs ?? null,
     stageIndex: index,
     ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
+    ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
+    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
   }));
 }
 
@@ -281,6 +297,9 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     ...(edge.fork !== undefined
       ? { fork: { select: edge.fork.select, allow_none: edge.fork.allow_none ?? false } }
       : {}),
+    ...(edge.clonable === true
+      ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
+      : {}),
   }));
 
   return { nodes, roots, childrenOf };
@@ -309,6 +328,35 @@ function validateForkFields(
   }
 }
 
+function validateClonableFields(
+  edges: NormalizedEdge[],
+  dag: ResolvedPipelineDag,
+  ctx: ResolvePipelineDagContext,
+): void {
+  for (const edge of edges) {
+    if (edge.clone_cap !== undefined && edge.clonable !== true) {
+      throw new Error(
+        formatError(ctx, `stage "${edge.id}": clone_cap requires clonable: true`),
+      );
+    }
+    if (edge.clonable === true && edge.clone_cap !== undefined) {
+      if (!Number.isInteger(edge.clone_cap) || edge.clone_cap < 2) {
+        throw new Error(
+          formatError(
+            ctx,
+            `stage "${edge.id}": clone_cap must be an integer greater than or equal to 2`,
+          ),
+        );
+      }
+    }
+    if (edge.clonable === true && (dag.childrenOf[edge.id] ?? []).length === 0) {
+      throw new Error(
+        formatError(ctx, `clonable on stage "${edge.id}": no children in the DAG`),
+      );
+    }
+  }
+}
+
 export function resolvePipelineDagFromRefs(
   refs: PipelineStageRef[],
   ctx: ResolvePipelineDagContext,
@@ -324,6 +372,7 @@ export function resolvePipelineDagFromRefs(
     .map((edge) => edge.id);
   const dag = buildResolvedPipelineDag(edges);
   validateForkFields(edges, dag, ctx);
+  validateClonableFields(edges, dag, ctx);
 
   return { stages, dag };
 }

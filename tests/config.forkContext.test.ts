@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import path from "node:path";
-import { resolveForkEmitContext } from "../src/config/resolveForkEmitContext.js";
+import {
+  resolveCloneEmitContext,
+  resolveForkEmitContext,
+} from "../src/config/resolveForkEmitContext.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { resolvePipelineDag } from "../src/config/resolvePipelineDag.js";
+import type { ResolvedPipelineDag } from "../src/types/pipeline.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 
 const ctx = (pipelineId: string) => ({
@@ -53,6 +57,112 @@ describe("resolveForkEmitContext", () => {
     expect(resolveForkEmitContext(dag, "decide")).toEqual({
       immediateSuccessorIds: ["only-branch"],
       forkShape: { cardinality: "one", allowNone: false },
+    });
+  });
+});
+
+describe("resolveCloneEmitContext", () => {
+  it("AE7: no clonable children returns undefined", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        { id: "detect-changes", needs: null, ancestors: [], stageIndex: 0 },
+        { id: "collect", needs: "detect-changes", ancestors: ["detect-changes"], stageIndex: 1 },
+      ],
+      roots: ["detect-changes"],
+      childrenOf: { "detect-changes": ["collect"], collect: [] },
+    };
+    expect(resolveCloneEmitContext(dag, "detect-changes")).toBeUndefined();
+    expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
+  });
+
+  it("linear parent with one clonable child returns clone context and no fork context", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        { id: "detect-changes", needs: null, ancestors: [], stageIndex: 0 },
+        {
+          id: "author-diagrams",
+          needs: "detect-changes",
+          ancestors: ["detect-changes"],
+          stageIndex: 1,
+          clonable: true,
+          clone_cap: 5,
+        },
+      ],
+      roots: ["detect-changes"],
+      childrenOf: { "detect-changes": ["author-diagrams"], "author-diagrams": [] },
+    };
+    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
+      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
+    });
+    expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
+  });
+
+  it("AE-mix: fork parent drops clonable ids from fork context", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "detect-changes",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect-changes",
+          ancestors: ["detect-changes"],
+          stageIndex: 1,
+          clonable: true,
+          clone_cap: 5,
+        },
+        {
+          id: "notify-slack",
+          needs: "detect-changes",
+          ancestors: ["detect-changes"],
+          stageIndex: 2,
+        },
+      ],
+      roots: ["detect-changes"],
+      childrenOf: {
+        "detect-changes": ["author-diagrams", "notify-slack"],
+        "author-diagrams": [],
+        "notify-slack": [],
+      },
+    };
+    expect(resolveForkEmitContext(dag, "detect-changes")).toEqual({
+      immediateSuccessorIds: ["notify-slack"],
+      forkShape: { cardinality: "one", allowNone: false },
+    });
+    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
+      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
+    });
+  });
+
+  it("fork parent whose every child is clonable returns undefined fork context", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "detect-changes",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect-changes",
+          ancestors: ["detect-changes"],
+          stageIndex: 1,
+          clonable: true,
+          clone_cap: 5,
+        },
+      ],
+      roots: ["detect-changes"],
+      childrenOf: { "detect-changes": ["author-diagrams"], "author-diagrams": [] },
+    };
+    expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
+    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
+      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
     });
   });
 });

@@ -58,4 +58,36 @@ describe("assertRequiredEnvelope", () => {
     });
     expect(isAdvancingEnvelope(envelope)).toBe(false);
   });
+
+  it("accepts a legal skip clone_forks item and copies it onto the envelope", () => {
+    const envelope = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      clone_forks: [{ successor_id: "author-diagrams", action: "skip" }],
+    });
+    expect(envelope.clone_forks).toEqual([
+      { successor_id: "author-diagrams", action: "skip" },
+    ]);
+  });
+
+  it("accepts an envelope without clone_forks and leaves the field absent", () => {
+    const envelope = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+    expect(envelope.clone_forks).toBeUndefined();
+  });
+
+  it("rejects clone_forks that is not an array", () => {
+    expect(() =>
+      assertRequiredEnvelope({
+        status: "success",
+        summary: "ok",
+        artifacts: [],
+        clone_forks: "nope",
+      }),
+    ).toThrow(EnvelopeError);
+  });
 });

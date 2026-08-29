@@ -18,9 +18,20 @@ export { syntheticPendingSnapshot } from "./syntheticStageSnapshot.js";
 export function overlayPlannedStages(
   stageIds: string[],
   snapshots: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): StageSnapshot[] {
   const byId = new Map(snapshots.map((s) => [s.stage_id, s]));
-  return stageIds.map((id) => byId.get(id) ?? syntheticPendingSnapshot(id));
+  const nodeById = new Map((dag?.nodes ?? []).map((n) => [n.id, n]));
+  return stageIds.map((id) => {
+    const node = nodeById.get(id);
+    const definitionId = node?.definition_id ?? node?.id;
+    const existing = byId.get(id);
+    const base = existing ?? syntheticPendingSnapshot(id, definitionId);
+    if (definitionId === undefined || base.definition_id === definitionId) {
+      return base;
+    }
+    return { ...base, definition_id: definitionId };
+  });
 }
 
 export function orderStageSnapshots(
@@ -35,6 +46,7 @@ function compactStages(stages: StageSnapshot[]): CompactStage[] {
     id: s.stage_id,
     status: s.status,
     attempt_count: s.attempt_count,
+    ...(s.definition_id !== undefined ? { definition_id: s.definition_id } : {}),
   }));
 }
 
@@ -141,7 +153,7 @@ export function projectRunDetail(
   dagSnapshot?: RunPipelineDagSnapshot | null,
 ): RunDetail {
   const ordered = dagSnapshot
-    ? overlayPlannedStages(dagSnapshot.stage_ids, stages)
+    ? overlayPlannedStages(dagSnapshot.stage_ids, stages, dagSnapshot)
     : stages;
   const summary = projectRunSummary(meta, ordered);
   const snapshot =

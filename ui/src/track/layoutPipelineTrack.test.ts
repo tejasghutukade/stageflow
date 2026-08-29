@@ -38,6 +38,63 @@ describe("groupNodesByLayer", () => {
     ]);
     expect(layers[2]!.map((n) => n.stage_id)).toEqual(["report-a"]);
   });
+
+  it("groups three clone instance ids in one layer like named siblings", () => {
+    const nodes: PipelineTrackNode[] = [
+      node({
+        stage_id: "detect-changes",
+        layer: 0,
+        layer_order: 0,
+        status: "succeeded",
+        readiness: "succeeded",
+      }),
+      node({
+        stage_id: "author-diagrams~1",
+        layer: 1,
+        layer_order: 0,
+        status: "running",
+        readiness: "running",
+      }),
+      node({
+        stage_id: "author-diagrams~2",
+        layer: 1,
+        layer_order: 1,
+        status: "running",
+        readiness: "running",
+      }),
+      node({
+        stage_id: "author-diagrams~3",
+        layer: 1,
+        layer_order: 2,
+        status: "running",
+        readiness: "running",
+      }),
+      node({
+        stage_id: "collect",
+        layer: 2,
+        layer_order: 0,
+        status: "pending",
+        readiness: "blocked",
+      }),
+    ];
+    const layers = groupNodesByLayer(nodes);
+    expect(layers).toHaveLength(3);
+    expect(layers[1]!.map((n) => n.stage_id)).toEqual([
+      "author-diagrams~1",
+      "author-diagrams~2",
+      "author-diagrams~3",
+    ]);
+    expect(
+      isLinearPipelineTrack({
+        nodes,
+        edges: [
+          { from: "detect-changes", to: "author-diagrams~1" },
+          { from: "detect-changes", to: "author-diagrams~2" },
+          { from: "detect-changes", to: "author-diagrams~3" },
+        ],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("detailListOrder", () => {

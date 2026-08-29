@@ -10,6 +10,7 @@ import {
   type CreatedRun,
   type RunDetail,
   type RunMeta,
+  type RunPipelineDagSnapshot,
   type RunStatus,
   type RunStore,
   type RunSummary,
@@ -254,6 +255,25 @@ export class SqliteRunStore implements RunStore {
       .run({
         run_id: runId,
         status,
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async updatePipelineDag(
+    runId: string,
+    dag: RunPipelineDagSnapshot,
+  ): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET pipeline_dag_json = @pipeline_dag_json, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        pipeline_dag_json: JSON.stringify(dag),
         updated_at: new Date().toISOString(),
       });
     if (result.changes === 0) {
@@ -628,6 +648,7 @@ export class SqliteRunStore implements RunStore {
   }
 
   private runMetaFromRow(row: RunRow): RunMeta {
+    const pipeline_dag = this.readPipelineDagSnapshotFromRow(row);
     return {
       run_id: row.run_id,
       pipeline_id: row.pipeline_id,
@@ -642,6 +663,7 @@ export class SqliteRunStore implements RunStore {
       ...(row.pipeline_path != null ? { pipeline_path: row.pipeline_path } : {}),
       ...(row.task_path != null ? { task_path: row.task_path } : {}),
       ...(row.project_root != null ? { project_root: row.project_root } : {}),
+      ...(pipeline_dag ? { pipeline_dag } : {}),
     };
   }
 

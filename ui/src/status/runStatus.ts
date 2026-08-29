@@ -5,7 +5,7 @@ export type StageDisplayStatus = StageSnapshot["status"];
 export type DisplayStatus = RunDisplayStatus | StageDisplayStatus;
 
 export type CssStatusToken = "waiting" | "running" | "succeeded" | "failed";
-export type RingStatus = "pending" | "running" | "waiting" | "succeeded" | "failed";
+export type RingStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
 
 export function runDisplayStatus(run: RunSummary): RunDisplayStatus {
   if (run.waiting_stage_id) return "waiting_for_input";
@@ -24,6 +24,7 @@ export function cssStatusToken(status: DisplayStatus): CssStatusToken | undefine
     case "failed":
       return "failed";
     case "pending":
+    case "skipped":
       return undefined;
   }
 }
@@ -37,6 +38,7 @@ export function statusCopy(status: DisplayStatus): string {
     case "running":
     case "succeeded":
     case "failed":
+    case "skipped":
       return status;
   }
 }
@@ -54,6 +56,7 @@ export function ringStatus(status: StageDisplayStatus): RingStatus {
     case "running":
     case "succeeded":
     case "failed":
+    case "skipped":
       return status;
   }
 }
@@ -71,12 +74,15 @@ export function ringGlyph(status: StageDisplayStatus | RingStatus): string {
       return "✓";
     case "failed":
       return "✕";
+    case "skipped":
+      return "–";
   }
 }
 
 export function trackSegmentToken(
   status: StageDisplayStatus,
-): CssStatusToken | undefined {
+): CssStatusToken | "skipped" | undefined {
+  if (status === "skipped") return "skipped";
   return cssStatusToken(status);
 }
 
@@ -86,6 +92,7 @@ export function statusDotVariant(
   switch (status) {
     case "created":
     case "pending":
+    case "skipped":
       return "neutral";
     case "running":
       return "accent";

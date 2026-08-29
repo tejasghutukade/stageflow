@@ -1,0 +1,15 @@
+id: clonable-nested-gate
+stages:
+  - id: detect-changes
+    system_prompt: Detect changes.
+    model: anthropic/claude-sonnet-4-5
+  - id: author-diagrams
+    needs: detect-changes
+    clonable: true
+    clone_cap: 5
+    system_prompt: Author diagrams.
+    model: anthropic/claude-sonnet-4-5
+  - id: collect
+    needs: author-diagrams
+    system_prompt: Collect results.
+    model: anthropic/claude-sonnet-4-5

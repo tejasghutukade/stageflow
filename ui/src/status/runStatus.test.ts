@@ -6,6 +6,7 @@ import {
   ringStatus,
   runDisplayStatus,
   statusCopy,
+  statusDotVariant,
   trackSegmentToken,
   waitingOnYouTitle,
   type DisplayStatus,
@@ -32,6 +33,7 @@ const displayStatuses: DisplayStatus[] = [
   "waiting_for_input",
   "succeeded",
   "failed",
+  "skipped",
 ];
 const stageStatuses: StageDisplayStatus[] = [
   "pending",
@@ -39,6 +41,7 @@ const stageStatuses: StageDisplayStatus[] = [
   "waiting_for_input",
   "succeeded",
   "failed",
+  "skipped",
 ];
 
 describe("runDisplayStatus", () => {
@@ -73,6 +76,7 @@ describe("cssStatusToken", () => {
     expect(cssStatusToken("succeeded")).toBe("succeeded");
     expect(cssStatusToken("failed")).toBe("failed");
     expect(cssStatusToken("pending")).toBeUndefined();
+    expect(cssStatusToken("skipped")).toBeUndefined();
   });
 });
 
@@ -84,6 +88,7 @@ describe("statusCopy", () => {
     expect(statusCopy("running")).toBe("running");
     expect(statusCopy("succeeded")).toBe("succeeded");
     expect(statusCopy("failed")).toBe("failed");
+    expect(statusCopy("skipped")).toBe("skipped");
   });
 });
 
@@ -99,6 +104,19 @@ describe("ringGlyph", () => {
     expect(ringGlyph("waiting_for_input")).toBe("?");
     expect(ringGlyph("waiting")).toBe("?");
   });
+
+  it("locks skipped to an en dash and pending to empty", () => {
+    expect(ringGlyph("skipped")).toBe("–");
+    expect(ringGlyph("pending")).toBe("");
+  });
+});
+
+describe("ringStatus skipped", () => {
+  it("is not pending", () => {
+    expect(ringStatus("skipped")).toBe("skipped");
+    expect(ringStatus("skipped")).not.toBe("pending");
+    expect(statusDotVariant("skipped")).toBe("neutral");
+  });
 });
 
 describe("trackSegmentToken", () => {
@@ -108,6 +126,7 @@ describe("trackSegmentToken", () => {
     expect(trackSegmentToken("waiting_for_input")).toBe("waiting");
     expect(trackSegmentToken("failed")).toBe("failed");
     expect(trackSegmentToken("pending")).toBeUndefined();
+    expect(trackSegmentToken("skipped")).toBe("skipped");
   });
 });
 

@@ -1,8 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeAgent } from "../src/agent/fakeAgent.js";
+import { FakeAgent, fakeHitlResumePath } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
@@ -159,5 +160,32 @@ describe("AgentPort contract", () => {
       ok: false,
       reason: "stage requested wait; use openStage/deliverAnswer",
     });
+  });
+
+  it("keys fake HITL resume and handle id by instance stageId", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "work~2");
+    const agent = new FakeAgent({
+      type: "wait_then_emit",
+      waitRequests: ["need-input"],
+      envelope: { status: "success", summary: "ok", artifacts: [] },
+    });
+    const handle = agent.openStage({
+      roots,
+      stage: {
+        id: "work",
+        system_prompt: "work",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      stageId: "work~2",
+      task: { id: "t1", goal: "goal" },
+      priorEnvelope: null,
+    });
+    const waiting = await handle.next();
+    expect(waiting.status).toBe("waiting_for_input");
+    expect(handle.stageId).toBe("work~2");
+    expect(existsSync(fakeHitlResumePath(roots, "work~2"))).toBe(true);
+    expect(existsSync(fakeHitlResumePath(roots, "work"))).toBe(false);
+    await handle.close({ park: true });
   });
 });
