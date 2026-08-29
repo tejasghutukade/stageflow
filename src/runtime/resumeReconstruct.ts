@@ -9,6 +9,7 @@ import {
   reloadTaskForRun,
 } from "./reloadRunCatalog.js";
 import type { RunStore, RunMeta } from "../runstore/port.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
@@ -83,7 +84,8 @@ export async function reconstructAndContinue(
     const attemptOpt = attemptCtx.eventOptions();
 
     const { meta, task, loaded } = await loadRunContext(store, runId, cwd);
-    const stageIndex = loaded.stages.findIndex((s) => s.id === stageId);
+    const definitionId = definitionIdForInstance(meta.pipeline_dag, stageId);
+    const stageIndex = loaded.stages.findIndex((s) => s.id === definitionId);
     if (stageIndex < 0) {
       const reason = `Stage ${stageId} not in pipeline ${meta.pipeline_id}`;
       await store.appendStageEvent(
@@ -99,6 +101,7 @@ export async function reconstructAndContinue(
       return { ok: false, reason };
     }
     const stage = loaded.stages[stageIndex]!;
+    const dag = meta.pipeline_dag ?? loaded.dag;
 
     const workspaceDir = store.getWorkspaceDir(runId);
     const checkoutRoot = meta.checkout_root;
@@ -134,8 +137,9 @@ export async function reconstructAndContinue(
       store,
       runId,
       stage,
+      stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
       factoryCwd,
@@ -166,8 +170,9 @@ export async function reconstructAndContinue(
       store,
       runId,
       stage,
+      stageId,
       task,
-      dag: loaded.dag,
+      dag,
       checkoutRoot,
       workspaceDir,
       hitl: ctx.hitl,

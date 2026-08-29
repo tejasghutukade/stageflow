@@ -1,14 +1,24 @@
 import type { AgentPort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
-import type { RunStore, StageSnapshot } from "../runstore/port.js";
+import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
-import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
-  collectDownstreamClosure,
-  collectDownstreamStageIds,
-} from "./dagTraversal.js";
+  applyCloneForksFromEnvelopes,
+  applyCloneForksToSchedule,
+  cloneFailureContinuesSchedule,
+  cloneFanoutConflict,
+  cloneRetryDownstream,
+  cloneScheduleAllowsRun,
+  isCloneInstance,
+  protectedClonableChildIds,
+  sequentialFailFastSkipIds,
+  sequentialLaterCloneIds,
+} from "./cloneSchedule.js";
+import { collectDownstreamStageIds } from "./dagTraversal.js";
 import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
@@ -61,7 +71,7 @@ type HasWorkOutsideBranchContext = {
   pendingDeltaStageIds?: ReadonlySet<string>;
 };
 
-type StageScheduleState =
+export type StageScheduleState =
   | "pending"
   | "active"
   | "waiting"
@@ -74,7 +84,27 @@ export type HydratedSchedule = {
   completedEnvelopes: Map<string, StageEnvelope>;
   schedulingHalted: boolean;
   firstFailureReason: string | undefined;
+  dag?: RunPipelineDagSnapshot;
 };
+
+function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (Array.isArray(snapshot.stage_ids)) return snapshot;
+  return {
+    ...dag,
+    stage_ids: dag.nodes.map((n) => n.id),
+  };
+}
+
+export {
+  applyCloneForksFromEnvelopes,
+  applyCloneForksToSchedule,
+};
+export type { ApplyCloneForksResult } from "./cloneSchedule.js";
+
+function synthesizedFailureEnvelope(reason: string): StageEnvelope {
+  return { status: "failure", summary: reason, artifacts: [] };
+}
 
 export function snapshotToScheduleState(
   snap: { status: StageSnapshot["status"] },
@@ -106,16 +136,20 @@ export async function hydrateScheduleFromStore(
   dag: ResolvedPipelineDag,
   executionMode: StageExecutionMode = "process",
 ): Promise<HydratedSchedule> {
+  const runDetail = await store.readRun(runId);
+  const meta = await store.readRunMeta(runId);
+  const resolvedDag = meta.pipeline_dag ?? asDagSnapshot(dag);
+
   const states = new Map<string, StageScheduleState>();
-  for (const node of dag.nodes) {
+  for (const node of resolvedDag.nodes) {
     states.set(node.id, "pending");
   }
 
-  const runDetail = await store.readRun(runId);
   const completedEnvelopes = await buildCompletedEnvelopesFromRun(
     store,
     runId,
     runDetail.stages,
+    resolvedDag,
   );
   let schedulingHalted = false;
   const overrides = new Map<string, StageScheduleState>();
@@ -128,7 +162,14 @@ export async function hydrateScheduleFromStore(
       executionMode,
     );
     states.set(snap.stage_id, state);
-    if (state === "failed") {
+    if (
+      state === "failed" &&
+      !cloneFailureContinuesSchedule(
+        resolvedDag,
+        snap.stage_id,
+        completedEnvelopes,
+      )
+    ) {
       schedulingHalted = true;
     }
   }
@@ -138,6 +179,7 @@ export async function hydrateScheduleFromStore(
     completedEnvelopes,
     schedulingHalted,
     firstFailureReason: undefined,
+    dag: resolvedDag,
   };
 }
 
@@ -148,16 +190,28 @@ export async function hydrateScheduleForRetryRoots(
   retryStageIds: string[],
 ): Promise<HydratedSchedule> {
   const runDetail = await store.readRun(runId);
-  const downstream = collectDownstreamClosure(dag, retryStageIds);
-  const retryRootSet = new Set(retryStageIds);
+  const meta = await store.readRunMeta(runId);
+  const resolvedDag = meta.pipeline_dag ?? asDagSnapshot(dag);
   const completedEnvelopes = await buildCompletedEnvelopesFromRun(
     store,
     runId,
     runDetail.stages,
+    resolvedDag,
   );
+  const downstream = cloneRetryDownstream(resolvedDag, retryStageIds);
+  for (const rootId of retryStageIds) {
+    for (const id of sequentialLaterCloneIds(
+      resolvedDag,
+      rootId,
+      completedEnvelopes,
+    )) {
+      downstream.add(id);
+    }
+  }
+  const retryRootSet = new Set(retryStageIds);
 
   const states = new Map<string, StageScheduleState>();
-  for (const node of dag.nodes) {
+  for (const node of resolvedDag.nodes) {
     states.set(node.id, "pending");
   }
 
@@ -183,6 +237,7 @@ export async function hydrateScheduleForRetryRoots(
     completedEnvelopes,
     schedulingHalted: false,
     firstFailureReason: undefined,
+    dag: resolvedDag,
   };
 }
 
@@ -208,7 +263,9 @@ export async function resumeRun(
   options: ResumeRunOptions,
 ): Promise<PipelineRunResult> {
   const { prepared, resumeFromStageId, initialPrior } = options;
-  const dag = prepared.loaded.dag;
+  const meta = await prepared.store.readRunMeta(prepared.run.runId);
+  const dag =
+    meta.pipeline_dag ?? buildPipelineDagSnapshotFromLoaded(prepared.loaded);
   const downstream = dag.childrenOf[resumeFromStageId];
   if (downstream?.length) {
     return runPipelineDag(options);
@@ -298,7 +355,7 @@ export async function retryRun(
   const hydrated = await hydrateScheduleForRetryRoots(
     prepared.store,
     prepared.run.runId,
-    prepared.loaded.dag,
+    buildPipelineDagSnapshotFromLoaded(prepared.loaded),
     [...retryRoots.keys()],
   );
   return runPipelineDag({
@@ -319,7 +376,10 @@ function applyForkChoiceToSchedule(
   forkStageId: string,
   chosen: Set<string>,
   states: Map<string, StageScheduleState>,
-  options?: { onSkip?: (childId: string) => void },
+  options?: {
+    onSkip?: (childId: string) => void;
+    protectedIds?: ReadonlySet<string>;
+  },
 ): void {
   const skipPending = (stageId: string) => {
     if (states.get(stageId) === "pending") {
@@ -329,6 +389,7 @@ function applyForkChoiceToSchedule(
   };
 
   for (const childId of dag.childrenOf[forkStageId] ?? []) {
+    if (options?.protectedIds?.has(childId)) continue;
     if (!chosen.has(childId)) {
       skipPending(childId);
       for (const desc of collectDownstreamStageIds(dag, childId)) {
@@ -362,8 +423,11 @@ export function applyRetryRootDelta(
   clearSchedulingHalt?: () => void,
 ): void {
   retryRoots.set(stageId, attempt);
-  const downstream = collectDownstreamClosure(dag, [stageId]);
+  const downstream = cloneRetryDownstream(dag, [stageId]);
   const resetIds = new Set<string>([stageId, ...downstream]);
+  for (const id of sequentialLaterCloneIds(dag, stageId, completedEnvelopes)) {
+    resetIds.add(id);
+  }
 
   for (const id of resetIds) {
     const state = states.get(id);
@@ -437,14 +501,12 @@ function isRunnable(
   stageId: string,
   states: Map<string, StageScheduleState>,
   schedulingHalted: boolean,
+  completedEnvelopes: Map<string, StageEnvelope>,
 ): boolean {
   if (schedulingHalted) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return false;
-  if (node.needs === null) return true;
-  return states.get(node.needs) === "succeeded";
+  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
 }
 
 export async function runPipelineDag(
@@ -464,12 +526,22 @@ export async function runPipelineDag(
     projectRoot,
   } = prepared;
   const factoryCwd = projectRoot ?? cwd ?? process.cwd();
-  const dag = loaded.dag;
-  const stageById = buildStageConfigById(loaded);
-
-  let { states, completedEnvelopes, schedulingHalted, firstFailureReason } =
+  const fallbackDag = buildPipelineDagSnapshotFromLoaded(loaded);
+  let {
+    states,
+    completedEnvelopes,
+    schedulingHalted,
+    firstFailureReason,
+    dag: hydratedDag,
+  } =
     options.initialSchedule ??
-    (await hydrateScheduleFromStore(store, run.runId, dag, executionMode));
+    (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
+  let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  if (hydratedDag === undefined) {
+    const meta = await store.readRunMeta(run.runId);
+    dag = meta.pipeline_dag ?? fallbackDag;
+  }
+  const stageById = buildStageConfigById(loaded);
 
   const retryContext = options.retryContext;
 
@@ -522,6 +594,17 @@ export async function runPipelineDag(
   }
 
   applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
+  {
+    const applied = applyCloneForksFromEnvelopes(
+      dag,
+      states,
+      completedEnvelopes,
+    );
+    if (applied.dag !== dag) {
+      await store.updatePipelineDag(run.runId, applied.dag);
+    }
+    dag = applied.dag;
+  }
 
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
@@ -578,9 +661,60 @@ export async function runPipelineDag(
     });
   };
 
-  const onStageFailure = async (stageId: string, reason: string) => {
+  const recordCloneFailureEnvelope = async (
+    stageId: string,
+    reason: string,
+    envelope?: StageEnvelope,
+  ) => {
+    if (!isCloneInstance(dag, stageId)) {
+      if (envelope !== undefined) {
+        completedEnvelopes.set(stageId, envelope);
+      }
+      return;
+    }
+    const failureEnvelope =
+      envelope ??
+      completedEnvelopes.get(stageId) ??
+      synthesizedFailureEnvelope(reason);
+    completedEnvelopes.set(stageId, failureEnvelope);
+    if (envelope === undefined) {
+      try {
+        await store.writeEnvelope(run.runId, stageId, failureEnvelope);
+      } catch {
+      }
+    }
+  };
+
+  const onStageFailure = async (
+    stageId: string,
+    reason: string,
+    envelope?: StageEnvelope,
+  ) => {
     states.set(stageId, "failed");
     notifyRetryRootTerminal(stageId, "failed");
+    await recordCloneFailureEnvelope(stageId, reason, envelope);
+    if (cloneFailureContinuesSchedule(dag, stageId, completedEnvelopes)) {
+      if (firstFailureReason === undefined) {
+        firstFailureReason = reason;
+      }
+      const persistSkipPending = async (id: string) => {
+        if (states.get(id) !== "pending") return;
+        states.set(id, "skipped");
+        notifyRetryRootTerminal(id, "skipped");
+        await store.appendStageEvent(run.runId, id, { event: "skipped" });
+      };
+      for (const id of sequentialFailFastSkipIds(
+        dag,
+        stageId,
+        completedEnvelopes,
+      )) {
+        await persistSkipPending(id);
+      }
+      if (retryContext) {
+        drainRetryMutations();
+      }
+      return;
+    }
     if (retryContext) {
       markBranchDownstreamSkipped(stageId);
       drainRetryMutations();
@@ -599,14 +733,25 @@ export async function runPipelineDag(
   };
 
   const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
+    const conflict = cloneFanoutConflict(dag, envelope);
+    if (conflict !== undefined) {
+      await store.appendStageEvent(run.runId, stageId, {
+        event: "failed",
+        reason: conflict,
+      });
+      await onStageFailure(stageId, conflict);
+      return;
+    }
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
     const node = dag.nodes.find((n) => n.id === stageId);
+    const protectedIds = protectedClonableChildIds(dag, stageId, envelope);
     if (node?.fork) {
       const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
       const skippedIds: string[] = [];
       applyForkChoiceToSchedule(dag, stageId, chosen, states, {
+        protectedIds,
         onSkip: (id) => {
           notifyRetryRootTerminal(id, "skipped");
           skippedIds.push(id);
@@ -616,10 +761,32 @@ export async function runPipelineDag(
         await store.appendStageEvent(run.runId, id, { event: "skipped" });
       }
     }
+    const applied = applyCloneForksToSchedule(dag, stageId, envelope, states);
+    const dagChanged = applied.dag !== dag;
+    dag = applied.dag;
+    if (dagChanged) {
+      await store.updatePipelineDag(run.runId, dag);
+    }
+    for (const id of applied.skippedIds) {
+      notifyRetryRootTerminal(id, "skipped");
+      await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+  };
+
+  const handlePostSuccessError = async (stageId: string, reason: string) => {
+    if (states.get(stageId) === "succeeded") {
+      completedEnvelopes.delete(stageId);
+      await store.appendStageEvent(run.runId, stageId, {
+        event: "failed",
+        reason,
+      });
+    }
+    await onStageFailure(stageId, reason);
   };
 
   const launchStage = async (stageId: string): Promise<void> => {
-    const stage = stageById.get(stageId);
+    const definitionId = definitionIdForInstance(dag, stageId);
+    const stage = stageById.get(definitionId);
     if (!stage) {
       await onStageFailure(stageId, `stage config missing for "${stageId}"`);
       return;
@@ -650,14 +817,7 @@ export async function runPipelineDag(
           await onStageSuccess(stageId, envelope);
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
-          if (states.get(stageId) === "succeeded") {
-            schedulingHalted = true;
-            if (firstFailureReason === undefined) {
-              firstFailureReason = reason;
-            }
-            return;
-          }
-          await onStageFailure(stageId, reason);
+          await handlePostSuccessError(stageId, reason);
         }
         return;
       }
@@ -674,6 +834,7 @@ export async function runPipelineDag(
       store,
       runId: run.runId,
       stage,
+      stageId,
       task,
       dag,
       checkoutRoot,
@@ -692,7 +853,11 @@ export async function runPipelineDag(
     }
 
     if (!result.ok) {
-      await onStageFailure(stageId, result.reason ?? "stage failed");
+      await onStageFailure(
+        stageId,
+        result.reason ?? "stage failed",
+        result.envelope,
+      );
       return;
     }
     if (result.envelope) {
@@ -700,14 +865,7 @@ export async function runPipelineDag(
         await onStageSuccess(stageId, result.envelope);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        if (states.get(stageId) === "succeeded") {
-          schedulingHalted = true;
-          if (firstFailureReason === undefined) {
-            firstFailureReason = reason;
-          }
-          return;
-        }
-        await onStageFailure(stageId, reason);
+        await handlePostSuccessError(stageId, reason);
       }
     } else {
       states.set(stageId, "succeeded");
@@ -729,7 +887,7 @@ export async function runPipelineDag(
   const pickRunnable = (): string[] => {
     const ids: string[] = [];
     for (const node of dag.nodes) {
-      if (isRunnable(dag, node.id, states, schedulingHalted)) {
+      if (isRunnable(dag, node.id, states, schedulingHalted, completedEnvelopes)) {
         ids.push(node.id);
       }
     }

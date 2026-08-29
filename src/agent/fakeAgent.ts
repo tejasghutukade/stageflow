@@ -5,6 +5,7 @@ import {
   isAdvancingEnvelope,
 } from "../envelope/check.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
+import { assertCloneForks } from "../envelope/cloneForks.js";
 import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
@@ -21,7 +22,7 @@ import type {
   StageRunInput,
   StageRunResult,
 } from "./port.js";
-import { runStageViaOpen } from "./port.js";
+import { runtimeStageId, runStageViaOpen } from "./port.js";
 
 function opaqueEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -143,7 +144,7 @@ export class FakeAgent implements AgentPort {
     };
 
     if (behavior.type === "wait_then_emit") {
-      const loaded = loadFakeHitlResume(input.roots, input.stage.id);
+      const loaded = loadFakeHitlResume(input.roots, runtimeStageId(input));
       if (loaded === "corrupt") {
         resumeCorrupt = true;
       } else if (loaded) {
@@ -176,7 +177,7 @@ export class FakeAgent implements AgentPort {
     };
 
     const finishEmit = (): StageHandleEvent => {
-      clearFakeHitlResume(input.roots, input.stage.id);
+      clearFakeHitlResume(input.roots, runtimeStageId(input));
       if (behavior.type === "throw") {
         input.onActivity?.({ event: "agent_end" });
         return {
@@ -201,6 +202,9 @@ export class FakeAgent implements AgentPort {
         const envelope = assertRequiredEnvelope(envelopeValue);
         if (input.forkEmitContext !== undefined) {
           assertForkEnvelope(envelope, input.forkEmitContext);
+        }
+        if (input.cloneEmitContext !== undefined) {
+          assertCloneForks(envelope, input.cloneEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
         if (!isAdvancingEnvelope(envelope)) {
@@ -234,7 +238,7 @@ export class FakeAgent implements AgentPort {
     };
 
     return {
-      stageId: input.stage.id,
+      stageId: runtimeStageId(input),
       async next(): Promise<StageHandleEvent> {
         if (closed) {
           return {
@@ -276,7 +280,7 @@ export class FakeAgent implements AgentPort {
               assertAnswerMatchesPrompt(t2Prompt, parsed);
             } catch (err) {
               input.onActivity?.({ event: "agent_end" });
-              clearFakeHitlResume(input.roots, input.stage.id);
+              clearFakeHitlResume(input.roots, runtimeStageId(input));
               return {
                 status: "completed",
                 result: {
@@ -296,7 +300,7 @@ export class FakeAgent implements AgentPort {
             !opaqueEqual(answer, expected)
           ) {
             input.onActivity?.({ event: "agent_end" });
-            clearFakeHitlResume(input.roots, input.stage.id);
+            clearFakeHitlResume(input.roots, runtimeStageId(input));
             return {
               status: "completed",
               result: {
@@ -311,7 +315,7 @@ export class FakeAgent implements AgentPort {
           const request = behavior.waitRequests[waitIndex];
           waitIndex += 1;
           armWait();
-          writeFakeHitlResume(input.roots, input.stage.id, {
+          writeFakeHitlResume(input.roots, runtimeStageId(input), {
             waitRequests: behavior.waitRequests,
             expectedAnswers: behavior.expectedAnswers,
             envelope: behavior.envelope,

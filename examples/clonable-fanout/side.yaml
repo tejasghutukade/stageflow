@@ -1,0 +1,6 @@
+id: side
+system_prompt: |
+  You are the named sibling side. Call emit_stage_envelope exactly once with
+  status success, a short summary that side ran, and artifacts []. Do not call
+  ask_operator.
+model: cursor/auto

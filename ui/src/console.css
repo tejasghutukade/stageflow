@@ -525,6 +525,7 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
 .track-mini__seg[data-s="running"] { background: var(--color-text-blue); }
 .track-mini__seg[data-s="waiting"] { background: var(--color-warning); }
 .track-mini__seg[data-s="failed"] { background: var(--color-error); }
+.track-mini__seg[data-s="skipped"] { background: var(--color-text-disabled); }
 
 .track-mini__label {
   margin-top: 5px;
@@ -960,6 +961,11 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
   border-color: var(--color-error);
   background: var(--color-background-red);
   color: var(--color-text-red);
+}
+
+.mini__n[data-s="skipped"] {
+  border-color: var(--color-text-disabled);
+  color: var(--color-text-disabled);
 }
 
 .mini__w {
@@ -1612,6 +1618,11 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
   color: var(--color-text-red);
 }
 
+.node[data-s="skipped"] .node__ring {
+  border-color: var(--color-text-disabled);
+  color: var(--color-text-disabled);
+}
+
 .node[data-selected="true"] .node__ring {
   box-shadow: 0 0 0 4px var(--color-accent-muted, rgba(99,102,241,.25));
 }
@@ -1631,6 +1642,7 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
 }
 
 .node[data-s="pending"] .node__name { color: var(--color-text-disabled); }
+.node[data-s="skipped"] .node__name { color: var(--color-text-disabled); }
 
 .node__meta {
   color: var(--color-text-secondary);

@@ -31,6 +31,7 @@ export type PipelineTrackNode = {
   blocked_by?: string[];
   gate_kinds?: StageGateKind[];
   attempt_count?: number;
+  definition_id?: string;
 };
 
 export type PipelineTrackEdge = {
@@ -74,6 +75,7 @@ export type StageLogEvent = StageLogLine & {
 
 export type StageSnapshot = {
   stage_id: string;
+  definition_id?: string;
   status:
     | "pending"
     | "running"
@@ -110,6 +112,7 @@ export type CompactStage = {
   id: string;
   status: StageSnapshot["status"];
   attempt_count: number;
+  definition_id?: string;
 };
 
 export type RunSummary = {
@@ -214,6 +217,7 @@ export interface RunStore {
   ): Promise<StageLogEvent[]>;
   listRuns(): Promise<RunSummary[]>;
   readRun(runId: string): Promise<RunDetail>;
+  updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
 }
 
 export function stageStatusFromEvents(

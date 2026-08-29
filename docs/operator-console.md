@@ -76,6 +76,16 @@ The run detail stream view shows:
 
 Use envelope view to read `summary`, `payload`, and artifact paths without parsing logs.
 
+### Clone tracks {#clone-tracks}
+
+Fan-out clones appear as distinct track nodes labeled `definition · N` (for example `work · 1`). Selecting a node uses the instance id (`work~1`) as the key. A run-once successor stays the catalog id (`work`).
+
+When the selected stage has an envelope, the first Files row is **Handoff envelope** — it opens the envelope inspector; meta is the instance id. Artifact rows keep that same instance id. Walkthrough: [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario A, step 6.
+
+Run detail keeps refreshing a run whose overall status is failed while another clone is still `waiting_for_input` or running after retry.
+
+Answering HITL on a selected clone: [HITL](hitl.md#console-reply).
+
 ## Capacity indicator
 
 The rail footer can show active run count vs soft max (`get_health` semantics) — same data as MCP `get_health`.
@@ -98,6 +108,7 @@ Product screenshots for README and docs live under `docs/img/` when captured (e.
 
 - [Quick start](quickstart.md) — first console session
 - [HITL](hitl.md) — answering gates in run detail
+- [`examples/clonable-fanout/`](../examples/clonable-fanout/) — clone track walkthrough
 - [Providers](providers.md) — Settings → Providers
 - [MCP](mcp.md) — automation alongside the UI
 - [CLI reference](cli-reference.md) — `sf ui --port`

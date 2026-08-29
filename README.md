@@ -36,6 +36,7 @@ The same pipeline runs three ways without rewriting anything:
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` is running
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
+- **Clonable fan-out** — clone one successor N times at completion, then join (see [YAML catalog](docs/yaml-catalog.md#clonable-successors))
 - **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
 
 ## Installation

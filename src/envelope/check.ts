@@ -2,6 +2,79 @@ import {
   EnvelopeError,
   type StageEnvelope,
 } from "../types/envelope.js";
+import type { CloneForkItem } from "../types/forkChoice.js";
+
+type ParsedCloneForkItem = {
+  successor_id: string;
+  action: "skip" | "once" | "fanout";
+  envelope?: StageEnvelope;
+  mode?: "parallel" | "sequential";
+  clones?: Array<{ envelope: StageEnvelope }>;
+};
+
+function parseCloneForkItem(raw: unknown, index: number): ParsedCloneForkItem {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new EnvelopeError(`clone_forks[${index}] must be an object`);
+  }
+  const record = raw as Record<string, unknown>;
+  if (typeof record.successor_id !== "string") {
+    throw new EnvelopeError(`clone_forks[${index}].successor_id must be a string`);
+  }
+
+  const action = record.action;
+  if (action !== "skip" && action !== "once" && action !== "fanout") {
+    throw new EnvelopeError(
+      `clone_forks[${index}].action must be "skip", "once", or "fanout"`,
+    );
+  }
+
+  const item: ParsedCloneForkItem = {
+    successor_id: record.successor_id,
+    action,
+  };
+
+  if (record.envelope !== undefined) {
+    item.envelope = assertRequiredEnvelope(record.envelope);
+  }
+
+  if (record.mode !== undefined) {
+    if (record.mode !== "parallel" && record.mode !== "sequential") {
+      throw new EnvelopeError(
+        `clone_forks[${index}].mode must be "parallel" or "sequential"`,
+      );
+    }
+    item.mode = record.mode;
+  }
+
+  if (record.clones !== undefined) {
+    if (!Array.isArray(record.clones)) {
+      throw new EnvelopeError(`clone_forks[${index}].clones must be an array`);
+    }
+    item.clones = record.clones.map((clone, cloneIndex) => {
+      if (clone === null || typeof clone !== "object" || Array.isArray(clone)) {
+        throw new EnvelopeError(
+          `clone_forks[${index}].clones[${cloneIndex}] must be an object`,
+        );
+      }
+      const cloneRecord = clone as Record<string, unknown>;
+      if (cloneRecord.envelope === undefined) {
+        throw new EnvelopeError(
+          `clone_forks[${index}].clones[${cloneIndex}].envelope is required`,
+        );
+      }
+      return { envelope: assertRequiredEnvelope(cloneRecord.envelope) };
+    });
+  }
+
+  return item;
+}
+
+export function parseCloneForks(raw: unknown): CloneForkItem[] {
+  if (!Array.isArray(raw)) {
+    throw new EnvelopeError("clone_forks must be an array");
+  }
+  return raw.map((item, index) => parseCloneForkItem(item, index) as CloneForkItem);
+}
 
 export function assertRequiredEnvelope(value: unknown): StageEnvelope {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -42,6 +115,10 @@ export function assertRequiredEnvelope(value: unknown): StageEnvelope {
       throw new EnvelopeError("fork_choice must be an array of strings");
     }
     envelope.fork_choice = record.fork_choice as string[];
+  }
+
+  if (record.clone_forks !== undefined) {
+    envelope.clone_forks = parseCloneForks(record.clone_forks);
   }
 
   if (record.payload !== undefined) {

@@ -271,4 +271,47 @@ describe("openStageAttempt", () => {
     expect(result).toEqual(routed);
     expect(opened).toHaveLength(0);
   });
+
+  it("forwards instance stageId into AgentPort input", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-clone-id-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "work~2",
+          definition_id: "work",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+        },
+      ],
+      roots: ["work~2"],
+      childrenOf: {},
+    };
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("work"),
+      stageId: "work~2",
+      task,
+      dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.stage.id).toBe("work");
+    expect(opened[0]?.stageId).toBe("work~2");
+    expect(opened[0]?.resumeToken).toMatch(
+      /stages\/work~2\/attempts\/1\/pi-session\.jsonl$/,
+    );
+  });
 });

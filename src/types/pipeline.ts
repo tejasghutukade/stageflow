@@ -14,6 +14,8 @@ export type PipelineStageRef = {
   id: string;
   needs?: string;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
+  clonable?: boolean;
+  clone_cap?: number;
 };
 
 export type PipelineStageYamlEntry = PipelineStageRef & {
@@ -38,6 +40,8 @@ export type NormalizedPipelineStageEntry = {
   id: string;
   needs?: string;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
+  clonable?: boolean;
+  clone_cap?: number;
   skill?: string;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
@@ -55,6 +59,9 @@ export type ResolvedPipelineStageNode = {
   ancestors: string[];
   stageIndex: number;
   fork?: PipelineForkConfig;
+  clonable?: boolean;
+  clone_cap?: number;
+  definition_id?: string;
 };
 
 export type ResolvedPipelineDag = {

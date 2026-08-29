@@ -1,23 +1,51 @@
-import type { RunStore, StageSnapshot } from "../runstore/port.js";
+import type { RunStore, RunPipelineDagSnapshot, StageSnapshot } from "../runstore/port.js";
+import {
+  instancesOfDefinition,
+} from "../runstore/pipelineDagSnapshot.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
+
+function definitionInstances(
+  dag: ResolvedPipelineDag,
+  catalogId: string,
+): string[] {
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (Array.isArray(snapshot.stage_ids)) {
+    return instancesOfDefinition(snapshot, catalogId);
+  }
+  return dag.nodes.some((n) => n.id === catalogId) ? [catalogId] : [];
+}
 
 export async function buildCompletedEnvelopesFromRun(
   store: RunStore,
   runId: string,
   stages?: StageSnapshot[],
+  dag?: ResolvedPipelineDag,
 ): Promise<Map<string, StageEnvelope>> {
   const completedEnvelopes = new Map<string, StageEnvelope>();
   const snapshotStages = stages ?? (await store.readRun(runId)).stages;
   for (const snap of snapshotStages) {
-    if (snap.status !== "succeeded") continue;
+    const isCloneInstance =
+      dag !== undefined &&
+      definitionIdForInstance(dag as RunPipelineDagSnapshot, snap.stage_id) !==
+        snap.stage_id;
+    if (snap.status !== "succeeded" && !(snap.status === "failed" && isCloneInstance)) {
+      continue;
+    }
     try {
       const envelope =
         snap.envelope ?? (await store.readEnvelope(runId, snap.stage_id));
       completedEnvelopes.set(snap.stage_id, envelope);
     } catch {
-      // envelope may be missing for corrupt runs; leave map empty
+      if (snap.status === "failed" && isCloneInstance) {
+        completedEnvelopes.set(snap.stage_id, {
+          status: "failure",
+          summary: "stage failed",
+          artifacts: [],
+        });
+      }
     }
   }
   return completedEnvelopes;
@@ -38,7 +66,7 @@ function dagNode(dag: ResolvedPipelineDag, stageId: string) {
 }
 
 export type ResolvePriorEnvelopeResult =
-  | { ok: true; prior: StageEnvelope | null }
+  | { ok: true; prior: StageEnvelope | null; joinPriors?: StageEnvelope[] }
   | { ok: false; reason: string };
 
 export async function resolvePriorEnvelope(options: {
@@ -59,19 +87,41 @@ export async function resolvePriorEnvelope(options: {
     return { ok: true, prior: null };
   }
 
-  const parentId = node.needs;
-  const fromMap = options.completedEnvelopes.get(parentId);
-  if (fromMap !== undefined) {
-    return { ok: true, prior: structuredClone(fromMap) };
+  const joinInstances = definitionInstances(options.dag, node.needs);
+  if (joinInstances.length > 1) {
+    const joinPriors: StageEnvelope[] = [];
+    for (const id of joinInstances) {
+      const fromMap = options.completedEnvelopes.get(id);
+      if (fromMap !== undefined) {
+        joinPriors.push(structuredClone(fromMap));
+        continue;
+      }
+      if (options.store !== undefined && options.runId !== undefined) {
+        try {
+          const envelope = await options.store.readEnvelope(options.runId, id);
+          joinPriors.push(structuredClone(envelope));
+          continue;
+        } catch {
+          return {
+            ok: false,
+            reason: `missing envelope for clone instance "${id}"`,
+          };
+        }
+      }
+      return {
+        ok: false,
+        reason: `missing envelope for clone instance "${id}"`,
+      };
+    }
+    return { ok: true, prior: null, joinPriors };
   }
 
-  if (options.store !== undefined && options.runId !== undefined) {
+  const parentId = node.needs;
+  const fromMap = options.completedEnvelopes.get(parentId);
+  let parent: StageEnvelope | undefined = fromMap;
+  if (parent === undefined && options.store !== undefined && options.runId !== undefined) {
     try {
-      const envelope = await options.store.readEnvelope(
-        options.runId,
-        parentId,
-      );
-      return { ok: true, prior: structuredClone(envelope) };
+      parent = await options.store.readEnvelope(options.runId, parentId);
     } catch {
       return {
         ok: false,
@@ -79,9 +129,32 @@ export async function resolvePriorEnvelope(options: {
       };
     }
   }
+  if (parent === undefined) {
+    return {
+      ok: false,
+      reason: `missing envelope for upstream stage "${parentId}"`,
+    };
+  }
 
-  return {
-    ok: false,
-    reason: `missing envelope for upstream stage "${parentId}"`,
-  };
+  for (const item of parent.clone_forks ?? []) {
+    if (item.action === "once" && item.successor_id === options.stageId) {
+      return { ok: true, prior: structuredClone(item.envelope) };
+    }
+    if (item.action === "fanout") {
+      const instanceIds = definitionInstances(options.dag, item.successor_id);
+      const index = instanceIds.indexOf(options.stageId);
+      if (index >= 0) {
+        const clone = item.clones[index];
+        if (clone === undefined) {
+          return {
+            ok: false,
+            reason: `missing clone envelope for instance "${options.stageId}"`,
+          };
+        }
+        return { ok: true, prior: structuredClone(clone.envelope) };
+      }
+    }
+  }
+
+  return { ok: true, prior: structuredClone(parent) };
 }

@@ -52,7 +52,19 @@ export type WorkspaceTrackStage = {
   envelope: { summary: string; artifactCount: number } | null;
 };
 
-export type ArtifactFile = { path: string; meta?: string };
+export type ArtifactFile = { path: string; label?: string; meta?: string };
+
+const ENVELOPE_ASIDE_PREFIX = "stageflow:envelope:";
+
+export function envelopeAsidePath(stageId: string): string {
+  return `${ENVELOPE_ASIDE_PREFIX}${stageId}`;
+}
+
+export function parseEnvelopeAsidePath(path: string): string | null {
+  if (!path.startsWith(ENVELOPE_ASIDE_PREFIX)) return null;
+  const stageId = path.slice(ENVELOPE_ASIDE_PREFIX.length);
+  return stageId.length > 0 ? stageId : null;
+}
 
 export type ArtifactBackedPrompt = Extract<PendingPrompt, { kind: "artifact_backed" }>;
 
@@ -127,14 +139,48 @@ function pickStageId(
   return order[0] ?? run.stages[0]?.stage_id ?? null;
 }
 
+export function formatCloneLabel(
+  stageId: string,
+  definitionId?: string,
+  ordinal?: number,
+): string {
+  if (definitionId === undefined || definitionId === "") return stageId;
+  if (stageId === definitionId) return definitionId;
+  if (ordinal === undefined) return stageId;
+  return `${definitionId} · ${ordinal}`;
+}
+
+function definitionOrdinal(
+  nodes: PipelineTrackNode[],
+  stageId: string,
+  definitionId: string | undefined,
+): number | undefined {
+  if (definitionId === undefined) return undefined;
+  const peers = detailListOrder(nodes).filter(
+    (n) => (n.definition_id ?? n.stage_id) === definitionId,
+  );
+  const index = peers.findIndex((n) => n.stage_id === stageId);
+  if (index < 0) return undefined;
+  return index + 1;
+}
+
+function nodeCloneLabel(nodes: PipelineTrackNode[], node: PipelineTrackNode): string {
+  return formatCloneLabel(
+    node.stage_id,
+    node.definition_id,
+    definitionOrdinal(nodes, node.stage_id, node.definition_id),
+  );
+}
+
 function snapshotToTrackStage(
   s: StageSnapshot,
   selectedStageId: string | null,
+  label?: string,
 ): WorkspaceTrackStage {
   const visual = ringStatus(s.status);
   return {
     id: s.stage_id,
-    label: s.stage_id,
+    label: label ?? s.stage_id,
     status: visual,
     selected: s.stage_id === selectedStageId,
     meta: visual === "waiting" ? statusCopy(s.status) : s.last_at,
@@ -147,10 +193,14 @@ function snapshotToTrackStage(
   };
 }
 
-function pendingTrackStage(id: string, selectedStageId: string | null): WorkspaceTrackStage {
+function pendingTrackStage(
+  id: string,
+  selectedStageId: string | null,
+  label?: string,
+): WorkspaceTrackStage {
   return {
     id,
-    label: id,
+    label: label ?? id,
     status: "pending",
     selected: id === selectedStageId,
     meta: "pending",
@@ -162,9 +212,11 @@ function trackNodeToWorkspaceStage(
   node: PipelineTrackNode,
   snapshot: StageSnapshot | undefined,
   selectedStageId: string | null,
+  nodes: PipelineTrackNode[],
 ): WorkspaceTrackStage {
-  if (snapshot) return snapshotToTrackStage(snapshot, selectedStageId);
-  return pendingTrackStage(node.stage_id, selectedStageId);
+  const label = nodeCloneLabel(nodes, node);
+  if (snapshot) return snapshotToTrackStage(snapshot, selectedStageId, label);
+  return pendingTrackStage(node.stage_id, selectedStageId, label);
 }
 
 function toTrackStages(
@@ -222,12 +274,13 @@ function dagTrackNode(
   snapshot: StageSnapshot | undefined,
   run: RunDetail,
   selectedStageId: string | null,
+  nodes: PipelineTrackNode[],
 ): DagTrackNode {
   const status = snapshot?.status ?? node.status;
   const visual = ringStatus(status);
   return {
     id: node.stage_id,
-    label: node.stage_id,
+    label: nodeCloneLabel(nodes, node),
     status: visual,
     stageStatus: status,
     selected: node.stage_id === selectedStageId,
@@ -260,6 +313,7 @@ function buildDetailListRows(
       : undefined;
     return {
       stageId: node.stage_id,
+      label: nodeCloneLabel(nodes, node),
       status,
       attemptCount: snapshot?.attempt_count ?? node.attempt_count ?? 1,
       readinessLine,
@@ -296,7 +350,7 @@ function buildTrackLayout(
 
   if (isLinearPipelineTrack(track)) {
     const linearStages = detailListOrder(nodes).map((node) =>
-      trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId),
+      trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId, nodes),
     );
     return {
       trackLayout: { mode: "linear", linearStages },
@@ -308,10 +362,10 @@ function buildTrackLayout(
   const grouped = groupNodesByLayer(nodes);
   const layerIndices = grouped.map((layer) => layer[0]!.layer);
   const dagLayers = grouped.map((layer) =>
-    layer.map((node) => dagTrackNode(node, snapshots.get(node.stage_id), run, selectedStageId)),
+    layer.map((node) => dagTrackNode(node, snapshots.get(node.stage_id), run, selectedStageId, nodes)),
   );
   const trackStages = detailListOrder(nodes).map((node) =>
-    trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId),
+    trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId, nodes),
   );
 
   return {
@@ -336,7 +390,7 @@ function composerState(
   if (status === "waiting_for_input" && prompt) {
     return { kind: "reply", prompt };
   }
-  if (status === "succeeded" || status === "failed" || status === "pending") {
+  if (status === "succeeded" || status === "failed" || status === "pending" || status === "skipped") {
     return { kind: "idle", label: "Session closed" };
   }
   return { kind: "none" };
@@ -346,7 +400,7 @@ function sessionChipKind(
   status: StageSnapshot["status"] | undefined,
 ): SessionChipKind {
   if (status === "waiting_for_input") return "alive";
-  if (status === "succeeded" || status === "failed" || status === "pending") {
+  if (status === "succeeded" || status === "failed" || status === "pending" || status === "skipped") {
     return "closed";
   }
   return null;
@@ -360,6 +414,22 @@ function runArtifactFiles(run: RunDetail): ArtifactFile[] {
     }
   }
   return files;
+}
+
+function asideArtifactFiles(
+  run: RunDetail,
+  selectedStage: StageSnapshot | null,
+): ArtifactFile[] {
+  const files = runArtifactFiles(run);
+  if (!selectedStage?.envelope) return files;
+  return [
+    {
+      path: envelopeAsidePath(selectedStage.stage_id),
+      label: "Handoff envelope",
+      meta: selectedStage.stage_id,
+    },
+    ...files,
+  ];
 }
 
 function inboundFromStageId(
@@ -413,17 +483,34 @@ function isWaitingArtifact(stage: StageSnapshot | null): boolean {
   );
 }
 
+export function runDetailShouldPoll(
+  run: Pick<RunDetail, "status" | "waiting_stage_id" | "stages"> | null,
+  action: { retrying: boolean; abandoning: boolean },
+): boolean {
+  if (action.retrying || action.abandoning) return true;
+  if (!run) return false;
+  if (run.status === "created" || run.status === "running") return true;
+  if (run.waiting_stage_id) return true;
+  return run.stages.some(
+    (s) => s.status === "running" || s.status === "waiting_for_input",
+  );
+}
+
 export function resolveRunWorkspace(
   view: DetailView,
   run: RunDetail,
   selection: OperatorSelection,
   plannedStageIds?: string[],
 ): RunWorkspace {
-  const selectedStageId = pickStageId(
+  const pickedStageId = pickStageId(
     run,
     selection.previousStageId,
     selection.userPicked,
   );
+  const selectedStageId =
+    view.kind === "envelope" && stageExists(run, view.stageId)
+      ? view.stageId
+      : pickedStageId;
   const selectedStage =
     run.stages.find((s) => s.stage_id === selectedStageId) ?? null;
   const catalogOverlay = run.pipeline_track?.nodes?.length
@@ -496,11 +583,16 @@ export function resolveRunWorkspace(
     showDecide,
     decidePrompt,
     artifactReadOnly: !showDecide,
-    selectedPath: kind === "artifact" && view.kind === "artifact" ? view.path : undefined,
+    selectedPath:
+      kind === "artifact" && view.kind === "artifact"
+        ? view.path
+        : kind === "envelope" && view.kind === "envelope"
+          ? envelopeAsidePath(view.stageId)
+          : undefined,
     trackStages,
     trackLayout,
     detailListRows,
-    artifactFiles: runArtifactFiles(run),
+    artifactFiles: asideArtifactFiles(run, selectedStage),
     sessionChip: sessionChipKind(selectedStage?.status),
     inboundEnvelope: inboundStage?.envelope ?? null,
     inboundFromStageId: inboundStage?.stage_id,

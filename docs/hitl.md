@@ -95,7 +95,9 @@ model: anthropic/claude-sonnet-4-5
 
 Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, and use the gate reply surface in the run detail stream.
 
-See [Operator console](operator-console.md).
+Answers go to the **selected** stage instance id. Today shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
+
+See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP
 

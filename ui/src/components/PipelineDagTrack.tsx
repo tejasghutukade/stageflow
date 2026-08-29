@@ -7,8 +7,14 @@ import { TrackWire, type TrackEnvelope } from "./PipelineTrack";
 export type DagTrackNode = {
   id: string;
   label: string;
-  status: "pending" | "running" | "waiting" | "succeeded" | "failed";
-  stageStatus: "pending" | "running" | "waiting_for_input" | "succeeded" | "failed";
+  status: "pending" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
+  stageStatus:
+    | "pending"
+    | "running"
+    | "waiting_for_input"
+    | "succeeded"
+    | "failed"
+    | "skipped";
   selected?: boolean;
   meta?: string;
   envelope?: TrackEnvelope | null;

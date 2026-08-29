@@ -12,6 +12,7 @@ describe("canRetry eligibility", () => {
     expect(canRetry("running")).toBe(false);
     expect(canRetry("succeeded")).toBe(false);
     expect(canRetry("pending")).toBe(false);
+    expect(canRetry("skipped")).toBe(false);
   });
 });
 
@@ -101,5 +102,60 @@ describe("createStageRetrySession", () => {
 
     expect(retry).toHaveBeenCalledOnce();
     expect(retry).toHaveBeenCalledWith("stage-a");
+  });
+
+  it("in-flight retry of author-diagrams~1 does not block author-diagrams~2", async () => {
+    let resolveOne: (() => void) | undefined;
+    let resolveTwo: (() => void) | undefined;
+    const retry = vi.fn((stageId: string) => {
+      if (stageId === "author-diagrams~1") {
+        return new Promise<void>((resolve) => {
+          resolveOne = resolve;
+        });
+      }
+      if (stageId === "author-diagrams~2") {
+        return new Promise<void>((resolve) => {
+          resolveTwo = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const onSuccess = vi.fn();
+    const session = createStageRetrySession({ retry, onSuccess });
+
+    const first = session.retry("author-diagrams~1");
+    const second = session.retry("author-diagrams~2");
+
+    expect(session.getState().retryingStageIds.has("author-diagrams~1")).toBe(true);
+    expect(session.getState().retryingStageIds.has("author-diagrams~2")).toBe(true);
+    expect(retry).toHaveBeenCalledTimes(2);
+
+    resolveOne?.();
+    await first;
+    resolveTwo?.();
+    await second;
+  });
+
+  it("ignores duplicate retry on author-diagrams~1 while in flight", async () => {
+    let resolveFirst: (() => void) | undefined;
+    const retry = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    const onSuccess = vi.fn();
+    const session = createStageRetrySession({ retry, onSuccess });
+
+    const first = session.retry("author-diagrams~1");
+    const second = session.retry("author-diagrams~1");
+    expect(session.getState().retryingStageIds.has("author-diagrams~1")).toBe(true);
+
+    resolveFirst?.();
+    await first;
+    await second;
+
+    expect(retry).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledWith("author-diagrams~1");
   });
 });

@@ -1,0 +1,10 @@
+id: fanout-demo
+goal: |
+  Dummy walkthrough for clonable fan-out. At decide, reply with exactly one of:
+  skip, once, parallel 2, parallel 3, sequential 2, sequential 3.
+context: |
+  Manual operator-console test. Each work clone (or the single work stage on
+  once) asks for ok <codeword> or fail. On ok, work writes codeword.md via
+  write_stage_artifact and lists that path in the envelope artifacts. collect
+  joins after work and must list every codeword from successful work envelopes.
+  On skip, work and collect should both be skipped.

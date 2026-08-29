@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { readdirSync, renameSync, rmdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { guardStageId } from "./workspaceLayout.js";
 
 export function newRunId(): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -63,5 +64,6 @@ export function runWorkspaceDir(storeRoot: string, runId: string): string {
 }
 
 export function stageDir(workspaceDir: string, stageId: string): string {
+  guardStageId(stageId);
   return path.join(workspaceDir, "stages", stageId);
 }

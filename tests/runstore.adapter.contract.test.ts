@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { buildStageSnapshotFromStore } from "../src/runstore/stageSnapshot.js";
 import {
   attemptAgentDir,
@@ -213,6 +214,22 @@ describe.each(adapters)("$label RunStore contract", ({ kind }) => {
     await expect(
       access(path.join(workspaceDir, "stages", stageId, ".pi-agent")),
     ).rejects.toThrow();
+  });
+
+  it("updatePipelineDag round-trips stage_ids", async () => {
+    const frozen = linearCompatDagSnapshot(["detect", "author-diagrams", "collect"]);
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: defaultTaskYaml,
+      pipelineDag: frozen,
+    });
+    const mutated = {
+      ...frozen,
+      stage_ids: ["detect", "author-diagrams~1", "author-diagrams~2", "collect"],
+    };
+    await store.updatePipelineDag(run.runId, mutated);
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.pipeline_dag?.stage_ids).toEqual(mutated.stage_ids);
   });
 
 });

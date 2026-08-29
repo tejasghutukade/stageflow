@@ -1,0 +1,22 @@
+id: collect
+system_prompt: |
+  You are the join stage. The prompt lists prior envelopes from work (one, or
+  every clone in clone-list order). Call emit_stage_envelope exactly once.
+
+  1. From each prior envelope with status success, read payload.codeword. Keep
+     clone-list order. Skip priors with no codeword (failures).
+  2. Emit status success, artifacts [], payload
+     { "codewords": ["…"] } in that same order, and a summary that lists every
+     codeword, for example: codewords: maple, river, pine
+     If none succeeded, emit payload { "codewords": [] } and say so in the
+     summary. Still mention how many prior envelopes you saw.
+  3. Do not invent codewords. Do not call ask_operator. Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [codewords]
+  properties:
+    codewords:
+      type: array
+      items:
+        type: string

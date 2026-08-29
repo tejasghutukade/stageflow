@@ -208,6 +208,8 @@ export function normalizePipelineStageEntries(
       body,
       ...(typeof raw.needs === "string" ? { needs: raw.needs } : {}),
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
+      ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
+      ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
       ...(skill !== undefined ? { skill } : {}),
     };
 
@@ -231,10 +233,18 @@ export function normalizePipelineStageEntries(
 
 export function toWiringRefs(
   entries: NormalizedPipelineStageEntry[],
-): Array<{ id: string; needs?: string; fork?: { select: "one" | "subset"; allow_none?: boolean } }> {
+): Array<{
+  id: string;
+  needs?: string;
+  fork?: { select: "one" | "subset"; allow_none?: boolean };
+  clonable?: boolean;
+  clone_cap?: number;
+}> {
   return entries.map((entry) => ({
     id: entry.id,
     ...(entry.needs !== undefined ? { needs: entry.needs } : {}),
     ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
+    ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
+    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
   }));
 }

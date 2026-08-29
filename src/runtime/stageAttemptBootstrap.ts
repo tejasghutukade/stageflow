@@ -1,6 +1,6 @@
 import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
-import { resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
+import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
@@ -44,6 +44,7 @@ export type StageAttemptOpenInput = {
   resumeToken?: string;
   workerRoots?: boolean;
   completedEnvelopes?: Map<string, StageEnvelope>;
+  stageId?: string;
 };
 
 export type StageAttemptOpenResult =
@@ -92,20 +93,20 @@ async function openStageWithOperatorCatalog(
   }
 }
 
-function resolveAttemptRoots(input: StageAttemptOpenInput): StageRoots {
+function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): StageRoots {
   const baseRoots =
     input.roots ??
     (input.workerRoots
       ? rootsForStageWorker(
           input.workspaceDir,
-          input.stage.id,
+          stageId,
           input.stage.model,
           input.checkoutRoot,
           input.attemptCtx,
         )
       : buildStageRoots(
           input.workspaceDir,
-          input.stage.id,
+          stageId,
           input.checkoutRoot,
           input.attemptCtx,
         ));
@@ -117,36 +118,49 @@ function resolveAttemptRoots(input: StageAttemptOpenInput): StageRoots {
 export async function openStageAttempt(
   input: StageAttemptOpenInput,
 ): Promise<StageAttemptOpenResult> {
+  const stageId = input.stageId ?? input.stage.id;
+  const definitionId = input.stage.id;
   const completedEnvelopes =
     input.completedEnvelopes ??
-    (await buildCompletedEnvelopesFromRun(input.store, input.runId));
+    (await buildCompletedEnvelopesFromRun(
+      input.store,
+      input.runId,
+      undefined,
+      input.dag,
+    ));
   const priorResult = await resolvePriorEnvelope({
     dag: input.dag,
-    stageId: input.stage.id,
+    stageId,
     completedEnvelopes,
     store: input.store,
     runId: input.runId,
   });
   if (!priorResult.ok) return priorResult;
 
-  const roots = resolveAttemptRoots(input);
+  const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;
   const resumeToken =
     input.resumeToken ??
-    resumeSessionFilePath(input.workspaceDir, input.stage.id, attempt);
+    resumeSessionFilePath(input.workspaceDir, stageId, attempt);
 
-  const forkEmitContext = resolveForkEmitContext(input.dag, input.stage.id);
+  const forkEmitContext = resolveForkEmitContext(input.dag, definitionId);
+  const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId);
 
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
       roots,
       stage: input.stage,
+      stageId,
       task: input.task,
       priorEnvelope: priorResult.prior,
+      ...(priorResult.joinPriors !== undefined
+        ? { priorEnvelopes: priorResult.joinPriors }
+        : {}),
       resumeToken,
       onActivity: input.onActivity,
       forkEmitContext,
+      cloneEmitContext,
     },
     input.operatorCatalog,
   );

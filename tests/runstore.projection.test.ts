@@ -7,7 +7,11 @@ import { loadPipeline } from "../src/config/loadPipeline.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunDetail, RunMeta, RunSummary, StageSnapshot } from "../src/runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
-import { projectRunDetail, projectRunSummary } from "../src/runstore/runProjection.js";
+import {
+  overlayPlannedStages,
+  projectRunDetail,
+  projectRunSummary,
+} from "../src/runstore/runProjection.js";
 import { syncRunStatusFromStages } from "../src/runtime/stageRecovery.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -55,6 +59,51 @@ function triage(run: RunSummary | RunDetail) {
 }
 
 describe("run projection", () => {
+  it("overlay stamps definition_id from DAG nodes onto synthetics", () => {
+    const dag = {
+      stage_ids: ["detect", "author-diagrams", "collect"],
+      roots: ["detect"],
+      childrenOf: { detect: ["author-diagrams"], "author-diagrams": ["collect"] },
+      nodes: [
+        {
+          id: "detect",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "detect",
+        },
+        {
+          id: "author-diagrams",
+          needs: "detect",
+          ancestors: ["detect"],
+          stageIndex: 1,
+          definition_id: "author-diagrams",
+        },
+        {
+          id: "collect",
+          needs: "author-diagrams",
+          ancestors: ["detect", "author-diagrams"],
+          stageIndex: 2,
+          definition_id: "collect",
+        },
+      ],
+    };
+    const overlay = overlayPlannedStages(dag.stage_ids, [], dag);
+    expect(overlay.map((s) => [s.stage_id, s.definition_id])).toEqual([
+      ["detect", "detect"],
+      ["author-diagrams", "author-diagrams"],
+      ["collect", "collect"],
+    ]);
+    const existing = overlayPlannedStages(
+      dag.stage_ids,
+      [snap("detect", "succeeded")],
+      dag,
+    );
+    expect(existing[0]?.definition_id).toBe("detect");
+    expect(existing[1]?.status).toBe("pending");
+    expect(existing[1]?.definition_id).toBe("author-diagrams");
+  });
+
   it("projects waiting_stage_ids for multiple simultaneous waiters", () => {
     const stages = [
       snap("clarify", "succeeded"),

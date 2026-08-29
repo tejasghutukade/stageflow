@@ -94,4 +94,39 @@ describe("StageProcessLauncher", () => {
 
     stderrSpy.mockRestore();
   });
+
+  it("holds two clone instance ids as distinct activeKeys", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-clone-keys-"));
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 2,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "250" },
+    });
+
+    const p1 = launcher.launch({
+      runId: "r1",
+      stageId: "author-diagrams~1",
+      rootDir,
+    });
+    const p2 = launcher.launch({
+      runId: "r1",
+      stageId: "author-diagrams~2",
+      rootDir,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(
+          launcher
+            .getActiveStageProcesses()
+            .map((e) => e.stageId)
+            .sort(),
+        ).toEqual(["author-diagrams~1", "author-diagrams~2"]);
+      },
+      { timeout: 2000 },
+    );
+
+    await Promise.all([p1, p2]);
+    expect(launcher.activeCount()).toBe(0);
+  });
 });
