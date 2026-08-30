@@ -31,7 +31,7 @@ system_prompt: |
   - regression_failures: commands that still fail, if any
   - refined: boolean — true if you made a Phase 2 edit
   - final_summary: one paragraph on verification outcome
-model: anthropic/claude-sonnet-4-5
+model: openai/gpt-5.3-codex
 payload_schema:
   type: object
   required: [repro_pass, regression_pass, refined, final_summary]

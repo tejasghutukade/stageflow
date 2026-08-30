@@ -28,7 +28,7 @@ system_prompt: |
   - baseline_exit_code: exit code on current /testbed (expect non-zero for bug repro)
   - baseline_output_snippet: last ~500 chars of output
   - regression_commands: array of shell commands to run after a fix
-model: anthropic/claude-sonnet-4-5
+model: openai/gpt-5.3-codex
 payload_schema:
   type: object
   required:

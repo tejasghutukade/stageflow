@@ -1,0 +1,6 @@
+{
+  "marshmallow-code__marshmallow-1343": {
+    "model_patch": "",
+    "model_name_or_path": "stageflow/openai/gpt-5.3-codex"
+  }
+}

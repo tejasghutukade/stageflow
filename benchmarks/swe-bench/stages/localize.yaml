@@ -24,7 +24,7 @@ system_prompt: |
   - hypothesis: one paragraph
 
   artifacts: optional localization.md via write_stage_artifact.
-model: anthropic/claude-sonnet-4-5
+model: openai/gpt-5.3-codex
 payload_schema:
   type: object
   required: [suspicious_files, edit_locations, hypothesis]

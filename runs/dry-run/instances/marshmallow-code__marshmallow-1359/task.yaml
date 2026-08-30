@@ -1,0 +1,45 @@
+id: "marshmallow-code__marshmallow-1359"
+goal: |
+  Fix the GitHub issue described below in the repository checked out at /testbed.
+context: |
+  Repository: marshmallow-code/marshmallow
+  Instance: marshmallow-code__marshmallow-1359
+  Base commit: b40a0f4e33823e6d0f341f7e8684e359a99060d1
+
+  3.0: DateTime fields cannot be used as inner field for List or Tuple fields
+Between releases 3.0.0rc8 and 3.0.0rc9, `DateTime` fields have started throwing an error when being instantiated as inner fields of container fields like `List` or `Tuple`. The snippet below works in <=3.0.0rc8 and throws the error below in >=3.0.0rc9 (and, worryingly, 3.0.0):
+
+```python
+from marshmallow import fields, Schema
+
+class MySchema(Schema):
+    times = fields.List(fields.DateTime())
+
+s = MySchema()
+```
+
+Traceback:
+```
+Traceback (most recent call last):
+  File "test-mm.py", line 8, in <module>
+    s = MySchema()
+  File "/Users/victor/.pyenv/versions/marshmallow/lib/python3.6/site-packages/marshmallow/schema.py", line 383, in __init__
+    self.fields = self._init_fields()
+  File "/Users/victor/.pyenv/versions/marshmallow/lib/python3.6/site-packages/marshmallow/schema.py", line 913, in _init_fields
+    self._bind_field(field_name, field_obj)
+  File "/Users/victor/.pyenv/versions/marshmallow/lib/python3.6/site-packages/marshmallow/schema.py", line 969, in _bind_field
+    field_obj._bind_to_schema(field_name, self)
+  File "/Users/victor/.pyenv/versions/marshmallow/lib/python3.6/site-packages/marshmallow/fields.py", line 636, in _bind_to_schema
+    self.inner._bind_to_schema(field_name, self)
+  File "/Users/victor/.pyenv/versions/marshmallow/lib/python3.6/site-packages/marshmallow/fields.py", line 1117, in _bind_to_schema
+    or getattr(schema.opts, self.SCHEMA_OPTS_VAR_NAME)
+AttributeError: 'List' object has no attribute 'opts'
+```
+
+It seems like it's treating the parent field as a Schema without checking that it is indeed a schema, so the `schema.opts` statement fails as fields don't have an `opts` attribute.
+
+constraints: |
+  Work only under /testbed.
+  Finish autonomously without operator input.
+  Apply a minimal fix and leave changes in the git working tree.
+  Call emit_stage_envelope when done with status success or failure.

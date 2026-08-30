@@ -1,0 +1,15 @@
+{
+  "total": 1,
+  "ran": 1,
+  "skipped": 0,
+  "results": [
+    {
+      "instance_id": "marshmallow-code__marshmallow-1343",
+      "outcome": "error",
+      "run_id": null,
+      "duration_ms": 46983,
+      "patch_bytes": 0,
+      "error": "Stageflow dist/cli.js not found. Run `npm run build` at the repo root before batch runs."
+    }
+  ]
+}

@@ -25,7 +25,7 @@ system_prompt: |
   - edited_files: repo-relative paths touched
   - repro_pass: boolean from running repro_command after your edit
   - regression_results: array of { command, exit_code, output_snippet }
-model: anthropic/claude-sonnet-4-5
+model: openai/gpt-5.3-codex
 payload_schema:
   type: object
   required: [patch_summary, edited_files, repro_pass]
