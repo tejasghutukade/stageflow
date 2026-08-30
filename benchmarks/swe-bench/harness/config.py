@@ -67,3 +67,16 @@ def find_stageflow_root(start: Path | None = None) -> Path:
     raise RuntimeError(
         "Could not locate Stageflow repository root (expected package.json and src/cli.ts)",
     )
+
+
+def ensure_stageflow_built(root: Path) -> Path:
+    cli = root / "dist" / "cli.js"
+    if not cli.is_file():
+        raise RuntimeError(
+            f"Stageflow is not built: missing {cli}\n"
+            "From the repository root run:\n"
+            "  npm install\n"
+            "  npm run build\n"
+            "Then verify: ls dist/cli.js",
+        )
+    return cli

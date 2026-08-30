@@ -8,9 +8,9 @@ Pipeline YAML (the actual solve workflow) is swappable; this package is the surr
 
 | Requirement | Notes |
 |-------------|-------|
-| Docker | x86_64 eval images from Docker Hub (`swebench/sweb.eval.x86_64.*`) |
+| Docker | x86_64 eval images from Docker Hub (`swebench/sweb.eval.x86_64.*`). **Docker Desktop/daemon must be running** — verify with `docker info` before a real batch (not needed for `--dry-run`). |
 | Python 3.11+ | Harness orchestrator |
-| Built Stageflow | `npm run build` at repo root (`dist/cli.js` required) |
+| Built Stageflow | **`npm install && npm run build` at repo root** — `dist/cli.js` is gitignored and must exist on the host before a real batch (the repo is bind-mounted into Docker) |
 | LLM credentials | e.g. `ANTHROPIC_API_KEY`, or mount `~/.stageflow/agent/auth.json` |
 | Disk / RAM | 120 GB+ free recommended; 16 GB RAM; keep workers below `min(0.75 * cpu, 24)` |
 

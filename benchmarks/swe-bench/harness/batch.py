@@ -4,7 +4,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .config import HarnessConfig
+from .config import HarnessConfig, ensure_stageflow_built
 from .dataset import SweBenchInstance, load_instances
 from .instance_runner import run_instance
 from .predictions import load_completed_instance_ids, rewrite_preds_json
@@ -34,6 +34,12 @@ def run_batch(config: HarnessConfig) -> dict:
         }
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return summary
+
+    if not config.dry_run:
+        ensure_stageflow_built(config.stageflow_root)
+        from .docker import ensure_docker_available
+
+        ensure_docker_available()
 
     workers = max(1, config.workers)
 

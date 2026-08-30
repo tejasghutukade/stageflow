@@ -7,9 +7,27 @@ from dataclasses import dataclass
 from typing import Mapping
 
 import docker
+from docker.errors import DockerException
 from docker.models.containers import Container
 
 from .config import HarnessConfig
+
+
+def ensure_docker_available() -> None:
+    try:
+        client = docker.from_env()
+        client.ping()
+    except DockerException as err:
+        raise RuntimeError(
+            "Docker is not running or not reachable. "
+            "Start Docker Desktop (macOS/Windows) or the Docker daemon (Linux), "
+            "then verify with: docker info",
+        ) from err
+    except FileNotFoundError as err:
+        raise RuntimeError(
+            "Docker CLI/socket not found. Install Docker Desktop and ensure "
+            "the daemon is running, then verify with: docker info",
+        ) from err
 
 
 @dataclass
