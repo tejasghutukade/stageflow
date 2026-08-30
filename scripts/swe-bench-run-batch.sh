@@ -14,7 +14,7 @@ SUBSET="${2:-lite}"
 SPLIT="${3:-dev}"
 WORKERS="${4:-1}"
 SLICE="${5:-0:2}"
-PIPELINE="${ROOT}/benchmarks/swe-bench/pipelines/stub.pipeline.yaml"
+PIPELINE="${ROOT}/benchmarks/swe-bench/pipelines/swe-agentless-lite.pipeline.yaml"
 
 pip install -q -e "${ROOT}/benchmarks/swe-bench" 2>/dev/null || pip install -e "${ROOT}/benchmarks/swe-bench"
 

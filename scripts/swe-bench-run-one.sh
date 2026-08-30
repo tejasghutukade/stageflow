@@ -16,7 +16,7 @@ if [[ -z "${INSTANCE_ID}" ]]; then
 fi
 
 OUTPUT_DIR="${2:-${ROOT}/benchmarks/swe-bench/runs/smoke-one}"
-PIPELINE="${ROOT}/benchmarks/swe-bench/pipelines/stub.pipeline.yaml"
+PIPELINE="${ROOT}/benchmarks/swe-bench/pipelines/swe-agentless-lite.pipeline.yaml"
 
 pip install -q -e "${ROOT}/benchmarks/swe-bench" 2>/dev/null || pip install -e "${ROOT}/benchmarks/swe-bench"
 
