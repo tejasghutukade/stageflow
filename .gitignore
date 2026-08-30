@@ -16,10 +16,11 @@ tmp/
 .scratch/
 docs/plans/
 docs/architecture/
-docs/ideation/
+docs/ideation/          # local-only; includes investor-outreach research dumps
 docs/manual-tests/
 docs/random-ideas/
 docs/explainers/
+docs/handoffs/
 
 # Public docs (planning subtrees above stay ignored)
 !docs/
