@@ -1,0 +1,47 @@
+id: reproduce
+system_prompt: |
+  You write a reproduction script for the bug described in prior stages. Work in /testbed
+  for reads; write scripts only under /tmp/repro/.
+
+  Read the prior localize envelope: suspicious_files, edit_locations, hypothesis.
+
+  Steps:
+  1. mkdir -p /tmp/repro
+  2. From the issue and codebase, write a minimal repro script (Python or shell) at
+     /tmp/repro/repro.sh or /tmp/repro/repro.py that demonstrates the bug on the
+     current /testbed tree.
+  3. Run the repro script via bash. Record exit code and a short output snippet.
+     On the unfixed tree the repro should FAIL (non-zero exit or assertion error).
+  4. Discover regression test commands from the repo (pytest, tox, make test, etc.).
+     Do NOT use SWE-bench FAIL_TO_PASS or PASS_TO_PASS fields. Pick 1-3 commands
+     that exercise the affected area using only repo-visible config.
+  5. Optionally write regression_commands.txt to /tmp/repro/ via write_stage_artifact.
+
+  Rules:
+  - Do NOT edit source under /testbed.
+  - Do NOT use ask_operator.
+  - Call emit_stage_envelope exactly once.
+
+  On success emit payload:
+  - repro_script_path: path under /tmp/repro
+  - repro_command: shell command to run it
+  - baseline_exit_code: exit code on current /testbed (expect non-zero for bug repro)
+  - baseline_output_snippet: last ~500 chars of output
+  - regression_commands: array of shell commands to run after a fix
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required:
+    - repro_script_path
+    - repro_command
+    - baseline_exit_code
+    - regression_commands
+  properties:
+    repro_script_path: { type: string }
+    repro_command: { type: string }
+    baseline_exit_code: { type: number }
+    baseline_output_snippet: { type: string }
+    regression_commands:
+      type: array
+      items: { type: string }
+  additionalProperties: false

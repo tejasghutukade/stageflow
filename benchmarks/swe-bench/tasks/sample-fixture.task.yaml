@@ -1,0 +1,12 @@
+id: sample-fixture
+goal: Fix the sample issue in the repository at /testbed.
+context: |
+  Repository: example/example
+  Instance: example__example-1
+  Base commit: abc123
+
+  A function returns None when it should return an empty list. Fix the implementation
+  so callers receive [] instead of None.
+constraints: |
+  Work only under /testbed.
+  Finish autonomously without operator input.

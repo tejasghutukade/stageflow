@@ -1,0 +1,13 @@
+id: swe-agentless-lite
+stages:
+  - id: localize
+    uses: ../stages/localize.yaml
+  - id: reproduce
+    uses: ../stages/reproduce.yaml
+    needs: localize
+  - id: implement
+    uses: ../stages/implement.yaml
+    needs: reproduce
+  - id: verify-refine
+    uses: ../stages/verify-refine.yaml
+    needs: implement

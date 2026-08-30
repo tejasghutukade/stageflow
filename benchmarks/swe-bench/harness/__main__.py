@@ -12,7 +12,7 @@ from .submit import package_submission
 
 
 def _default_pipeline(root: Path) -> Path:
-    return root / "benchmarks" / "swe-bench" / "pipelines" / "stub.pipeline.yaml"
+    return root / "benchmarks" / "swe-bench" / "pipelines" / "swe-agentless-lite.pipeline.yaml"
 
 
 def build_parser() -> argparse.ArgumentParser:

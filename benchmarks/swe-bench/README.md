@@ -135,7 +135,44 @@ sf export-run --from instances/foo/sf-run.json --out instances/foo/run-export.js
 sf export-trace --from instances/foo/sf-run.json --instance-id foo --out trajs/foo.json
 ```
 
-## Swap in the real pipeline
+## Pipelines
+
+| Pipeline | Purpose |
+|----------|---------|
+| `pipelines/stub.pipeline.yaml` | Harness wiring smoke (no code changes) |
+| `pipelines/swe-agentless-lite.pipeline.yaml` | **Option B** — localize → reproduce → implement → verify-refine |
+
+### Option B (recommended starting point)
+
+Four-stage Agentless-lite flow for mid-tier models:
+
+```text
+localize (read-only) → reproduce (/tmp/repro scripts) → implement (minimal patch) → verify-refine (test + one retry)
+```
+
+Run on Lite dev instances:
+
+```bash
+python3 -m harness batch \
+  --subset lite \
+  --split dev \
+  --workers 1 \
+  --slice 0:10 \
+  --output-dir runs/agentless-lite \
+  --pipeline pipelines/swe-agentless-lite.pipeline.yaml
+```
+
+Validate pipeline shape locally:
+
+```bash
+npm run build
+node dist/cli.js validate \
+  --pipeline benchmarks/swe-bench/pipelines/swe-agentless-lite.pipeline.yaml \
+  --task benchmarks/swe-bench/tasks/sample-fixture.task.yaml \
+  --strict
+```
+
+## Swap in other pipelines
 
 Replace `pipelines/stub.pipeline.yaml` with your solve pipeline and pass `--pipeline` to `batch`. The harness does not need changes.
 
