@@ -42,6 +42,11 @@ software-factory-naming-research.json
 software-factory-usecases-pitch-targets.json
 software-factory-usecases-pitch-targets.md
 .worktrees/
+.venv/
+/runs/
+.stageflow-backup-test/
+.stageflow-ci-test/
+deliver-receipts.json
 benchmarks/swe-bench/runs/
 benchmarks/swe-bench/**/__pycache__/
 benchmarks/swe-bench/**/*.egg-info/
