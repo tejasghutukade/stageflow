@@ -48,53 +48,42 @@ export function wrapRunStoreWithChangeBus(
   store: RunStore,
   bus: RunChangeBus,
 ): RunStore {
-  return {
-    createRun: async (input: CreateRunInput): Promise<CreatedRun> => {
-      const created = await store.createRun(input);
-      bus.emit({ runId: created.runId, kind: "created" });
-      return created;
-    },
-    updateRunStatus: async (runId: string, status: RunStatus): Promise<void> => {
-      await store.updateRunStatus(runId, status);
-      bus.emit({ runId, kind: "status" });
-    },
-    appendStageEvent: async (
-      runId: string,
-      stageId: string,
-      event: StageLogLine,
-      options?: { attempt?: number },
-    ): Promise<void> => {
-      await store.appendStageEvent(runId, stageId, event, options);
-      if (event.event === "waiting_for_input" || event.event === "resumed") {
-        bus.emit({ runId, kind: "waiting" });
-      }
-    },
-    readRunMeta: (runId) => store.readRunMeta(runId),
-    readTaskYaml: (runId) => store.readTaskYaml(runId),
-    getWorkspaceDir: (runId) => store.getWorkspaceDir(runId),
-    ensureStageWorkspace: (runId, stageId) =>
-      store.ensureStageWorkspace(runId, stageId),
-    ensureAttemptWorkspace: (runId, stageId, attempt) =>
-      store.ensureAttemptWorkspace(runId, stageId, attempt),
-    createStageExecution: (runId, stageId) =>
-      store.createStageExecution(runId, stageId),
-    listStageExecutions: (runId, stageId) =>
-      store.listStageExecutions(runId, stageId),
-    getLatestStageExecution: (runId, stageId) =>
-      store.getLatestStageExecution(runId, stageId),
-    countStageAttempts: (runId, stageId) =>
-      store.countStageAttempts(runId, stageId),
-    getStageExecution: (runId, stageId, attempt) =>
-      store.getStageExecution(runId, stageId, attempt),
-    updateStageExecution: (runId, stageId, attempt, patch) =>
-      store.updateStageExecution(runId, stageId, attempt, patch),
-    writeEnvelope: (runId, stageId, envelope, options) =>
-      store.writeEnvelope(runId, stageId, envelope, options),
-    readEnvelope: (runId, stageId) => store.readEnvelope(runId, stageId),
-    listStageEvents: (runId, stageId, attempt) =>
-      store.listStageEvents(runId, stageId, attempt),
-    listRuns: (filter) => store.listRuns(filter),
-    readRun: (runId) => store.readRun(runId),
-    updatePipelineDag: (runId, dag) => store.updatePipelineDag(runId, dag),
+  const createRun = async (input: CreateRunInput): Promise<CreatedRun> => {
+    const created = await store.createRun(input);
+    bus.emit({ runId: created.runId, kind: "created" });
+    return created;
   };
+
+  const updateRunStatus = async (
+    runId: string,
+    status: RunStatus,
+  ): Promise<void> => {
+    await store.updateRunStatus(runId, status);
+    bus.emit({ runId, kind: "status" });
+  };
+
+  const appendStageEvent = async (
+    runId: string,
+    stageId: string,
+    event: StageLogLine,
+    options?: { attempt?: number },
+  ): Promise<void> => {
+    await store.appendStageEvent(runId, stageId, event, options);
+    if (event.event === "waiting_for_input" || event.event === "resumed") {
+      bus.emit({ runId, kind: "waiting" });
+    }
+  };
+
+  return new Proxy(store, {
+    get(target, prop, receiver) {
+      if (prop === "createRun") return createRun;
+      if (prop === "updateRunStatus") return updateRunStatus;
+      if (prop === "appendStageEvent") return appendStageEvent;
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === "function") {
+        return value.bind(target);
+      }
+      return value;
+    },
+  });
 }
