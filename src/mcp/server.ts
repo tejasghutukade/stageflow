@@ -5,8 +5,9 @@ import {
   isInitializeRequest,
   McpServer,
 } from "@modelcontextprotocol/server";
+import type { McpToolDeps } from "./deps.js";
 import { registerRunResources, runResourceUri } from "./resources.js";
-import { registerMcpTools, type McpToolDeps } from "./tools.js";
+import { registerMcpTools } from "./tools.js";
 
 export type { McpToolDeps };
 

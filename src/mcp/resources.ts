@@ -4,7 +4,7 @@ import {
   ResourceTemplate,
 } from "@modelcontextprotocol/server";
 import { projectRunForMcp } from "./projectRun.js";
-import type { McpToolDeps } from "./tools.js";
+import type { McpToolDeps } from "./deps.js";
 
 export const RUN_RESOURCE_URI_TEMPLATE = "stageflow://runs/{runId}";
 
