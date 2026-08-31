@@ -293,7 +293,7 @@ Long-poll until a run reaches a HITL waiting point and/or a terminal status, or 
 
 | `until` | Wakes when |
 |---------|------------|
-| `waiting` | Any stage is `waiting_for_input` / non-empty `waiting_stage_ids` (run `status` stays `"running"` during HITL) |
+| `waiting` | Any stage is `waiting_for_input` / non-empty `waiting_stage_ids` (run `status` stays `"running"` during HITL). A terminal run also ends the wait. |
 | `terminal` | Run `status` is `succeeded` or `failed` |
 | `any` | Waiting **or** terminal |
 

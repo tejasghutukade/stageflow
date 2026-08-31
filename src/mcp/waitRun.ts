@@ -98,6 +98,7 @@ export function classifyWaitWake(
   let matched: "waiting" | "terminal" | null = null;
   if (until === "waiting") {
     if (waiting) matched = "waiting";
+    else if (terminal) matched = "terminal";
   } else if (until === "terminal") {
     if (terminal) matched = "terminal";
   } else if (waiting) {
@@ -187,10 +188,11 @@ export async function waitRun(opts: WaitRunOpts): Promise<WaitRunResult> {
       elapsed_ms - lastProgressAt >= PROGRESS_EVERY_MS
     ) {
       try {
-        await opts.onProgress({
+        const maybe = opts.onProgress({
           progress: pollCount,
           message: `waiting until=${untilVal} elapsed_ms=${elapsed_ms}`,
         });
+        void Promise.resolve(maybe).catch(() => {});
       } catch {
       }
       lastProgressAt = elapsed_ms;

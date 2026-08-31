@@ -1,14 +1,27 @@
 import type {
+  RunDetail,
   RunStore,
   RunSummary,
   StageSnapshot,
 } from "../runstore/port.js";
 
+type WaitingSummarySource = Pick<
+  RunSummary,
+  | "run_id"
+  | "waiting_stage_id"
+  | "waiting_stage_ids"
+  | "waiting_kind"
+  | "waiting_summary"
+  | "waiting_prompt_id"
+  | "waiting_artifacts"
+  | "waiting_questions"
+>;
+
 export function projectWaitingGate(opts: {
   runId: string;
   stageId: string;
   stage: StageSnapshot;
-  summary: RunSummary;
+  summary: WaitingSummarySource;
 }): Record<string, unknown> {
   const { runId, stageId, stage, summary } = opts;
   const prompt = stage.pending_prompt;
@@ -48,44 +61,60 @@ export function projectWaitingGate(opts: {
   return item;
 }
 
+function projectGatesForRun(
+  detail: RunDetail,
+  summary: WaitingSummarySource,
+): Array<Record<string, unknown>> {
+  const stageIds =
+    summary.waiting_stage_ids ??
+    (summary.waiting_stage_id !== undefined ? [summary.waiting_stage_id] : []);
+  const items: Array<Record<string, unknown>> = [];
+  for (const stageId of stageIds) {
+    const stage = detail.stages.find((s) => s.stage_id === stageId);
+    if (!stage || stage.status !== "waiting_for_input") continue;
+    items.push(
+      projectWaitingGate({
+        runId: summary.run_id,
+        stageId,
+        stage,
+        summary,
+      }),
+    );
+  }
+  return items;
+}
+
 export async function projectWaitingGates(
   store: RunStore,
   opts?: { runId?: string },
 ): Promise<Array<Record<string, unknown>>> {
-  const summaries = opts?.runId
-    ? (await store.listRuns()).filter((r) => r.run_id === opts.runId)
-    : await store.listRuns();
+  if (opts?.runId !== undefined) {
+    let detail;
+    try {
+      detail = await store.readRun(opts.runId);
+    } catch {
+      return [];
+    }
+    return projectGatesForRun(detail, detail);
+  }
+
+  const summaries = await store.listRuns();
   const waiting = summaries.filter(
     (r) =>
       (r.waiting_stage_ids !== undefined && r.waiting_stage_ids.length > 0) ||
       r.waiting_stage_id !== undefined,
   );
 
-  const items: Array<Record<string, unknown>> = [];
-  for (const summary of waiting) {
-    const stageIds =
-      summary.waiting_stage_ids ??
-      (summary.waiting_stage_id !== undefined
-        ? [summary.waiting_stage_id]
-        : []);
-    let detail;
-    try {
-      detail = await store.readRun(summary.run_id);
-    } catch {
-      continue;
-    }
-    for (const stageId of stageIds) {
-      const stage = detail.stages.find((s) => s.stage_id === stageId);
-      if (!stage || stage.status !== "waiting_for_input") continue;
-      items.push(
-        projectWaitingGate({
-          runId: summary.run_id,
-          stageId,
-          stage,
-          summary,
-        }),
-      );
-    }
-  }
-  return items;
+  const perRun = await Promise.all(
+    waiting.map(async (summary) => {
+      let detail;
+      try {
+        detail = await store.readRun(summary.run_id);
+      } catch {
+        return [] as Array<Record<string, unknown>>;
+      }
+      return projectGatesForRun(detail, summary);
+    }),
+  );
+  return perRun.flat();
 }

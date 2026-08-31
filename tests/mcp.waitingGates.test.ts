@@ -222,9 +222,11 @@ describe("projectWaitingGates", () => {
     summaries: RunSummary[];
     details?: Map<string, RunDetail> | ((runId: string) => RunDetail);
     failRead?: Set<string>;
+    onListRuns?: () => void;
   }): Pick<RunStore, "listRuns" | "readRun"> {
     return {
       async listRuns() {
+        opts.onListRuns?.();
         return opts.summaries;
       },
       async readRun(runId: string) {
@@ -271,7 +273,7 @@ describe("projectWaitingGates", () => {
     expect(items[0]!.stageId).toBe("clarify");
   });
 
-  it("T6 optional runId filter: only that run’s gates", async () => {
+  it("T6 optional runId filter: only that run’s gates via readRun", async () => {
     const promptA = {
       kind: "free_text" as const,
       id: "a",
@@ -282,6 +284,7 @@ describe("projectWaitingGates", () => {
       id: "b",
       message: "B?",
     };
+    let listRunsCalls = 0;
     const store = fakeStore({
       summaries: [
         summary({
@@ -295,6 +298,9 @@ describe("projectWaitingGates", () => {
           waiting_stage_ids: ["s1"],
         }),
       ],
+      onListRuns: () => {
+        listRunsCalls += 1;
+      },
       details: (runId) =>
         detail(
           [
@@ -314,10 +320,12 @@ describe("projectWaitingGates", () => {
 
     const all = await projectWaitingGates(store as RunStore);
     expect(all.map((i) => i.runId)).toEqual(["run-a", "run-b"]);
+    expect(listRunsCalls).toBe(1);
 
     const filtered = await projectWaitingGates(store as RunStore, {
       runId: "run-b",
     });
+    expect(listRunsCalls).toBe(1);
     expect(filtered).toHaveLength(1);
     expect(filtered[0]).toEqual(
       expect.objectContaining({
@@ -326,6 +334,18 @@ describe("projectWaitingGates", () => {
         waiting_summary: "B?",
       }),
     );
+  });
+
+  it("T6b runId readRun failure → empty list", async () => {
+    const store = fakeStore({
+      summaries: [],
+      failRead: new Set(["missing"]),
+      details: new Map(),
+    });
+    const items = await projectWaitingGates(store as RunStore, {
+      runId: "missing",
+    });
+    expect(items).toEqual([]);
   });
 
   it("T7 readRun failure for one summary → skip, do not fail whole list", async () => {

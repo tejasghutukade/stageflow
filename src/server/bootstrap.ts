@@ -8,6 +8,8 @@ import type { RunStore } from "../runstore/port.js";
 import { RunManager } from "../runtime/runManager.js";
 import {
   createRunChangeBus,
+  getRunChangeBusFromWrappedStore,
+  isRunStoreWrapped,
   wrapRunStoreWithChangeBus,
   type RunChangeBus,
 } from "../runtime/runChangeBus.js";
@@ -55,10 +57,23 @@ export async function bootstrapStageflowHost(
     options.rootDir !== undefined
       ? findProjectRoot(rootDir) !== null
       : ctx.isGitProject;
-  const runChangeBus = options.runChangeBus ?? createRunChangeBus();
   const rawStore =
     options.store ??
     createRunStore({ rootDir, kind: options.storeKind });
+  const boundBus = isRunStoreWrapped(rawStore)
+    ? getRunChangeBusFromWrappedStore(rawStore)
+    : undefined;
+  if (
+    boundBus !== undefined &&
+    options.runChangeBus !== undefined &&
+    options.runChangeBus !== boundBus
+  ) {
+    throw new Error(
+      "runChangeBus does not match the bus already bound to the provided store",
+    );
+  }
+  const runChangeBus =
+    options.runChangeBus ?? boundBus ?? createRunChangeBus();
   const store = wrapRunStoreWithChangeBus(rawStore, runChangeBus);
   const manager = new RunManager({
     agent: options.agent,

@@ -70,7 +70,12 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     async ({ status, since, pipeline }) => {
       const filter: ListRunsFilter = {};
       if (status !== undefined) filter.status = status as RunStatus;
-      if (since !== undefined) filter.since = since;
+      if (since !== undefined) {
+        if (!Number.isFinite(Date.parse(since))) {
+          return textResult({ error: "since must be a valid date", status: 400 }, true);
+        }
+        filter.since = since;
+      }
       if (pipeline !== undefined) filter.pipeline = pipeline;
       const runs = await store.listRuns(
         Object.keys(filter).length > 0 ? filter : undefined,

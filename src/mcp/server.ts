@@ -180,6 +180,7 @@ export function createMcpHttpHandler(
       }
 
       const server = createStageflowMcpServer(tools);
+      let sessionRegistered = false;
       const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
@@ -188,6 +189,7 @@ export function createMcpHttpHandler(
             server,
             unsubscribeBus: attachBusNotifications(server, deps.runChangeBus),
           });
+          sessionRegistered = true;
         },
         onsessionclosed: (id) => {
           void disposeSession(id, { closeTransport: false });
@@ -199,8 +201,15 @@ export function createMcpHttpHandler(
         void disposeSession(id, { closeTransport: false });
       };
 
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
+      try {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+      } finally {
+        if (!sessionRegistered) {
+          await transport.close().catch(() => undefined);
+          await server.close().catch(() => undefined);
+        }
+      }
       return;
     }
 

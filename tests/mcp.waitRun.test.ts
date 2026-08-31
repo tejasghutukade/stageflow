@@ -101,6 +101,15 @@ describe("waitRun helpers", () => {
     expect(classifyWaitWake(proj, "terminal", true)).toBe("terminal");
   });
 
+  it("classifyWaitWake: terminal + until waiting → already / terminal", () => {
+    const proj = baseProjection({ status: "succeeded" });
+    expect(classifyWaitWake(proj, "waiting", false)).toBe("already");
+    expect(classifyWaitWake(proj, "waiting", true)).toBe("terminal");
+    const failed = baseProjection({ status: "failed" });
+    expect(classifyWaitWake(failed, "waiting", false)).toBe("already");
+    expect(classifyWaitWake(failed, "waiting", true)).toBe("terminal");
+  });
+
   it("classifyWaitWake: waiting_* + until waiting wakes; until terminal does not", () => {
     const proj = baseProjection({
       waiting_stage_ids: ["clarify"],
@@ -200,6 +209,51 @@ describe("waitRun loop", () => {
     });
     expect(terminal.ok && terminal.run.status).toBe("succeeded");
     expect(terminal.ok && terminal.elapsed_ms).toBeLessThan(POLL_INTERVAL_MS);
+  });
+
+  it("T1b: terminal store + until waiting → already promptly (not timeout)", async () => {
+    const result = await waitRun({
+      store: fakeStore([terminalDetail()]),
+      runId: "run-1",
+      until: "waiting",
+      timeoutMs: 5_000,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "already",
+      until: "waiting",
+    });
+    expect(result.ok && result.run.status).toBe("succeeded");
+    expect(result.ok && result.elapsed_ms).toBeLessThan(POLL_INTERVAL_MS);
+
+    const failed = await waitRun({
+      store: fakeStore([terminalDetail("failed")]),
+      runId: "run-1",
+      until: "waiting",
+      timeoutMs: 5_000,
+    });
+    expect(failed).toMatchObject({
+      ok: true,
+      reason: "already",
+      until: "waiting",
+    });
+    expect(failed.ok && failed.run.status).toBe("failed");
+    expect(failed.ok && failed.elapsed_ms).toBeLessThan(POLL_INTERVAL_MS);
+  });
+
+  it("T1c: running → terminal under until waiting → reason terminal", async () => {
+    const result = await waitRun({
+      store: fakeStore([detail(), terminalDetail()]),
+      runId: "run-1",
+      until: "waiting",
+      timeoutMs: 5_000,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      reason: "terminal",
+      until: "waiting",
+    });
+    expect(result.ok && result.run.status).toBe("succeeded");
   });
 
   it("T2: transitions to waiting → reason waiting after poll", async () => {
@@ -316,6 +370,19 @@ describe("waitRun loop", () => {
       progress: expect.any(Number),
       message: expect.stringContaining("waiting until=terminal"),
     });
+  });
+
+  it("T8b: hanging onProgress does not block timeout", async () => {
+    const onProgress = vi.fn(() => new Promise<void>(() => {}));
+    const result = await waitRun({
+      store: fakeStore([detail()]),
+      runId: "run-1",
+      until: "terminal",
+      timeoutMs: PROGRESS_EVERY_MS + 400,
+      onProgress,
+    });
+    expect(result.ok && result.reason).toBe("timeout");
+    expect(onProgress.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("T9: until waiting | terminal | any predicate via loop", async () => {

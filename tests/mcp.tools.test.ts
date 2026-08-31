@@ -1166,6 +1166,104 @@ describe("MCP Tier 1 operator parity", () => {
       });
       expect(missing.isError).toBe(true);
       expect(missing.payload.error).toBeTruthy();
+
+      for (const blank of ["", "   "]) {
+        const emptyDescribe = await mcpCall(base, "describe_pipeline", {
+          pipeline: blank,
+        });
+        expect(emptyDescribe.isError).toBe(true);
+        expect(emptyDescribe.payload.error).toBe("pipeline is required");
+        expect(emptyDescribe.payload.status).toBe(400);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("start_run rejects empty/whitespace pipeline", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-start-blank-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      for (const blank of ["", "   "]) {
+        const result = await mcpCall(base, "start_run", {
+          pipeline: blank,
+          task: { id: "t", goal: "g" },
+        });
+        expect(result.isError).toBe(true);
+        expect(result.payload.error).toBe("pipeline is required");
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact missing → 404; path denied → 400", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-art-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const deniedRel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      ".pi-agent",
+      "auth.json",
+    );
+    await mkdir(path.dirname(path.join(created.workspaceDir, deniedRel)), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(created.workspaceDir, deniedRel),
+      JSON.stringify({ secret: "nope" }),
+    );
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const missingRun = await mcpCall(base, "read_artifact", {
+        runId: "does-not-exist",
+        path: "stages/clarify/attempts/1/artifacts/note.txt",
+      });
+      expect(missingRun.isError).toBe(true);
+      expect(missingRun.payload.status).toBe(404);
+      expect(missingRun.payload.error).toBeTruthy();
+
+      const missingArtifact = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: "stages/clarify/attempts/1/artifacts/missing.txt",
+      });
+      expect(missingArtifact.isError).toBe(true);
+      expect(missingArtifact.payload.status).toBe(404);
+      expect(String(missingArtifact.payload.error)).toMatch(/Artifact not found/);
+
+      const denied = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: deniedRel,
+      });
+      expect(denied.isError).toBe(true);
+      expect(denied.payload.status).toBe(400);
+      expect(String(denied.payload.error)).toMatch(/Artifact path denied/);
+
+      const escaped = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: "../outside.txt",
+      });
+      expect(escaped.isError).toBe(true);
+      expect(escaped.payload.status).toBe(400);
+      expect(String(escaped.payload.error)).toMatch(/\.\.|must not contain/);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -1222,6 +1320,23 @@ describe("MCP Tier 1 operator parity", () => {
       expect(
         byPipeline.payload.runs.map((r: { run_id: string }) => r.run_id),
       ).toEqual([a.runId]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("list_runs rejects invalid since", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-since-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const bad = await mcpCall(base, "list_runs", { since: "not-a-date" });
+      expect(bad.isError).toBe(true);
+      expect(bad.payload.status).toBe(400);
+      expect(bad.payload.error).toBe("since must be a valid date");
+      expect(bad.payload.runs).toBeUndefined();
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
