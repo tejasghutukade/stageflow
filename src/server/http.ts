@@ -677,6 +677,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     }
   });
 
+  server.requestTimeout = 0;
+
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => resolve());
     server.on("error", reject);

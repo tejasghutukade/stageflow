@@ -202,6 +202,69 @@ Use `list_stage_events` / `get_envelope` for timelines and full envelopes.
 
 Returns `404`-style error JSON when the run is not found.
 
+### `wait_run`
+
+Long-poll until a run reaches a HITL waiting point and/or a terminal status, or until `timeout_ms` elapses. Holds one MCP `tools/call` HTTP request; transport stays **stateless** (no session ID).
+
+**Input:**
+
+```json
+{
+  "runId": "…",
+  "timeout_ms": 60000,
+  "until": "any"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `runId` | Required |
+| `timeout_ms` | Optional wait budget in ms. Default `60000`. Must be in `(0, 240000]`. |
+| `until` | Optional wake predicate: `"any"` (default), `"waiting"`, or `"terminal"` |
+
+**Wake predicates**
+
+| `until` | Wakes when |
+|---------|------------|
+| `waiting` | Any stage is `waiting_for_input` / non-empty `waiting_stage_ids` (run `status` stays `"running"` during HITL) |
+| `terminal` | Run `status` is `succeeded` or `failed` |
+| `any` | Waiting **or** terminal |
+
+Already-satisfied predicates return immediately with `reason: "already"` (not an error).
+
+**Success output:**
+
+```json
+{
+  "reason": "waiting",
+  "elapsed_ms": 1234,
+  "until": "any",
+  "run": { }
+}
+```
+
+`reason` is one of `waiting` | `terminal` | `timeout` | `already`. Nested `run` matches lean `get_run` (no events; includes `waiting_*` / `pending_prompt` when waiting).
+
+**Timeout is success:** when the budget elapses without a matching wake, the tool returns `reason: "timeout"` with the latest snapshot and `isError: false`.
+
+**Abort ≠ cancel run:** cancelling the MCP request / aborting the handler signal ends only the wait (`isError` with `code: "aborted"`). The pipeline run continues. There is still no run-level cancel tool.
+
+**Optional progress:** if the client supplies `_meta.progressToken` on `tools/call`, the server may emit sparse `notifications/progress` during the poll loop. Progress is never required for correctness. Many clients default tool timeouts to ~60s; only clients that honor progress and `resetTimeoutOnProgress` benefit. Cursor behavior is unverified — pass a shorter `timeout_ms` when unsure.
+
+**Node `requestTimeout`:** the UI HTTP server disables Node’s default 300s `requestTimeout` so a max `timeout_ms` of 240s is not cut off by the socket layer.
+
+**Compose with HITL**
+
+```
+start_run → wait_run (until waiting/any)
+         → answer_gate
+         → wait_run (until terminal)
+```
+
+Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point.
+
+**Errors (`isError: true`):** `404` unknown run; `400` invalid `timeout_ms`; `code: "aborted"` when the client aborts the wait.
+
 ### `list_stage_events`
 
 List persisted stage log events (lifecycle/activity). Optional `attempt` scopes to one attempt.
@@ -325,9 +388,8 @@ Exact config shape depends on your MCP client version. Session IDs are not requi
 ## Limitations
 
 - MCP requires `sf ui` — there is no standalone `sf mcp` command
-- No run-level cancel/abort tool (abandon is per running stage only)
-- No `wait_run` / long-poll or push notifications (deferred)
-- No MCP resources / stateful sessions (deferred)
+- No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
+- No MCP resources / stateful sessions / push subscribe (deferred; `wait_run` long-poll remains the interaction wait)
 - Default `get_run` stays lean (no stage event streams); use `list_stage_events` / `get_envelope` for detail
 - Tools return JSON text content blocks
 

@@ -61,7 +61,16 @@ async function jsonFetch(url: string, init?: RequestInit) {
   return { status: res.status, body };
 }
 
-async function mcpCall(base: string, name: string, args: Record<string, unknown> = {}) {
+async function mcpCall(
+  base: string,
+  name: string,
+  args: Record<string, unknown> = {},
+  opts: { signal?: AbortSignal; meta?: Record<string, unknown> } = {},
+) {
+  const params: Record<string, unknown> = { name, arguments: args };
+  if (opts.meta !== undefined) {
+    params._meta = opts.meta;
+  }
   const res = await fetch(`${base}/mcp`, {
     method: "POST",
     headers: {
@@ -72,8 +81,9 @@ async function mcpCall(base: string, name: string, args: Record<string, unknown>
       jsonrpc: "2.0",
       id: 1,
       method: "tools/call",
-      params: { name, arguments: args },
+      params,
     }),
+    signal: opts.signal,
   });
   const text = await res.text();
   const dataLine = text
@@ -1208,6 +1218,402 @@ describe("MCP Tier 1 operator parity", () => {
       expect(
         byPipeline.payload.runs.map((r: { run_id: string }) => r.run_id),
       ).toEqual([a.runId]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("MCP Tier 2 wait_run", () => {
+  const freeTextPrompt = {
+    kind: "free_text" as const,
+    id: "prompt-1",
+    message: "What should the module name be?",
+  };
+  const freeTextAnswer = {
+    promptId: "prompt-1",
+    kind: "free_text" as const,
+    text: "payments",
+  };
+
+  it("tools/list includes wait_run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-list-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+    try {
+      const tools = await mcpListTools(base);
+      expect(tools.map((t) => t.name)).toContain("wait_run");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE1 wake on waiting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-hitl-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: [freeTextPrompt],
+        envelope: {
+          status: "success",
+          summary: "clarify-ok",
+          artifacts: [],
+        },
+      },
+    ]);
+    const { server, base, store } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      expect(started.isError).toBe(false);
+      const runId = started.payload.runId as string;
+
+      const waited = await mcpCall(base, "wait_run", {
+        runId,
+        until: "any",
+        timeout_ms: 8_000,
+      });
+      expect(waited.isError).toBe(false);
+      expect(waited.payload.reason).toBe("waiting");
+      expect(waited.payload.until).toBe("any");
+      expect(waited.payload.run.status).toBe("running");
+      expect(waited.payload.run.waiting_stage_ids).toContain("clarify");
+      expect(
+        waited.payload.run.stages.find(
+          (s: { stage_id: string }) => s.stage_id === "clarify",
+        )?.pending_prompt,
+      ).toEqual(freeTextPrompt);
+      expect(waited.payload.run.stages[0]?.events).toBeUndefined();
+
+      await mcpCall(base, "answer_gate", {
+        runId,
+        stageId: "clarify",
+        answer: freeTextAnswer,
+      });
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE2 wake on terminal", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-term-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "emit",
+        envelope: {
+          status: "success",
+          summary: "ok",
+          artifacts: [],
+        },
+      },
+    ]);
+    const { server, base } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      const runId = started.payload.runId as string;
+
+      const waited = await mcpCall(base, "wait_run", {
+        runId,
+        until: "terminal",
+        timeout_ms: 8_000,
+      });
+      expect(waited.isError).toBe(false);
+      expect(["terminal", "already"]).toContain(waited.payload.reason);
+      expect(waited.payload.run.status).toBe("succeeded");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE3 already waiting / already terminal → reason already", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-already-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: [freeTextPrompt],
+        envelope: {
+          status: "success",
+          summary: "ok",
+          artifacts: [],
+        },
+      },
+    ]);
+    const { server, base, store } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      const runId = started.payload.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.stages.some((s) => s.status === "waiting_for_input");
+      });
+
+      const alreadyWaiting = await mcpCall(base, "wait_run", {
+        runId,
+        until: "waiting",
+        timeout_ms: 2_000,
+      });
+      expect(alreadyWaiting.isError).toBe(false);
+      expect(alreadyWaiting.payload.reason).toBe("already");
+      expect(alreadyWaiting.payload.elapsed_ms).toBeLessThan(500);
+
+      await mcpCall(base, "answer_gate", {
+        runId,
+        stageId: "clarify",
+        answer: freeTextAnswer,
+      });
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+
+      const alreadyTerminal = await mcpCall(base, "wait_run", {
+        runId,
+        until: "terminal",
+        timeout_ms: 2_000,
+      });
+      expect(alreadyTerminal.isError).toBe(false);
+      expect(alreadyTerminal.payload.reason).toBe("already");
+      expect(alreadyTerminal.payload.run.status).toBe("succeeded");
+      expect(alreadyTerminal.payload.elapsed_ms).toBeLessThan(500);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE4 timeout while still running", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-to-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: [freeTextPrompt],
+        envelope: {
+          status: "success",
+          summary: "ok",
+          artifacts: [],
+        },
+      },
+    ]);
+    const { server, base, store } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      const runId = started.payload.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.stages.some((s) => s.status === "waiting_for_input");
+      });
+
+      const timedOut = await mcpCall(base, "wait_run", {
+        runId,
+        until: "terminal",
+        timeout_ms: 400,
+      });
+      expect(timedOut.isError).toBe(false);
+      expect(timedOut.payload.reason).toBe("timeout");
+      expect(timedOut.payload.run.status).toBe("running");
+      expect(timedOut.payload.elapsed_ms).toBeGreaterThanOrEqual(350);
+
+      await mcpCall(base, "answer_gate", {
+        runId,
+        stageId: "clarify",
+        answer: freeTextAnswer,
+      });
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE5 unknown run → 404; invalid timeout_ms / until → 400", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-err-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const missing = await mcpCall(base, "wait_run", {
+        runId: "no-such-run",
+        timeout_ms: 500,
+      });
+      expect(missing.isError).toBe(true);
+      expect(missing.payload.status).toBe(404);
+
+      const badTimeout = await mcpCall(base, "wait_run", {
+        runId: "x",
+        timeout_ms: 0,
+      });
+      expect(badTimeout.isError).toBe(true);
+      expect(badTimeout.payload.status).toBe(400);
+
+      const badUntilRes = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "wait_run",
+            arguments: { runId: "x", until: "nope" },
+          },
+        }),
+      });
+      const badUntilText = await badUntilRes.text();
+      const badUntilLine = badUntilText
+        .split("\n")
+        .find((line) => line.startsWith("data: "));
+      expect(badUntilLine).toBeTruthy();
+      const badUntilMsg = JSON.parse(badUntilLine!.slice("data: ".length)) as {
+        result?: { isError?: boolean; content?: Array<{ text?: string }> };
+      };
+      expect(badUntilMsg.result?.isError).toBe(true);
+      expect(badUntilMsg.result?.content?.[0]?.text ?? "").toMatch(/valid|enum|until|invalid/i);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("AE6 abort ends wait with code aborted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-abort-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "wait_then_emit",
+        waitRequests: [freeTextPrompt],
+        envelope: {
+          status: "success",
+          summary: "ok",
+          artifacts: [],
+        },
+      },
+    ]);
+    const { server, base, store } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      const runId = started.payload.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.stages.some((s) => s.status === "waiting_for_input");
+      });
+
+      const controller = new AbortController();
+      const pending = mcpCall(
+        base,
+        "wait_run",
+        { runId, until: "terminal", timeout_ms: 30_000 },
+        { signal: controller.signal },
+      );
+      await new Promise((r) => setTimeout(r, 100));
+      controller.abort();
+
+      let aborted = false;
+      try {
+        const result = await pending;
+        if (result.isError && result.payload?.code === "aborted") {
+          aborted = true;
+        }
+      } catch (err) {
+        aborted =
+          err instanceof Error &&
+          (err.name === "AbortError" || /aborted/i.test(err.message));
+      }
+      expect(aborted).toBe(true);
+
+      const stillWaiting = await store.readRun(runId);
+      expect(stillWaiting.status).toBe("running");
+      expect(
+        stillWaiting.stages.some((s) => s.status === "waiting_for_input"),
+      ).toBe(true);
+
+      await mcpCall(base, "answer_gate", {
+        runId,
+        stageId: "clarify",
+        answer: freeTextAnswer,
+      });
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("get_run stays event-free after wait_run wake", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-wait-lean-"));
+    const agent = scriptedFakeAgent([
+      {
+        type: "emit",
+        envelope: {
+          status: "success",
+          summary: "ok",
+          artifacts: [],
+          payload: { n: 1 },
+        },
+      },
+    ]);
+    const { server, base } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "g" },
+      });
+      const runId = started.payload.runId as string;
+
+      const waited = await mcpCall(base, "wait_run", {
+        runId,
+        until: "terminal",
+        timeout_ms: 8_000,
+      });
+      expect(waited.payload.run.stages[0]?.events).toBeUndefined();
+
+      const detail = await mcpCall(base, "get_run", { runId });
+      expect(detail.isError).toBe(false);
+      expect(detail.payload.stages[0]?.events).toBeUndefined();
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

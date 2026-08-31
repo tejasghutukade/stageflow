@@ -14,6 +14,15 @@ import {
 } from "../tools/askOperator.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { readRunArtifact } from "./readArtifact.js";
+import {
+  DEFAULT_TIMEOUT_MS,
+  POLL_INTERVAL_MS,
+  PROGRESS_EVERY_MS,
+  clampTimeoutMs,
+  classifyWaitWake,
+  sleepAbortable,
+  type WaitUntil,
+} from "./waitRun.js";
 
 const taskFileSchema = z.object({
   id: z.string(),
@@ -179,6 +188,112 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
           },
           true,
         );
+      }
+    },
+  );
+
+  server.registerTool(
+    "wait_run",
+    {
+      description:
+        "Long-poll until a run is waiting for HITL input and/or terminal (succeeded/failed), or until timeout_ms. Default until=any wakes on waiting OR terminal. Abort cancels only this wait (not the run). Optional notifications/progress when the client supplies _meta.progressToken. Compose: wait_run → answer_gate → wait_run.",
+      inputSchema: z.object({
+        runId: z.string(),
+        timeout_ms: z
+          .number()
+          .optional()
+          .describe(`Wait budget in ms (default ${DEFAULT_TIMEOUT_MS}, max 240000)`),
+        until: z
+          .enum(["any", "waiting", "terminal"])
+          .optional()
+          .describe('Wake predicate: "any" (default), "waiting", or "terminal"'),
+      }),
+    },
+    async ({ runId, timeout_ms, until }, ctx) => {
+      const untilVal: WaitUntil = until ?? "any";
+      const clamped = clampTimeoutMs(timeout_ms);
+      if (!clamped.ok) {
+        return textResult({ error: clamped.error, status: 400 }, true);
+      }
+
+      const signal = ctx.mcpReq.signal;
+      const progressToken = ctx.mcpReq._meta?.progressToken;
+      const started = Date.now();
+      let hadWaited = false;
+      let pollCount = 0;
+      let lastProgressAt = 0;
+
+      const abortedResult = () =>
+        textResult({ error: "wait aborted", code: "aborted" }, true);
+
+      while (true) {
+        if (signal.aborted) {
+          return abortedResult();
+        }
+
+        let detail;
+        try {
+          detail = await store.readRun(runId);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const notFound = /not found|no such|unknown run/i.test(message);
+          return textResult(
+            {
+              error: message,
+              status: notFound ? 404 : 500,
+            },
+            true,
+          );
+        }
+
+        const run = projectRunForMcp(detail);
+        const wake = classifyWaitWake(run, untilVal, hadWaited);
+        const elapsed_ms = Date.now() - started;
+        if (wake !== null) {
+          return textResult({
+            reason: wake,
+            elapsed_ms,
+            until: untilVal,
+            run,
+          });
+        }
+
+        if (elapsed_ms >= clamped.value) {
+          return textResult({
+            reason: "timeout",
+            elapsed_ms,
+            until: untilVal,
+            run,
+          });
+        }
+
+        if (
+          progressToken !== undefined &&
+          elapsed_ms - lastProgressAt >= PROGRESS_EVERY_MS
+        ) {
+          try {
+            await ctx.mcpReq.notify({
+              method: "notifications/progress",
+              params: {
+                progressToken,
+                progress: pollCount,
+                message: `waiting until=${untilVal} elapsed_ms=${elapsed_ms}`,
+              },
+            });
+          } catch {
+          }
+          lastProgressAt = elapsed_ms;
+        }
+
+        const remaining = clamped.value - elapsed_ms;
+        const sleepMs = Math.min(POLL_INTERVAL_MS, remaining);
+        try {
+          await sleepAbortable(sleepMs, signal);
+        } catch {
+          return abortedResult();
+        }
+        hadWaited = true;
+        pollCount += 1;
       }
     },
   );
