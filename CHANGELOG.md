@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-31
+
+### Added
+
+- Rich MCP operator surface: `validate`, `describe_pipeline`, `list_waiting`, `retry_stage`, `abandon_stage`, `rerun`, plus catalog/control parity with the console
+- `wait_run` long-poll for agent observation (`until=any|waiting|terminal`) with progress notifications
+- Session-backed MCP by default, `stageflow://runs/{runId}` resources, and `sf mcp` standalone host
+- Shared `createHttpHost` for `sf ui` and `sf mcp` (`/mcp`, `requestTimeout=0`, Origin checks)
+
+### Changed
+
+- **BREAKING (MCP):** sessions are the default transport mode (`--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` for opt-out)
+- **BREAKING (MCP):** `list_pipelines` / `list_tasks` return `{path,id}` objects instead of path strings (greenfield; no prior MCP clients)
+
 ## [0.5.0] - 2026-08-28
 
 ### Added
@@ -82,7 +96,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tejasghutukade/stageflow/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/tejasghutukade/stageflow/compare/v0.2.0...v0.3.0
