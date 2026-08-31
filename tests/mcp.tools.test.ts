@@ -192,6 +192,7 @@ describe("MCP tools and HTTP inline task", () => {
       store,
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
+      mcpStateless: true,
     });
 
     try {
@@ -330,6 +331,7 @@ describe("MCP tools and HTTP inline task", () => {
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
       maxConcurrent: 1,
+      mcpStateless: true,
     });
 
     try {
@@ -417,6 +419,7 @@ describe("MCP tools and HTTP inline task", () => {
       port: 0,
       uiDistDir: path.join(root, "missing-ui"),
       maxConcurrent: 3,
+      mcpStateless: true,
     });
 
     try {
@@ -612,7 +615,7 @@ async function withMcpServer(
   root: string,
   agent: ReturnType<typeof scriptedFakeAgent> | Parameters<typeof startUiServer>[0]["agent"],
   store = createRunStore({ rootDir: root }),
-  opts: { maxConcurrent?: number; cwd?: string } = {},
+  opts: { maxConcurrent?: number; cwd?: string; mcpStateless?: boolean } = {},
 ) {
   const started = await startUiServer({
     agent,
@@ -622,6 +625,7 @@ async function withMcpServer(
     port: 0,
     uiDistDir: path.join(root, "missing-ui"),
     maxConcurrent: opts.maxConcurrent,
+    mcpStateless: opts.mcpStateless ?? true,
   });
   const address = started.server.address();
   if (!address || typeof address === "string") {

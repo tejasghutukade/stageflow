@@ -42,3 +42,5 @@ export type {
 export { deriveStatusFromStages } from "./runstore/port.js";
 export { RunManager } from "./runtime/runManager.js";
 export { startUiServer } from "./server/http.js";
+export { startMcpServer } from "./server/mcpHost.js";
+export { DEFAULT_PORT } from "./server/mcpHost.js";

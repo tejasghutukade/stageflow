@@ -5,19 +5,86 @@ title: Mcp
 
 # MCP
 
-When `sf ui` is running, Stageflow serves a **Streamable HTTP** MCP endpoint at:
+Stageflow serves **Streamable HTTP** MCP with **stateful sessions as the product default**. Host it via either:
+
+- `sf ui` — operator console + MCP
+- `sf mcp` — MCP-only (no browser, no console assets)
+
+Default endpoint:
 
 ```
 http://127.0.0.1:3847/mcp
 ```
 
-The URL is printed on boot alongside the operator console link. Point Cursor or another MCP client at this URL while the server process is alive.
+The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-MCP tools resolve the **project git root** for catalog browse and the **`<git-root>/.stageflow/`** run store — the same semantics as CLI commands, not the shell cwd where you started `sf ui`.
+## Sessions (how MCP works)
 
-Implementation: `src/mcp/tools.ts`.
+1. Client `POST /mcp` with an `initialize` request (no session header).
+2. Server responds with an `Mcp-Session-Id` header.
+3. Client opens `GET /mcp` with that header for the SSE listen channel (server→client notifications).
+4. Subsequent tool / resource calls reuse the same session header on `POST /mcp`.
+5. `DELETE /mcp` with the session header closes the session.
+
+Sessions enable run **resource subscribe** and `notifications/resources/updated`. Without a GET listen stream, tools still work on the session; push updates will not be delivered.
+
+### Stateless escape hatch (test/debug)
+
+For clients or harnesses that must avoid session headers:
+
+```bash
+sf mcp --mcp-stateless
+# or
+STAGEFLOW_MCP_STATELESS=1 sf mcp
+```
+
+Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardown (`sessionIdGenerator: undefined`). Tier 1 tools and Tier 2 `wait_run` work in both modes. Resource **subscribe/notify** requires session mode + GET SSE listen.
+
+## `sf mcp` vs `sf ui`
+
+| Host | Serves | Browser |
+|------|--------|---------|
+| `sf ui` | Console REST/static + `/mcp` | Opens by default |
+| `sf mcp` | `/mcp` + minimal `GET /api/health` | No |
+
+Both use the same git-root / `.stageflow/` store semantics and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported.
+
+MCP tools resolve the **project git root** for catalog browse and the **`<git-root>/.stageflow/`** run store — the same semantics as CLI commands, not the shell cwd where you started the host.
+
+Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
 
 > **Breaking change (pipeline-owned catalog):** `list_pipelines` returns manifest filesystem path listings (objects with `path`, `id`, …), not bare pipeline ids. `start_run` requires a `pipeline` path and exactly one of `task_path` or inline `task`. Update MCP clients that passed ids like `"hello"`.
+
+## Resources
+
+### `stageflow://runs/{runId}`
+
+Runs-only resource template. Catalog discovery stays on `list_pipelines` / `list_tasks` tools — there is **no** `stageflow://catalog/pipelines` resource in v1.
+
+| Operation | Notes |
+|-----------|-------|
+| `resources/list` | Enumerates known runs as `stageflow://runs/{runId}` |
+| `resources/read` | JSON text of the lean `get_run` projection (no stage events) |
+| `resources/subscribe` | Session mode + GET SSE; receive `notifications/resources/updated` |
+
+**When `updated` fires:** run created; run `status` changes; waiting fields appear or clear (HITL park / resume). Not on every stage activity log line.
+
+### Dual observation paths (permanent)
+
+| Path | Mechanism |
+|------|-----------|
+| `wait_run` | Poll-inside-wait tool; works without sessions / without the change bus |
+| Resource subscribe | Push via GET SSE; complementary, not a replacement for `wait_run` |
+
+Compose either way:
+
+```
+start_run → wait_run (until waiting/any) → answer_gate → wait_run (until terminal)
+```
+
+```
+start_run → resources/subscribe(stageflow://runs/{runId}) → on updated, get_run / answer_gate
+```
 
 ## Tools
 
@@ -204,7 +271,7 @@ Returns `404`-style error JSON when the run is not found.
 
 ### `wait_run`
 
-Long-poll until a run reaches a HITL waiting point and/or a terminal status, or until `timeout_ms` elapses. Holds one MCP `tools/call` HTTP request; transport stays **stateless** (no session ID).
+Long-poll until a run reaches a HITL waiting point and/or a terminal status, or until `timeout_ms` elapses. Holds one MCP `tools/call` HTTP request. Uses **poll-inside-wait** against the store (ignores the resource change bus). Works in session mode and with `--mcp-stateless`.
 
 **Input:**
 
@@ -251,7 +318,7 @@ Already-satisfied predicates return immediately with `reason: "already"` (not an
 
 **Optional progress:** if the client supplies `_meta.progressToken` on `tools/call`, the server may emit sparse `notifications/progress` during the poll loop. Progress is never required for correctness. Many clients default tool timeouts to ~60s; only clients that honor progress and `resetTimeoutOnProgress` benefit. Cursor behavior is unverified — pass a shorter `timeout_ms` when unsure.
 
-**Node `requestTimeout`:** the UI HTTP server disables Node’s default 300s `requestTimeout` so a max `timeout_ms` of 240s is not cut off by the socket layer.
+**Node `requestTimeout`:** both `sf ui` and `sf mcp` disable Node’s default 300s `requestTimeout` so a max `timeout_ms` of 240s is not cut off by the socket layer.
 
 **Compose with HITL**
 
@@ -261,7 +328,7 @@ start_run → wait_run (until waiting/any)
          → wait_run (until terminal)
 ```
 
-Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point.
+Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream.
 
 **Errors (`isError: true`):** `404` unknown run; `400` invalid `timeout_ms`; `code: "aborted"` when the client aborts the wait.
 
@@ -371,7 +438,7 @@ Start a new run from a completed or failed run’s pipeline/task locators.
 
 ## Cursor configuration
 
-Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` runs, for example:
+Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` or `sf mcp` runs, for example:
 
 ```json
 {
@@ -383,20 +450,21 @@ Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` runs, 
 }
 ```
 
-Exact config shape depends on your MCP client version. Session IDs are not required for the current **stateless** Streamable HTTP transport.
+Exact config shape depends on your MCP client version. Prefer session-capable Streamable HTTP clients. Use `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` only for test/debug clients that cannot send session headers.
 
 ## Limitations
 
-- MCP requires `sf ui` — there is no standalone `sf mcp` command
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
-- No MCP resources / stateful sessions / push subscribe (deferred; `wait_run` long-poll remains the interaction wait)
-- Default `get_run` stays lean (no stage event streams); use `list_stage_events` / `get_envelope` for detail
+- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
+- No provider/settings/catalog-write MCP tools
+- Default `get_run` / run resource read stay lean (no stage event streams); use `list_stage_events` / `get_envelope` for detail
 - Tools return JSON text content blocks
+- One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 
 ## See also
 
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf validate`
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`

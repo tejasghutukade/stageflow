@@ -2,7 +2,6 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { readFile, access } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   localhostHostValidation,
   localhostOriginValidation,
@@ -23,17 +22,16 @@ import { browseCatalog } from "../config/browseCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
-import { handleMcpHttpRequest } from "../mcp/server.js";
-import { createRunStore, type RunStoreKind } from "../runstore/createStore.js";
+import type { RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
-import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
-import {
+import type {
+  AbandonStageResult,
+  RetryStageResult,
+  StartRunResult,
   RunManager,
-  type AbandonStageResult,
-  type RetryStageResult,
-  type StartRunResult,
 } from "../runtime/runManager.js";
+import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
@@ -41,8 +39,11 @@ import {
 import { isTaskFile } from "../runtime/taskInput.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
-
-const DEFAULT_PORT = 3847;
+import {
+  bootstrapStageflowHost,
+  type StageflowHostOptions,
+} from "./bootstrap.js";
+import { DEFAULT_PORT } from "./mcpHost.js";
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -56,6 +57,8 @@ export type UiServerOptions = {
   uiDistDir?: string;
   maxConcurrent?: number;
   providerAuthContext?: ProviderAuthContext;
+  mcpStateless?: boolean;
+  runChangeBus?: RunChangeBus;
 };
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -269,34 +272,16 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   mcpUrl: string;
   manager: RunManager;
   store: RunStore;
+  runChangeBus: RunChangeBus;
+  mcpStateless: boolean;
 }> {
-  const invocationCwd = options.cwd ?? process.cwd();
-  const ctx = await resolveStageflowContext(invocationCwd);
-  const cwd = ctx.invocationCwd;
-  const agentDir = options.agentDir ?? getAgentDir();
-  const rootDir = options.rootDir ?? ctx.projectRoot;
-  const isGitProject =
-    options.rootDir !== undefined
-      ? findProjectRoot(rootDir) !== null
-      : ctx.isGitProject;
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
-  const providerAuthContext = options.providerAuthContext;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
-  const store =
-    options.store ??
-    createRunStore({ rootDir, kind: options.storeKind });
-  const manager = new RunManager({
-    agent: options.agent,
-    cwd,
-    projectRoot: rootDir,
-    isGitProject,
-    store,
-    maxConcurrent: options.maxConcurrent,
-    operatorCatalog: { cwd, agentDir },
-  });
-  await manager.attachWaitingStages();
-  await manager.reconcileOrphanedStages();
+  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const { manager, store, cwd, agentDir, mcpHandler, runChangeBus, mcpStateless } =
+    boot;
+  const providerAuthContext = boot.providerAuthContext;
   const validateMcpHost = localhostHostValidation();
   const validateMcpOrigin = localhostOriginValidation();
 
@@ -310,7 +295,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
         return;
       }
       try {
-        await handleMcpHttpRequest(req, res, { manager, store, cwd });
+        await mcpHandler.handle(req, res);
       } catch (err) {
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
@@ -679,6 +664,10 @@ export async function startUiServer(options: UiServerOptions): Promise<{
 
   server.requestTimeout = 0;
 
+  server.on("close", () => {
+    void mcpHandler.close();
+  });
+
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => resolve());
     server.on("error", reject);
@@ -696,6 +685,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     mcpUrl: `${url}/mcp`,
     manager,
     store,
+    runChangeBus,
+    mcpStateless,
   };
 }
 

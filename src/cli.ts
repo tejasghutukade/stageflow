@@ -26,6 +26,8 @@ import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
+import { startMcpServer } from "./server/mcpHost.js";
+import { resolveMcpStateless } from "./mcp/server.js";
 
 const USAGE = `Usage:
   sf init
@@ -34,7 +36,8 @@ const USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
-  sf ui [--port ${DEFAULT_PORT}]
+  sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]
+  sf mcp [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
@@ -73,6 +76,7 @@ function parseArgs(argv: string[]): {
   pipeline?: string;
   port?: number;
   checkout?: string;
+  mcpStateless?: boolean;
 } {
   const args = argv.slice(2);
   if (args.length === 0) {
@@ -107,6 +111,7 @@ function parseArgs(argv: string[]): {
   let pipeline: string | undefined;
   let port: number | undefined;
   let checkout: string | undefined;
+  let mcpStateless = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--task") {
       task = args[++i];
@@ -124,9 +129,11 @@ function parseArgs(argv: string[]): {
       if (!Number.isFinite(port) || port <= 0) {
         throw new Error(`Invalid --port: ${raw}`);
       }
+    } else if (args[i] === "--mcp-stateless") {
+      mcpStateless = true;
     }
   }
-  return { help: false, command, task, pipeline, port, checkout };
+  return { help: false, command, task, pipeline, port, checkout, mcpStateless };
 }
 
 export function parseRunStageArgs(argv: string[]): {
@@ -311,16 +318,37 @@ async function main(argv: string[]): Promise<number> {
     const store = createRunStore({ rootDir: ctx.projectRoot });
 
     if (parsed.command === "ui") {
+      const mcpStateless = resolveMcpStateless({
+        mcpStateless: parsed.mcpStateless,
+      });
       const { url, mcpUrl } = await startUiServer({
         agent: new PiAgentAdapter(),
         store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
+        mcpStateless,
       });
       console.log(`Operator console: ${url}`);
       console.log(`MCP endpoint: ${mcpUrl}`);
       openBrowser(url);
+      await new Promise(() => undefined);
+      return 0;
+    }
+
+    if (parsed.command === "mcp") {
+      const mcpStateless = resolveMcpStateless({
+        mcpStateless: parsed.mcpStateless,
+      });
+      const { mcpUrl } = await startMcpServer({
+        agent: new PiAgentAdapter(),
+        store,
+        cwd: ctx.invocationCwd,
+        rootDir: ctx.projectRoot,
+        port: parsed.port,
+        mcpStateless,
+      });
+      console.log(`MCP endpoint: ${mcpUrl}`);
       await new Promise(() => undefined);
       return 0;
     }

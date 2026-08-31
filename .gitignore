@@ -43,3 +43,9 @@ software-factory-naming-research.json
 software-factory-usecases-pitch-targets.json
 software-factory-usecases-pitch-targets.md
 .worktrees/
+.agenttrail/
+.venv/
+.stageflow-backup-test/
+.stageflow-ci-test/
+benchmarks/
+runs/

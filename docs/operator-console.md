@@ -98,7 +98,7 @@ Other settings (theme, etc.) follow console UX conventions in `ui/AGENTS.md`.
 
 ## MCP co-location
 
-MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs. See [MCP](mcp.md).
+MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). For MCP without the console, use `sf mcp` instead — do not run both against the same project store. See [MCP](mcp.md).
 
 ## Screenshots
 

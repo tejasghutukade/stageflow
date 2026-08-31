@@ -4,6 +4,7 @@ import { browseCatalog } from "../config/browseCatalog.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog } from "../config/validateCatalog.js";
 import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
+import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import type {
   AbandonStageResult,
   RetryStageResult,
@@ -79,6 +80,7 @@ export type McpToolDeps = {
   manager: RunManager;
   store: RunStore;
   cwd: string;
+  runChangeBus?: RunChangeBus;
 };
 
 export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
