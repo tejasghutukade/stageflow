@@ -6,5 +6,8 @@ export type McpToolDeps = {
   manager: RunManager;
   store: RunStore;
   cwd: string;
-  runChangeBus?: RunChangeBus;
+};
+
+export type McpHttpDeps = McpToolDeps & {
+  runChangeBus: RunChangeBus;
 };

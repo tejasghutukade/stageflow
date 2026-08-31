@@ -1,10 +1,13 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { createServer } from "node:http";
 import { cp, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { createRunChangeBus } from "../src/runtime/runChangeBus.js";
+import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import { startUiServer } from "../src/server/http.js";
 import { startMcpServer, DEFAULT_PORT } from "../src/server/mcpHost.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
@@ -472,5 +475,55 @@ describe("MCP Tier 3 sf mcp host", () => {
         env: { STAGEFLOW_MCP_STATELESS: "1" },
       }),
     ).toBe(true);
+  });
+});
+
+describe("MCP Tier 3 session dispose", () => {
+  it("double handler.close does not throw; bus unsubscribe once", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-dispose-"));
+    const store = createRunStore({ rootDir: root });
+    const bus = createRunChangeBus();
+    let unsubCount = 0;
+    const originalOn = bus.on.bind(bus);
+    bus.on = (listener) => {
+      const unsub = originalOn(listener);
+      return () => {
+        unsubCount += 1;
+        unsub();
+      };
+    };
+
+    const boot = await bootstrapStageflowHost({
+      agent: scriptedFakeAgent([]),
+      cwd: catalogRoot,
+      rootDir: root,
+      store,
+      runChangeBus: bus,
+    });
+
+    const server = createServer((req, res) => {
+      void boot.mcpHandler.handle(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("no addr");
+    const base = `http://127.0.0.1:${address.port}`;
+
+    try {
+      await mcpInitialize(base);
+      expect(unsubCount).toBe(0);
+
+      await boot.mcpHandler.close();
+      expect(unsubCount).toBe(1);
+
+      await boot.mcpHandler.close();
+      expect(unsubCount).toBe(1);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });

@@ -5,11 +5,12 @@ import {
   isInitializeRequest,
   McpServer,
 } from "@modelcontextprotocol/server";
-import type { McpToolDeps } from "./deps.js";
+import type { RunChangeBus } from "../runtime/runChangeBus.js";
+import type { McpHttpDeps, McpToolDeps } from "./deps.js";
 import { registerRunResources, runResourceUri } from "./resources.js";
 import { registerMcpTools } from "./tools.js";
 
-export type { McpToolDeps };
+export type { McpHttpDeps, McpToolDeps };
 
 export type McpHttpOptions = {
   /** Test/debug escape hatch — per-request create/teardown (no sessions). */
@@ -58,12 +59,14 @@ function sessionIdFromRequest(req: IncomingMessage): string | undefined {
   return undefined;
 }
 
+function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
+  return { manager: deps.manager, store: deps.store, cwd: deps.cwd };
+}
+
 function attachBusNotifications(
   server: McpServer,
-  deps: McpToolDeps,
-): (() => void) | undefined {
-  const bus = deps.runChangeBus;
-  if (!bus) return undefined;
+  bus: RunChangeBus,
+): () => void {
   return bus.on((event) => {
     const uri = runResourceUri(event.runId);
     void server.server.sendResourceUpdated({ uri }).catch(() => undefined);
@@ -118,19 +121,31 @@ export type McpHttpHandler = {
 
 /** Stateful Streamable HTTP session host (product default) or stateless escape hatch. */
 export function createMcpHttpHandler(
-  deps: McpToolDeps,
+  deps: McpHttpDeps,
   options: McpHttpOptions = {},
 ): McpHttpHandler {
   const stateless = options.mcpStateless === true;
   const sessions = new Map<string, SessionEntry>();
+  const tools = toolDepsFrom(deps);
 
-  async function closeSession(sessionId: string): Promise<void> {
+  async function disposeSession(
+    sessionId: string,
+    opts: { closeTransport: boolean },
+  ): Promise<void> {
     const entry = sessions.get(sessionId);
     if (!entry) return;
     sessions.delete(sessionId);
-    entry.unsubscribeBus?.();
-    await entry.transport.close().catch(() => undefined);
+    const unsub = entry.unsubscribeBus;
+    entry.unsubscribeBus = undefined;
+    unsub?.();
+    if (opts.closeTransport) {
+      await entry.transport.close().catch(() => undefined);
+    }
     await entry.server.close().catch(() => undefined);
+  }
+
+  async function closeSession(sessionId: string): Promise<void> {
+    await disposeSession(sessionId, { closeTransport: true });
   }
 
   async function handleStateful(
@@ -164,32 +179,24 @@ export function createMcpHttpHandler(
         return;
       }
 
-      const server = createStageflowMcpServer(deps);
+      const server = createStageflowMcpServer(tools);
       const transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
           sessions.set(id, {
             transport,
             server,
-            unsubscribeBus: attachBusNotifications(server, deps),
+            unsubscribeBus: attachBusNotifications(server, deps.runChangeBus),
           });
         },
         onsessionclosed: (id) => {
-          const entry = sessions.get(id);
-          if (!entry) return;
-          sessions.delete(id);
-          entry.unsubscribeBus?.();
-          void entry.server.close().catch(() => undefined);
+          void disposeSession(id, { closeTransport: false });
         },
       });
       transport.onclose = () => {
         const id = transport.sessionId;
         if (!id) return;
-        const entry = sessions.get(id);
-        if (!entry) return;
-        sessions.delete(id);
-        entry.unsubscribeBus?.();
-        void entry.server.close().catch(() => undefined);
+        void disposeSession(id, { closeTransport: false });
       };
 
       await server.connect(transport);
@@ -203,7 +210,7 @@ export function createMcpHttpHandler(
   return {
     handle: async (req, res) => {
       if (stateless) {
-        await handleStatelessMcpRequest(req, res, deps);
+        await handleStatelessMcpRequest(req, res, tools);
         return;
       }
       await handleStateful(req, res);
