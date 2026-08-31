@@ -18,15 +18,7 @@ import {
 } from "../tools/askOperator.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { readRunArtifact } from "./readArtifact.js";
-import {
-  DEFAULT_TIMEOUT_MS,
-  POLL_INTERVAL_MS,
-  PROGRESS_EVERY_MS,
-  clampTimeoutMs,
-  classifyWaitWake,
-  sleepAbortable,
-  type WaitUntil,
-} from "./waitRun.js";
+import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
 
 const taskFileSchema = z.object({
   id: z.string(),
@@ -191,91 +183,46 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
       }),
     },
     async ({ runId, timeout_ms, until }, ctx) => {
-      const untilVal: WaitUntil = until ?? "any";
-      const clamped = clampTimeoutMs(timeout_ms);
-      if (!clamped.ok) {
-        return textResult({ error: clamped.error, status: 400 }, true);
-      }
-
-      const signal = ctx.mcpReq.signal;
       const progressToken = ctx.mcpReq._meta?.progressToken;
-      const started = Date.now();
-      let hadWaited = false;
-      let pollCount = 0;
-      let lastProgressAt = 0;
-
-      const abortedResult = () =>
-        textResult({ error: "wait aborted", code: "aborted" }, true);
-
-      while (true) {
-        if (signal.aborted) {
-          return abortedResult();
-        }
-
-        let detail;
-        try {
-          detail = await store.readRun(runId);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          const notFound = /not found|no such|unknown run/i.test(message);
-          return textResult(
-            {
-              error: message,
-              status: notFound ? 404 : 500,
-            },
-            true,
-          );
-        }
-
-        const run = projectRunForMcp(detail);
-        const wake = classifyWaitWake(run, untilVal, hadWaited);
-        const elapsed_ms = Date.now() - started;
-        if (wake !== null) {
-          return textResult({
-            reason: wake,
-            elapsed_ms,
-            until: untilVal,
-            run,
-          });
-        }
-
-        if (elapsed_ms >= clamped.value) {
-          return textResult({
-            reason: "timeout",
-            elapsed_ms,
-            until: untilVal,
-            run,
-          });
-        }
-
-        if (
-          progressToken !== undefined &&
-          elapsed_ms - lastProgressAt >= PROGRESS_EVERY_MS
-        ) {
-          try {
-            await ctx.mcpReq.notify({
-              method: "notifications/progress",
-              params: {
-                progressToken,
-                progress: pollCount,
-                message: `waiting until=${untilVal} elapsed_ms=${elapsed_ms}`,
-              },
-            });
-          } catch {
-          }
-          lastProgressAt = elapsed_ms;
-        }
-
-        const remaining = clamped.value - elapsed_ms;
-        const sleepMs = Math.min(POLL_INTERVAL_MS, remaining);
-        try {
-          await sleepAbortable(sleepMs, signal);
-        } catch {
-          return abortedResult();
-        }
-        hadWaited = true;
-        pollCount += 1;
+      const result = await waitRun({
+        store,
+        runId,
+        timeoutMs: timeout_ms,
+        until,
+        signal: ctx.mcpReq.signal,
+        onProgress:
+          progressToken !== undefined
+            ? async (info) => {
+                try {
+                  await ctx.mcpReq.notify({
+                    method: "notifications/progress",
+                    params: {
+                      progressToken,
+                      progress: info.progress,
+                      message: info.message,
+                    },
+                  });
+                } catch {
+                }
+              }
+            : undefined,
+      });
+      if (!result.ok) {
+        return textResult(
+          {
+            error: result.error,
+            ...(result.status !== undefined ? { status: result.status } : {}),
+            ...(result.code !== undefined ? { code: result.code } : {}),
+          },
+          true,
+        );
       }
+      return textResult({
+        reason: result.reason,
+        elapsed_ms: result.elapsed_ms,
+        until: result.until,
+        run: result.run,
+      });
     },
   );
 

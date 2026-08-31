@@ -1,4 +1,6 @@
 import type { RunProjection } from "../projection/projectRun.js";
+import type { RunStore } from "../runstore/port.js";
+import { projectRunForMcp } from "./projectRun.js";
 
 export type WaitUntil = "any" | "waiting" | "terminal";
 
@@ -8,6 +10,37 @@ export const DEFAULT_TIMEOUT_MS = 60_000;
 export const MAX_TIMEOUT_MS = 240_000;
 export const POLL_INTERVAL_MS = 250;
 export const PROGRESS_EVERY_MS = 2_000;
+
+export type WaitRunProgressInfo = {
+  progress: number;
+  message: string;
+};
+
+export type WaitRunSuccess = {
+  ok: true;
+  reason: WaitReason;
+  elapsed_ms: number;
+  until: WaitUntil;
+  run: RunProjection;
+};
+
+export type WaitRunFailure = {
+  ok: false;
+  error: string;
+  status?: number;
+  code?: string;
+};
+
+export type WaitRunResult = WaitRunSuccess | WaitRunFailure;
+
+export type WaitRunOpts = {
+  store: Pick<RunStore, "readRun">;
+  runId: string;
+  timeoutMs?: number;
+  until?: WaitUntil;
+  signal?: AbortSignal;
+  onProgress?: (info: WaitRunProgressInfo) => void | Promise<void>;
+};
 
 export function clampTimeoutMs(
   timeoutMs: number | undefined,
@@ -93,4 +126,84 @@ export function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> 
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export async function waitRun(opts: WaitRunOpts): Promise<WaitRunResult> {
+  const untilVal: WaitUntil = opts.until ?? "any";
+  const clamped = clampTimeoutMs(opts.timeoutMs);
+  if (!clamped.ok) {
+    return { ok: false, error: clamped.error, status: 400 };
+  }
+
+  const signal = opts.signal;
+  const started = Date.now();
+  let hadWaited = false;
+  let pollCount = 0;
+  let lastProgressAt = 0;
+
+  while (true) {
+    if (signal?.aborted) {
+      return { ok: false, error: "wait aborted", code: "aborted" };
+    }
+
+    let detail;
+    try {
+      detail = await opts.store.readRun(opts.runId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const notFound = /not found|no such|unknown run/i.test(message);
+      return {
+        ok: false,
+        error: message,
+        status: notFound ? 404 : 500,
+      };
+    }
+
+    const run = projectRunForMcp(detail);
+    const wake = classifyWaitWake(run, untilVal, hadWaited);
+    const elapsed_ms = Date.now() - started;
+    if (wake !== null) {
+      return {
+        ok: true,
+        reason: wake,
+        elapsed_ms,
+        until: untilVal,
+        run,
+      };
+    }
+
+    if (elapsed_ms >= clamped.value) {
+      return {
+        ok: true,
+        reason: "timeout",
+        elapsed_ms,
+        until: untilVal,
+        run,
+      };
+    }
+
+    if (
+      opts.onProgress &&
+      elapsed_ms - lastProgressAt >= PROGRESS_EVERY_MS
+    ) {
+      try {
+        await opts.onProgress({
+          progress: pollCount,
+          message: `waiting until=${untilVal} elapsed_ms=${elapsed_ms}`,
+        });
+      } catch {
+      }
+      lastProgressAt = elapsed_ms;
+    }
+
+    const remaining = clamped.value - elapsed_ms;
+    const sleepMs = Math.min(POLL_INTERVAL_MS, remaining);
+    try {
+      await sleepAbortable(sleepMs, signal);
+    } catch {
+      return { ok: false, error: "wait aborted", code: "aborted" };
+    }
+    hadWaited = true;
+    pollCount += 1;
+  }
 }
