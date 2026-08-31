@@ -439,15 +439,21 @@ describe("MCP Tier 3 sf mcp host", () => {
     expect(DEFAULT_PORT).toBe(3847);
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-host-"));
     const store = createRunStore({ rootDir: root });
-    const { server, mcpUrl, mcpStateless } = await startMcpServer({
-      agent: scriptedFakeAgent([]),
-      cwd: catalogRoot,
-      rootDir: root,
-      store,
-      port: 0,
-      mcpStateless: true,
-    });
+    const { server, mcpUrl, mcpStateless, runChangeBus, manager, store: hostStore } =
+      await startMcpServer({
+        agent: scriptedFakeAgent([]),
+        cwd: catalogRoot,
+        rootDir: root,
+        store,
+        port: 0,
+        mcpStateless: true,
+      });
     expect(mcpStateless).toBe(true);
+    expect(server.requestTimeout).toBe(0);
+    expect(runChangeBus).toBeTruthy();
+    expect(manager).toBeTruthy();
+    expect(hostStore).toBeTruthy();
+    expect(typeof hostStore.readRun).toBe("function");
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("no addr");
     const base = `http://127.0.0.1:${address.port}`;
@@ -459,6 +465,22 @@ describe("MCP Tier 3 sf mcp host", () => {
       const health = await mcpToolCall(base, undefined, "get_health");
       expect(health.isError).toBe(false);
       expect(health.payload.ok).toBe(true);
+
+      const forbidden = await fetch(`${base}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Origin: "https://evil.example",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 9,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      expect(forbidden.status).toBe(403);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
