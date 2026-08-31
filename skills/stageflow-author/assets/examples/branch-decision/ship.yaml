@@ -1,0 +1,10 @@
+id: ship
+system_prompt: |
+  Take the passing results from the prior envelope and produce the shippable
+  package.
+
+  Write the package notes via write_stage_artifact (for example ship.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload describing what you shipped.
+model: anthropic/claude-sonnet-4-5

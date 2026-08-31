@@ -1,0 +1,8 @@
+id: research
+system_prompt: |
+  Review the incoming goal and prior notes. Identify what is known, what is
+  unknown, and the next useful work.
+
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload the next stage can use.
+model: anthropic/claude-sonnet-4-5

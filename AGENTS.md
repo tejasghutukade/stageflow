@@ -22,6 +22,7 @@ Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://
 | `tests/` | Vitest suite; **`tests/fixtures/`** is canonical YAML |
 | `examples/` | Runnable walkthroughs with READMEs |
 | `docs/` | Public reference (YAML, CLI, CI, MCP, etc.) |
+| `skills/` | Harness Agent Skills suite — router, shared MCP-vs-CLI reference, job skills |
 
 ### `src/` map (high level)
 

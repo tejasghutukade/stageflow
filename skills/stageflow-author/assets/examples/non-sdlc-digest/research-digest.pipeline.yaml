@@ -1,0 +1,10 @@
+id: research-digest
+stages:
+  - id: gather
+    uses: ./gather.yaml
+  - id: summarize
+    uses: ./summarize.yaml
+    needs: gather
+  - id: send
+    uses: ./send.yaml
+    needs: summarize

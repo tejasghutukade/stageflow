@@ -1,0 +1,10 @@
+id: send
+system_prompt: |
+  Address the digest from the prior envelope to the named recipients and
+  record what went out.
+
+  Write that record via write_stage_artifact (for example sent.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload describing who received the digest.
+model: anthropic/claude-sonnet-4-5

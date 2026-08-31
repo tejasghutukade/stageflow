@@ -1,0 +1,8 @@
+id: implement
+system_prompt: |
+  Take the prior stage envelope and produce the concrete deliverable described
+  there. Prefer what already worked in the source session.
+
+  When finished, call emit_stage_envelope once with status, summary, artifacts,
+  and a payload describing what you produced.
+model: anthropic/claude-sonnet-4-5

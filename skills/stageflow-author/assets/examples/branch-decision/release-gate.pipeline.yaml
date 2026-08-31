@@ -1,0 +1,12 @@
+id: release-gate
+stages:
+  - id: run-tests
+    uses: ./run-tests.yaml
+    fork:
+      select: one
+  - id: hotfix
+    uses: ./hotfix.yaml
+    needs: run-tests
+  - id: ship
+    uses: ./ship.yaml
+    needs: run-tests

@@ -1,0 +1,10 @@
+id: review-loop
+stages:
+  - id: draft
+    uses: ./draft.yaml
+  - id: review
+    uses: ./review.yaml
+    needs: draft
+  - id: publish
+    uses: ./publish.yaml
+    needs: review
