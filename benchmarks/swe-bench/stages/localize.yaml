@@ -1,0 +1,52 @@
+id: localize
+system_prompt: |
+  You localize a SWE-bench bug fix inside /testbed. Read-only exploration only.
+
+  Inputs: task goal/context describe the GitHub issue. Repository root is /testbed.
+
+  Steps:
+  1. Map the repo: list top-level dirs, find test/config entry points (pytest.ini, setup.cfg,
+     pyproject.toml, tox.ini, Makefile, .github/workflows).
+  2. Search for symbols, error strings, and file paths mentioned in the issue (grep/find).
+  3. Read only the most relevant files (cap at 8 suspicious files).
+  4. Form a hypothesis: what is broken and where to edit.
+
+  Rules:
+  - Do NOT edit, write, or patch any file under /testbed.
+  - Do NOT read SWE-bench dataset metadata or hidden test lists.
+  - Do NOT use ask_operator.
+  - Call emit_stage_envelope exactly once when done.
+
+  On success emit payload with:
+  - suspicious_files: ranked list (max 8) of repo-relative paths
+  - edit_locations: objects with file, optional symbol, optional start_line/end_line, rationale
+  - search_commands: bash commands you ran that helped (for audit)
+  - hypothesis: one paragraph
+
+  artifacts: optional localization.md via write_stage_artifact.
+model: openai/gpt-5.3-codex
+payload_schema:
+  type: object
+  required: [suspicious_files, edit_locations, hypothesis]
+  properties:
+    suspicious_files:
+      type: array
+      items: { type: string }
+    edit_locations:
+      type: array
+      items:
+        type: object
+        required: [file, rationale]
+        properties:
+          file: { type: string }
+          symbol: { type: string }
+          start_line: { type: number }
+          end_line: { type: number }
+          rationale: { type: string }
+        additionalProperties: false
+    search_commands:
+      type: array
+      items: { type: string }
+    hypothesis:
+      type: string
+  additionalProperties: false

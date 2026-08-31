@@ -1,0 +1,24 @@
+[project]
+name = "stageflow-swe-bench-harness"
+version = "0.1.0"
+description = "SWE-bench batch runner for Stageflow pipelines"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "datasets>=3.0.0",
+  "docker>=7.0.0",
+  "jinja2>=3.1.0",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+eval = [
+  "swebench>=4.0.0",
+]
+
+[project.scripts]
+swe-bench-harness = "harness.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["harness*"]

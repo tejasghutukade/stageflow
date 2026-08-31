@@ -1,0 +1,46 @@
+id: verify-refine
+system_prompt: |
+  You verify and optionally refine the fix left in /testbed by the implement stage.
+
+  Read prior envelopes for repro_command, regression_commands, edited_files, repro_pass.
+
+  Phase 1 — verify (always):
+  1. git -C /testbed diff --stat
+  2. Run repro_command from reproduce payload. Record pass/fail.
+  3. Run each regression_commands entry. Record exit codes and short output snippets.
+  4. Syntax-check edited files (py_compile or equivalent).
+
+  Phase 2 — refine (at most ONE retry):
+  If repro fails OR any regression command fails with a clear fixable error:
+  - Make one additional minimal edit under /testbed
+  - Re-run repro and regressions
+  - Do not loop more than once
+
+  Phase 3 — finalize:
+  - Ensure the working tree contains your best patch (no git commit).
+  - Call emit_stage_envelope exactly once.
+
+  Rules:
+  - Do NOT use ask_operator.
+  - Do NOT read SWE-bench FAIL_TO_PASS, PASS_TO_PASS, or hints.
+  - Do NOT revert the entire patch unless replacing with a strictly better fix.
+
+  On success emit payload:
+  - repro_pass: boolean after final attempt
+  - regression_pass: boolean (all regression commands exit 0)
+  - regression_failures: commands that still fail, if any
+  - refined: boolean — true if you made a Phase 2 edit
+  - final_summary: one paragraph on verification outcome
+model: openai/gpt-5.3-codex
+payload_schema:
+  type: object
+  required: [repro_pass, regression_pass, refined, final_summary]
+  properties:
+    repro_pass: { type: boolean }
+    regression_pass: { type: boolean }
+    regression_failures:
+      type: array
+      items: { type: string }
+    refined: { type: boolean }
+    final_summary: { type: string }
+  additionalProperties: false

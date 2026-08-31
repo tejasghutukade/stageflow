@@ -21,3 +21,4 @@ catalog:
     task: "*.task.yaml"
   exclude:
     - tests/fixtures
+    - benchmarks

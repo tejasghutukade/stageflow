@@ -1,0 +1,14 @@
+id: "{{ instance_id }}"
+goal: |
+  Fix the GitHub issue described below in the repository checked out at /testbed.
+context: |
+  Repository: {{ repo }}
+  Instance: {{ instance_id }}
+  Base commit: {{ base_commit }}
+
+  {{ problem_statement | indent(2) }}
+constraints: |
+  Work only under /testbed.
+  Finish autonomously without operator input.
+  Apply a minimal fix and leave changes in the git working tree.
+  Call emit_stage_envelope when done with status success or failure.

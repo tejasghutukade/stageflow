@@ -13,6 +13,15 @@ export function storeRootFor(rootDir: string): string {
   return path.join(rootDir, ".stageflow");
 }
 
+/** Project store root, overridable via `STAGEFLOW_STORE_ROOT` (absolute path). */
+export function resolveStoreRoot(projectRoot: string): string {
+  const override = process.env.STAGEFLOW_STORE_ROOT?.trim();
+  if (override) {
+    return path.resolve(override);
+  }
+  return storeRootFor(projectRoot);
+}
+
 function directoryState(
   dirPath: string,
 ): "missing" | "empty" | "populated" | "other" {

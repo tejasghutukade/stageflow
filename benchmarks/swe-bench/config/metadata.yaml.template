@@ -1,0 +1,19 @@
+info:
+  name: Stageflow SWE-bench Run
+  site: https://github.com/stageflow/stageflow
+  report: REPLACE_WITH_ARXIV_OR_TECH_REPORT_URL
+  authors: REPLACE_WITH_AUTHOR_NAMES
+tags:
+  checked: false
+  model:
+    - anthropic/claude-sonnet-4-5
+  org:
+    - Stageflow
+  os_model: false
+  os_system: true
+  system:
+    attempts: "1"
+  agent: Stageflow
+  agent_org: Stageflow
+  model_display: Claude Sonnet 4.5
+  model_org: Anthropic

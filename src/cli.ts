@@ -14,6 +14,10 @@ import {
   EXPORT_RUN_USAGE,
   runExportRunCommand,
 } from "./cli/exportRunCommand.js";
+import {
+  EXPORT_TRACE_USAGE,
+  runExportTraceCommand,
+} from "./cli/exportTraceCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -34,6 +38,7 @@ const USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
+  sf export-trace --run <runId> [--from <sf-run.json>] [--instance-id <id>] [--out <file>] [--model <name>]
   sf ui [--port ${DEFAULT_PORT}]
   sf providers list
   sf providers status [--provider <id>]
@@ -61,6 +66,8 @@ ${ARTIFACT_USAGE}
 ${ENVELOPE_USAGE}
 
 ${EXPORT_RUN_USAGE}
+
+${EXPORT_TRACE_USAGE}
 
 ${PROVIDERS_USAGE}
 
@@ -94,6 +101,7 @@ function parseArgs(argv: string[]): {
     command === "artifact" ||
     command === "envelope" ||
     command === "export-run" ||
+    command === "export-trace" ||
     command === "skills"
   ) {
     return { help: false, command };
@@ -292,6 +300,13 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "export-run") {
       return runExportRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "export-trace") {
+      return runExportTraceCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });
