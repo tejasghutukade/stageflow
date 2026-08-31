@@ -9,8 +9,9 @@ Pipeline YAML (the actual solve workflow) is swappable; this package is the surr
 | Requirement | Notes |
 |-------------|-------|
 | Docker | x86_64 eval images from Docker Hub (`swebench/sweb.eval.x86_64.*`). **Docker Desktop/daemon must be running** — verify with `docker info` before a real batch (not needed for `--dry-run`). |
+| Apple Silicon | SWE-bench images are x86_64; Stageflow runs on the **host** by default (`--execution-mode auto`) because `better-sqlite3` segfaults under Rosetta in the container. Testbed is copied from the image to a host bind mount. Host mode writes run state under `instances/<id>/.stageflow/` via `STAGEFLOW_STORE_ROOT` — **your repo-root `.stageflow/` is not modified**. Use `--execution-mode container` to force in-container Stageflow on Linux/CI. |
 | Python 3.11+ | Harness orchestrator |
-| Built Stageflow | **`npm install && npm run build` at repo root** — `dist/cli.js` is gitignored and must exist on the host before a real batch (the repo is bind-mounted into Docker) |
+| Built Stageflow | **`npm install && npm run build` at repo root** — `dist/cli.js` is gitignored and must exist on the host before a real batch (the repo is bind-mounted into Docker; Linux `node_modules` are installed inside the container) |
 | LLM credentials | e.g. `ANTHROPIC_API_KEY`, or mount `~/.stageflow/agent/auth.json` |
 | Disk / RAM | 120 GB+ free recommended; 16 GB RAM; keep workers below `min(0.75 * cpu, 24)` |
 
@@ -91,6 +92,7 @@ Flags:
 - `--slice 0:10` — slice after filtering
 - `--resume` — skip instances already in `all_preds.jsonl`
 - `--model-name-or-path` — prediction metadata (default `stageflow/claude-sonnet-4-5`)
+- `--execution-mode auto|host|container` — where Stageflow runs (default `auto`: host on Apple Silicon, container elsewhere)
 
 ### Grade locally
 
@@ -190,7 +192,7 @@ Official submission requires [SWE-bench/experiments](https://github.com/SWE-benc
 
 1. Pull official `swebench/sweb.eval.x86_64.{instance}` image
 2. Start container with repo at `/testbed`
-3. Bootstrap Node 20 inside the container (eval images are Python-only)
+3. Bootstrap Node 22 inside the container (eval images are Python-only; Linux `node_modules` installed via anonymous volume overlay)
 4. Mount Stageflow repo at `/opt/stageflow` and run `sf run --checkout /testbed`
 5. Extract `git -C /testbed diff` and bundle `pi-session.jsonl` traces
 6. Grade with `swebench eval` or `sb-cli submit` — do not reimplement test parsing

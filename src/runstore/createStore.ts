@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import type { RunStore } from "./port.js";
-import { migrateLegacyStoreRoot, storeRootFor } from "./paths.js";
+import { migrateLegacyStoreRoot, resolveStoreRoot } from "./paths.js";
 import { SqliteRunStore } from "./sqlite/SqliteRunStore.js";
 
 export type RunStoreKind = "sqlite";
@@ -31,7 +31,7 @@ function resolveKind(kind?: string): "sqlite" {
 export function createRunStore(config: RunStoreConfig): RunStore {
   resolveKind(config.kind);
   migrateLegacyStoreRoot(config.rootDir);
-  const storeRoot = storeRootFor(config.rootDir);
+  const storeRoot = resolveStoreRoot(config.rootDir);
   mkdirSync(storeRoot, { recursive: true });
   return new SqliteRunStore(storeRoot);
 }

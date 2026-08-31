@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,9 +10,12 @@ from .bootstrap import bootstrap_container
 from .config import HarnessConfig
 from .dataset import SweBenchInstance, docker_image_name
 from .docker import DockerManager, shell_join
-from .patch import extract_patch
+from .host_runner import run_stageflow_on_host, should_use_host_stageflow
+from .patch import extract_patch, extract_patch_from_path
 from .predictions import append_prediction, prediction_row
+from .sf_run import extract_sf_reason
 from .taskgen import render_task, task_container_path
+from .testbed import ensure_testbed_ready, populate_host_testbed
 from .trace import build_trace_document, read_json_if_exists, write_trace
 
 
@@ -24,6 +26,7 @@ class InstanceResult:
     run_id: str | None
     model_patch: str
     error: str | None = None
+    reason: str | None = None
     duration_ms: int = 0
 
 
@@ -54,86 +57,104 @@ def run_instance(
     docker = DockerManager(config)
     image = instance.image or docker_image_name(instance.instance_id)
     container: Container | None = None
-    log_path = instance_dir / "container.log"
+    use_host = should_use_host_stageflow(config)
 
     try:
-        container = docker.start_container(
-            instance.instance_id,
-            image,
-            str(instance_dir.resolve()),
-            str(worker_store.resolve()),
-        )
-        bootstrap_container(container, docker, config, worker_store)
+        if use_host:
+            testbed_host = instance_dir / "testbed"
+            populate_host_testbed(image, testbed_host, docker.client)
+            ensure_testbed_ready(testbed_host)
+            instance_store = instance_dir / ".stageflow"
+            exit_code, sf_run = run_stageflow_on_host(
+                config,
+                task_path=task_path,
+                checkout_path=testbed_host,
+                instance_dir=instance_dir,
+                base_commit=instance.base_commit,
+                store_path=instance_store,
+            )
+            model_patch = extract_patch_from_path(testbed_host)
+        else:
+            container = docker.start_container(
+                instance.instance_id,
+                image,
+                str(instance_dir.resolve()),
+                str(worker_store.resolve()),
+            )
+            bootstrap_container(container, docker, config, worker_store)
 
-        pipeline_path = config.pipeline_container_path()
-        task_in_container = task_container_path(config)
-        sf_run_host = instance_dir / "sf-run.json"
+            pipeline_path = config.pipeline_container_path()
+            task_in_container = task_container_path(config)
+            sf_run_host = instance_dir / "sf-run.json"
 
-        sf_cmd = shell_join(
-            [
-                "node",
-                f"{config.container_stageflow_mount}/dist/cli.js",
-                "run",
-                "--task",
-                task_in_container,
-                "--pipeline",
-                pipeline_path,
-                "--checkout",
-                config.container_checkout,
-                "--skip-gates",
-                "--json",
-                "--include",
-                "stages",
-                "--git-sha",
-                instance.base_commit,
-            ],
-        )
+            sf_cmd = shell_join(
+                [
+                    "node",
+                    f"{config.container_stageflow_mount}/dist/cli.js",
+                    "run",
+                    "--task",
+                    task_in_container,
+                    "--pipeline",
+                    pipeline_path,
+                    "--checkout",
+                    config.container_checkout,
+                    "--skip-gates",
+                    "--json",
+                    "--include",
+                    "stages",
+                    "--git-sha",
+                    instance.base_commit,
+                ],
+            )
 
-        sf_result = docker.exec(
-            container,
-            f"cd {config.container_stageflow_mount} && {sf_cmd} > {config.container_output_mount}/sf-run.json 2>&1; echo $? > {config.container_output_mount}/sf-run.exit",
-            workdir=config.container_stageflow_mount,
-        )
+            sf_result = docker.exec(
+                container,
+                f"cd {config.container_stageflow_mount} && {sf_cmd} > {config.container_output_mount}/sf-run.json 2>&1; echo $? > {config.container_output_mount}/sf-run.exit",
+                workdir=config.container_stageflow_mount,
+            )
 
-        log_path.write_text(
-            (sf_result.stdout or "") + (sf_result.stderr or ""),
-            encoding="utf-8",
-        )
+            log_path = instance_dir / "container.log"
+            log_path.write_text(
+                (sf_result.stdout or "") + (sf_result.stderr or ""),
+                encoding="utf-8",
+            )
 
-        exit_code = _read_exit_code(instance_dir / "sf-run.exit")
-        sf_run = read_json_if_exists(sf_run_host)
+            exit_code = _read_exit_code(instance_dir / "sf-run.exit")
+            sf_run = read_json_if_exists(sf_run_host)
 
-        export_cmd = shell_join(
-            [
-                "node",
-                f"{config.container_stageflow_mount}/dist/cli.js",
-                "export-run",
-                "--from",
-                f"{config.container_output_mount}/sf-run.json",
-                "--out",
-                f"{config.container_output_mount}/run-export.json",
-            ],
-        )
-        docker.exec(
-            container,
-            f"cd {config.container_stageflow_mount} && {export_cmd} || true",
-            workdir=config.container_stageflow_mount,
-        )
+            export_cmd = shell_join(
+                [
+                    "node",
+                    f"{config.container_stageflow_mount}/dist/cli.js",
+                    "export-run",
+                    "--from",
+                    f"{config.container_output_mount}/sf-run.json",
+                    "--out",
+                    f"{config.container_output_mount}/run-export.json",
+                ],
+            )
+            docker.exec(
+                container,
+                f"cd {config.container_stageflow_mount} && {export_cmd} || true",
+                workdir=config.container_stageflow_mount,
+            )
 
-        model_patch = extract_patch(container, docker, config)
+            model_patch = extract_patch(container, docker, config)
+
         run_export = read_json_if_exists(instance_dir / "run-export.json")
-
+        trace_store = instance_dir / ".stageflow" if use_host else worker_store
         trace_doc = build_trace_document(
             instance_id=instance.instance_id,
             config=config,
             sf_run=sf_run,
             run_export=run_export,
-            worker_store_host=worker_store,
+            worker_store_host=trace_store,
         )
         write_trace(config, instance.instance_id, trace_doc)
 
         outcome = _resolve_outcome(sf_run, exit_code)
         run_id = sf_run.get("runId") if sf_run else None
+        reason = extract_sf_reason(sf_run)
 
         append_prediction(
             config.preds_jsonl_path(),
@@ -151,6 +172,7 @@ def run_instance(
             outcome=outcome,
             run_id=run_id if isinstance(run_id, str) else None,
             model_patch=model_patch,
+            reason=reason,
             duration_ms=int((time.time() - started) * 1000),
         )
     except Exception as err:

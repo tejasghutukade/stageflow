@@ -3,7 +3,7 @@ import path from "node:path";
 import { projectRun } from "../projection/projectRun.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { RunStatus } from "../runstore/port.js";
-import { runWorkspaceDir, storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import {
   attemptSessionPath,
   isInsideDir,
@@ -257,7 +257,7 @@ export async function runExportTraceCommand(
     const detail = await store.readRun(runId);
     assertRunComplete(detail.status, runId);
     const projection = projectRun(detail);
-    const runWorkspace = runWorkspaceDir(storeRootFor(projectRoot), runId);
+    const runWorkspace = runWorkspaceDir(resolveStoreRoot(projectRoot), runId);
     const document = buildTraceDocument({
       runId,
       runWorkspace,

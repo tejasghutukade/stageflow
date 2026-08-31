@@ -13,6 +13,7 @@ from harness.predictions import (
     prediction_row,
     rewrite_preds_json,
 )
+from harness.host_runner import run_stageflow_on_host
 from harness.taskgen import render_task
 from harness.dataset import SweBenchInstance
 
@@ -68,3 +69,49 @@ def test_predictions_incremental(tmp_path: Path) -> None:
     rewrite_preds_json(jsonl, tmp_path / "preds.json")
     preds = json.loads((tmp_path / "preds.json").read_text(encoding="utf-8"))
     assert preds["foo"]["model_patch"] == "diff"
+
+
+def test_host_runner_uses_stageflow_store_root_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = find_stageflow_root()
+    instance_dir = tmp_path / "instance"
+    store_path = instance_dir / ".stageflow"
+    repo_stageflow = root / ".stageflow"
+    repo_stageflow.mkdir(exist_ok=True)
+    marker = repo_stageflow / "preserve-me"
+    marker.write_text("keep", encoding="utf-8")
+
+    captured: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["store_root"] = kwargs.get("env", {}).get("STAGEFLOW_STORE_ROOT", "")
+        class Result:
+            returncode = 1
+            stdout = '{"ok": false, "outcome": "failed"}'
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr("harness.host_runner.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "harness.host_runner.ensure_stageflow_built",
+        lambda _root: root / "dist/cli.js",
+    )
+
+    config = HarnessConfig(
+        stageflow_root=root,
+        output_dir=tmp_path,
+        pipeline=root / "benchmarks/swe-bench/pipelines/stub.pipeline.yaml",
+    )
+    run_stageflow_on_host(
+        config,
+        task_path=tmp_path / "task.yaml",
+        checkout_path=tmp_path / "testbed",
+        instance_dir=instance_dir,
+        base_commit="abc",
+        store_path=store_path,
+    )
+
+    assert captured["store_root"] == str(store_path.resolve())
+    assert marker.read_text(encoding="utf-8") == "keep"

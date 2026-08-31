@@ -6,7 +6,7 @@ context: |
   Instance: {{ instance_id }}
   Base commit: {{ base_commit }}
 
-  {{ problem_statement }}
+  {{ problem_statement | indent(2) }}
 constraints: |
   Work only under /testbed.
   Finish autonomously without operator input.

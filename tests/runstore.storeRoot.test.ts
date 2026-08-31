@@ -33,7 +33,7 @@ import {
   createRunStore,
   DISK_STORE_REJECTED,
 } from "../src/runstore/createStore.js";
-import { storeRootFor } from "../src/runstore/paths.js";
+import { storeRootFor, resolveStoreRoot } from "../src/runstore/paths.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import { plantDiskEraRun } from "./helpers/plantDiskEraRun.js";
 
@@ -54,6 +54,32 @@ describe("store root and one-shot migrate", () => {
     const storeRoot = storeRootFor(root);
     expect(path.basename(storeRoot)).toBe(".stageflow");
     expect(storeRoot.endsWith(LEGACY_STORE_DIRNAME)).toBe(false);
+  });
+
+  it("resolveStoreRoot honors STAGEFLOW_STORE_ROOT override", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-store-override-"));
+    const override = path.join(root, "isolated-store");
+    const prev = process.env.STAGEFLOW_STORE_ROOT;
+    process.env.STAGEFLOW_STORE_ROOT = override;
+    try {
+      expect(resolveStoreRoot(root)).toBe(override);
+      const store = createRunStore({ rootDir: root });
+      await store.createRun({
+        pipelineId: "p",
+        taskYaml: "id: t",
+        pipelinePath: "p.yaml",
+        taskPath: "t.yaml",
+        projectRoot: root,
+      });
+      expect(existsSync(path.join(override, "state.db"))).toBe(true);
+      expect(existsSync(path.join(storeRootFor(root), "state.db"))).toBe(false);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.STAGEFLOW_STORE_ROOT;
+      } else {
+        process.env.STAGEFLOW_STORE_ROOT = prev;
+      }
+    }
   });
 
   it("moves a populated legacy store to .stageflow and drops the old directory", async () => {

@@ -4,11 +4,13 @@ import os
 import shlex
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Mapping
 
 import docker
 from docker.errors import DockerException
 from docker.models.containers import Container
+from docker.types import Mount
 
 from .config import HarnessConfig
 
@@ -55,6 +57,9 @@ class DockerManager:
         image: str,
         instance_output_dir: str,
         worker_store_host: str,
+        testbed_host: Path | None = None,
+        *,
+        mount_worker_store: bool = True,
     ) -> Container:
         name = self.container_name(instance_id)
         self._remove_existing(name)
@@ -69,17 +74,24 @@ class DockerManager:
                 "bind": self.config.container_output_mount,
                 "mode": "rw",
             },
-            worker_store_host: {
+        }
+        if mount_worker_store:
+            volumes[worker_store_host] = {
                 "bind": f"{self.config.container_stageflow_mount}/.stageflow",
                 "mode": "rw",
-            },
-        }
+            }
 
         home_stageflow = os.path.expanduser("~/.stageflow")
         if os.path.isdir(home_stageflow):
             volumes[home_stageflow] = {
                 "bind": "/root/.stageflow",
                 "mode": "ro",
+            }
+
+        if testbed_host is not None:
+            volumes[str(testbed_host.resolve())] = {
+                "bind": self.config.container_checkout,
+                "mode": "rw",
             }
 
         container = self.client.containers.run(
@@ -89,6 +101,13 @@ class DockerManager:
             detach=True,
             remove=False,
             volumes=volumes,
+            mounts=[
+                Mount(
+                    target=f"{self.config.container_stageflow_mount}/node_modules",
+                    source=None,
+                    type="volume",
+                ),
+            ],
             environment=env,
             working_dir=self.config.container_checkout,
         )

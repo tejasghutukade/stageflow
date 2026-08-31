@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .config import HarnessConfig, ensure_stageflow_built
 from .dataset import SweBenchInstance, load_instances
+from .host_runner import should_use_host_stageflow
 from .instance_runner import run_instance
 from .predictions import load_completed_instance_ids, rewrite_preds_json
 
@@ -45,7 +46,7 @@ def run_batch(config: HarnessConfig) -> dict:
 
     def _worker(instance: SweBenchInstance, worker_id: int) -> dict:
         result = run_instance(instance, config, worker_id=worker_id)
-        return {
+        row = {
             "instance_id": result.instance_id,
             "outcome": result.outcome,
             "run_id": result.run_id,
@@ -53,6 +54,9 @@ def run_batch(config: HarnessConfig) -> dict:
             "patch_bytes": len(result.model_patch.encode("utf-8")),
             "error": result.error,
         }
+        if result.reason:
+            row["reason"] = result.reason
+        return row
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
@@ -68,6 +72,8 @@ def run_batch(config: HarnessConfig) -> dict:
         "total": len(instances),
         "ran": len(pending),
         "skipped": len(completed),
+        "execution_mode": config.execution_mode,
+        "stageflow_on_host": should_use_host_stageflow(config),
         "results": sorted(results, key=lambda row: row["instance_id"]),
     }
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

@@ -18,6 +18,7 @@ class HarnessConfig:
     instance_ids: list[str] | None = None
     slice_spec: str | None = None
     dry_run: bool = False
+    execution_mode: str = "auto"
     env_keys: list[str] = field(
         default_factory=lambda: [
             "ANTHROPIC_API_KEY",

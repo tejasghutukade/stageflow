@@ -15,6 +15,25 @@ def _default_pipeline(root: Path) -> Path:
     return root / "benchmarks" / "swe-bench" / "pipelines" / "swe-agentless-lite.pipeline.yaml"
 
 
+def _harness_root(root: Path) -> Path:
+    return root / "benchmarks" / "swe-bench"
+
+
+def resolve_pipeline(root: Path, pipeline: Path | None) -> Path:
+    if pipeline is None:
+        return _default_pipeline(root)
+    candidate = pipeline.expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    candidate = candidate.resolve()
+    if candidate.is_file():
+        return candidate
+    bench_candidate = (_harness_root(root) / pipeline).resolve()
+    if bench_candidate.is_file():
+        return bench_candidate
+    return candidate
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="swe-bench-harness")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -30,6 +49,12 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--slice", dest="slice_spec", default=None)
     batch.add_argument("--resume", action="store_true")
     batch.add_argument("--dry-run", action="store_true")
+    batch.add_argument(
+        "--execution-mode",
+        choices=["auto", "host", "container"],
+        default="auto",
+        help="Where to run Stageflow (auto=host on Apple Silicon)",
+    )
 
     grade = sub.add_parser("grade", help="Grade predictions with official SWE-bench tooling")
     grade.add_argument("--output-dir", type=Path, required=True)
@@ -54,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     root = find_stageflow_root()
 
     if args.command == "batch":
-        pipeline = args.pipeline or _default_pipeline(root)
+        pipeline = resolve_pipeline(root, args.pipeline)
         config = HarnessConfig(
             stageflow_root=root,
             output_dir=args.output_dir.resolve(),
@@ -67,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
             instance_ids=args.instance_ids,
             slice_spec=args.slice_spec,
             dry_run=args.dry_run,
+            execution_mode=args.execution_mode,
         )
         summary = run_batch(config)
         print(json.dumps(summary, indent=2))

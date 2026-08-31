@@ -4,7 +4,7 @@ import path from "node:path";
 import type { ProjectContext } from "../project/resolveProjectContext.js";
 import type { StageflowContext } from "../project/resolveStageflowContext.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot } from "../runstore/paths.js";
 
 export const SETTINGS_FILE_NAME = "settings.json";
 
@@ -27,16 +27,16 @@ export function globalSettingsFilePath(): string {
 
 export function settingsFilePathForContext(ctx: ProjectContext | StageflowContext): string {
   if (ctx.isGitProject) {
-    return path.join(storeRootFor(ctx.projectRoot), SETTINGS_FILE_NAME);
+    return path.join(resolveStoreRoot(ctx.projectRoot), SETTINGS_FILE_NAME);
   }
   if (path.resolve(ctx.projectRoot) === path.resolve(os.homedir())) {
     return path.join(ctx.globalHome, SETTINGS_FILE_NAME);
   }
-  return path.join(storeRootFor(ctx.projectRoot), SETTINGS_FILE_NAME);
+  return path.join(resolveStoreRoot(ctx.projectRoot), SETTINGS_FILE_NAME);
 }
 
 export function settingsFilePath(cwd: string): string {
-  return path.join(storeRootFor(path.resolve(cwd)), SETTINGS_FILE_NAME);
+  return path.join(resolveStoreRoot(path.resolve(cwd)), SETTINGS_FILE_NAME);
 }
 
 export function parseSlotCount(value: unknown): number | undefined {
@@ -204,7 +204,7 @@ export function writeFactorySettings(
   }
 
   const root = path.resolve(cwd);
-  mkdirSync(storeRootFor(root), { recursive: true });
+  mkdirSync(resolveStoreRoot(root), { recursive: true });
   writeFileSync(
     settingsFilePath(cwd),
     `${JSON.stringify(out, null, 2)}\n`,

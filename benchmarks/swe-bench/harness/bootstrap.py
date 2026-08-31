@@ -8,7 +8,7 @@ from docker.models.containers import Container
 from .config import HarnessConfig
 from .docker import DockerManager, ExecResult
 
-NODE_VERSION = "20.18.0"
+NODE_VERSION = "22.13.0"
 NODE_DIR = f"/opt/node-v{NODE_VERSION}-linux-x64"
 BOOTSTRAP_MARKER = ".stageflow-node-bootstrap"
 
@@ -69,8 +69,26 @@ def ensure_stageflow_cli(
     cli = f"{config.container_stageflow_mount}/dist/cli.js"
     return docker.exec(
         container,
-        f"test -f {cli} && node {cli} --help >/dev/null",
+        f"test -f {cli} && node {cli} --help",
     )
+
+
+def ensure_stageflow_deps(
+    container: Container,
+    docker: DockerManager,
+    config: HarnessConfig,
+) -> ExecResult:
+    mount = config.container_stageflow_mount
+    install_script = f"""
+set -euo pipefail
+cd {mount}
+if [ -f package-lock.json ]; then
+  npm ci --omit=dev
+else
+  npm install --omit=dev
+fi
+"""
+    return docker.exec(container, install_script, workdir=mount)
 
 
 def bootstrap_container(
@@ -92,8 +110,19 @@ def bootstrap_container(
 
     cli_result = ensure_stageflow_cli(container, docker, config)
     if cli_result.returncode != 0:
-        raise RuntimeError(
-            "Stageflow dist/cli.js not found. Run `npm run build` at the repo root before batch runs.",
-        )
+        deps_result = ensure_stageflow_deps(container, docker, config)
+        if deps_result.returncode != 0:
+            raise RuntimeError(
+                "Stageflow npm install failed inside container: "
+                f"{deps_result.stderr or deps_result.stdout}",
+            )
+        cli_result = ensure_stageflow_cli(container, docker, config)
+        if cli_result.returncode != 0:
+            detail = (cli_result.stderr or cli_result.stdout or "").strip()
+            raise RuntimeError(
+                "Stageflow CLI check failed inside container. "
+                "Ensure `npm run build` at the repo root before batch runs."
+                + (f"\n{detail}" if detail else ""),
+            )
 
     mark_bootstrapped(config, worker_store_host)
