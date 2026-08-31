@@ -7,9 +7,12 @@ import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import type {
   AbandonStageResult,
-  RetryStageResult,
   RunManager,
 } from "../runtime/runManager.js";
+import {
+  mapRetryStageFailure,
+  mapStartFailure,
+} from "../server/operatorResults.js";
 import {
   parseAskOperatorAnswer,
 } from "../tools/askOperator.js";
@@ -50,30 +53,6 @@ function textResult(data: unknown, isError = false) {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
     ...(isError ? { isError: true } : {}),
   };
-}
-
-function inferRetryStageErrorCode(reason: string): string | undefined {
-  if (/retry already in progress/i.test(reason)) return "retry_in_progress";
-  if (/waiting for input/i.test(reason)) return "hitl_not_retriable";
-  if (/already has active orchestration/i.test(reason)) return "run_not_retryable";
-  if (/run is not failed/i.test(reason)) return "run_not_retryable";
-  if (/stage is not failed/i.test(reason)) return "stage_not_failed";
-  return undefined;
-}
-
-function retryStageFailureBody(result: Extract<RetryStageResult, { ok: false }>) {
-  const { ok: _ok, status: _status, reason, ...rest } = result;
-  const code = inferRetryStageErrorCode(reason);
-  return { error: reason, status: result.status, ...(code ? { code } : {}), ...rest };
-}
-
-function startFailureBody(result: { reason: string; status?: number; [k: string]: unknown }) {
-  const { ok: _ok, status, reason, ...rest } = result as {
-    ok?: boolean;
-    status?: number;
-    reason: string;
-  } & Record<string, unknown>;
-  return { error: reason, ...(status !== undefined ? { status } : {}), ...rest };
 }
 
 export type McpToolDeps = {
@@ -528,7 +507,10 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
     async ({ runId, stageId }) => {
       const result = await manager.retryStage(runId, stageId);
       if (!result.ok) {
-        return textResult(retryStageFailureBody(result), true);
+        return textResult(
+          { ...mapRetryStageFailure(result), status: result.status },
+          true,
+        );
       }
       return textResult({
         runId: result.runId,
@@ -577,7 +559,13 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
     async ({ runId }) => {
       const result = await manager.rerun(runId);
       if (!result.ok) {
-        return textResult(startFailureBody(result), true);
+        return textResult(
+          {
+            ...mapStartFailure(result),
+            ...(result.status !== undefined ? { status: result.status } : {}),
+          },
+          true,
+        );
       }
       return textResult({ runId: result.runId });
     },

@@ -27,8 +27,6 @@ import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type {
   AbandonStageResult,
-  RetryStageResult,
-  StartRunResult,
   RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -44,6 +42,7 @@ import {
   type StageflowHostOptions,
 } from "./bootstrap.js";
 import { DEFAULT_PORT } from "./mcpHost.js";
+import { mapRetryStageFailure, mapStartFailure } from "./operatorResults.js";
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -68,28 +67,6 @@ function json(res: ServerResponse, status: number, body: unknown): void {
     "Content-Length": Buffer.byteLength(payload),
   });
   res.end(payload);
-}
-
-function startFailureBody(result: Extract<StartRunResult, { ok: false }>) {
-  const { ok: _ok, status: _status, reason, ...rest } = result;
-  return { error: reason, ...rest };
-}
-
-function inferRetryStageErrorCode(reason: string): string | undefined {
-  if (/retry already in progress/i.test(reason)) return "retry_in_progress";
-  if (/waiting for input/i.test(reason)) return "hitl_not_retriable";
-  if (/already has active orchestration/i.test(reason)) return "run_not_retryable";
-  if (/run is not failed/i.test(reason)) return "run_not_retryable";
-  if (/stage is not failed/i.test(reason)) return "stage_not_failed";
-  return undefined;
-}
-
-function retryStageFailureBody(
-  result: Extract<RetryStageResult, { ok: false }>,
-) {
-  const { ok: _ok, status: _status, reason, ...rest } = result;
-  const code = inferRetryStageErrorCode(reason);
-  return { error: reason, ...(code ? { code } : {}), ...rest };
 }
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -388,7 +365,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
           pipeline: body.pipeline.trim(),
         });
         if (!result.ok) {
-          json(res, result.status ?? 500, startFailureBody(result));
+          json(res, result.status ?? 500, mapStartFailure(result));
           return;
         }
         json(res, 202, { runId: result.runId });
@@ -399,7 +376,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
         const runId = decodeURIComponent(pathname.split("/")[3] ?? "");
         const result = await manager.rerun(runId);
         if (!result.ok) {
-          json(res, result.status ?? 500, startFailureBody(result));
+          json(res, result.status ?? 500, mapStartFailure(result));
           return;
         }
         json(res, 202, { runId: result.runId });
@@ -440,7 +417,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
         const stageId = decodeURIComponent(retryMatch[2] ?? "");
         const result = await manager.retryStage(runId, stageId);
         if (!result.ok) {
-          json(res, result.status ?? 500, retryStageFailureBody(result));
+          json(res, result.status ?? 500, mapRetryStageFailure(result));
           return;
         }
         json(res, 202, {
