@@ -68,6 +68,7 @@ describe("catalog surface parity", () => {
       store,
       port: 0,
       uiDistDir: path.join(storeRoot, "missing-ui"),
+      mcpStateless: true,
     });
 
     try {

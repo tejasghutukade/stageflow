@@ -238,10 +238,10 @@ sf validate --strict --json
 
 ## `sf ui`
 
-Start the operator console and MCP endpoint.
+Start the operator console and MCP endpoint (sessions are the MCP product default).
 
 ```bash
-sf ui [--port 3847]
+sf ui [--port 3847] [--mcp-stateless]
 ```
 
 Prints:
@@ -249,7 +249,21 @@ Prints:
 - Operator console URL (default `http://127.0.0.1:3847`)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted. The run store resolves to `<git-root>/.stageflow/` even when started from a subdirectory. See [Operator console](operator-console.md) and [MCP](mcp.md).
+Opens the default browser. Process runs until interrupted. The run store resolves to `<git-root>/.stageflow/` even when started from a subdirectory.
+
+`--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
+
+Run **either** `sf ui` **or** `sf mcp` for a project — not both against the same store.
+
+## `sf mcp`
+
+Start an MCP-only HTTP host (no operator console UI, no browser open).
+
+```bash
+sf mcp [--port 3847] [--mcp-stateless]
+```
+
+Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves minimal `GET /api/health`. Same git-root / `.stageflow/` semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 

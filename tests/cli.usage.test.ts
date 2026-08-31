@@ -52,6 +52,8 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toMatch(/Usage:/);
     expect(result.stdout).toMatch(/sf ui/);
+    expect(result.stdout).toMatch(/sf mcp/);
+    expect(result.stdout).toMatch(/--mcp-stateless/);
     expect(result.stdout).toMatch(/--checkout/);
     expect(result.stdout).toMatch(/sf run[^\n]*--json/);
     expect(result.stdout).toMatch(/sf validate/);

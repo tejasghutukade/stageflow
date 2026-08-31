@@ -101,7 +101,7 @@ See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP
 
-MCP does not expose a dedicated “answer gate” tool in v1. Poll `get_run` for waiting state; operator replies are console-first.
+Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` runs — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console.
 
 ## See also
 
