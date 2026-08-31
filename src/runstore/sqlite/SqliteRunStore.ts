@@ -8,6 +8,7 @@ import {
   stageStatusFromEvents,
   type CreateRunInput,
   type CreatedRun,
+  type ListRunsFilter,
   type RunDetail,
   type RunMeta,
   type RunPipelineDagSnapshot,
@@ -611,14 +612,36 @@ export class SqliteRunStore implements RunStore {
     return this.loadEvents(runId, stageId, attempt);
   }
 
-  async listRuns(): Promise<RunSummary[]> {
+  async listRuns(filter?: ListRunsFilter): Promise<RunSummary[]> {
     await this.ready();
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (filter?.status !== undefined) {
+      clauses.push("status = ?");
+      params.push(filter.status);
+    }
+    if (filter?.since !== undefined) {
+      clauses.push("created_at >= ?");
+      params.push(filter.since);
+    }
+    if (filter?.pipeline !== undefined && filter.pipeline.trim().length > 0) {
+      const pipeline = filter.pipeline.trim();
+      const normalized = normalizeCatalogPath(pipeline);
+      clauses.push(
+        "(pipeline_id = ? OR pipeline_path = ? OR pipeline_path = ?)",
+      );
+      params.push(pipeline, pipeline, normalized);
+    }
+
+    const where =
+      clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
         `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
-         FROM runs ORDER BY created_at DESC`,
+         FROM runs ${where} ORDER BY created_at DESC`,
       )
-      .all() as RunRow[];
+      .all(...params) as RunRow[];
 
     const summaries: RunSummary[] = [];
     for (const row of rows) {

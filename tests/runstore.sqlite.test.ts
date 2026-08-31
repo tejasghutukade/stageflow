@@ -522,4 +522,109 @@ CREATE TABLE stage_events (
     expect(byStage["branch-b"]).toBe(11);
     expect(byStage["branch-c"]).toBe(11);
   });
+
+  describe("listRuns filters", () => {
+    it("returns all runs newest-first with no filter", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-all-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const a = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const b = await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns();
+      expect(listed.map((r) => r.run_id)).toEqual([b.runId, a.runId]);
+    });
+
+    it("filters by status", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-status-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const running = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const failed = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(failed.runId, "failed");
+
+      const listed = await store.listRuns({ status: "failed" });
+      expect(listed.map((r) => r.run_id)).toEqual([failed.runId]);
+      expect(listed.every((r) => r.status === "failed")).toBe(true);
+      expect(listed.some((r) => r.run_id === running.runId)).toBe(false);
+    });
+
+    it("filters by since (created_at lower bound)", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-since-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const older = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const cutoff = new Date().toISOString();
+      await new Promise((r) => setTimeout(r, 5));
+      const newer = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns({ since: cutoff });
+      expect(listed.map((r) => r.run_id)).toEqual([newer.runId]);
+      expect(listed.some((r) => r.run_id === older.runId)).toBe(false);
+    });
+
+    it("filters by pipeline id or path", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-pipe-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const pipePath = path.join(root, "pipelines", "docs-only.pipeline.yaml");
+      const match = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+        pipelinePath: pipePath,
+      });
+      await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+        pipelinePath: path.join(root, "pipelines", "single.pipeline.yaml"),
+      });
+
+      const byId = await store.listRuns({ pipeline: "docs-only" });
+      expect(byId.map((r) => r.run_id)).toEqual([match.runId]);
+
+      const byPath = await store.listRuns({ pipeline: pipePath });
+      expect(byPath.map((r) => r.run_id)).toEqual([match.runId]);
+    });
+
+    it("ANDs combined filters", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-list-and-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const keep = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(keep.runId, "succeeded");
+      const wrongStatus = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(wrongStatus.runId, "failed");
+      await store.createRun({
+        pipelineId: "single",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      const listed = await store.listRuns({
+        status: "succeeded",
+        pipeline: "docs-only",
+      });
+      expect(listed.map((r) => r.run_id)).toEqual([keep.runId]);
+    });
+  });
 });

@@ -160,6 +160,14 @@ export type CreateRunInput = {
   projectRoot?: string;
 };
 
+export type ListRunsFilter = {
+  status?: RunStatus;
+  /** ISO timestamp; keep runs with created_at >= since */
+  since?: string;
+  /** Match pipeline_id or pipeline_path */
+  pipeline?: string;
+};
+
 /**
  * Persistence port for pipeline run state.
  * Call sites should prefer CreatedRun.workspaceDir from createRun over
@@ -215,7 +223,7 @@ export interface RunStore {
     stageId: string,
     attempt?: number,
   ): Promise<StageLogEvent[]>;
-  listRuns(): Promise<RunSummary[]>;
+  listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
 }
