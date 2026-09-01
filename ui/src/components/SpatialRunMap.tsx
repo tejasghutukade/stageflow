@@ -18,8 +18,8 @@ import {
   statusCopy,
 } from "../status/runStatus";
 import { canAbandon, canRetry, isStageActionBusy } from "../stageAction";
+import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
 import { AttemptCountBadge } from "./AttemptCountBadge";
-import type { TrackDetailRow } from "./TrackDetailList";
 
 export const PAN_CLICK_THRESHOLD_PX = 4;
 export const SPATIAL_ZOOM_MIN = 0.25;
@@ -158,7 +158,7 @@ function nodeChromeStatus(
 export type SpatialRunMapProps = {
   layout: SpatialTrackLayout;
   stages: StageSnapshot[];
-  detailListRows: TrackDetailRow[];
+  nodeChrome: SpatialNodeChrome[];
   selectedStageId: string | null;
   onSelectStage: (stageId: string) => void;
   onDeselect: () => void;
@@ -173,7 +173,7 @@ export type SpatialRunMapProps = {
 export function SpatialRunMap({
   layout,
   stages,
-  detailListRows,
+  nodeChrome,
   selectedStageId,
   onSelectStage,
   onDeselect,
@@ -201,7 +201,7 @@ export function SpatialRunMap({
   const [dragging, setDragging] = useState(false);
 
   const snapshots = new Map(stages.map((s) => [s.stage_id, s]));
-  const rows = new Map(detailListRows.map((r) => [r.stageId, r]));
+  const chromeById = new Map(nodeChrome.map((c) => [c.stageId, c]));
   const retrying = retryingStageIds ?? new Set<string>();
 
   useLayoutEffect(() => {
@@ -374,8 +374,8 @@ export function SpatialRunMap({
             })}
             {layout.nodes.map((node) => {
               const snap = snapshots.get(node.stageId);
-              const row = rows.get(node.stageId);
-              const status = snap?.status ?? row?.status ?? "pending";
+              const chrome = chromeById.get(node.stageId);
+              const status = snap?.status ?? chrome?.status ?? "pending";
               const abandoned = snap ? isAbandonedDisplay(snap.events) : false;
               return (
                 <SpatialNode
@@ -383,8 +383,7 @@ export function SpatialRunMap({
                   node={node}
                   status={status}
                   abandoned={abandoned}
-                  label={row?.label ?? node.stageId}
-                  row={row}
+                  chrome={chrome}
                   selected={selectedStageId === node.stageId}
                   busy={isStageActionBusy(
                     { retryingStageIds: retrying, abandoningStageId },
@@ -437,8 +436,7 @@ function SpatialNode({
   node,
   status,
   abandoned,
-  label,
-  row,
+  chrome,
   selected,
   busy,
   retrying,
@@ -450,8 +448,7 @@ function SpatialNode({
   node: SpatialNodeBox;
   status: StageSnapshot["status"];
   abandoned: boolean;
-  label: string;
-  row: TrackDetailRow | undefined;
+  chrome: SpatialNodeChrome | undefined;
   selected: boolean;
   busy: boolean;
   retrying: boolean;
@@ -465,16 +462,17 @@ function SpatialNode({
   const action = spatialNodeAction(status, abandoned);
   const showRetry = action === "retry" && canRetry(status) && onRetryStage;
   const showAbandon = action === "abandon" && canAbandon(status) && onAbandonStage;
-  const chrome = nodeChromeStatus(status, abandoned);
+  const chromeStatus = nodeChromeStatus(status, abandoned);
   const statusLabel = abandoned ? abandonedDisplayCopy() : statusCopy(status);
-  const kicker = spatialNodeKicker(label, label);
+  const title = chrome?.title ?? node.stageId;
+  const kicker = chrome ? spatialNodeKicker(chrome.kicker, chrome.title) : null;
   const metaParts = [statusLabel];
-  if (row?.readinessLine && status === "pending") metaParts.push(row.readinessLine);
+  if (chrome?.readinessLine && status === "pending") metaParts.push(chrome.readinessLine);
   if (status === "waiting_for_input") {
-    if (row?.gateKinds?.length) metaParts.push(row.gateKinds.map(gateLabel).join(" · "));
-    if (row?.promptSummary) metaParts.push(row.promptSummary);
-  } else if (row?.meta) {
-    metaParts.push(row.meta);
+    if (chrome?.gateKinds?.length) metaParts.push(chrome.gateKinds.map(gateLabel).join(" · "));
+    if (chrome?.promptSummary) metaParts.push(chrome.promptSummary);
+  } else if (chrome?.meta) {
+    metaParts.push(chrome.meta);
   }
 
   const select = () => {
@@ -484,9 +482,9 @@ function SpatialNode({
 
   return (
     <g
-      className={`gnode ${chrome}${selected ? " selected" : ""}`}
+      className={`gnode ${chromeStatus}${selected ? " selected" : ""}`}
       data-id={node.stageId}
-      data-waiting={row?.isWaitingAttention ? "true" : undefined}
+      data-waiting={chrome?.isWaitingAttention ? "true" : undefined}
       transform={`translate(${node.x},${node.y})`}
     >
       <rect className="node-box" x={0} y={0} width={node.width} height={SPATIAL_NODE_H} rx={12} ry={12} />
@@ -507,8 +505,8 @@ function SpatialNode({
           >
             {kicker ? <span className="gnode__kicker">{kicker}</span> : null}
             <span className="gnode__title">
-              {label}
-              <AttemptCountBadge count={row?.attemptCount} />
+              {title}
+              <AttemptCountBadge count={chrome?.attemptCount} />
             </span>
             <span className="gnode__meta">{metaParts.join(" · ")}</span>
           </button>
@@ -521,7 +519,7 @@ function SpatialNode({
             </text>
           ) : null}
           <text className="node-title" x={16} y={kicker ? 44 : 32}>
-            {label}
+            {title}
           </text>
           <text className="node-meta" x={16} y={66}>
             {metaParts.join(" · ")}

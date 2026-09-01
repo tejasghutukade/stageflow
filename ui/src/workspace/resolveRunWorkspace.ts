@@ -3,17 +3,15 @@ import type {
   PipelineTrackNode,
   RunDetail,
   StageEnvelopeView,
+  StageGateKind,
   StageSnapshot,
 } from "../api";
 import type { DetailView } from "../routes";
-import type { DagTrackNode } from "../components/PipelineDagTrack";
-import type { TrackDetailRow } from "../components/TrackDetailList";
-import type { TrackLayout } from "../components/RunTrack";
 import { ringStatus, statusCopy, type RingStatus } from "../status/runStatus";
 import {
   detailListOrder,
-  groupNodesByLayer,
-  isLinearPipelineTrack,
+  layoutSpatialTrack,
+  type SpatialTrackLayout,
 } from "../track/layoutPipelineTrack";
 import { readinessDetail } from "../track/readinessCopy";
 
@@ -55,6 +53,19 @@ export type WorkspaceTrackStage = {
 
 export type ArtifactFile = { path: string; label?: string; meta?: string };
 
+export type SpatialNodeChrome = {
+  stageId: string;
+  title: string;
+  kicker: string;
+  status: StageSnapshot["status"];
+  attemptCount?: number;
+  readinessLine?: string;
+  gateKinds?: StageGateKind[];
+  promptSummary?: string;
+  meta?: string;
+  isWaitingAttention: boolean;
+};
+
 const ENVELOPE_ASIDE_PREFIX = "stageflow:envelope:";
 
 export function envelopeAsidePath(stageId: string): string {
@@ -79,8 +90,8 @@ export type RunWorkspace = {
   artifactReadOnly: boolean;
   selectedPath: string | undefined;
   trackStages: WorkspaceTrackStage[];
-  trackLayout: TrackLayout;
-  detailListRows: TrackDetailRow[];
+  spatialLayout: SpatialTrackLayout;
+  nodeChrome: SpatialNodeChrome[];
   artifactFiles: ArtifactFile[];
   sessionChip: SessionChipKind;
   inboundEnvelope: StageEnvelopeView | null;
@@ -301,54 +312,25 @@ function promptSummary(prompt: PendingPrompt | undefined): string | undefined {
   }
 }
 
-function dagTrackNode(
-  node: PipelineTrackNode,
-  snapshot: StageSnapshot | undefined,
-  run: RunDetail,
-  selectedStageId: string | null,
-  nodes: PipelineTrackNode[],
-): DagTrackNode {
-  const status = snapshot?.status ?? node.status;
-  const visual = ringStatus(status);
-  return {
-    id: node.stage_id,
-    label: nodeCloneLabel(nodes, node),
-    status: visual,
-    stageStatus: status,
-    selected: node.stage_id === selectedStageId,
-    meta: visual === "waiting" ? statusCopy(status) : snapshot?.last_at,
-    envelope: snapshot?.envelope
-      ? {
-          summary: snapshot.envelope.summary,
-          artifactCount: snapshot.envelope.artifacts.length,
-        }
-      : null,
-    isWaitingAttention: isWaitingAttention(run, node.stage_id, status),
-  };
-}
-
-function buildDetailListRows(
+function nodeChromeFromTrack(
   run: RunDetail,
   nodes: PipelineTrackNode[],
   snapshots: Map<string, StageSnapshot>,
-  includeReadiness: boolean,
-): TrackDetailRow[] {
+): SpatialNodeChrome[] {
   return detailListOrder(nodes).map((node) => {
     const snapshot = snapshots.get(node.stage_id);
     const status = snapshot?.status ?? node.status;
-    const readinessLine = includeReadiness
-      ? readinessDetail({
-          readiness: node.readiness,
-          blocked_by: node.blocked_by,
-          status,
-        })
-      : undefined;
     return {
       stageId: node.stage_id,
-      label: nodeCloneLabel(nodes, node),
+      title: nodeCloneLabel(nodes, node),
+      kicker: node.definition_id ?? node.stage_id,
       status,
       attemptCount: snapshot?.attempt_count ?? node.attempt_count ?? 1,
-      readinessLine,
+      readinessLine: readinessDetail({
+        readiness: node.readiness,
+        blocked_by: node.blocked_by,
+        status,
+      }),
       gateKinds: node.gate_kinds,
       meta: status === "running" ? snapshot?.last_at : undefined,
       promptSummary:
@@ -360,55 +342,62 @@ function buildDetailListRows(
   });
 }
 
-function buildTrackLayout(
+function nodeChromeFromStages(
+  run: RunDetail,
+  trackStages: WorkspaceTrackStage[],
+  snapshots: Map<string, StageSnapshot>,
+): SpatialNodeChrome[] {
+  return trackStages.map((ts) => {
+    const snapshot = snapshots.get(ts.id);
+    const status = snapshot?.status ?? "pending";
+    return {
+      stageId: ts.id,
+      title: ts.label,
+      kicker: ts.id,
+      status,
+      attemptCount: snapshot?.attempt_count ?? 1,
+      meta: status === "running" ? snapshot?.last_at : undefined,
+      promptSummary:
+        status === "waiting_for_input"
+          ? promptSummary(snapshot?.pending_prompt)
+          : undefined,
+      isWaitingAttention: isWaitingAttention(run, ts.id, status),
+    };
+  });
+}
+
+function buildRunGraph(
   run: RunDetail,
   selectedStageId: string | null,
   plannedStageIds: string[] | undefined,
-): { trackLayout: TrackLayout; detailListRows: TrackDetailRow[]; trackStages: WorkspaceTrackStage[] } {
-  const track = run.pipeline_track;
+): {
+  spatialLayout: SpatialTrackLayout;
+  nodeChrome: SpatialNodeChrome[];
+  trackStages: WorkspaceTrackStage[];
+} {
   const snapshots = snapshotById(run);
+  const spatialLayout = layoutSpatialTrack(run.pipeline_track, {
+    liveStageIds: run.stages.map((s) => s.stage_id),
+    plannedStageIds,
+  });
+  const track = run.pipeline_track;
 
-  if (!track?.nodes?.length) {
-    const linearStages = toTrackStages(run.stages, selectedStageId, plannedStageIds);
+  if (!track.nodes.length) {
+    const trackStages = toTrackStages(run.stages, selectedStageId, plannedStageIds);
     return {
-      trackLayout: { mode: "linear", linearStages },
-      detailListRows: [],
-      trackStages: linearStages,
+      spatialLayout,
+      nodeChrome: nodeChromeFromStages(run, trackStages, snapshots),
+      trackStages,
     };
   }
 
   const nodes = track.nodes;
-  const detailListRows = buildDetailListRows(run, nodes, snapshots, true);
-
-  if (isLinearPipelineTrack(track)) {
-    const linearStages = detailListOrder(nodes).map((node) =>
-      trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId, nodes),
-    );
-    return {
-      trackLayout: { mode: "linear", linearStages },
-      detailListRows,
-      trackStages: linearStages,
-    };
-  }
-
-  const grouped = groupNodesByLayer(nodes);
-  const layerIndices = grouped.map((layer) => layer[0]!.layer);
-  const dagLayers = grouped.map((layer) =>
-    layer.map((node) => dagTrackNode(node, snapshots.get(node.stage_id), run, selectedStageId, nodes)),
-  );
   const trackStages = detailListOrder(nodes).map((node) =>
     trackNodeToWorkspaceStage(node, snapshots.get(node.stage_id), selectedStageId, nodes),
   );
-
   return {
-    trackLayout: {
-      mode: "dag",
-      dagLayers,
-      layerIndices,
-      trackNodes: nodes,
-      edges: track.edges,
-    },
-    detailListRows,
+    spatialLayout,
+    nodeChrome: nodeChromeFromTrack(run, nodes, snapshots),
     trackStages,
   };
 }
@@ -609,10 +598,10 @@ export function resolveRunWorkspace(
         }
       : null;
 
-  const { trackLayout, detailListRows, trackStages } = buildTrackLayout(
+  const { spatialLayout, nodeChrome, trackStages } = buildRunGraph(
     run,
     selectedStageId,
-    catalogOverlay,
+    plannedStageIds,
   );
 
   return {
@@ -630,8 +619,8 @@ export function resolveRunWorkspace(
           ? envelopeAsidePath(view.stageId)
           : undefined,
     trackStages,
-    trackLayout,
-    detailListRows,
+    spatialLayout,
+    nodeChrome,
     artifactFiles: asideArtifactFiles(run, selectedStage),
     sessionChip: sessionChipKind(selectedStage?.status),
     inboundEnvelope: inboundStage?.envelope ?? null,

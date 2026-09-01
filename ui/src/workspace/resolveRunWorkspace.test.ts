@@ -3,6 +3,7 @@ import type { PendingPrompt, PipelineTrackNode, RunDetail, StageSnapshot } from 
 import type { DetailView } from "../routes";
 import { statusCopy } from "../status/runStatus";
 import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
+import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
   envelopeAsidePath,
   formatCloneLabel,
@@ -782,8 +783,8 @@ const fanOutTrack = {
   ],
 };
 
-describe("DAG track layout", () => {
-  it("uses dag mode for fan-out projection", () => {
+describe("spatial track layout", () => {
+  it("projects fan-out nodes and waiting chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "recon", status: "succeeded" }),
@@ -807,14 +808,19 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("dag");
-    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ stageId: "improve-a" }),
-        expect.objectContaining({ stageId: "improve-c" }),
-      ]),
-    );
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "recon",
+      "improve-a",
+      "improve-b",
+      "improve-c",
+      "report-b",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual(fanOutTrack.edges);
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["improve-a", "improve-c"]);
     expect(workspace.selectedStageId).toBe("improve-a");
+    expect(workspace.kind).toBe("stream");
   });
 
   it("resolves inbound envelope via DAG edges not declaration order", () => {
@@ -835,7 +841,7 @@ describe("DAG track layout", () => {
     expect(workspace.inboundEnvelope).toEqual(envelope);
   });
 
-  it("shows blocked readiness on detail rows", () => {
+  it("shows blocked readiness on node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "running" }),
@@ -843,13 +849,13 @@ describe("DAG track layout", () => {
       ],
       { pipeline_track: fanOutTrack },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "report-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "report-b",
     );
-    expect(row?.readinessLine).toBe("Blocked on improve-b");
+    expect(chrome?.readinessLine).toBe("Blocked on improve-b");
   });
 
-  it("passes attempt_count into detail list rows", () => {
+  it("passes attempt_count into node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "failed", attempt_count: 2 }),
@@ -878,13 +884,13 @@ describe("DAG track layout", () => {
         },
       },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "improve-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "improve-b",
     );
-    expect(row?.attemptCount).toBe(2);
+    expect(chrome?.attemptCount).toBe(2);
   });
 
-  it("keeps linear mode for single-chain projection", () => {
+  it("lays out a single-chain projection as a spatial row", () => {
     const run = detail(
       [
         stage({ stage_id: "a", status: "succeeded" }),
@@ -906,7 +912,11 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual(["a", "b", "c"]);
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ]);
   });
 });
 
@@ -1013,27 +1023,28 @@ describe("AE-console-nodes clone labels", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("dag");
-    if (workspace.trackLayout.mode !== "dag") return;
-    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.id)).toEqual([
-      "author-diagrams~1",
-      "author-diagrams~2",
-      "author-diagrams~3",
-    ]);
-    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.label)).toEqual([
-      "author-diagrams · 1",
-      "author-diagrams · 2",
-      "author-diagrams · 3",
-    ]);
+    expect(
+      workspace.spatialLayout.nodes
+        .filter((n) => n.layerIndex === 1)
+        .map((n) => n.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2", "author-diagrams~3"]);
+    expect(
+      workspace.nodeChrome
+        .filter((c) => c.kicker === "author-diagrams" && c.stageId !== "author-diagrams")
+        .map((c) => c.title),
+    ).toEqual(["author-diagrams · 1", "author-diagrams · 2", "author-diagrams · 3"]);
     expect(workspace.trackStages.find((s) => s.id === "detect-changes")?.label).toBe(
       "detect-changes",
     );
     expect(workspace.trackStages.find((s) => s.id === "collect")?.label).toBe(
       "collect",
     );
-    expect(
-      workspace.detailListRows.find((r) => r.stageId === "author-diagrams~2")?.label,
-    ).toBe("author-diagrams · 2");
+    const cloneChrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams~2");
+    expect(cloneChrome?.title).toBe("author-diagrams · 2");
+    expect(cloneChrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(cloneChrome!.kicker, cloneChrome!.title)).toBe(
+      "author-diagrams",
+    );
 
     const picked = resolveRunWorkspace(
       stream,
@@ -1044,6 +1055,29 @@ describe("AE-console-nodes clone labels", () => {
     expect(picked.trackStages.find((s) => s.selected)?.label).toBe(
       "author-diagrams · 2",
     );
+  });
+
+  it("joins clone chrome kicker against the ordinal title", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { pipeline_track: threeCloneTrack, waiting_stage_id: "author-diagrams~2" },
+    );
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "author-diagrams~2",
+    );
+    expect(chrome).toEqual(
+      expect.objectContaining({
+        title: "author-diagrams · 2",
+        kicker: "author-diagrams",
+      }),
+    );
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).not.toBeNull();
   });
 
   it("labels a run-once author-diagrams node with the catalog id", () => {
@@ -1086,10 +1120,18 @@ describe("AE-console-nodes clone labels", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "detect-changes",
+      "author-diagrams",
+      "collect",
+    ]);
     expect(workspace.trackStages.find((s) => s.id === "author-diagrams")?.label).toBe(
       "author-diagrams",
     );
+    const chrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams");
+    expect(chrome?.title).toBe("author-diagrams");
+    expect(chrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).toBeNull();
   });
 });
 
@@ -1136,10 +1178,10 @@ describe("AE-today-first-waiter clone waiters", () => {
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
     expect(workspace.selectedStageId).toBe("author-diagrams~1");
-    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention).map((r) => r.stageId)).toEqual([
-      "author-diagrams~1",
-      "author-diagrams~2",
-    ]);
+    expect(workspace.kind).toBe("stream");
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2"]);
 
     const picked = resolveRunWorkspace(
       stream,

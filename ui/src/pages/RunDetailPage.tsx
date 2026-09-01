@@ -34,17 +34,16 @@ import {
   useStageAbandon,
   useStageRetry,
 } from "../stageAction";
-import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
 import {
   activeWaitKey,
   parseEnvelopeAsidePath,
   resolveRunWorkspace,
   runDetailShouldPoll,
   stageCloneLabel,
-  stageIdKnown,
   type RunWorkspace,
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
+import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
 
 const WORK_DEFAULT_H = 300;
 const WORK_MIN_H = 200;
@@ -249,29 +248,28 @@ export function RunDetailPage({
   }
 
   useEffect(() => {
-    if (workspace?.syncStreamRoute) {
-      onOpenStreamRef.current(workspace.selectedStageId ?? undefined);
+    const command = resolveStreamRoute({
+      view,
+      streamViewStageId,
+      run,
+      plannedStageIds,
+      selectedStageId: workspace?.selectedStageId ?? null,
+      syncStreamRoute: workspace?.syncStreamRoute ?? false,
+      userPickedStageId,
+      dismissedWaitKey,
+    });
+    if (command.action === "openStream") {
+      onOpenStreamRef.current(command.stageId);
     }
-  }, [workspace?.syncStreamRoute, workspace?.selectedStageId]);
-
-  useEffect(() => {
-    if (view.kind !== "stream" || !streamViewStageId || !run) return;
-    if (stageIdKnown(run, streamViewStageId, plannedStageIds)) return;
-    onOpenStreamRef.current();
-  }, [view.kind, streamViewStageId, run, plannedStageIds]);
-
-  useEffect(() => {
-    if (view.kind !== "stream") return;
-    if (userPickedStageId || dismissedWaitKey) return;
-    if (!workspace?.selectedStageId) return;
-    if (streamViewStageId === workspace.selectedStageId) return;
-    onOpenStreamRef.current(workspace.selectedStageId);
   }, [
-    view.kind,
+    view,
     streamViewStageId,
+    run,
+    plannedStageIds,
+    workspace?.selectedStageId,
+    workspace?.syncStreamRoute,
     userPickedStageId,
     dismissedWaitKey,
-    workspace?.selectedStageId,
   ]);
 
   useEffect(() => {
@@ -334,13 +332,7 @@ export function RunDetailPage({
   const composer = workspace
     ? composerEl(runId, workspace, onOpenArtifact)
     : undefined;
-  const spatialLayout = run
-    ? layoutSpatialTrack(run.pipeline_track, {
-        liveStageIds: run.stages.map((s) => s.stage_id),
-        plannedStageIds,
-      })
-    : { nodes: [], edges: [] };
-  const hasMapNodes = spatialLayout.nodes.length > 0;
+  const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
   const showWorkspace = Boolean(
     workspace &&
       (workspace.selectedStageId ||
@@ -528,9 +520,9 @@ export function RunDetailPage({
         ) : hasMapNodes ? (
           <div className="workspace">
             <SpatialRunMap
-              layout={spatialLayout}
+              layout={workspace.spatialLayout}
               stages={run.stages}
-              detailListRows={workspace.detailListRows}
+              nodeChrome={workspace.nodeChrome}
               selectedStageId={workspace.selectedStageId}
               onSelectStage={(id) => {
                 setUserPickedStageId(id);

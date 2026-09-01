@@ -142,6 +142,12 @@ describe("spatialNodeKicker", () => {
   it("keeps a distinct kicker", () => {
     expect(spatialNodeKicker("design", "Design review")).toBe("design");
   });
+
+  it("joins a clone kicker against its ordinal title", () => {
+    expect(spatialNodeKicker("author-diagrams", "author-diagrams · 2")).toBe(
+      "author-diagrams",
+    );
+  });
 });
 
 describe("spatialNodeAction", () => {
