@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prototype Gallery — Spatial Run Page</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2f3d;
+      --text: #e8eaef;
+      --muted: #8b92a5;
+      --accent: #e9a23b;
+      --accent-dim: rgba(233, 162, 59, 0.15);
+      --pass: #7aa36a;
+      --info: #6b9fff;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+    }
+    .gallery-header {
+      padding: 1rem 1.25rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .gallery-header h1 {
+      margin: 0 0 0.25rem;
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .gallery-header p {
+      margin: 0 0 0.5rem;
+      font-size: 0.8125rem;
+      color: var(--muted);
+    }
+    .refine {
+      margin: 0 0 0.75rem;
+      padding: 0.625rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(107, 159, 255, 0.35);
+      background: rgba(107, 159, 255, 0.08);
+      font-size: 0.8125rem;
+      line-height: 1.45;
+    }
+    .refine strong { color: var(--info); }
+    .refine ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+    .refine li { margin: 0.15rem 0; color: var(--muted); }
+    .contract {
+      margin: 0 0 0.75rem;
+      padding: 0.625rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid rgba(122, 163, 106, 0.35);
+      background: rgba(122, 163, 106, 0.08);
+      font-size: 0.8125rem;
+      line-height: 1.45;
+    }
+    .contract strong { color: var(--pass); }
+    .contract ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+    .contract li { margin: 0.15rem 0; color: var(--muted); }
+    .tabs {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .tab {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--muted);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .tab:hover {
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .tab.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--text);
+    }
+    .tab.focus {
+      box-shadow: 0 0 0 2px rgba(233, 162, 59, 0.35);
+    }
+    .gallery-main {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem 1.25rem 1.25rem;
+    }
+    .pane {
+      display: none;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .pane.active {
+      display: flex;
+    }
+    .pane-label {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      margin: 0;
+      font-weight: 500;
+    }
+    .mockup {
+      flex: 1;
+      width: 100%;
+      min-height: 480px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+  </style>
+</head>
+<body>
+  <header class="gallery-header">
+    <h1>Prototype Gallery — Live Spatial Run Page</h1>
+    <p>Question: how does the spatial map sit inside the real run page, with files / handoffs / envelopes below only when a stage is selected?</p>
+    <div class="refine">
+      <strong>Minimal refinement (review focus):</strong> Same live map. Click a stage → session logs on the node, and the run-page workspace (Files aside + envelope/artifact record + decide) slides in below. No stage selected → map is the full pane. Click the canvas (or Hide workspace) to collapse.
+      <ul>
+        <li>Chrome: rail, ← Runs topbar, Start fresh, capacity — as the operator console would ship</li>
+        <li>Logs stay on the node (SHOW TASKS). Files / Handoff envelope / decide live in the gated below panel</li>
+        <li>Map-only snapshot kept at <code>kept/minimal-map-only/</code></li>
+      </ul>
+    </div>
+    <div class="contract">
+      <strong>Visual contract:</strong>
+      <ul>
+        <li><strong>minimal</strong> (refined) — run-page chrome + map + gated workspace</li>
+        <li><strong>typical</strong> (unchanged) — artifact sidebar + gate capsules</li>
+        <li><strong>ambitious</strong> (unchanged) — minimap + HITL overlay</li>
+      </ul>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Prototype variants">
+      <button type="button" class="tab active focus" data-pane="pane-minimal" aria-selected="true">Minimal · review</button>
+      <button type="button" class="tab" data-pane="pane-typical" aria-selected="false">Typical</button>
+      <button type="button" class="tab" data-pane="pane-ambitious" aria-selected="false">Ambitious</button>
+    </nav>
+  </header>
+  <main class="gallery-main">
+    <section id="pane-minimal" class="pane active" role="tabpanel" aria-label="prototype~1 · minimal · run page + gated workspace">
+      <header class="pane-label">prototype~1 · minimal · run page chrome · spatial map · files/envelopes gated on stage click</header>
+      <iframe class="mockup" title="Run · minimal spatial board" src="minimal/index.html"></iframe>
+    </section>
+    <section id="pane-typical" class="pane" role="tabpanel" aria-label="prototype~2 · typical · Stageflow run board · typical">
+      <header class="pane-label">prototype~2 · typical · Stageflow run board · typical · unchanged</header>
+      <iframe class="mockup" title="Stageflow run board · typical" src="typical/index.html"></iframe>
+    </section>
+    <section id="pane-ambitious" class="pane" role="tabpanel" aria-label="prototype~3 · ambitious · Spatial run map · HITL overlay">
+      <header class="pane-label">prototype~3 · ambitious · Spatial run map · HITL overlay · unchanged</header>
+      <iframe class="mockup" title="Spatial run map · HITL overlay" src="ambitious/index.html"></iframe>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll(".tab");
+      var panes = document.querySelectorAll(".pane");
+      tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          var id = tab.getAttribute("data-pane");
+          tabs.forEach(function (t) {
+            t.classList.remove("active");
+            t.setAttribute("aria-selected", "false");
+          });
+          panes.forEach(function (p) { p.classList.remove("active"); });
+          tab.classList.add("active");
+          tab.setAttribute("aria-selected", "true");
+          var pane = document.getElementById(id);
+          if (pane) pane.classList.add("active");
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

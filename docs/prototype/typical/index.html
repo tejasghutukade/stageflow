@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run · run-page-live-map — typical</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#000;--surface:#181818;--raised:#1f1f1f;--text:#fff;--dim:#9b9b9b;--faint:#686868;
+  --accent:#e9a23b;--accent-dim:rgba(233,162,59,.14);--success:#7aa36a;--complete:#3f7f57;
+  --complete-light:#70a784;--danger:#db6b67;--human:#5fb8c9;--knowledge:#a189e0;
+  --font:Geist,"Geist Sans",Manrope,system-ui,sans-serif;
+  --mono:Geist Mono,"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);--ease-out:cubic-bezier(.23,1,.32,1);
+  --sidebar-w:272px;--topbar-h:64px;
+  --card-shadow:0 12px 40px rgba(0,0,0,.45);
+}
+html[data-theme="light"]{
+  --bg:#f5f3ef;--surface:#fff;--raised:#faf8f5;--text:#111;--dim:#5a5a5a;--faint:#888;
+  --card-shadow:0 12px 40px rgba(0,0,0,.12);
+}
+html,body{height:100%;font-family:var(--font);font-size:13px;color:var(--text);background:var(--bg)}
+button,input{font:inherit;cursor:pointer;color:inherit;border:none;background:none}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.022;z-index:9999;
+  background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+.app{display:grid;grid-template-rows:var(--topbar-h) 1fr;height:100dvh;overflow:hidden}
+
+/* ── Topbar ── */
+.topbar{display:flex;align-items:center;gap:14px;height:var(--topbar-h);padding:0 20px;
+  border-bottom:1px solid #2a2a2a;background:var(--surface);flex-shrink:0;z-index:20}
+html[data-theme="light"] .topbar{border-color:#e0dcd4}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.brand__mark{width:28px;height:28px;border-radius:7px;background:var(--raised);border:1px solid #333;
+  display:grid;place-items:center}
+html[data-theme="light"] .brand__mark{border-color:#ddd}
+.brand__name{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.brand__sep{width:1px;height:24px;background:#333;margin:0 2px}
+html[data-theme="light"] .brand__sep{background:#ddd}
+.topbar__title{font-size:15px;font-weight:600;letter-spacing:-.02em}
+.topbar__yaml{font-family:var(--mono);font-size:11px;color:var(--dim);padding:3px 8px;border-radius:6px;
+  background:var(--raised);border:1px solid #333}
+html[data-theme="light"] .topbar__yaml{border-color:#ddd}
+.variant-chip{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:lowercase;
+  padding:4px 10px;border-radius:999px;border:1px solid rgba(233,162,59,.45);color:var(--accent);
+  background:var(--accent-dim);white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  font-size:11px;font-weight:600;border:1px solid #333;background:var(--raised);color:var(--dim);white-space:nowrap}
+html[data-theme="light"] .badge{border-color:#ccc}
+.badge.working{border-color:rgba(122,163,106,.45);color:var(--success)}
+.badge.plan-behind{border-color:rgba(233,162,59,.4);color:var(--accent)}
+.badge__dot{width:7px;height:7px;border-radius:50%;background:var(--success);animation:working-pulse 1.6s ease-in-out infinite}
+.watching{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);white-space:nowrap}
+.watching__dot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:working-pulse 1.6s ease-in-out infinite}
+.topbar__spacer{flex:1}
+.theme-switch{position:relative;width:44px;height:24px;flex-shrink:0}
+.theme-switch input{opacity:0;width:0;height:0;position:absolute}
+.theme-switch__track{position:absolute;inset:0;border-radius:999px;background:#2a2a2a;border:1px solid #444;
+  transition:background .2s,border-color .2s;cursor:pointer}
+html[data-theme="light"] .theme-switch__track{background:#e8e4dc;border-color:#ccc}
+.theme-switch__thumb{position:absolute;top:3px;left:3px;width:16px;height:16px;border-radius:50%;
+  background:var(--accent);transition:transform .25s var(--ease);pointer-events:none}
+.theme-switch input:checked+.theme-switch__track .theme-switch__thumb{transform:translateX(20px)}
+
+/* ── Workspace ── */
+.workspace{display:grid;grid-template-columns:var(--sidebar-w) 1fr;min-height:0;overflow:hidden}
+
+/* ── Sidebar ── */
+.sidebar{display:flex;flex-direction:column;background:var(--surface);border-right:1px solid #2a2a2a;min-height:0}
+html[data-theme="light"] .sidebar{border-color:#e0dcd4}
+.sidebar__head{padding:12px 14px 10px;font-size:10px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);border-bottom:1px solid #2a2a2a;flex-shrink:0}
+.sidebar__body{flex:1;overflow-y:auto;padding:6px 0;font-family:var(--mono);font-size:11px;line-height:1.5}
+.tree-row{display:flex;align-items:center;gap:4px;padding:3px 10px;color:var(--dim);cursor:pointer;
+  white-space:nowrap;user-select:none}
+.tree-row:hover{background:rgba(255,255,255,.04)}
+.tree-row.dir{font-weight:600;color:var(--text)}
+.tree-row.file{color:var(--dim)}
+.tree-row.hot{color:var(--accent);background:rgba(233,162,59,.08)}
+html[data-theme="light"] .tree-row.hot{background:rgba(233,162,59,.12);box-shadow:inset 3px 0 0 var(--accent)}
+.tree-row .chev{display:inline-block;width:12px;font-size:9px;color:var(--faint);transition:transform .2s var(--ease);flex-shrink:0}
+.tree-row.open>.chev{transform:rotate(90deg)}
+.tree-ago{margin-left:auto;font-size:10px;color:var(--accent);flex-shrink:0}
+.tree-legend{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid #2a2a2a;
+  font-size:10px;color:var(--faint);flex-shrink:0;background:var(--surface);position:sticky;bottom:0}
+.tree-legend__dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;
+  animation:working-pulse 1.6s ease-in-out infinite}
+
+/* ── Canvas ── */
+.graph-view{position:relative;overflow:hidden;background:var(--bg);min-height:0}
+#graph-stage{position:absolute;inset:0;cursor:grab;transform-origin:0 0}
+#graph-stage.grabbing{cursor:grabbing}
+#worldSvg{display:block;overflow:visible}
+.canvas-tools{position:absolute;left:20px;top:20px;z-index:8;display:flex;gap:8px;flex-wrap:wrap}
+.tool-pill{display:flex;background:var(--surface);border:1px solid #333;border-radius:999px;overflow:hidden;
+  box-shadow:var(--card-shadow)}
+html[data-theme="light"] .tool-pill{border-color:#ccc}
+.tool-btn{padding:8px 13px;font-size:11px;font-weight:500;color:var(--dim);border-right:1px solid #333}
+html[data-theme="light"] .tool-btn{border-color:#ddd}
+.tool-btn:last-child{border-right:none}
+.tool-btn:hover{color:var(--text);background:rgba(255,255,255,.05)}
+.tool-btn[aria-pressed="true"]{background:var(--accent-dim);color:var(--accent)}
+
+/* Run cards */
+#runs{position:absolute;right:20px;top:20px;width:340px;z-index:8;display:flex;flex-direction:column;
+  gap:8px;max-height:calc(100% - 40px);overflow-y:auto;pointer-events:none}
+#runs>*{pointer-events:auto}
+body.hide-runs #runs{display:none}
+.run-cycle{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);padding:2px 4px}
+.run-card{background:var(--surface);border:1px solid #333;border-radius:12px;padding:12px 14px;cursor:pointer;
+  box-shadow:var(--card-shadow);animation:reveal .5s var(--ease-out);transition:border-color .15s}
+html[data-theme="light"] .run-card{border-color:#ccc}
+.run-card:hover,.run-card.selected{border-color:var(--accent)}
+.run-card__head{display:flex;align-items:flex-start;gap:8px;margin-bottom:6px}
+.run-card__title{font-weight:600;font-size:13px;flex:1;line-height:1.3}
+.agent-chip{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;
+  font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
+  background:var(--raised);border:1px solid #333;color:var(--dim);flex-shrink:0;margin-top:1px}
+.agent-chip__dot{width:6px;height:6px;border-radius:50%;background:var(--success);animation:working-pulse 1.6s ease-in-out infinite}
+.agent-chip.human .agent-chip__dot{background:var(--human)}
+.run-card__meta{font-size:10px;color:var(--dim);margin-bottom:4px;font-family:var(--mono)}
+.run-card__meta a{color:var(--accent);text-decoration:none}
+.run-card__meta a:hover{text-decoration:underline}
+.run-task{font-size:11px;color:var(--text);margin-bottom:4px;line-height:1.45}
+.run-tool{font-family:var(--mono);font-size:10px;color:var(--dim);line-height:1.4}
+.run-tool em{color:var(--accent);font-style:normal}
+.run-detail{margin-top:8px;padding-top:8px;border-top:1px solid #2a2a2a;font-size:10px;color:var(--dim);
+  display:none;line-height:1.55}
+.run-card.expanded .run-detail{display:block}
+
+/* foreignObject capsules */
+body.hide-activity .fo-capsules,body.hide-activity .fo-obsrow,body.hide-activity .obs-overlay{display:none!important}
+.fo-wrap{font-family:var(--font);color:var(--text)}
+.fo-capsules{display:flex;flex-direction:column;gap:6px}
+.task-capsule{display:flex;align-items:center;gap:10px;height:44px;padding:0 12px;background:var(--surface);
+  border-radius:999px;border:1px solid #333;font-size:11px;cursor:pointer;transition:border-color .15s,background .15s;
+  overflow:hidden}
+html[data-theme="light"] .task-capsule{border-color:#ccc;background:#fff}
+.task-capsule:hover{border-color:#555}
+.task-capsule.expanded{height:auto;min-height:44px;border-radius:14px;align-items:flex-start;padding:10px 12px}
+.task-capsule.done{opacity:.72}
+.task-capsule.active{border-color:rgba(233,162,59,.45);background:rgba(233,162,59,.06)}
+.ring-marker{width:18px;height:18px;flex-shrink:0}
+.ring-marker svg{display:block}
+.capsule-text{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task-capsule.expanded .capsule-text{white-space:normal}
+.gate-kind{display:inline-block;padding:1px 7px;border-radius:999px;font-size:9px;font-weight:600;
+  font-family:var(--mono);letter-spacing:.02em;margin-left:6px;vertical-align:middle;flex-shrink:0}
+.gate-kind.free_text{background:rgba(233,162,59,.12);color:var(--accent);border:1px solid rgba(233,162,59,.35)}
+.gate-kind.confirm{background:rgba(122,163,106,.12);color:var(--success);border:1px solid rgba(122,163,106,.35)}
+.gate-kind.artifact_backed{background:rgba(95,184,201,.12);color:var(--human);border:1px solid rgba(95,184,201,.35)}
+.capsule-detail{display:none;width:100%;margin-top:6px;padding-top:6px;border-top:1px solid #333;
+  font-size:10px;color:var(--dim);font-weight:400;line-height:1.45}
+.task-capsule.expanded .capsule-detail{display:block}
+.fo-obsrow{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;margin-top:6px;
+  border-radius:999px;background:rgba(233,162,59,.1);border:1px solid rgba(233,162,59,.28);
+  font-size:11px;font-weight:600;color:var(--accent);font-family:var(--mono)}
+
+/* Toast */
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(60px);
+  padding:10px 18px;background:var(--raised);border:1px solid #444;border-radius:999px;font-size:12px;
+  z-index:60;transition:transform .35s var(--ease-out),opacity .35s;opacity:0;pointer-events:none}
+#toast.show{transform:translateX(-50%) translateY(0);opacity:1}
+
+@keyframes working-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.88)}}
+@keyframes reveal{from{opacity:0;transform:translateY(6px);filter:blur(4px)}to{opacity:1;transform:none;filter:none}}
+@keyframes travel{to{stroke-dashoffset:-28}}
+@keyframes node-spin{to{transform:rotate(360deg)}}
+@keyframes obs-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:1ms!important;transition-duration:1ms!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand__mark" aria-hidden="true">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+          <circle cx="4" cy="14" r="2" fill="#e9a23b"/>
+          <circle cx="9" cy="9" r="2" fill="#e9a23b" opacity=".7"/>
+          <circle cx="14" cy="4" r="2" fill="#e9a23b" opacity=".45"/>
+          <path d="M4 14 L9 9 L14 4" stroke="#e9a23b" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="2 3"/>
+        </svg>
+      </div>
+      <span class="brand__name">agenttrail</span>
+    </div>
+    <span class="brand__sep"></span>
+    <span class="topbar__title">run-page-live-map</span>
+    <span class="topbar__yaml">stageflow.yaml</span>
+    <span class="variant-chip">variant · typical</span>
+    <span class="badge working"><span class="badge__dot"></span>Working · <span id="workingAgo">12s</span></span>
+    <span class="badge plan-behind">Plan behind · 3m</span>
+    <span class="topbar__spacer"></span>
+    <span class="watching"><span class="watching__dot"></span>Watching</span>
+    <label class="theme-switch" title="Toggle theme">
+      <input type="checkbox" id="theme-toggle" aria-label="Toggle light theme">
+      <span class="theme-switch__track"><span class="theme-switch__thumb"></span></span>
+    </label>
+  </header>
+
+  <div class="workspace">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__head">RUN WORKSPACE</div>
+      <div class="sidebar__body" id="treeBody"></div>
+      <div class="tree-legend">
+        <span class="tree-legend__dot"></span>
+        <span>most recent edit · <span id="legendAgo">12</span>s ago</span>
+      </div>
+    </aside>
+
+    <div class="graph-view" id="graph">
+      <div class="canvas-tools">
+        <div class="tool-pill">
+          <button type="button" class="tool-btn" id="zoomOut" title="Zoom out">−</button>
+          <button type="button" class="tool-btn" id="zoomLabel">85%</button>
+          <button type="button" class="tool-btn" id="zoomIn" title="Zoom in">+</button>
+        </div>
+        <div class="tool-pill">
+          <button type="button" class="tool-btn" id="fitRun">Fit run</button>
+        </div>
+        <div class="tool-pill">
+          <button type="button" class="tool-btn" id="toggleActivity" aria-pressed="true">Activity</button>
+          <button type="button" class="tool-btn" id="toggleRuns" aria-pressed="true">Runs</button>
+        </div>
+      </div>
+
+      <div id="runs"></div>
+
+      <div id="graph-stage">
+        <svg id="worldSvg" width="2000" height="1500" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <pattern id="dotGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <circle cx="1" cy="1" r="1" fill="#333"/>
+            </pattern>
+            <marker id="arrowNeeds" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#666"/>
+            </marker>
+            <marker id="arrowHandoff" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#e9a23b"/>
+            </marker>
+            <filter id="nodeShadow" x="-20%" y="-20%" width="140%" height="140%">
+              <feDropShadow dx="0" dy="4" stdDeviation="8" flood-opacity=".35"/>
+            </filter>
+          </defs>
+          <rect width="2000" height="1500" fill="url(#dotGrid)"/>
+          <g id="worldContent"></g>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+"use strict";
+
+const RUN = { x: 40, y: 60, w: 1680, h: 720 };
+const COL_W = 340, ROW_H = 200, NODE_W = 400, NODE_H = 128;
+const NODE_PAD_X = 60, NODE_PAD_Y = 80;
+const NS = "http://www.w3.org/2000/svg";
+const XHTML = "http://www.w3.org/1999/xhtml";
+
+const STAGES = [
+  { id:"reference", title:"Reference", kicker:"reference", col:0, row:1, status:"succeeded",
+    gates:2, gatesDone:2, progress:100, obsLive:false,
+    capsules:[
+      { title:"Extract agenttrail grammar", done:true, gate:"artifact_backed" },
+      { title:"Operator accept contract", done:true, gate:"confirm" }
+    ]},
+  { id:"plan", title:"Plan", kicker:"plan", col:1, row:1, status:"running",
+    gates:3, gatesDone:1, progress:58, obsLive:true, obsLabel:"Revising · plan.md",
+    capsules:[
+      { title:"Scope three variant theses", done:true, gate:"free_text", detail:"Minimal, typical, ambitious depth tiers." },
+      { title:"Confirm pipeline topology", done:false, gate:"confirm", active:true, detail:"Fork prototype~1/2/3 after plan envelope." },
+      { title:"Review plan artifact", done:false, gate:"artifact_backed", detail:"artifact: stages/plan/attempts/1/artifacts/plan.md" }
+    ]},
+  { id:"prototype~1", title:"Prototype · minimal", kicker:"prototype~1", col:2, row:0, status:"succeeded",
+    gates:1, gatesDone:1, progress:100, obsLive:false,
+    capsules:[{ title:"Write minimal mockup", done:true, gate:"artifact_backed" }]},
+  { id:"prototype~2", title:"Prototype · typical", kicker:"prototype~2", col:2, row:1, status:"waiting_for_input",
+    gates:1, gatesDone:0, progress:72, obsLive:false, waiting:true,
+    capsules:[{ title:"Review typical HTML mockup", done:false, gate:"artifact_backed", active:true,
+      detail:"docs/prototype/typical/index.html — board IS the page." }]},
+  { id:"prototype~3", title:"Prototype · ambitious", kicker:"prototype~3", col:2, row:2, status:"running",
+    gates:1, gatesDone:0, progress:34, obsLive:true,
+    capsules:[{ title:"Write ambitious spatial map", done:false, gate:"artifact_backed", active:true }],
+    tool:"write", toolDetail:"docs/prototype/ambitious/index.html", elapsed:"1m 08s", agent:"prototype~3" },
+  { id:"gallery", title:"Gallery", kicker:"gallery", col:3, row:1, status:"pending",
+    gates:2, gatesDone:0, progress:0, obsLive:false,
+    capsules:[{ title:"Join variant mockups", done:false, gate:"confirm" }]},
+  { id:"finalize", title:"Finalize", kicker:"finalize", col:4, row:1, status:"pending",
+    gates:1, gatesDone:0, progress:0, obsLive:false,
+    capsules:[{ title:"Capture pipeline verdict", done:false, gate:"free_text" }]}
+];
+
+const EDGES = [
+  { from:"reference", to:"plan", type:"handoff", label:"visual-contract ⇢" },
+  { from:"plan", to:"prototype~1", type:"needs", active:true, label:"plan envelope" },
+  { from:"plan", to:"prototype~2", type:"needs", active:true, label:"plan envelope" },
+  { from:"plan", to:"prototype~3", type:"needs", active:true, label:"plan envelope" },
+  { from:"prototype~1", to:"prototype~2", type:"link", label:"sibling" },
+  { from:"prototype~2", to:"prototype~3", type:"link", label:"sibling" },
+  { from:"prototype~1", to:"gallery", type:"needs", label:"minimal" },
+  { from:"prototype~2", to:"gallery", type:"needs", label:"typical" },
+  { from:"prototype~3", to:"gallery", type:"needs", label:"ambitious" },
+  { from:"gallery", to:"finalize", type:"needs", label:"gallery ⇢" }
+];
+
+const TREE = [
+  { path:"stages", dir:true, open:true, depth:0 },
+  { path:"stages/reference", dir:true, open:false, depth:1, parent:"stages" },
+  { path:"stages/reference/attempts/1/artifacts/visual-contract.md", file:true, depth:2, parent:"stages/reference", hot:false, ago:"18m" },
+  { path:"stages/plan", dir:true, open:true, depth:1, parent:"stages" },
+  { path:"stages/plan/attempts/1/artifacts/plan.md", file:true, depth:2, parent:"stages/plan", hot:true, ago:"12s" },
+  { path:"stages/prototype~2", dir:true, open:false, depth:1, parent:"stages" },
+  { path:"stages/prototype~2/attempts/1/pi-session.jsonl", file:true, depth:2, parent:"stages/prototype~2", hot:false, ago:"2m" },
+  { path:"docs", dir:true, open:true, depth:0 },
+  { path:"docs/prototype", dir:true, open:true, depth:1, parent:"docs" },
+  { path:"docs/prototype/minimal/index.html", file:true, depth:2, parent:"docs/prototype", hot:false, ago:"3m" },
+  { path:"docs/prototype/typical/index.html", file:true, depth:2, parent:"docs/prototype", hot:true, ago:"12s" },
+  { path:"docs/prototype/ambitious/index.html", file:true, depth:2, parent:"docs/prototype", hot:false, ago:"8m" },
+  { path:"examples", dir:true, open:true, depth:0 },
+  { path:"examples/prototyping", dir:true, open:true, depth:1, parent:"examples" },
+  { path:"examples/prototyping/plan.yaml", file:true, depth:2, parent:"examples/prototyping", hot:false, ago:"14m" },
+  { path:"examples/prototyping/prototype.yaml", file:true, depth:2, parent:"examples/prototyping", hot:false, ago:"14m" },
+  { path:"examples/prototyping/run-page-live-map.task.yaml", file:true, depth:2, parent:"examples/prototyping", hot:false, ago:"18m" }
+];
+
+let scale = 0.85, panX = 20, panY = 10;
+let selectedId = "plan";
+let expandedIds = new Set(["plan"]);
+let expandedCapsules = new Set();
+let dragging = false, dragStart = null;
+let workingSec = 12;
+let treeOpen = new Set(TREE.filter(t => t.open).map(t => t.path));
+
+const $ = s => document.querySelector(s);
+const graph = $("#graph");
+const stageEl = $("#graph-stage");
+const worldContent = $("#worldContent");
+const runsEl = $("#runs");
+const toast = $("#toast");
+
+function stagePos(s){
+  return { x: RUN.x + NODE_PAD_X + s.col * COL_W, y: RUN.y + NODE_PAD_Y + s.row * ROW_H };
+}
+function stageById(id){ return STAGES.find(s => s.id === id); }
+
+function statusLabel(st){
+  return { pending:"Pending", running:"Running", waiting_for_input:"Waiting on you",
+    succeeded:"Succeeded", failed:"Failed", skipped:"Skipped" }[st] || st;
+}
+
+function showToast(msg){
+  toast.textContent = msg;
+  toast.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => toast.classList.remove("show"), 2400);
+}
+
+function edgePath(x1,y1,x2,y2){
+  const mx = (x1 + x2) / 2;
+  return "M" + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + x2 + "," + y2;
+}
+
+function ringMarkerSvg(done, active){
+  const stroke = done ? "#3f7f57" : (active ? "#e9a23b" : "#555");
+  const fill = done ? "#3f7f57" : "none";
+  const inner = done ? '<path d="M5 9 L8 12 L13 6" stroke="#fff" stroke-width="1.5" fill="none" stroke-linecap="round"/>' :
+    (active ? '<circle cx="9" cy="9" r="3" fill="#e9a23b" opacity=".6"/>' : '');
+  return '<svg class="ring-marker" viewBox="0 0 18 18" width="18" height="18">' +
+    '<circle cx="9" cy="9" r="7" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1.5"/>' + inner + '</svg>';
+}
+
+function buildCapsulesHtml(s){
+  const caps = s.capsules.map((c, i) => {
+    const key = s.id + ":" + i;
+    const exp = expandedCapsules.has(key);
+    return '<div class="task-capsule' + (c.done ? " done" : "") + (c.active ? " active" : "") + (exp ? " expanded" : "") + '" data-cap="' + key + '">' +
+      ringMarkerSvg(c.done, c.active) +
+      '<div style="flex:1;min-width:0">' +
+        '<div class="capsule-text">' + c.title + '<span class="gate-kind ' + c.gate + '">' + c.gate + '</span></div>' +
+        (c.detail ? '<div class="capsule-detail">' + c.detail + '</div>' : '') +
+      '</div></div>';
+  }).join("");
+  const obs = s.obsLabel ? '<div class="fo-obsrow">' + s.obsLabel + '</div>' : '';
+  return '<div class="fo-wrap"><div class="fo-capsules">' + caps + '</div>' + obs + '</div>';
+}
+
+function nodeBorderColor(s, sel){
+  if (sel) return "#e9a23b";
+  if (s.status === "running") return "#e9a23b";
+  if (s.status === "waiting_for_input") return "#5fb8c9";
+  if (s.status === "succeeded") return "#3f7f57";
+  if (s.status === "failed") return "#db6b67";
+  return "#333";
+}
+
+function renderWorld(){
+  worldContent.innerHTML = "";
+
+  const runG = document.createElementNS(NS, "g");
+  runG.innerHTML =
+    '<rect x="' + RUN.x + '" y="' + RUN.y + '" width="' + RUN.w + '" height="' + RUN.h + '" rx="16" ' +
+    'fill="rgba(24,24,24,.55)" stroke="#2a2a2a" stroke-width="1"/>' +
+    '<text x="' + (RUN.x + 12) + '" y="' + (RUN.y - 12) + '" fill="#686868" font-size="10" font-weight="700" ' +
+    'font-family="var(--font)" letter-spacing="1.2">RUN · run-page-live-map</text>';
+  worldContent.appendChild(runG);
+
+  EDGES.forEach(e => {
+    const a = stageById(e.from), b = stageById(e.to);
+    const pa = stagePos(a), pb = stagePos(b);
+    const x1 = pa.x + NODE_W, y1 = pa.y + NODE_H / 2;
+    const x2 = pb.x, y2 = pb.y + NODE_H / 2;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", edgePath(x1, y1, x2, y2));
+    path.setAttribute("fill", "none");
+    if (e.type === "link") {
+      path.setAttribute("stroke", "#333");
+      path.setAttribute("stroke-width", "1.5");
+      path.setAttribute("stroke-dasharray", "2 7");
+    } else if (e.type === "handoff") {
+      path.setAttribute("stroke", "#e9a23b");
+      path.setAttribute("stroke-width", "2.5");
+      path.setAttribute("stroke-dasharray", "10 8");
+      path.setAttribute("marker-end", "url(#arrowHandoff)");
+      path.style.animation = "travel 1.6s linear infinite";
+    } else {
+      path.setAttribute("stroke", e.active ? "#e9a23b" : "#444");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("marker-end", "url(#arrowNeeds)");
+      if (e.active) {
+        path.setAttribute("stroke-dasharray", "8 6");
+        path.style.animation = "travel 1.4s linear infinite";
+      }
+    }
+    path.style.pointerEvents = "none";
+    worldContent.appendChild(path);
+    if (e.label) {
+      const lx = (x1 + x2) / 2, ly = (y1 + y2) / 2 - 14;
+      const labelG = document.createElementNS(NS, "g");
+      labelG.setAttribute("transform", "translate(" + (lx - 52) + "," + (ly - 9) + ")");
+      labelG.style.cursor = "pointer";
+      labelG.innerHTML =
+        '<rect width="104" height="18" rx="4" fill="#181818" stroke="#444"/>' +
+        '<text x="52" y="12" text-anchor="middle" fill="#9b9b9b" font-size="9" font-family="monospace">' + e.label + '</text>';
+      labelG.addEventListener("click", ev => {
+        ev.stopPropagation();
+        showToast("Edge · " + e.from + " → " + e.to + " · " + e.label);
+      });
+      worldContent.appendChild(labelG);
+    }
+  });
+
+  STAGES.forEach(s => {
+    const pos = stagePos(s);
+    const sel = s.id === selectedId;
+    const g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "svg-node");
+    g.setAttribute("data-id", s.id);
+    g.setAttribute("transform", "translate(" + pos.x + "," + pos.y + ")");
+    g.style.cursor = "pointer";
+
+    const border = nodeBorderColor(s, sel);
+    const dash = s.status === "waiting_for_input" ? ' stroke-dasharray="6 4"' : "";
+    const fill = s.status === "waiting_for_input" ? "rgba(95,184,201,.06)" :
+      (s.status === "succeeded" ? "rgba(63,127,87,.08)" : "#181818");
+    const opacity = s.status === "pending" ? "0.72" : "1";
+    g.setAttribute("opacity", opacity);
+
+    let inner = "";
+    inner += '<rect width="' + NODE_W + '" height="' + NODE_H + '" rx="12" fill="' + fill + '" stroke="' + border + '" stroke-width="' + (sel ? 2 : 1.5) + '"' + dash + ' filter="url(#nodeShadow)"/>';
+
+    if (s.obsLive) {
+      inner += '<g opacity=".55"><rect x="-4" y="-4" width="' + (NODE_W + 8) + '" height="' + (NODE_H + 8) + '" rx="14" fill="none" ' +
+        'stroke="#e9a23b" stroke-width="1" stroke-dasharray="4 4"><animateTransform attributeName="transform" type="rotate" ' +
+        'from="0 ' + (NODE_W/2) + ' ' + (NODE_H/2) + '" to="360 ' + (NODE_W/2) + ' ' + (NODE_H/2) + '" dur="4s" repeatCount="indefinite"/></rect></g>';
+    }
+
+    if (s.waiting) {
+      inner += '<rect x="' + (NODE_W - 52) + '" y="-12" width="44" height="18" rx="9" fill="#5fb8c9"/>' +
+        '<text x="' + (NODE_W - 30) + '" y="1" text-anchor="middle" fill="#000" font-size="8" font-weight="700">HITL</text>';
+    }
+
+    inner += '<circle cx="0" cy="' + (NODE_H/2) + '" r="4" fill="#555" stroke="#666"/>';
+    inner += '<circle cx="' + NODE_W + '" cy="' + (NODE_H/2) + '" r="4" fill="#555" stroke="#666"/>';
+
+    inner += '<text x="16" y="28" fill="#686868" font-size="10" font-family="monospace">' + s.kicker + '</text>';
+    inner += '<text x="16" y="50" fill="#fff" font-size="15" font-weight="600" font-family="var(--font)">' + escSvg(s.title) + '</text>';
+    inner += '<text x="16" y="72" fill="#9b9b9b" font-size="11" font-family="var(--font)">' +
+      s.gatesDone + " of " + s.gates + " gates · " + statusLabel(s.status) + '</text>';
+
+    const progColor = s.status === "succeeded" ? "#70a784" : "#e9a23b";
+    inner += '<rect x="0" y="' + (NODE_H - 4) + '" width="' + NODE_W + '" height="4" rx="0 0 12 12" fill="#2a2a2a"/>';
+    inner += '<rect x="0" y="' + (NODE_H - 4) + '" width="' + (NODE_W * s.progress / 100) + '" height="4" fill="' + progColor + '"/>';
+
+    if (s.status === "running") {
+      inner += '<g transform="translate(' + (NODE_W - 36) + ',12)"><circle cx="11" cy="11" r="10" fill="none" stroke="#e9a23b" stroke-width="2" stroke-dasharray="16 20">' +
+        '<animateTransform attributeName="transform" type="rotate" from="0 11 11" to="360 11 11" dur="1.1s" repeatCount="indefinite"/></circle></g>';
+    } else if (s.status === "succeeded") {
+      inner += '<circle cx="' + (NODE_W - 25) + '" cy="22" r="11" fill="#3f7f57"/>';
+      inner += '<text x="' + (NODE_W - 25) + '" y="26" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">✓</text>';
+    } else if (s.status === "waiting_for_input") {
+      inner += '<circle cx="' + (NODE_W - 25) + '" cy="22" r="11" fill="none" stroke="#5fb8c9" stroke-width="2" stroke-dasharray="4 3"/>';
+      inner += '<text x="' + (NODE_W - 25) + '" y="26" text-anchor="middle" fill="#5fb8c9" font-size="12" font-weight="700">?</text>';
+    } else {
+      inner += '<circle cx="' + (NODE_W - 25) + '" cy="22" r="11" fill="none" stroke="#686868" stroke-width="1.5"/>';
+      inner += '<text x="' + (NODE_W - 25) + '" y="26" text-anchor="middle" fill="#686868" font-size="11">○</text>';
+    }
+
+    const tasksLabel = expandedIds.has(s.id) ? "HIDE TASKS" : "SHOW TASKS";
+    inner += '<g class="node-action" data-action="tasks" style="cursor:pointer">' +
+      '<rect x="16" y="84" width="88" height="22" rx="6" fill="#1f1f1f" stroke="#444"/>' +
+      '<text x="60" y="99" text-anchor="middle" fill="#9b9b9b" font-size="9" font-weight="600" font-family="var(--font)">' + tasksLabel + '</text></g>';
+    inner += '<g class="node-action" data-action="open" style="cursor:pointer">' +
+      '<rect x="112" y="84" width="52" height="22" rx="6" fill="#1f1f1f" stroke="#444"/>' +
+      '<text x="138" y="99" text-anchor="middle" fill="#e9a23b" font-size="9" font-weight="600" font-family="var(--font)">OPEN</text></g>';
+
+    if (s.obsLive && s.obsLabel) {
+      inner += '<g class="obs-overlay">' +
+        '<rect x="170" y="84" width="130" height="22" rx="11" fill="rgba(233,162,59,.12)" stroke="rgba(233,162,59,.35)"/>' +
+        '<text x="235" y="99" text-anchor="middle" fill="#e9a23b" font-size="9" font-weight="600" font-family="monospace">' + escSvg(s.obsLabel) + '</text></g>';
+    }
+
+    g.innerHTML = inner;
+    g.addEventListener("click", ev => {
+      const action = ev.target.closest("[data-action]");
+      if (action) {
+        ev.stopPropagation();
+        const act = action.getAttribute("data-action");
+        if (act === "tasks") toggleExpand(s.id);
+        else if (act === "open") { selectStage(s.id); showToast("Open stage · " + s.id); }
+        return;
+      }
+      ev.stopPropagation();
+      selectStage(s.id, ev.shiftKey);
+    });
+    worldContent.appendChild(g);
+
+    if (expandedIds.has(s.id)) {
+      const tetherY1 = pos.y + NODE_H;
+      const capCount = s.capsules.length + (s.obsLabel ? 1 : 0);
+      const foH = capCount * 50 + 20;
+      const foY = tetherY1 + 14;
+      const foW = 368;
+      const foX = pos.x + 16;
+
+      const tether = document.createElementNS(NS, "line");
+      tether.setAttribute("x1", pos.x + NODE_W / 2);
+      tether.setAttribute("y1", tetherY1);
+      tether.setAttribute("x2", pos.x + NODE_W / 2);
+      tether.setAttribute("y2", foY);
+      tether.setAttribute("stroke", "#444");
+      tether.setAttribute("stroke-dasharray", "4 4");
+      worldContent.appendChild(tether);
+
+      const fo = document.createElementNS(NS, "foreignObject");
+      fo.setAttribute("x", foX);
+      fo.setAttribute("y", foY);
+      fo.setAttribute("width", foW);
+      fo.setAttribute("height", foH + 40);
+      const div = document.createElementNS(XHTML, "div");
+      div.innerHTML = buildCapsulesHtml(s);
+      fo.appendChild(div);
+      fo.addEventListener("click", ev => {
+        const cap = ev.target.closest(".task-capsule");
+        if (!cap) return;
+        ev.stopPropagation();
+        const key = cap.dataset.cap;
+        if (expandedCapsules.has(key)) expandedCapsules.delete(key);
+        else expandedCapsules.add(key);
+        renderWorld();
+        showToast(expandedCapsules.has(key) ? "Gate capsule expanded" : "Gate capsule collapsed");
+      });
+      worldContent.appendChild(fo);
+    }
+  });
+}
+
+function escSvg(t){
+  return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function isTreeVisible(item){
+  if (!item.parent) return true;
+  let p = item.parent;
+  while (p) {
+    if (!treeOpen.has(p)) return false;
+    const parentItem = TREE.find(t => t.path === p);
+    p = parentItem ? parentItem.parent : null;
+  }
+  return true;
+}
+
+function renderTree(){
+  $("#treeBody").innerHTML = TREE.map(item => {
+    if (!isTreeVisible(item)) return "";
+    const name = item.path.split("/").pop() + (item.dir ? "/" : "");
+    const indent = item.depth * 14;
+    const cls = ["tree-row", item.dir ? "dir" : "file", treeOpen.has(item.path) ? "open" : "", item.hot ? "hot" : ""].filter(Boolean).join(" ");
+    const chev = item.dir ? '<span class="chev">▶</span>' : '<span class="chev" style="visibility:hidden">▶</span>';
+    const ago = item.hot ? '<span class="tree-ago">' + item.ago + '</span>' : "";
+    return '<div class="' + cls + '" style="padding-left:' + (10 + indent) + 'px" data-path="' + item.path + '" data-dir="' + (item.dir ? "1" : "0") + '">' + chev + name + ago + '</div>';
+  }).join("");
+}
+
+function renderRuns(){
+  const live = STAGES.filter(s => s.status === "running" || s.status === "waiting_for_input");
+  let html = '<div class="run-cycle">Now · run-page-live-map · ' + live.length + ' stages</div>';
+  live.forEach(s => {
+    const sel = s.id === selectedId ? " selected" : "";
+    const human = s.status === "waiting_for_input";
+    const agent = s.agent || s.id;
+    const task = human
+      ? "Review typical variant HTML before gallery joins"
+      : (s.id === "plan" ? "Revising plan.md · gate confirm pending" : "Emitting ambitious spatial mockup");
+    html += '<div class="run-card' + sel + '" data-card="' + s.id + '">' +
+      '<div class="run-card__head">' +
+        '<div class="run-card__title">' + s.title + '</div>' +
+        '<span class="agent-chip' + (human ? " human" : "") + '"><span class="agent-chip__dot"></span>' + agent + '</span>' +
+      '</div>' +
+      '<div class="run-card__meta">' + (s.elapsed || "live") + ' · <a href="#" data-focus="' + s.id + '">' + s.id + '</a></div>' +
+      '<div class="run-task">' + task + '</div>' +
+      (s.tool ? '<div class="run-tool"><em>' + s.tool + '</em> ' + s.toolDetail + ' · just now</div>' : "") +
+      '<div class="run-detail">Session trace · tool calls streaming · click card to expand activity detail</div>' +
+    '</div>';
+  });
+  runsEl.innerHTML = html;
+}
+
+function applyTransform(){
+  stageEl.style.transform = "translate(" + panX + "px," + panY + "px) scale(" + scale + ")";
+  $("#zoomLabel").textContent = Math.round(scale * 100) + "%";
+  if (scale <= 0.75) expandedIds = new Set([selectedId]);
+  renderWorld();
+}
+
+function focusStage(id){
+  const s = stageById(id);
+  if (!s) return;
+  selectedId = id;
+  expandedIds.add(id);
+  const p = stagePos(s);
+  const wrap = graph.getBoundingClientRect();
+  scale = Math.min(1.05, Math.max(0.85, scale));
+  panX = wrap.width / 2 - (p.x + NODE_W / 2) * scale;
+  panY = wrap.height / 2 - (p.y + NODE_H / 2) * scale;
+  applyTransform();
+  renderRuns();
+  showToast("Focused · " + id);
+}
+
+function selectStage(id, toggleExpand){
+  selectedId = id;
+  if (toggleExpand) {
+    if (expandedIds.has(id)) expandedIds.delete(id);
+    else expandedIds.add(id);
+  } else {
+    expandedIds.add(id);
+  }
+  renderWorld();
+  renderRuns();
+  showToast("Selected · " + id);
+}
+
+function toggleExpand(id){
+  if (expandedIds.has(id)) expandedIds.delete(id);
+  else expandedIds.add(id);
+  selectedId = id;
+  renderWorld();
+  showToast(expandedIds.has(id) ? "Tasks expanded · " + id : "Tasks collapsed · " + id);
+}
+
+function fitRun(){
+  const wrap = graph.getBoundingClientRect();
+  scale = Math.min(wrap.width / (RUN.w + 80), wrap.height / (RUN.h + 80), 1);
+  panX = (wrap.width - RUN.w * scale) / 2 - RUN.x * scale + 16;
+  panY = (wrap.height - RUN.h * scale) / 2 - RUN.y * scale + 16;
+  applyTransform();
+  showToast("Fit run region");
+}
+
+function zoomAt(factor, cx, cy){
+  const wrap = graph.getBoundingClientRect();
+  const px = cx !== undefined ? cx : wrap.width / 2;
+  const py = cy !== undefined ? cy : wrap.height / 2;
+  const wx = (px - panX) / scale;
+  const wy = (py - panY) / scale;
+  scale = Math.min(2, Math.max(0.35, scale * factor));
+  panX = px - wx * scale;
+  panY = py - wy * scale;
+  applyTransform();
+}
+
+stageEl.addEventListener("mousedown", e => {
+  if (e.target.closest(".svg-node") || e.target.closest("foreignObject") || e.target.closest("[data-action]")) return;
+  dragging = true;
+  dragStart = { x: e.clientX - panX, y: e.clientY - panY };
+  stageEl.classList.add("grabbing");
+});
+window.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  panX = e.clientX - dragStart.x;
+  panY = e.clientY - dragStart.y;
+  applyTransform();
+});
+window.addEventListener("mouseup", () => {
+  dragging = false;
+  stageEl.classList.remove("grabbing");
+});
+
+graph.addEventListener("wheel", e => {
+  e.preventDefault();
+  const wrap = graph.getBoundingClientRect();
+  const cx = e.clientX - wrap.left, cy = e.clientY - wrap.top;
+  if (e.ctrlKey || e.metaKey) zoomAt(e.deltaY < 0 ? 1.08 : 0.92, cx, cy);
+  else { panX -= e.deltaX; panY -= e.deltaY; applyTransform(); }
+}, { passive: false });
+
+runsEl.addEventListener("click", e => {
+  const focus = e.target.closest("[data-focus]");
+  if (focus) { e.preventDefault(); focusStage(focus.dataset.focus); return; }
+  const card = e.target.closest(".run-card");
+  if (card) {
+    const id = card.dataset.card;
+    const wasExp = card.classList.contains("expanded");
+    selectStage(id);
+    document.querySelectorAll(".run-card").forEach(c => c.classList.remove("expanded"));
+    if (!wasExp || id !== selectedId) card.classList.add("expanded");
+    showToast(card.classList.contains("expanded") ? "Activity card expanded" : "Activity card collapsed");
+  }
+});
+
+$("#treeBody").addEventListener("click", e => {
+  const row = e.target.closest(".tree-row");
+  if (!row) return;
+  const path = row.dataset.path;
+  const isDir = row.dataset.dir === "1";
+  if (isDir) {
+    if (treeOpen.has(path)) treeOpen.delete(path);
+    else treeOpen.add(path);
+    renderTree();
+    showToast((treeOpen.has(path) ? "Expanded · " : "Collapsed · ") + path);
+  } else if (row.classList.contains("hot")) {
+    if (path.indexOf("plan.md") >= 0) focusStage("plan");
+    else if (path.indexOf("typical") >= 0) focusStage("prototype~2");
+    showToast("Revealed · " + path);
+  } else {
+    showToast("Open · " + path);
+  }
+});
+
+$("#zoomIn").addEventListener("click", () => { zoomAt(1.15); showToast("Zoom in"); });
+$("#zoomOut").addEventListener("click", () => { zoomAt(0.87); showToast("Zoom out"); });
+$("#fitRun").addEventListener("click", fitRun);
+
+$("#toggleActivity").addEventListener("click", function(){
+  const on = this.getAttribute("aria-pressed") !== "true";
+  this.setAttribute("aria-pressed", on);
+  document.body.classList.toggle("hide-activity", !on);
+  localStorage.setItem("sf-hide-activity", !on);
+  showToast(on ? "Activity overlay on" : "Activity overlay off");
+});
+
+$("#toggleRuns").addEventListener("click", function(){
+  const on = this.getAttribute("aria-pressed") !== "true";
+  this.setAttribute("aria-pressed", on);
+  document.body.classList.toggle("hide-runs", !on);
+  localStorage.setItem("sf-hide-runs", !on);
+  showToast(on ? "Runs overlay on" : "Runs overlay off");
+});
+
+$("#theme-toggle").addEventListener("change", function(){
+  document.documentElement.dataset.theme = this.checked ? "light" : "dark";
+  localStorage.setItem("sf-theme", document.documentElement.dataset.theme);
+  showToast("Theme · " + document.documentElement.dataset.theme);
+});
+
+window.addEventListener("resize", () => applyTransform());
+
+function tick(){
+  workingSec++;
+  const label = workingSec < 60 ? workingSec + "s" : Math.floor(workingSec / 60) + "m";
+  $("#workingAgo").textContent = label;
+  $("#legendAgo").textContent = String(workingSec);
+}
+
+function init(){
+  const theme = localStorage.getItem("sf-theme");
+  if (theme) {
+    document.documentElement.dataset.theme = theme;
+    $("#theme-toggle").checked = theme === "light";
+  }
+  if (localStorage.getItem("sf-hide-activity") === "true") {
+    document.body.classList.add("hide-activity");
+    $("#toggleActivity").setAttribute("aria-pressed", "false");
+  }
+  if (localStorage.getItem("sf-hide-runs") === "true") {
+    document.body.classList.add("hide-runs");
+    $("#toggleRuns").setAttribute("aria-pressed", "false");
+  }
+  renderTree();
+  renderRuns();
+  fitRun();
+  setInterval(tick, 1000);
+}
+
+init();
+})();
+</script>
+</body>
+</html>

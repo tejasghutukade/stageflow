@@ -10,6 +10,7 @@ coverage/
 PLAN.md
 .claude/
 .agents/
+.tmp_gallery_chunks/
 
 # Local operator YAML (not part of the package; keep on disk for manual runs)
 /pipelines/
@@ -33,6 +34,8 @@ docs/*
 !docs/*.md
 !docs/img/
 !docs/img/**
+!docs/prototype/
+!docs/prototype/**
 !docs/providers/
 docs/providers/*
 !docs/providers/*.md

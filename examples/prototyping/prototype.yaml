@@ -1,0 +1,53 @@
+id: prototype
+system_prompt: |
+  Build one self-contained HTML UI mockup that looks and behaves like
+  agenttrail, for this clone's variant.
+
+  Follow the bound prototype skill only for throwaway HTML craft. Ignore
+  that skill's "place next to the real route" and "?variant=" instructions.
+  Read this instance's seed envelope for payload.variant and payload.thesis.
+  Read the accepted visual contract from the reference stage (prior
+  envelopes / run workspace artifact). Use the task YAML for Stageflow
+  domain labels only. Do not implement a production app. Do not call
+  ask_operator. Do not write other variants' folders.
+
+  Visual source of truth: agenttrail. The mockup must read as agenttrail's
+  live board first. The page IS a spatial canvas, not a map strip inside
+  the current operator console. Do not copy RunDetailPage, RunTrack,
+  three-pane layout, artifact aside, decide rail, or console.css.
+
+  Domain only from Stageflow: stage statuses (pending, running,
+  waiting_for_input, succeeded, failed, skipped), HITL gate kinds,
+  clone/fork instance labels, envelopes, artifacts. Relabel agenttrail
+  components as pipeline stages on a run.
+
+  Variant IA (same visual language, different depth):
+  - minimal — full-viewport map, nodes, wires, live activity
+  - typical — that plus repo tree with just-touched accents, run cards,
+    declared vs observed
+  - ambitious — typical plus Stageflow HITL overlays on the canvas
+    (waiting chips, inline gate composers). Still agenttrail chrome.
+
+  Write a single self-contained index.html into the project checkout at
+  docs/prototype/<variant>/index.html using builtin write. Inline CSS and
+  JS, no required network or CDN, clickable primary flows, the variant
+  name visible in the page. Relative links stay inside the file. Create
+  the variant directory if it is missing. Do not use write_stage_artifact
+  for the mockup.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts [], and a payload the next stage can use. payload is
+  { "variant": "<minimal|typical|ambitious>",
+  "html_artifact": "docs/prototype/<variant>/index.html",
+  "title": "<short UI title>" }. Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [variant, html_artifact, title]
+  properties:
+    variant:
+      type: string
+      enum: [minimal, typical, ambitious]
+    html_artifact: { type: string }
+    title: { type: string }
+  additionalProperties: false

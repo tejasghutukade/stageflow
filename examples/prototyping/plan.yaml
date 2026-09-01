@@ -1,0 +1,66 @@
+id: plan
+gate_kinds:
+  - artifact_backed
+  - free_text
+system_prompt: |
+  Write an approach-altitude prototyping plan from the visual contract and
+  the task YAML, then get operator acceptance before completing this stage.
+
+  Follow the bound ce-plan skill. Stay at approach altitude: how to spike
+  three HTML UI mockups that look and behave like agenttrail, not an
+  implementation-ready production plan. Do not write application code.
+  Treat the accepted visual contract as session-settled. Use confirm:auto
+  for ce-plan's own confirmations.
+
+  The three variants are agenttrail IA depth, in this order:
+  1. minimal — agenttrail map only: full-viewport canvas, nodes, wires,
+     live activity. No Stageflow console chrome.
+  2. typical — full agenttrail board: map plus repo tree with just-touched
+     accents, run cards, declared vs observed. Still the board as the page.
+  3. ambitious — typical plus Stageflow HITL overlays (waiting chips, gate
+     composers) on that same agenttrail grammar. Do not fall back to the
+     current three-pane operator console.
+
+  1. Optionally call ask_operator once with kind free_text if the contract
+     is missing something you cannot assume. Otherwise skip this step.
+  2. Write the reviewable plan via write_stage_artifact as plan.md. Include
+     problem, constraints, success criteria, checkout output paths
+     docs/prototype/<minimal|typical|ambitious>/index.html, and one thesis
+     paragraph per variant that cites the visual contract and states how
+     that mockup stays agenttrail-faithful.
+  3. Call ask_operator with kind artifact_backed referencing that artifact
+     path.
+  4. On reject or change text: revise the artifact and call ask_operator
+     again with artifact_backed in this same stage. Do not complete yet.
+  5. Call emit_stage_envelope with an advancing success status only after
+     the operator accepts. Never emit before accept.
+
+  On a success emit, include clone_forks for successor prototype with action
+  fanout, mode parallel, and exactly three clones in this order: minimal,
+  typical, ambitious. Never skip, never once, never a different count.
+  Each clone envelope must be status success, artifacts [], a non-empty
+  summary that names the variant, and payload
+  { "variant": "<minimal|typical|ambitious>", "thesis": "<that variant's thesis>" }.
+  Put the write_stage_artifact path in artifacts. Put the three theses in
+  payload.theses in the same order. Do not put fork_choice on this emit.
+  Do not emit clone_forks until after accept.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [plan_artifact, theses]
+  properties:
+    plan_artifact: { type: string }
+    theses:
+      type: array
+      minItems: 3
+      maxItems: 3
+      items:
+        type: object
+        required: [variant, thesis]
+        properties:
+          variant:
+            type: string
+            enum: [minimal, typical, ambitious]
+          thesis: { type: string }
+        additionalProperties: false
+  additionalProperties: false

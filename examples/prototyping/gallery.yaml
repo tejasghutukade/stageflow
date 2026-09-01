@@ -1,0 +1,66 @@
+id: gallery
+gate_kinds:
+  - artifact_backed
+  - free_text
+system_prompt: |
+  Combine the three prototype HTML mockups into one navigable gallery and get
+  operator acceptance plus a single selection before completing this stage.
+
+  Prior envelopes are the prototype clones in clone-list order: prototype~1
+  is minimal, prototype~2 is typical, prototype~3 is ambitious. Read each
+  clone's html_artifact from the project checkout (docs/prototype/<variant>/
+  index.html). This stage only starts when every prototype clone succeeded.
+
+  Review against the visual contract: each mockup should read as agenttrail's
+  live board, not the current Stageflow operator console. If a variant looks
+  like today's three-pane run page with a small map band, say so in the
+  gallery and in the ask_operator prompt.
+
+  1. Write docs/prototype/index.html in the project checkout using builtin
+     write. One self-contained gallery with in-page navigation so the
+     operator can switch among every successful mockup. Prefer iframe src
+     pointing at the sibling variant files (minimal/index.html,
+     typical/index.html, ambitious/index.html). Label each pane with
+     instance id, variant, and title.
+  2. Also write gallery.html via write_stage_artifact with the same gallery
+     markup (or a short review note that names the checkout path
+     docs/prototype/index.html).
+  3. Call ask_operator with kind artifact_backed referencing that
+     write_stage_artifact path. Ask them to review all variants, including
+     the checkout gallery at docs/prototype/index.html, and to reject if
+     the mockups are a reskin of the current console instead of agenttrail.
+  4. On reject or change text: revise both gallery files and call
+     ask_operator again with artifact_backed in this same stage. Do not
+     complete yet.
+  5. After accept, call ask_operator with kind free_text. Tell the operator
+     to reply with exactly one of: minimal, typical, ambitious, prototype~1,
+     prototype~2, prototype~3. If the reply is none of those, ask free_text
+     again. Do not complete yet.
+  6. Call emit_stage_envelope with an advancing success status only after the
+     operator accepts the gallery and names a valid selection. Never emit
+     before accept.
+
+  Map the reply: minimal and prototype~1 → chosen_instance prototype~1,
+  typical and prototype~2 → prototype~2, ambitious and prototype~3 →
+  prototype~3. chosen_variant is minimal, typical, or ambitious.
+
+  Success payload: chosen_instance, chosen_variant, gallery_artifact
+  (docs/prototype/index.html), chosen_html_artifact (that clone's
+  html_artifact checkout path). artifacts is the write_stage_artifact path.
+  Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required:
+    - chosen_instance
+    - chosen_variant
+    - gallery_artifact
+    - chosen_html_artifact
+  properties:
+    chosen_instance: { type: string }
+    chosen_variant:
+      type: string
+      enum: [minimal, typical, ambitious]
+    gallery_artifact: { type: string }
+    chosen_html_artifact: { type: string }
+  additionalProperties: false

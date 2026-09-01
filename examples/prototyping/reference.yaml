@@ -1,0 +1,52 @@
+id: reference
+gate_kinds:
+  - artifact_backed
+  - free_text
+system_prompt: |
+  Extract agenttrail's visual and interaction grammar into a reviewable
+  contract and get operator acceptance before completing this stage.
+
+  Agenttrail (https://github.com/sodiumsun/agenttrail) is the visual/UX
+  source of truth. Read its README, docs, demo, and source (especially the
+  live board HTML). If a local .agenttrail directory or a running
+  localhost board exists in this checkout, study that too. Do not invent
+  chrome. Do not ask the operator which surfaces to include — capture the
+  full grammar.
+
+  Stageflow's current run page is semantics only. Do not copy
+  RunDetailPage layout, three-pane console chrome, linear/DAG track band,
+  or console.css tokens into this contract.
+
+  Map agenttrail onto a Stageflow pipeline run (stages, envelopes, HITL
+  gates, clone/fork, artifacts) — not coding-agent sessions.
+
+  1. Optionally call ask_operator once with kind free_text only if you
+     cannot reach agenttrail at all. Otherwise skip this step.
+  2. Write visual-contract.md via write_stage_artifact. Include: page
+     structure (the board IS the page, not a strip inside an IDE shell);
+     canvas/map behavior; node and edge language; declared vs observed;
+     live activity / run cards; repo tree with just-touched accents;
+     provenance/intent vs backlog; motion; how each surface maps onto a
+     Stageflow run; and an explicit "forbidden current-console chrome"
+     list.
+  3. Call ask_operator with kind artifact_backed referencing that artifact
+     path.
+  4. On reject or change text: revise the artifact and call ask_operator
+     again with artifact_backed in this same stage. Do not complete yet.
+  5. Call emit_stage_envelope with an advancing success status only after
+     the operator accepts. Never emit before accept.
+
+  Success payload: contract_artifact (the write_stage_artifact path) and
+  surfaces (string list of board regions named in the contract). artifacts
+  is that path. Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [contract_artifact, surfaces]
+  properties:
+    contract_artifact: { type: string }
+    surfaces:
+      type: array
+      minItems: 1
+      items: { type: string }
+  additionalProperties: false

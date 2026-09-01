@@ -1,0 +1,21 @@
+id: prototyping
+stages:
+  - id: reference
+    uses: ./reference.yaml
+  - id: plan
+    uses: ./plan.yaml
+    needs: reference
+    skill: ce-plan
+  - id: prototype
+    uses: ./prototype.yaml
+    needs: plan
+    clonable: true
+    clone_cap: 3
+    skill: prototype
+  - id: gallery
+    uses: ./gallery.yaml
+    needs: prototype
+  - id: finalize
+    uses: ./finalize.yaml
+    needs: gallery
+    skill: ce-plan
