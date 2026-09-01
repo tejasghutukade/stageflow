@@ -8,6 +8,7 @@ export type ArtifactReaderProps = {
   path: string;
   readOnly?: boolean;
   onBackToTranscript: () => void;
+  onHide?: () => void;
 };
 
 type ViewMode = "rendered" | "raw" | "diff";
@@ -52,6 +53,7 @@ export function ArtifactReader({
   path,
   readOnly,
   onBackToTranscript,
+  onHide,
 }: ArtifactReaderProps) {
   const markdown = isMarkdown(path);
   const [mode, setMode] = useState<ViewMode>(markdown ? "rendered" : "raw");
@@ -89,8 +91,15 @@ export function ArtifactReader({
           <span className="reader__path">{dirName(path)}</span>
         ) : null}
         {readOnly ? <span className="chip">read only</span> : null}
-        <button className="btn btn--ghost btn--sm" onClick={onBackToTranscript}>← Transcript</button>
-        <div className="seg">
+        <span className="topbar__spacer"></span>
+        <div className="stream__head-trail">
+          <button className="btn btn--ghost btn--sm" onClick={onBackToTranscript}>← Transcript</button>
+          {onHide ? (
+            <button type="button" className="btn btn--sm" onClick={onHide}>
+              Hide workspace
+            </button>
+          ) : null}
+          <div className="seg">
           <button
             data-active={mode === "rendered" ? "true" : undefined}
             disabled={!markdown}
@@ -105,6 +114,7 @@ export function ArtifactReader({
             Raw
           </button>
           <button disabled>Diff</button>
+          </div>
         </div>
       </div>
 

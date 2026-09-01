@@ -71,32 +71,52 @@ export function EnvelopeFields({
   );
 }
 
+export function formatEnvelopeSubtitle(
+  fromStageId: string,
+  toStageId: string | undefined,
+  labelFor?: (stageId: string) => string,
+): string {
+  const label = (id: string) => labelFor?.(id) ?? id;
+  return toStageId
+    ? `${label(fromStageId)} → ${label(toStageId)}`
+    : label(fromStageId);
+}
+
 export function EnvelopeRecord({
   fromStageId,
   toStageId,
   envelope,
   onBackToTranscript,
+  onHide,
   onArtifactClick,
+  stageLabel,
 }: {
   fromStageId: string;
   toStageId?: string;
   envelope: StageEnvelopeView;
   onBackToTranscript: () => void;
+  onHide?: () => void;
   onArtifactClick?: (path: string) => void;
+  stageLabel?: (stageId: string) => string;
 }) {
-  const subtitle = toStageId
-    ? `${fromStageId} → ${toStageId}`
-    : fromStageId;
+  const subtitle = formatEnvelopeSubtitle(fromStageId, toStageId, stageLabel);
 
   return (
     <div className="stream" style={{ height: "100%" }}>
       <header className="stream__head">
         <h3 className="stream__name">Handoff envelope</h3>
         <span className="mono muted">{subtitle}</span>
-        <span style={{ marginLeft: "auto" }}></span>
-        <button type="button" className="btn btn--sm" onClick={onBackToTranscript}>
-          ← Transcript
-        </button>
+        <span className="topbar__spacer"></span>
+        <div className="stream__head-trail">
+          <button type="button" className="btn btn--sm" onClick={onBackToTranscript}>
+            ← Transcript
+          </button>
+          {onHide ? (
+            <button type="button" className="btn btn--sm" onClick={onHide}>
+              Hide workspace
+            </button>
+          ) : null}
+        </div>
       </header>
       <div className="stream__body">
         <EnvelopeFields

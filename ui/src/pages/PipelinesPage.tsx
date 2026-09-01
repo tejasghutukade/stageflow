@@ -208,19 +208,19 @@ export function PipelinesPage({
                 className="rrow"
                 href={`#${pipelinePath(pipeline.id)}`}
               >
-                <span>
+                <span className="rrow__id">
                   <span className="rrow__task">{pipeline.id}</span>
-                  <span className="rrow__pipe" style={{ display: "block" }}>
-                    {pipeline.path}
-                  </span>
+                  <span className="rrow__pipe">{pipeline.path}</span>
                 </span>
-                <PipelineMiniTrack stages={pipeline.stages} />
                 <span className="rrow__right">
                   {gates === 1 ? "1 gate" : `${gates} gates`}
                   <br />
                   <span className="mono" style={{ fontSize: "var(--font-size-xs)" }}>
                     {pipelineRuns.length} {pipelineRuns.length === 1 ? "run" : "runs"}
                   </span>
+                </span>
+                <span className="rrow__track">
+                  <PipelineMiniTrack stages={pipeline.stages} />
                 </span>
               </a>
             );

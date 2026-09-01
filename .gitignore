@@ -10,6 +10,7 @@ coverage/
 PLAN.md
 .claude/
 .agents/
+.tmp_gallery_chunks/
 
 # Local operator YAML (not part of the package; keep on disk for manual runs)
 /pipelines/
@@ -18,13 +19,16 @@ PLAN.md
 .playwright-mcp/
 tmp/
 .scratch/
+# Local-only docs and catalogs (keep on disk; not part of the package)
 docs/plans/
 docs/architecture/
-docs/ideation/          # local-only; includes investor-outreach research dumps
+docs/ideation/
+docs/prototype/
 docs/manual-tests/
 docs/random-ideas/
 docs/explainers/
 docs/handoffs/
+examples/prototyping/
 
 # Public docs (planning subtrees above stay ignored)
 !docs/

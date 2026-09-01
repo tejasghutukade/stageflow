@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { StageLogEvent } from "../api/types";
 import {
+  formatActivityDescription,
+  formatActivityLabel,
+} from "../status/activityCopy";
+import {
   buildTranscriptTurns,
   pairToolEvents,
 } from "./TranscriptTurns";
@@ -186,5 +190,26 @@ describe("buildTranscriptTurns", () => {
         },
       ]),
     ).toEqual([]);
+  });
+
+  it("uses Stage failed once and keeps the reason on the description", () => {
+    const event = { event: "failed", reason: "tool error" } as const;
+    expect(formatActivityLabel(event)).toBe("Stage failed");
+    expect(formatActivityDescription(event)).toBe("tool error");
+    expect(buildTranscriptTurns([event])).toEqual([
+      { kind: "system", event },
+    ]);
+  });
+
+  it("omits turn_start when there is no description", () => {
+    expect(buildTranscriptTurns([{ event: "turn_start" }])).toEqual([]);
+  });
+
+  it("keeps turn_start when a description exists", () => {
+    const event = { event: "turn_start", reason: "round 2" };
+    expect(formatActivityDescription(event)).toBe("round 2");
+    expect(buildTranscriptTurns([event])).toEqual([
+      { kind: "system", event },
+    ]);
   });
 });

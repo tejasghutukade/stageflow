@@ -23,6 +23,7 @@ import {
   parseHash,
   runArtifactPath,
   runEnvelopePath,
+  runStagePath,
   runStreamPath,
   type Route,
 } from "./routes";
@@ -115,7 +116,9 @@ function AppShell() {
         view={route.view}
         onBack={() => go("/runs")}
         onReran={(id) => go(runStreamPath(id))}
-        onOpenStream={() => go(runStreamPath(route.runId))}
+        onOpenStream={(stageId) =>
+          go(stageId ? runStagePath(route.runId, stageId) : runStreamPath(route.runId))
+        }
         onOpenArtifact={(path) => go(runArtifactPath(route.runId, path))}
         onOpenEnvelope={(stageId) => go(runEnvelopePath(route.runId, stageId))}
       />

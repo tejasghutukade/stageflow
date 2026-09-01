@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-01
+
+### Added
+
+- Spatial map-first run detail page: zoomable stage graph, gated workspace (logs / files / envelopes / HITL), and stage deep links (`#/runs/:id/stages/:stageId`)
+
+### Changed
+
+- Runs and Pipelines list rows stack identity above a full-width mini track so catalog paths stay readable
+- Created runs show `not started` (still gray status) and a `Start run` primary action until history exists
+
+### Fixed
+
+- Run-page polish: workspace header wrap, single envelope/artifact chrome, camera refit when the workspace opens, readable node Retry/Abandon icons, focus rings, clone-aware aside labels, and quieter failure/turn transcript dividers
+
 ## [0.7.0] - 2026-09-01
 
 ### Changed
@@ -106,7 +121,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/tejasghutukade/stageflow/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...v0.5.0

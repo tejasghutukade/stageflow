@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { PipelineTrackNode, PipelineTrackProjection } from "../api";
 import {
+  SPATIAL_COL_W,
+  SPATIAL_NODE_H,
+  SPATIAL_NODE_W,
+  SPATIAL_ROW_H,
   detailListOrder,
   edgesBetweenLayers,
   groupNodesByLayer,
   isLinearPipelineTrack,
+  layoutSpatialTrack,
+  spatialLayerYOffset,
 } from "./layoutPipelineTrack";
 
 function node(
@@ -176,6 +182,119 @@ describe("edgesBetweenLayers", () => {
     ]);
     expect(edgesBetweenLayers(edges, nodes, 1, 2)).toEqual([
       { from: "improve-a", to: "report-a" },
+    ]);
+  });
+});
+
+describe("layoutSpatialTrack", () => {
+  it("lays out a linear three-stage chain as three columns and one row", () => {
+    const projection: PipelineTrackProjection = {
+      nodes: [
+        node({ stage_id: "a", layer: 0, layer_order: 0 }),
+        node({ stage_id: "b", layer: 1, layer_order: 0 }),
+        node({ stage_id: "c", layer: 2, layer_order: 0 }),
+      ],
+      edges: [
+        { from: "a", to: "b" },
+        { from: "b", to: "c" },
+      ],
+    };
+    expect(isLinearPipelineTrack(projection)).toBe(true);
+    const layout = layoutSpatialTrack(projection);
+    expect(layout.nodes.map((n) => ({ id: n.stageId, x: n.x, y: n.y }))).toEqual([
+      { id: "a", x: 0, y: 0 },
+      { id: "b", x: SPATIAL_COL_W, y: 0 },
+      { id: "c", x: SPATIAL_COL_W * 2, y: 0 },
+    ]);
+    expect(layout.nodes.every((n) => n.width === SPATIAL_NODE_W && n.height === SPATIAL_NODE_H)).toBe(
+      true,
+    );
+    expect(layout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ]);
+  });
+
+  it("places clone siblings on one x and centers single-node columns on the fan-out", () => {
+    const projection: PipelineTrackProjection = {
+      nodes: [
+        node({ stage_id: "root", layer: 0, layer_order: 0 }),
+        node({ stage_id: "a", layer: 1, layer_order: 0 }),
+        node({ stage_id: "b", layer: 1, layer_order: 1 }),
+        node({ stage_id: "c", layer: 1, layer_order: 2 }),
+        node({ stage_id: "join", layer: 2, layer_order: 0 }),
+      ],
+      edges: [
+        { from: "root", to: "a" },
+        { from: "root", to: "b" },
+        { from: "root", to: "c" },
+        { from: "a", to: "join" },
+        { from: "b", to: "join" },
+        { from: "c", to: "join" },
+      ],
+    };
+    const layout = layoutSpatialTrack(projection);
+    const midY = SPATIAL_ROW_H;
+    expect(layout.nodes.map((n) => ({ id: n.stageId, x: n.x, y: n.y }))).toEqual([
+      { id: "root", x: 0, y: midY },
+      { id: "a", x: SPATIAL_COL_W, y: 0 },
+      { id: "b", x: SPATIAL_COL_W, y: SPATIAL_ROW_H },
+      { id: "c", x: SPATIAL_COL_W, y: SPATIAL_ROW_H * 2 },
+      { id: "join", x: SPATIAL_COL_W * 2, y: midY },
+    ]);
+  });
+
+  it("computes a vertical offset that centers a shorter layer in the tallest stack", () => {
+    expect(spatialLayerYOffset(1, 3)).toBe(SPATIAL_ROW_H);
+    expect(spatialLayerYOffset(3, 3)).toBe(0);
+    expect(spatialLayerYOffset(1, 1)).toBe(0);
+  });
+
+  it("keeps skip-layer and extra edges in the edge list", () => {
+    const projection: PipelineTrackProjection = {
+      nodes: [
+        node({ stage_id: "a", layer: 0, layer_order: 0 }),
+        node({ stage_id: "b", layer: 1, layer_order: 0 }),
+        node({ stage_id: "c", layer: 2, layer_order: 0 }),
+      ],
+      edges: [
+        { from: "a", to: "b" },
+        { from: "b", to: "c" },
+        { from: "a", to: "c" },
+      ],
+    };
+    expect(layoutSpatialTrack(projection).edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+      { from: "a", to: "c" },
+    ]);
+  });
+
+  it("falls back to a single row of planned ids when nodes are empty", () => {
+    const layout = layoutSpatialTrack(
+      { nodes: [], edges: [] },
+      { liveStageIds: ["a"], plannedStageIds: ["a", "b", "c"] },
+    );
+    expect(layout.nodes.map((n) => ({ id: n.stageId, x: n.x, y: n.y }))).toEqual([
+      { id: "a", x: 0, y: 0 },
+      { id: "b", x: SPATIAL_COL_W, y: 0 },
+      { id: "c", x: SPATIAL_COL_W * 2, y: 0 },
+    ]);
+    expect(layout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ]);
+  });
+
+  it("appends live stages missing from planned ids in the empty-node fallback", () => {
+    const layout = layoutSpatialTrack(
+      { nodes: [], edges: [] },
+      { liveStageIds: ["a", "orphan"], plannedStageIds: ["a", "b"] },
+    );
+    expect(layout.nodes.map((n) => n.stageId)).toEqual(["a", "b", "orphan"]);
+    expect(layout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "orphan" },
     ]);
   });
 });

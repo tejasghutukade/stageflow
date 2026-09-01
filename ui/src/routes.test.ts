@@ -3,6 +3,7 @@ import {
   extensionFilePath,
   extensionPackagePath,
   parseHash,
+  runStagePath,
 } from "./routes";
 
 describe("parseHash", () => {
@@ -37,9 +38,44 @@ describe("parseHash", () => {
       path: filePath,
     });
   });
-});
 
   it("parses the provider connect route", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
   });
+});
+
+describe("run stage hash", () => {
+  it("parses a stream stage path", () => {
+    expect(parseHash("#/runs/r1/stages/design")).toEqual({
+      name: "detail",
+      runId: "r1",
+      view: { kind: "stream", stageId: "design" },
+    });
+  });
+
+  it("keeps four-segment envelope paths", () => {
+    expect(parseHash("#/runs/r1/stages/design/envelope")).toEqual({
+      name: "detail",
+      runId: "r1",
+      view: { kind: "envelope", stageId: "design" },
+    });
+  });
+
+  it("round-trips runStagePath through parseHash", () => {
+    const path = runStagePath("r1", "design");
+    expect(parseHash(`#${path}`)).toEqual({
+      name: "detail",
+      runId: "r1",
+      view: { kind: "stream", stageId: "design" },
+    });
+  });
+
+  it("yields the unknown stage id from the parser", () => {
+    expect(parseHash("#/runs/r1/stages/unknown")).toEqual({
+      name: "detail",
+      runId: "r1",
+      view: { kind: "stream", stageId: "unknown" },
+    });
+  });
+});
 

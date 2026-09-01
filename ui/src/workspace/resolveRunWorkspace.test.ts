@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import type { PendingPrompt, PipelineTrackNode, RunDetail, StageSnapshot } from "../api";
 import type { DetailView } from "../routes";
 import { statusCopy } from "../status/runStatus";
+import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
+import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
   envelopeAsidePath,
   formatCloneLabel,
   parseEnvelopeAsidePath,
   resolveRunWorkspace,
   runDetailShouldPoll,
+  stageCloneLabel,
+  stageIdKnown,
   type OperatorSelection,
 } from "./resolveRunWorkspace";
 
@@ -50,6 +54,7 @@ function selection(
     previousStageId: null,
     userPicked: false,
     drawerStageId: null,
+    dismissedWaitKey: null,
     ...overrides,
   };
 }
@@ -74,31 +79,17 @@ const envelope = {
 };
 
 describe("stage selection", () => {
-  it("with no operator pick selects the first waiting_for_input stage", () => {
+  it("stream view with no pick and no wait is empty", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
-      stage({ stage_id: "clarify", status: "waiting_for_input" }),
-      stage({ stage_id: "review", status: "waiting_for_input" }),
+      stage({ stage_id: "review", status: "succeeded" }),
     ]);
-    expect(
-      resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("clarify");
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
   });
 
-  it("prefers waiting_stage_id when it is set", () => {
-    const run = detail(
-      [
-        stage({ stage_id: "clarify", status: "waiting_for_input" }),
-        stage({ stage_id: "review", status: "waiting_for_input" }),
-      ],
-      { waiting_stage_id: "review" },
-    );
-    expect(
-      resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("review");
-  });
-
-  it("with no waiting stage selects the first running stage", () => {
+  it("does not auto-select a running-only stream", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "build", status: "running" }),
@@ -106,10 +97,10 @@ describe("stage selection", () => {
     ]);
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("build");
+    ).toBeNull();
   });
 
-  it("with neither waiting nor running selects the first failed stage", () => {
+  it("does not auto-select a failed-only stream", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "build", status: "failed" }),
@@ -117,10 +108,10 @@ describe("stage selection", () => {
     ]);
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("build");
+    ).toBeNull();
   });
 
-  it("with no waiting, running, or failed keeps the previous selection", () => {
+  it("does not keep a previous stage without a user pick", () => {
     const run = detail([
       stage({ stage_id: "intake", status: "succeeded" }),
       stage({ stage_id: "review", status: "succeeded" }),
@@ -131,24 +122,177 @@ describe("stage selection", () => {
         run,
         selection({ previousStageId: "review" }),
       ).selectedStageId,
+    ).toBeNull();
+  });
+
+  it("selects waiting_stage_id when the wait is not dismissed", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+        stage({
+          stage_id: "review",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+        }),
+      ],
+      { waiting_stage_id: "review" },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.selectedStageId).toBe("review");
+    expect(workspace.kind).toBe("stream");
+    expect(workspace.composer).toEqual({
+      kind: "reply",
+      prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+    });
+  });
+
+  it("stays empty after Hide workspace while the same wait is open", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { waiting_stage_id: "clarify" },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ dismissedWaitKey: "clarify:p-ft" }),
+    );
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
+  });
+
+  it("selects a new wait after a dismissed key", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "review",
+          status: "waiting_for_input",
+          pending_prompt: { kind: "confirm", id: "p-cf", message: "OK?" },
+        }),
+      ],
+      { waiting_stage_id: "review" },
+    );
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ dismissedWaitKey: "clarify:p-ft" }),
+      ).selectedStageId,
     ).toBe("review");
   });
 
-  it("with no previous selection falls back to the first stage", () => {
-    const run = detail([
-      stage({ stage_id: "intake", status: "succeeded" }),
-      stage({ stage_id: "review", status: "succeeded" }),
-    ]);
+  it("falls back to waiting_prompt_id when the waiter has no snapshot prompt", () => {
+    const run = detail(
+      [stage({ stage_id: "clarify", status: "waiting_for_input" })],
+      { waiting_stage_id: "clarify", waiting_prompt_id: "p-run" },
+    );
     expect(
       resolveRunWorkspace(stream, run, selection()).selectedStageId,
-    ).toBe("intake");
+    ).toBe("clarify");
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ dismissedWaitKey: "p-run" }),
+      ).selectedStageId,
+    ).toBeNull();
   });
 
-  it("preserves an operator pick when the stage still exists", () => {
+  it("selects the artifact owner and keeps artifact kind", () => {
+    const run = detail([
+      stage({
+        stage_id: "intake",
+        status: "succeeded",
+        artifacts: ["notes.md"],
+      }),
+      stage({
+        stage_id: "design",
+        status: "succeeded",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    const workspace = resolveRunWorkspace(artifactView, run, selection());
+    expect(workspace.selectedStageId).toBe("design");
+    expect(workspace.kind).toBe("artifact");
+  });
+
+  it("keeps artifact kind when no snapshot owns the path", () => {
+    const run = detail([
+      stage({ stage_id: "design", status: "succeeded", artifacts: ["other.md"] }),
+    ]);
+    const workspace = resolveRunWorkspace(artifactView, run, selection());
+    expect(workspace.kind).toBe("artifact");
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.selectedPath).toBe("plan.md");
+  });
+
+  it("selects a stream stageId from the view", () => {
+    const run = detail([
+      stage({ stage_id: "design", status: "running" }),
+      stage({ stage_id: "review", status: "pending" }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "design" },
+      run,
+      selection(),
+    );
+    expect(workspace.selectedStageId).toBe("design");
+    expect(workspace.kind).toBe("stream");
+  });
+
+  it("ignores an unknown stream stageId and stays map-only", () => {
+    const run = detail([stage({ stage_id: "design", status: "running" })]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "ghost" },
+      run,
+      selection(),
+    );
+    expect(stageIdKnown(run, "ghost")).toBe(false);
+    expect(workspace.selectedStageId).toBeNull();
+    expect(workspace.kind).toBe("empty");
+  });
+
+  it("opens stream workspace for a pending planned stageId", () => {
+    const run = detail([stage({ stage_id: "design", status: "running" })]);
+    const workspace = resolveRunWorkspace(
+      { kind: "stream", stageId: "review" },
+      run,
+      selection(),
+      ["design", "review"],
+    );
+    expect(workspace.selectedStageId).toBe("review");
+    expect(workspace.kind).toBe("stream");
+    expect(workspace.composer).toEqual({ kind: "idle", label: "Session closed" });
+  });
+
+  it("selects the envelope route stage without a user pick", () => {
+    const run = detail([
+      stage({ stage_id: "clarify", status: "succeeded", envelope }),
+      stage({ stage_id: "review", status: "running" }),
+    ]);
+    const workspace = resolveRunWorkspace(
+      { kind: "envelope", stageId: "clarify" },
+      run,
+      selection(),
+    );
+    expect(workspace.selectedStageId).toBe("clarify");
+    expect(workspace.kind).toBe("envelope");
+  });
+
+  it("preserves a user pick of a running clone when a sibling is waiting", () => {
     const run = detail(
       [
         stage({ stage_id: "clarify", status: "waiting_for_input" }),
-        stage({ stage_id: "review", status: "pending" }),
+        stage({ stage_id: "review", status: "running" }),
       ],
       { waiting_stage_id: "clarify" },
     );
@@ -161,10 +305,28 @@ describe("stage selection", () => {
     ).toBe("review");
   });
 
-  it("drops an operator pick when the stage no longer exists", () => {
+  it("clears a HITL-only pick when the wait ends", () => {
+    const run = detail([
+      stage({ stage_id: "clarify", status: "succeeded" }),
+      stage({ stage_id: "review", status: "running" }),
+    ]);
+    expect(
+      resolveRunWorkspace(
+        stream,
+        run,
+        selection({ previousStageId: "clarify", userPicked: false }),
+      ).selectedStageId,
+    ).toBeNull();
+  });
+
+  it("drops an operator pick when the stage no longer exists and edge-triggers the waiter", () => {
     const run = detail(
       [
-        stage({ stage_id: "clarify", status: "waiting_for_input" }),
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
         stage({ stage_id: "review", status: "pending" }),
       ],
       { waiting_stage_id: "clarify" },
@@ -177,17 +339,38 @@ describe("stage selection", () => {
       ).selectedStageId,
     ).toBe("clarify");
   });
+
+  it("resolves an artifact owner from envelope artifacts in track order", () => {
+    const run = detail([
+      stage({
+        stage_id: "design",
+        status: "succeeded",
+        envelope: { ...envelope, artifacts: ["plan.md"] },
+      }),
+      stage({
+        stage_id: "review",
+        status: "succeeded",
+        artifacts: ["plan.md"],
+      }),
+    ]);
+    expect(
+      resolveRunWorkspace(artifactView, run, selection()).selectedStageId,
+    ).toBe("design");
+  });
 });
 
 describe("composer and session chip", () => {
   it("stream + waiting + pending_prompt returns a composer that accepts a reply", () => {
-    const run = detail([
-      stage({
-        stage_id: "clarify",
-        status: "waiting_for_input",
-        pending_prompt: freeText,
-      }),
-    ]);
+    const run = detail(
+      [
+        stage({
+          stage_id: "clarify",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { waiting_stage_id: "clarify" },
+    );
     const workspace = resolveRunWorkspace(stream, run, selection());
     expect(workspace.kind).toBe("stream");
     expect(workspace.composer).toEqual({ kind: "reply", prompt: freeText });
@@ -398,13 +581,13 @@ describe("track stages", () => {
       selection(),
       ["a", "b", "c"],
     );
-    expect(workspace.selectedStageId).toBe("a");
+    expect(workspace.selectedStageId).toBeNull();
     expect(workspace.trackStages).toEqual([
       {
         id: "a",
         label: "a",
         status: "running",
-        selected: true,
+        selected: false,
         meta: undefined,
         envelope: null,
       },
@@ -600,8 +783,8 @@ const fanOutTrack = {
   ],
 };
 
-describe("DAG track layout", () => {
-  it("uses dag mode for fan-out projection", () => {
+describe("spatial track layout", () => {
+  it("projects fan-out nodes and waiting chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "recon", status: "succeeded" }),
@@ -625,14 +808,19 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("dag");
-    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ stageId: "improve-a" }),
-        expect.objectContaining({ stageId: "improve-c" }),
-      ]),
-    );
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "recon",
+      "improve-a",
+      "improve-b",
+      "improve-c",
+      "report-b",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual(fanOutTrack.edges);
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["improve-a", "improve-c"]);
     expect(workspace.selectedStageId).toBe("improve-a");
+    expect(workspace.kind).toBe("stream");
   });
 
   it("resolves inbound envelope via DAG edges not declaration order", () => {
@@ -653,7 +841,7 @@ describe("DAG track layout", () => {
     expect(workspace.inboundEnvelope).toEqual(envelope);
   });
 
-  it("shows blocked readiness on detail rows", () => {
+  it("shows blocked readiness on node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "running" }),
@@ -661,13 +849,13 @@ describe("DAG track layout", () => {
       ],
       { pipeline_track: fanOutTrack },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "report-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "report-b",
     );
-    expect(row?.readinessLine).toBe("Blocked on improve-b");
+    expect(chrome?.readinessLine).toBe("Blocked on improve-b");
   });
 
-  it("passes attempt_count into detail list rows", () => {
+  it("passes attempt_count into node chrome", () => {
     const run = detail(
       [
         stage({ stage_id: "improve-b", status: "failed", attempt_count: 2 }),
@@ -696,13 +884,13 @@ describe("DAG track layout", () => {
         },
       },
     );
-    const row = resolveRunWorkspace(stream, run, selection()).detailListRows.find(
-      (r) => r.stageId === "improve-b",
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "improve-b",
     );
-    expect(row?.attemptCount).toBe(2);
+    expect(chrome?.attemptCount).toBe(2);
   });
 
-  it("keeps linear mode for single-chain projection", () => {
+  it("lays out a single-chain projection as a spatial row", () => {
     const run = detail(
       [
         stage({ stage_id: "a", status: "succeeded" }),
@@ -724,7 +912,11 @@ describe("DAG track layout", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual(["a", "b", "c"]);
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "a", to: "b" },
+      { from: "b", to: "c" },
+    ]);
   });
 });
 
@@ -831,27 +1023,28 @@ describe("AE-console-nodes clone labels", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("dag");
-    if (workspace.trackLayout.mode !== "dag") return;
-    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.id)).toEqual([
-      "author-diagrams~1",
-      "author-diagrams~2",
-      "author-diagrams~3",
-    ]);
-    expect(workspace.trackLayout.dagLayers[1]?.map((n) => n.label)).toEqual([
-      "author-diagrams · 1",
-      "author-diagrams · 2",
-      "author-diagrams · 3",
-    ]);
+    expect(
+      workspace.spatialLayout.nodes
+        .filter((n) => n.layerIndex === 1)
+        .map((n) => n.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2", "author-diagrams~3"]);
+    expect(
+      workspace.nodeChrome
+        .filter((c) => c.kicker === "author-diagrams" && c.stageId !== "author-diagrams")
+        .map((c) => c.title),
+    ).toEqual(["author-diagrams · 1", "author-diagrams · 2", "author-diagrams · 3"]);
     expect(workspace.trackStages.find((s) => s.id === "detect-changes")?.label).toBe(
       "detect-changes",
     );
     expect(workspace.trackStages.find((s) => s.id === "collect")?.label).toBe(
       "collect",
     );
-    expect(
-      workspace.detailListRows.find((r) => r.stageId === "author-diagrams~2")?.label,
-    ).toBe("author-diagrams · 2");
+    const cloneChrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams~2");
+    expect(cloneChrome?.title).toBe("author-diagrams · 2");
+    expect(cloneChrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(cloneChrome!.kicker, cloneChrome!.title)).toBe(
+      "author-diagrams",
+    );
 
     const picked = resolveRunWorkspace(
       stream,
@@ -862,6 +1055,29 @@ describe("AE-console-nodes clone labels", () => {
     expect(picked.trackStages.find((s) => s.selected)?.label).toBe(
       "author-diagrams · 2",
     );
+  });
+
+  it("joins clone chrome kicker against the ordinal title", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "author-diagrams~2",
+          status: "waiting_for_input",
+          pending_prompt: freeText,
+        }),
+      ],
+      { pipeline_track: threeCloneTrack, waiting_stage_id: "author-diagrams~2" },
+    );
+    const chrome = resolveRunWorkspace(stream, run, selection()).nodeChrome.find(
+      (c) => c.stageId === "author-diagrams~2",
+    );
+    expect(chrome).toEqual(
+      expect.objectContaining({
+        title: "author-diagrams · 2",
+        kicker: "author-diagrams",
+      }),
+    );
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).not.toBeNull();
   });
 
   it("labels a run-once author-diagrams node with the catalog id", () => {
@@ -904,10 +1120,18 @@ describe("AE-console-nodes clone labels", () => {
       },
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
-    expect(workspace.trackLayout.mode).toBe("linear");
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "detect-changes",
+      "author-diagrams",
+      "collect",
+    ]);
     expect(workspace.trackStages.find((s) => s.id === "author-diagrams")?.label).toBe(
       "author-diagrams",
     );
+    const chrome = workspace.nodeChrome.find((c) => c.stageId === "author-diagrams");
+    expect(chrome?.title).toBe("author-diagrams");
+    expect(chrome?.kicker).toBe("author-diagrams");
+    expect(spatialNodeKicker(chrome!.kicker, chrome!.title)).toBeNull();
   });
 });
 
@@ -954,10 +1178,10 @@ describe("AE-today-first-waiter clone waiters", () => {
     );
     const workspace = resolveRunWorkspace(stream, run, selection());
     expect(workspace.selectedStageId).toBe("author-diagrams~1");
-    expect(workspace.detailListRows.filter((r) => r.isWaitingAttention).map((r) => r.stageId)).toEqual([
-      "author-diagrams~1",
-      "author-diagrams~2",
-    ]);
+    expect(workspace.kind).toBe("stream");
+    expect(
+      workspace.nodeChrome.filter((c) => c.isWaitingAttention).map((c) => c.stageId),
+    ).toEqual(["author-diagrams~1", "author-diagrams~2"]);
 
     const picked = resolveRunWorkspace(
       stream,
@@ -1025,6 +1249,83 @@ describe("AE-skipped-leftovers", () => {
     );
     expect(workspace.composer).toEqual({ kind: "idle", label: "Session closed" });
     expect(workspace.sessionChip).toBe("closed");
+  });
+});
+
+describe("aside and envelope clone labels", () => {
+  it("uses definition · N for clone artifact meta", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "work~1",
+          status: "succeeded",
+          artifacts: ["out.md"],
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "work~1",
+              definition_id: "work",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "work~1", userPicked: true }),
+    );
+    expect(stageCloneLabel(run, "work~1")).toBe("work · 1");
+    expect(workspace.artifactFiles).toEqual([
+      { path: "out.md", meta: "work · 1" },
+    ]);
+  });
+
+  it("keeps a non-clone stage meta without an ordinal", () => {
+    const run = detail(
+      [
+        stage({
+          stage_id: "design",
+          status: "succeeded",
+          artifacts: ["plan.md"],
+        }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            cloneTrackNode({
+              stage_id: "design",
+              definition_id: "design",
+              layer: 0,
+              status: "succeeded",
+              readiness: "succeeded",
+            }),
+          ],
+          edges: [],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(
+      stream,
+      run,
+      selection({ previousStageId: "design", userPicked: true }),
+    );
+    expect(workspace.artifactFiles[0]?.meta).toBe("design");
+  });
+
+  it("joins two formatted envelope labels with an arrow", () => {
+    expect(
+      formatEnvelopeSubtitle("work~1", "collect", (id) =>
+        id === "work~1" ? "work · 1" : "collect",
+      ),
+    ).toBe("work · 1 → collect");
   });
 });
 
