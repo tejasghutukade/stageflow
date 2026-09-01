@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-01
+
 ### Changed
 
 - **BREAKING:** Parallel clone join requires every clone to succeed. A clone failure skips the join and its descendants; sibling clones still run. Sequential fail-fast is unchanged.
@@ -104,7 +106,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/tejasghutukade/stageflow/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/tejasghutukade/stageflow/compare/v0.3.0...v0.4.0
