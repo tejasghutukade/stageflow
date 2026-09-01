@@ -24,8 +24,23 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  * 1. STAGEFLOW_CURSOR_EXTENSION (absolute path to the extension .ts/.js)
  * 2. Path package from ~/.pi/agent/settings.json (same source interactive pi uses)
  * 3. npm install under ~/.pi/agent/npm/node_modules/pi-cursor-sdk
+ *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
  * 4. Sibling checkout at ../pi-cursor-sdk relative to this repo
  */
+const CURSOR_PACKAGE_ENTRIES = ["dist/index.js", "src/index.ts"] as const;
+
+export function cursorExtensionEntryInPackage(
+  packageRoot: string,
+): string | undefined {
+  for (const rel of CURSOR_PACKAGE_ENTRIES) {
+    const full = path.join(packageRoot, rel);
+    if (existsSync(full)) {
+      return full;
+    }
+  }
+  return undefined;
+}
+
 export function resolveCursorExtensionPath(): string | undefined {
   const fromEnv = process.env.STAGEFLOW_CURSOR_EXTENSION?.trim();
   if (fromEnv && existsSync(fromEnv)) {
@@ -37,27 +52,23 @@ export function resolveCursorExtensionPath(): string | undefined {
     return fromSettings;
   }
 
-  const npmEntry = path.join(
-    os.homedir(),
-    ".pi",
-    "agent",
-    "npm",
-    "node_modules",
-    "pi-cursor-sdk",
-    "src",
-    "index.ts",
+  const npmEntry = cursorExtensionEntryInPackage(
+    path.join(
+      os.homedir(),
+      ".pi",
+      "agent",
+      "npm",
+      "node_modules",
+      "pi-cursor-sdk",
+    ),
   );
-  if (existsSync(npmEntry)) {
+  if (npmEntry) {
     return npmEntry;
   }
 
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const sibling = path.resolve(here, "../../../pi-cursor-sdk/src/index.ts");
-  if (existsSync(sibling)) {
-    return sibling;
-  }
-
-  return undefined;
+  const siblingRoot = path.resolve(here, "../../../pi-cursor-sdk");
+  return cursorExtensionEntryInPackage(siblingRoot);
 }
 
 export function isCursorModelRef(modelRef: string): boolean {
@@ -82,7 +93,7 @@ function missingExtensionReason(modelRef: string): string {
   return [
     `Model "${modelRef}" requires pi-cursor-sdk, but no extension entry was found.`,
     "Install with `pi install npm:pi-cursor-sdk`, or set STAGEFLOW_CURSOR_EXTENSION",
-    "to the absolute path of pi-cursor-sdk/src/index.ts.",
+    "to the absolute path of pi-cursor-sdk/dist/index.js (or src/index.ts).",
     "Also ensure a Cursor SDK API key is available via Pi /login or CURSOR_API_KEY.",
   ].join(" ");
 }
@@ -162,8 +173,8 @@ function resolveFromPiSettings(): string | undefined {
       }
     }
 
-    const declared = path.join(packageRoot, "src", "index.ts");
-    if (existsSync(declared)) {
+    const declared = cursorExtensionEntryInPackage(packageRoot);
+    if (declared) {
       return declared;
     }
   }
