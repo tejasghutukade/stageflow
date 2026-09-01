@@ -67,6 +67,21 @@ describe("stageflow-run SKILL.md", () => {
     expect(gateSection).toMatch(/answer_gate/);
     expect(gateSection).toContain("references/native-question-ui.md");
     expect(gateSection).not.toMatch(/Collect the human's reply in this chat/);
+    expect(gateSection).not.toMatch(/Ask once/);
     expect(body).not.toMatch(/do not open another surface/);
+    expect(body).toMatch(/AskQuestion/);
+  });
+
+  it("locks picker routing, harvest, and confirm submit shape in the reference", () => {
+    const reference = readFileSync(nativeQuestionUi, "utf8");
+    expect(reference).toMatch(/AskQuestion/);
+    expect(reference).toMatch(/AskUserQuestion/);
+    expect(reference).toMatch(/ask_user/);
+    expect(reference).toMatch(/reply with exactly one of/);
+    expect(reference).toMatch(/choose one of/);
+    expect(reference).toMatch(/exactly one of/);
+    expect(reference).toMatch(/whole[\s\S]*gate in chat/i);
+    expect(reference).toMatch(/kind": "confirm"/);
+    expect(reference).toMatch(/Never submit a `confirm` item as `free_text`/);
   });
 });

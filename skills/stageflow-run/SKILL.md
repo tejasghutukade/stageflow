@@ -47,7 +47,7 @@ If this chat already has a `runId` and the request is check, answer, or continue
 
 Prefer this harness's native Stageflow MCP tools when their names are already in the tool list. When they are not, call [`scripts/mcp-call.mjs`](scripts/mcp-call.mjs) — see [`references/mcp-call.md`](references/mcp-call.md). Always use `mcp-call.mjs --stateless` for a bridge this skill started.
 
-Call only `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `get_health`.
+Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `get_health`. Host question tools already in this harness's tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`) are for [Gate](#gate) presentation, not Stageflow MCP.
 
 ## MCP path
 
@@ -83,7 +83,10 @@ Read [`references/native-question-ui.md`](references/native-question-ui.md) befo
 
 1. `list_waiting` with `{ "runId" }`.
 2. Print the pending prompt text **verbatim** (and artifacts / sub-questions when present).
-3. Present the decision on the host native question UI when that reference says the gate is representable; otherwise collect the reply in this chat. Map it to the prompt `kind`:
+3. Present the decision as that reference directs:
+   - If a host question tool is already in this harness's tool list and the gate is representable, invoke that picker. For `multi_question`, sequential pickers only when **every** sub-question is representable, then one `answer_gate`; otherwise the **whole** gate in this chat.
+   - Otherwise collect the reply in this chat.
+4. Map the reply to the prompt `kind` (picker Accept/Reject → `accept`/`reject`):
 
 | kind | `answer` |
 |---|---|
@@ -92,10 +95,10 @@ Read [`references/native-question-ui.md`](references/native-question-ui.md) befo
 | `artifact_backed` | `{ "promptId", "kind": "artifact_backed", "decision": "accept" \| "reject" }` |
 | `multi_question` | `{ "promptId", "kind": "multi_question", "answers": { "<id>": { "kind", "text" \| "decision" } } }` |
 
-`promptId` is `pending_prompt.id` or `waiting_prompt_id`. Map yes/y/accept/approve to `accept`; no/n/reject/deny to `reject`. Ask once when the kind is `multi_question` and any sub-question is unanswered, or when confirm/artifact_backed is not a clear decision.
+`promptId` is `pending_prompt.id` or `waiting_prompt_id`. Map yes/y/accept/approve/Accept to `accept`; no/n/reject/deny/Reject to `reject`. Each `multi_question` sub-answer keeps that sub's `kind` (`confirm` → `decision`, `free_text` → `text`). Collect every sub-answer before `answer_gate`.
 
-4. `answer_gate` with `{ "runId", "stageId", "answer" }`.
-5. Return to [Wait](#wait).
+5. `answer_gate` with `{ "runId", "stageId", "answer" }`.
+6. Return to [Wait](#wait).
 
 **Done when** `answer_gate` returns `{ "ok": true }` and Wait is re-entered. On `isError` (400 / 404 / 409), print the payload and collect a corrected reply the same way (picker if still representable; otherwise this chat).
 

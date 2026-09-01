@@ -32,7 +32,15 @@ Pass the pending message as the question text and the mapped labels as that tool
 | `free_text` with no closed set | — | Always |
 | `multi_question` | Sequential pickers when **every** sub-question is representable; then one `answer_gate` | Any sub-question is open or unmappable — the **whole** gate in chat |
 
-Map picker Accept / yes / approve → `accept`. Reject / no / deny → `reject`. Submit the selected option label as `free_text.text` unless the kind is `confirm` or `artifact_backed`.
+Map picker Accept / yes / approve → `accept`. Reject / no / deny → `reject`. Always include `promptId` (`pending_prompt.id` or `waiting_prompt_id`).
+
+| Item | Submit |
+|---|---|
+| Top-level or sub `confirm` | `{ "kind": "confirm", "decision": "accept" \| "reject" }` |
+| Top-level `artifact_backed` | `{ "kind": "artifact_backed", "decision": "accept" \| "reject" }` plus optional `text` after a reject follow-up |
+| Top-level or sub `free_text` (including harvested) | `{ "kind": "free_text", "text": "<selected label>" }` |
+
+Never submit a `confirm` item as `free_text`. For `multi_question`, wrap sub-answers in the Gate `answers` object and call `answer_gate` once.
 
 When in doubt, chat.
 
@@ -50,7 +58,7 @@ Split the names after that directive (commas, `or`, newlines). Those literal nam
 
 Do **not** harvest loose example lists (`you might try`, `e.g.`, `for example` without `exactly one of`). A listed example set that is not a hard closed directive stays in chat.
 
-Submit the selected label as-is. If the prompt also lists aliases for the same choice (for example `minimal` and `prototype~1`), keep every listed name on the card; do not rewrite the label at submit — the stage maps synonyms.
+Submit the selected label as `text` for `free_text` items. If the prompt also lists aliases for the same choice (for example `minimal` and `prototype~1`), keep every listed name on the card; do not rewrite the label at submit — the stage maps synonyms.
 
 **Done when** the option list is the prompt's literal closed set, or the gate stayed in chat.
 
