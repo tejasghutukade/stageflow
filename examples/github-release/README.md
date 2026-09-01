@@ -58,3 +58,21 @@ DRY_RUN=1 sf run \
   --task examples/github-release/github-release.task.yaml \
   --checkout "$PWD"
 ```
+
+## Repair published notes
+
+If a GitHub Release was published with only the latest version's notes, run **Repair GitHub Release notes** from the Actions tab (`workflow_dispatch`). It overwrites that release's body with every CHANGELOG section since the previous GitHub Release. It does not create tags.
+
+| Input | Effect |
+|-------|--------|
+| *(empty)* | Repair the latest GitHub Release (closes the current `v0.8.0` gap) |
+| `tag` | Repair one tag (`v0.8.0` or `0.8.0`) |
+| `all` | Repair every published GitHub Release |
+| `dry_run` | Print notes in the job log; do not edit GitHub |
+
+Use the branch that contains `scripts/release-range.mjs` (this change must be on the branch you run). Locally:
+
+```bash
+node scripts/release-range.mjs repair --dry-run true
+node scripts/release-range.mjs repair --tag v0.8.0
+```

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -127,10 +128,68 @@ export function resolvePreviousVersion(current, { githubTags, gitTags } = {}) {
   return { previous: pickPreviousVersion(candidates, current), source };
 }
 
+function asReleaseTarget(tag) {
+  const version = parseVersionTag(tag);
+  if (!version) return null;
+  return { tag: `v${version.raw}`, version: version.raw };
+}
+
+export function listRepairTargets(releaseTags, { tag, all } = {}) {
+  const targets = [];
+  const seen = new Set();
+  for (const candidate of releaseTags) {
+    const target = asReleaseTarget(candidate);
+    if (!target || seen.has(target.version)) continue;
+    seen.add(target.version);
+    targets.push(target);
+  }
+  targets.sort((a, b) =>
+    compareSemver(parseVersionTag(a.version), parseVersionTag(b.version)),
+  );
+  if (all && tag) {
+    throw new Error("pass --tag or --all, not both");
+  }
+  if (all) {
+    if (targets.length === 0) throw new Error("no GitHub Releases to repair");
+    return targets;
+  }
+  if (tag) {
+    const wanted = asReleaseTarget(tag);
+    if (!wanted) throw new Error(`invalid tag '${tag}'; expected vX.Y.Z`);
+    const found = targets.find((target) => target.version === wanted.version);
+    if (!found) {
+      throw new Error(`no GitHub Release ${wanted.tag}`);
+    }
+    return [found];
+  }
+  if (targets.length === 0) throw new Error("no GitHub Releases to repair");
+  return [targets[targets.length - 1]];
+}
+
+export function planRepair(changelog, target, releaseTags) {
+  const previous = pickPreviousVersion(releaseTags, target.version);
+  const notes = extractChangelogRange(changelog, {
+    after: previous || undefined,
+    through: target.version,
+  });
+  return {
+    tag: target.tag,
+    version: target.version,
+    previous,
+    notes,
+    included: includedVersionsFromChangelog(notes),
+  };
+}
+
+function isTruthy(value) {
+  return value === "1" || value === "true" || value === "yes";
+}
+
 function printUsage() {
   process.stderr.write(`Usage:
   node scripts/release-range.mjs previous --current <x.y.z>
   node scripts/release-range.mjs changelog --through <x.y.z> [--after <x.y.z>] [--file CHANGELOG.md]
+  node scripts/release-range.mjs repair [--tag vX.Y.Z] [--all 1] [--dry-run 1] [--file CHANGELOG.md]
 `);
 }
 
@@ -182,6 +241,49 @@ function main(argv) {
     });
     process.stdout.write(slice);
     if (slice && !slice.endsWith("\n")) process.stdout.write("\n");
+    return;
+  }
+  if (command === "repair") {
+    const github = listGithubReleaseTags();
+    if (!github.ok) throw new Error("gh release list failed");
+    const file = path.resolve(flags.file ?? "CHANGELOG.md");
+    const changelog = readFileSync(file, "utf8");
+    const targets = listRepairTargets(github.tags, {
+      tag: flags.tag,
+      all: isTruthy(flags.all),
+    });
+    const dryRun = isTruthy(flags["dry-run"]);
+    for (const target of targets) {
+      const plan = planRepair(changelog, target, github.tags);
+      const versions = plan.included.join(", ") || "(none)";
+      process.stderr.write(
+        `repair ${plan.tag} previous=${plan.previous || "(none)"} versions=${versions}\n`,
+      );
+      if (!plan.notes.trim()) {
+        throw new Error(`empty CHANGELOG slice for ${plan.tag}`);
+      }
+      if (dryRun) {
+        process.stdout.write(`--- ${plan.tag} ---\n${plan.notes}\n`);
+        continue;
+      }
+      const dir = mkdtempSync(path.join(tmpdir(), "release-notes-"));
+      const notesPath = path.join(dir, "NOTES.md");
+      try {
+        writeFileSync(notesPath, `${plan.notes}\n`);
+        const edited = spawnSync(
+          "gh",
+          ["release", "edit", plan.tag, "--notes-file", notesPath],
+          { encoding: "utf8" },
+        );
+        if (edited.status !== 0) {
+          throw new Error(
+            `gh release edit ${plan.tag} failed: ${edited.stderr || edited.stdout}`,
+          );
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
     return;
   }
   printUsage();

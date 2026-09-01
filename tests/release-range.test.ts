@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import {
   extractChangelogRange,
   includedVersionsFromChangelog,
+  listRepairTargets,
   pickPreviousVersion,
+  planRepair,
   resolvePreviousVersion,
 } from "../scripts/release-range.mjs";
 
@@ -82,5 +84,35 @@ describe("release-range", () => {
       "0.5.0",
       "0.4.0",
     ]);
+  });
+
+  it("repairs the latest GitHub Release across a version gap", () => {
+    const tags = ["v0.2.0", "v0.3.0", "v0.8.0"];
+    const [latest] = listRepairTargets(tags, {});
+    expect(latest).toEqual({ tag: "v0.8.0", version: "0.8.0" });
+    const plan = planRepair(changelog, latest, tags);
+    expect(plan.previous).toBe("0.3.0");
+    expect(plan.included).toEqual([
+      "0.8.0",
+      "0.7.0",
+      "0.6.0",
+      "0.5.0",
+      "0.4.0",
+    ]);
+  });
+
+  it("repairs a named tag or every GitHub Release", () => {
+    const tags = ["v0.8.0", "v0.3.0", "v0.2.0"];
+    expect(listRepairTargets(tags, { tag: "0.3.0" })).toEqual([
+      { tag: "v0.3.0", version: "0.3.0" },
+    ]);
+    expect(listRepairTargets(tags, { all: true }).map((t) => t.tag)).toEqual([
+      "v0.2.0",
+      "v0.3.0",
+      "v0.8.0",
+    ]);
+    expect(() => listRepairTargets(tags, { tag: "v0.4.0" })).toThrow(
+      /no GitHub Release v0.4.0/,
+    );
   });
 });
