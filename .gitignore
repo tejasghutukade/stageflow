@@ -8,6 +8,8 @@ ui/dist/
 coverage/
 .compound-engineering/
 PLAN.md
+.claude/
+.agents/
 
 # Local operator YAML (not part of the package; keep on disk for manual runs)
 /pipelines/
