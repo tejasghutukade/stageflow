@@ -328,7 +328,7 @@ start_run → wait_run (until waiting/any)
          → wait_run (until terminal)
 ```
 
-Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream.
+Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream. A coding-agent host may present the pending prompt on its native question UI; the submit path is still `answer_gate`.
 
 **Errors (`isError: true`):** `404` unknown run; `400` invalid `timeout_ms`; `code: "aborted"` when the client aborts the wait.
 
