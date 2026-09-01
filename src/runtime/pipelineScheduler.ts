@@ -12,10 +12,10 @@ import {
   cloneFailureContinuesSchedule,
   cloneFanoutConflict,
   cloneRetryDownstream,
+  cloneFailFastSkipIds,
   cloneScheduleAllowsRun,
   isCloneInstance,
   protectedClonableChildIds,
-  sequentialFailFastSkipIds,
   sequentialLaterCloneIds,
 } from "./cloneSchedule.js";
 import { collectDownstreamStageIds } from "./dagTraversal.js";
@@ -619,6 +619,20 @@ export async function runPipelineDag(
     options.onRetryRootTerminal?.(stageId, attempt, outcome);
   };
 
+  const persistSkipPending = async (id: string) => {
+    if (states.get(id) !== "pending") return;
+    states.set(id, "skipped");
+    notifyRetryRootTerminal(id, "skipped");
+    await store.appendStageEvent(run.runId, id, { event: "skipped" });
+  };
+
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
+    for (const id of cloneFailFastSkipIds(dag, stageId, completedEnvelopes)) {
+      await persistSkipPending(id);
+    }
+  }
+
   const markSkippedPending = () => {
     for (const node of dag.nodes) {
       if (states.get(node.id) === "pending") {
@@ -697,13 +711,7 @@ export async function runPipelineDag(
       if (firstFailureReason === undefined) {
         firstFailureReason = reason;
       }
-      const persistSkipPending = async (id: string) => {
-        if (states.get(id) !== "pending") return;
-        states.set(id, "skipped");
-        notifyRetryRootTerminal(id, "skipped");
-        await store.appendStageEvent(run.runId, id, { event: "skipped" });
-      };
-      for (const id of sequentialFailFastSkipIds(
+      for (const id of cloneFailFastSkipIds(
         dag,
         stageId,
         completedEnvelopes,

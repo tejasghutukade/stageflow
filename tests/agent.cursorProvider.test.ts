@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  cursorExtensionEntryInPackage,
   isCursorModelRef,
   resolveCursorExtensionPath,
 } from "../src/agent/cursorProvider.js";
@@ -44,6 +45,25 @@ describe("cursor provider support", () => {
     );
     const resolved = resolveCursorExtensionPath();
     expect(resolved).not.toBe(process.env.STAGEFLOW_CURSOR_EXTENSION);
+  });
+
+  it("prefers dist/index.js over src/index.ts in a package root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-pkg-"));
+    await mkdir(path.join(root, "dist"), { recursive: true });
+    await mkdir(path.join(root, "src"), { recursive: true });
+    const dist = path.join(root, "dist", "index.js");
+    const src = path.join(root, "src", "index.ts");
+    await writeFile(dist, "export {};\n");
+    await writeFile(src, "export {};\n");
+    expect(cursorExtensionEntryInPackage(root)).toBe(dist);
+  });
+
+  it("falls back to src/index.ts when dist is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cursor-src-"));
+    await mkdir(path.join(root, "src"), { recursive: true });
+    const src = path.join(root, "src", "index.ts");
+    await writeFile(src, "export {};\n");
+    expect(cursorExtensionEntryInPackage(root)).toBe(src);
   });
 
   it("is registered as StageProviderSupport only for cursor models", () => {

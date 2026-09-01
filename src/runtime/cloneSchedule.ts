@@ -127,11 +127,26 @@ export function sequentialLaterCloneIds(
   return instances.slice(i + 1);
 }
 
-function sequentialJoinSuccessorIds(
+function joinSuccessorIds(
   dag: ResolvedPipelineDag,
   successorId: string,
 ): string[] {
   return dag.nodes.filter((n) => n.needs === successorId).map((n) => n.id);
+}
+
+function joinAndDownstreamIds(
+  dag: ResolvedPipelineDag,
+  cloneStageId: string,
+): string[] {
+  const defId = definitionIdForInstance(asDagSnapshot(dag), cloneStageId);
+  const ids: string[] = [];
+  for (const joinId of joinSuccessorIds(dag, defId)) {
+    ids.push(joinId);
+    for (const desc of collectDownstreamStageIds(dag, joinId)) {
+      ids.push(desc);
+    }
+  }
+  return ids;
 }
 
 export function cloneFanoutConflict(
@@ -195,12 +210,14 @@ export function cloneFailureContinuesSchedule(
   );
 }
 
-export function sequentialFailFastSkipIds(
+export function cloneFailFastSkipIds(
   dag: ResolvedPipelineDag,
   stageId: string,
   completedEnvelopes: Map<string, StageEnvelope>,
 ): string[] {
-  if (isParallelCloneInstance(dag, stageId, completedEnvelopes)) return [];
+  if (isParallelCloneInstance(dag, stageId, completedEnvelopes)) {
+    return joinAndDownstreamIds(dag, stageId);
+  }
   if (!isSequentialCloneInstance(dag, stageId, completedEnvelopes)) return [];
   const instances = sequentialInstanceList(dag, stageId, completedEnvelopes);
   if (instances === undefined) return [];
@@ -209,13 +226,7 @@ export function sequentialFailFastSkipIds(
   for (const id of instances.slice(idx + 1)) {
     ids.push(id);
   }
-  const defId = definitionIdForInstance(asDagSnapshot(dag), stageId);
-  for (const joinId of sequentialJoinSuccessorIds(dag, defId)) {
-    ids.push(joinId);
-    for (const desc of collectDownstreamStageIds(dag, joinId)) {
-      ids.push(desc);
-    }
-  }
+  ids.push(...joinAndDownstreamIds(dag, stageId));
   return ids;
 }
 
@@ -242,14 +253,7 @@ export function cloneScheduleAllowsRun(
   if (instances.length <= 1) {
     const parentId = instances[0] ?? node.needs;
     if (states.get(parentId) !== "succeeded") return false;
-  } else if (isSequentialFanoutSuccessor(completedEnvelopes, node.needs)) {
-    if (!instances.every((id) => states.get(id) === "succeeded")) return false;
-  } else if (
-    !instances.every((id) => {
-      const s = states.get(id);
-      return s === "succeeded" || s === "failed" || s === "skipped";
-    })
-  ) {
+  } else if (!instances.every((id) => states.get(id) === "succeeded")) {
     return false;
   }
   return !sequentialPreviousUnsatisfied(
