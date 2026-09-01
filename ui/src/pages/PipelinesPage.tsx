@@ -208,11 +208,9 @@ export function PipelinesPage({
                 className="rrow"
                 href={`#${pipelinePath(pipeline.id)}`}
               >
-                <span>
+                <span className="rrow__id" title={`${pipeline.id}\n${pipeline.path}`}>
                   <span className="rrow__task">{pipeline.id}</span>
-                  <span className="rrow__pipe" style={{ display: "block" }}>
-                    {pipeline.path}
-                  </span>
+                  <span className="rrow__pipe">{pipeline.path}</span>
                 </span>
                 <PipelineMiniTrack stages={pipeline.stages} />
                 <span className="rrow__right">

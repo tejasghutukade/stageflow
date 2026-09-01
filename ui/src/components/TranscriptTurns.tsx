@@ -333,7 +333,7 @@ export function buildTranscriptTurns(
       turns.push({ kind: "operator_prompt", event: ev });
     } else if (ev.event === "operator_answer") {
       turns.push({ kind: "operator_answer", event: ev });
-    } else {
+    } else if (!(ev.event === "turn_start" && !formatActivityDescription(ev))) {
       turns.push({ kind: "system", event: ev });
     }
     i += 1;

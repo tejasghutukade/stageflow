@@ -11,18 +11,22 @@ import {
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
 import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
-import { StatusLabel } from "../StatusLabel";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
 import { ArtifactAside } from "../components/ArtifactAside";
 import { ArtifactReader } from "../components/ArtifactReader";
 import { ArtifactDecideColumn } from "../components/DecidePanel";
 import { EnvelopeDrawer } from "../components/EnvelopeDrawer";
 import { EnvelopeRecord } from "../components/EnvelopeFields";
-import { RunTrack } from "../components/RunTrack";
+import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
 import type { DetailView } from "../routes";
-import { cssStatusToken, statusCopy } from "../status/runStatus";
+import {
+  abandonedDisplayCopy,
+  cssStatusToken,
+  isAbandonedDisplay,
+  statusCopy,
+} from "../status/runStatus";
 import {
   canAbandon,
   canRetry,
@@ -30,13 +34,28 @@ import {
   useStageAbandon,
   useStageRetry,
 } from "../stageAction";
+import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
 import {
+  activeWaitKey,
   parseEnvelopeAsidePath,
   resolveRunWorkspace,
   runDetailShouldPoll,
+  stageCloneLabel,
+  stageIdKnown,
   type RunWorkspace,
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
+
+const WORK_DEFAULT_H = 300;
+const WORK_MIN_H = 200;
+const MAP_MIN_H = 140;
+const WORK_ARROW_STEP = 24;
+
+export function clampWorkHeight(requested: number, paneHeight: number): number {
+  const maxByMap = paneHeight - MAP_MIN_H;
+  if (paneHeight < 340) return Math.max(0, maxByMap);
+  return Math.max(WORK_MIN_H, Math.min(requested, maxByMap));
+}
 
 function sessionChipEl(kind: SessionChipKind) {
   if (kind === "alive") return <span className="chip">session alive</span>;
@@ -89,21 +108,30 @@ export function RunDetailPage({
   view: DetailView;
   onBack: () => void;
   onReran: (runId: string) => void;
-  onOpenStream: () => void;
+  onOpenStream: (stageId?: string) => void;
   onOpenArtifact: (path: string) => void;
   onOpenEnvelope: (stageId: string) => void;
 }) {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [userPickedStageId, setUserPickedStageId] = useState<string | null>(null);
+  const [userPickedStageId, setUserPickedStageId] = useState<string | null>(
+    () => (view.kind === "stream" && view.stageId ? view.stageId : null),
+  );
   const previousStageIdRef = useRef<string | null>(null);
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
+  const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
+  const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
+  const [paneHeight, setPaneHeight] = useState(0);
+  const [splitDragging, setSplitDragging] = useState(false);
+  const paneRef = useRef<HTMLDivElement>(null);
+  const splitGestureRef = useRef<{ id: number; y: number; h: number } | null>(null);
   const [rerunning, setRerunning] = useState(false);
   const wasWaitingArtifact = useRef(false);
   const onOpenStreamRef = useRef(onOpenStream);
   onOpenStreamRef.current = onOpenStream;
   const catalog = useRunCatalogHandle();
+  const streamViewStageId = view.kind === "stream" ? view.stageId : undefined;
 
   const load = useCallback(async () => {
     try {
@@ -130,9 +158,10 @@ export function RunDetailPage({
   const retryAndSelect = useCallback(
     (stageId: string) => {
       setUserPickedStageId(stageId);
+      onOpenStream(stageId);
       retry(stageId);
     },
-    [retry],
+    [onOpenStream, retry],
   );
 
   const {
@@ -148,9 +177,11 @@ export function RunDetailPage({
   };
 
   useEffect(() => {
-    setUserPickedStageId(null);
+    setUserPickedStageId(streamViewStageId ?? null);
     previousStageIdRef.current = null;
     setDrawerStageId(null);
+    setDismissedWaitKey(null);
+    setWorkHeight(WORK_DEFAULT_H);
     setRun(null);
     setError(null);
     wasWaitingArtifact.current = false;
@@ -159,6 +190,11 @@ export function RunDetailPage({
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (view.kind !== "stream") return;
+    setUserPickedStageId(streamViewStageId ?? null);
+  }, [view.kind, streamViewStageId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,6 +233,7 @@ export function RunDetailPage({
           previousStageId: userPickedStageId ?? previousStageIdRef.current,
           userPicked: userPickedStageId !== null,
           drawerStageId,
+          dismissedWaitKey,
           wasWaitingArtifact: wasWaitingArtifact.current,
         },
         plannedStageIds,
@@ -213,9 +250,68 @@ export function RunDetailPage({
 
   useEffect(() => {
     if (workspace?.syncStreamRoute) {
-      onOpenStreamRef.current();
+      onOpenStreamRef.current(workspace.selectedStageId ?? undefined);
     }
-  }, [workspace?.syncStreamRoute]);
+  }, [workspace?.syncStreamRoute, workspace?.selectedStageId]);
+
+  useEffect(() => {
+    if (view.kind !== "stream" || !streamViewStageId || !run) return;
+    if (stageIdKnown(run, streamViewStageId, plannedStageIds)) return;
+    onOpenStreamRef.current();
+  }, [view.kind, streamViewStageId, run, plannedStageIds]);
+
+  useEffect(() => {
+    if (view.kind !== "stream") return;
+    if (userPickedStageId || dismissedWaitKey) return;
+    if (!workspace?.selectedStageId) return;
+    if (streamViewStageId === workspace.selectedStageId) return;
+    onOpenStreamRef.current(workspace.selectedStageId);
+  }, [
+    view.kind,
+    streamViewStageId,
+    userPickedStageId,
+    dismissedWaitKey,
+    workspace?.selectedStageId,
+  ]);
+
+  useEffect(() => {
+    const el = paneRef.current;
+    if (!el) return;
+    const measure = () => setPaneHeight(el.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  const applyWorkHeight = useCallback(
+    (requested: number) => {
+      const height = paneRef.current?.getBoundingClientRect().height ?? paneHeight;
+      setWorkHeight(clampWorkHeight(requested, height));
+    },
+    [paneHeight],
+  );
+
+  const hideWorkspace = useCallback(() => {
+    if (run) setDismissedWaitKey(activeWaitKey(run));
+    setUserPickedStageId(null);
+    previousStageIdRef.current = null;
+    setDrawerStageId(null);
+    onOpenStream();
+  }, [onOpenStream, run]);
+
+  const openSelectedStream = useCallback(() => {
+    const stageId =
+      workspace?.selectedStageId ??
+      (view.kind === "envelope" ? view.stageId : undefined) ??
+      userPickedStageId;
+    if (stageId) {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      return;
+    }
+    onOpenStream();
+  }, [onOpenStream, userPickedStageId, view, workspace?.selectedStageId]);
 
   async function onRerunClick() {
     setRerunning(true);
@@ -238,66 +334,103 @@ export function RunDetailPage({
   const composer = workspace
     ? composerEl(runId, workspace, onOpenArtifact)
     : undefined;
+  const spatialLayout = run
+    ? layoutSpatialTrack(run.pipeline_track, {
+        liveStageIds: run.stages.map((s) => s.stage_id),
+        plannedStageIds,
+      })
+    : { nodes: [], edges: [] };
+  const hasMapNodes = spatialLayout.nodes.length > 0;
+  const showWorkspace = Boolean(
+    workspace &&
+      (workspace.selectedStageId ||
+        workspace.kind === "artifact" ||
+        workspace.kind === "envelope"),
+  );
 
-  let body;
+  const abandoned = stage ? isAbandonedDisplay(stage.events) : false;
+  const hideButton = (
+    <button type="button" className="btn btn--sm" onClick={hideWorkspace}>
+      Hide workspace
+    </button>
+  );
+
+  let center;
   if (error) {
-    body = (
+    center = (
       <div style={{ padding: "var(--spacing-4)" }}>
         <div className="banner banner--error">{error}</div>
       </div>
     );
   } else if (!run || !workspace) {
-    body = (
+    center = (
       <div style={{ padding: "var(--spacing-4)" }}>
         <p>Loading…</p>
       </div>
     );
-  } else if (workspace.kind === "empty") {
-    body = (
-      <div style={{ padding: "var(--spacing-4)" }}>
-        <p>
-          {run.stages.length === 0
-            ? "No stages have started yet."
-            : "Select a stage to inspect."}
-        </p>
-      </div>
-    );
   } else if (workspace.kind === "artifact" && selectedPath) {
-    body = (
+    center = (
       <ArtifactReader
         runId={runId}
         path={selectedPath}
         readOnly={workspace.artifactReadOnly}
-        onBackToTranscript={onOpenStream}
+        onBackToTranscript={openSelectedStream}
+        onHide={hideWorkspace}
       />
     );
   } else if (workspace.kind === "envelope" && workspace.envelope) {
-    body = workspace.envelope.envelope ? (
+    center = workspace.envelope.envelope ? (
       <EnvelopeRecord
         fromStageId={workspace.envelope.fromStageId}
         toStageId={workspace.envelope.toStageId}
         envelope={workspace.envelope.envelope}
-        onBackToTranscript={onOpenStream}
+        onBackToTranscript={openSelectedStream}
+        onHide={hideWorkspace}
         onArtifactClick={onOpenArtifact}
+        stageLabel={(id) => stageCloneLabel(run, id)}
       />
     ) : (
-      <div style={{ padding: "var(--spacing-4)" }}>
-        <div className="banner banner--warning">{workspace.envelope.fromStageId} has not emitted a handoff envelope.</div>
+      <div className="stream" style={{ height: "100%" }}>
+        <header className="stream__head">
+          <h3 className="stream__name">Handoff envelope</h3>
+          <span className="topbar__spacer"></span>
+          <div className="stream__head-trail">
+            <button type="button" className="btn btn--sm" onClick={openSelectedStream}>
+              ← Transcript
+            </button>
+            {hideButton}
+          </div>
+        </header>
+        <div style={{ padding: "var(--spacing-4)" }}>
+          <div className="banner banner--warning">{workspace.envelope.fromStageId} has not emitted a handoff envelope.</div>
+        </div>
       </div>
     );
-  } else if (stage) {
-    body = (
+  } else if (workspace.selectedStageId) {
+    const streamStageId = workspace.selectedStageId;
+    const stageToken = stage ? cssStatusToken(stage.status) : undefined;
+    center = (
       <TranscriptStream
         stageName={
-          workspace.trackStages.find((s) => s.id === stage.stage_id)?.label ??
-          stage.stage_id
+          workspace.trackStages.find((s) => s.id === streamStageId)?.label ??
+          streamStageId
         }
         status={
           <>
-            <StatusLabel status={stage.status} />
-            <AttemptCountBadge count={stage.attempt_count} />
+            {abandoned ? (
+              <span className="status status--failed">
+                <span className="dot dot--failed"></span>
+                {" "}{abandonedDisplayCopy()}
+              </span>
+            ) : (
+              <span className={`status${stageToken && stageToken !== "running" ? ` status--${stageToken}` : ""}`}>
+                <span className={`dot${stageToken ? ` dot--${stageToken}` : ""}`}></span>
+                {" "}{stage ? statusCopy(stage.status) : "pending"}
+              </span>
+            )}
+            {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
             {sessionChipEl(workspace.sessionChip)}
-            {canRetry(stage.status) ? (
+            {stage && canRetry(stage.status) ? (
               <button
                 type="button"
                 className="btn btn--sm"
@@ -309,7 +442,7 @@ export function RunDetailPage({
                   : "Retry stage"}
               </button>
             ) : null}
-            {canAbandon(stage.status) ? (
+            {stage && canAbandon(stage.status) ? (
               <button
                 type="button"
                 className="btn btn--sm btn--reject"
@@ -321,131 +454,222 @@ export function RunDetailPage({
             ) : null}
           </>
         }
+        trailing={hideButton}
         autoScroll={workspace.liveStream}
-        scrollKey={stage.events.length}
+        scrollKey={stage?.events.length}
         composer={composer}
       >
         <TranscriptTurns
-          events={stage.events}
+          events={stage?.events ?? []}
           inboundEnvelope={workspace.inboundEnvelope}
         />
       </TranscriptStream>
     );
   }
 
+  const splitMax = Math.max(0, paneHeight - MAP_MIN_H);
+  const splitMin = paneHeight < 340 ? splitMax : WORK_MIN_H;
+
   return (
     <>
-      <div className="pane" style={{ height: "100%" }}>
-        <div className="topbar">
-          <a className="topbar__back" href="#/runs" onClick={e => { e.preventDefault(); onBack(); }}>← Runs</a>
-          <h2 className="topbar__title">{run ? runTaskLabel(run) : runId}</h2>
-          {run ? <span className="topbar__sub">{runLocatorSubtitle(run)}</span> : null}
-          {run ? (
-            <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
-              <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
-              {" "}{statusCopy(run.status)}
-            </span>
+      <div
+        ref={paneRef}
+        className={`pane run-detail${showWorkspace ? " has-stage" : ""}${splitDragging ? " is-resizing" : ""}`}
+        style={{ height: "100%", ["--work-h" as string]: `${workHeight}px` }}
+      >
+        <div>
+          <div className="topbar">
+            <a className="topbar__back" href="#/runs" onClick={e => { e.preventDefault(); onBack(); }}>← Runs</a>
+            <h2 className="topbar__title">{run ? runTaskLabel(run) : "Loading…"}</h2>
+            {run ? (
+              <span className="topbar__sub" title={runLocatorSubtitle(run)}>
+                {runLocatorSubtitle(run)}
+              </span>
+            ) : null}
+            {run ? (
+              <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
+                <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
+                {" "}{statusCopy(run.status)}
+              </span>
+            ) : null}
+            <span className="topbar__spacer"></span>
+            <button className="btn btn--primary" disabled={rerunning} onClick={() => void onRerunClick()}>
+              {rerunning
+                ? run?.status === "created"
+                  ? "Starting…"
+                  : "Starting fresh…"
+                : run?.status === "created"
+                  ? "Start run"
+                  : "Start fresh"}
+            </button>
+          </div>
+
+          {retryError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {retryError}
+            </div>
           ) : null}
-          <span className="topbar__spacer"></span>
-          <button className="btn btn--primary" disabled={rerunning} onClick={() => void onRerunClick()}>
-            {rerunning ? "Starting fresh…" : "Start fresh"}
-          </button>
+
+          {abandonError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {abandonError}
+            </div>
+          ) : null}
         </div>
 
-        {retryError ? (
-          <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
-            {retryError}
+        {error && !run ? (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <div className="banner banner--error">{error}</div>
           </div>
-        ) : null}
-
-        {abandonError ? (
-          <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
-            {abandonError}
+        ) : !run || !workspace ? (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <p>Loading…</p>
           </div>
-        ) : null}
+        ) : hasMapNodes ? (
+          <div className="workspace">
+            <SpatialRunMap
+              layout={spatialLayout}
+              stages={run.stages}
+              detailListRows={workspace.detailListRows}
+              selectedStageId={workspace.selectedStageId}
+              onSelectStage={(id) => {
+                setUserPickedStageId(id);
+                onOpenStream(id);
+              }}
+              onDeselect={hideWorkspace}
+              retryingStageIds={retryingStageIds}
+              onRetryStage={retryAndSelect}
+              abandoningStageId={abandoningStageId}
+              onAbandonStage={abandon}
+              runId={runId}
+              showHint={!showWorkspace}
+            />
+          </div>
+        ) : (
+          <div style={{ padding: "var(--spacing-4)" }}>
+            <p>No stages have started yet.</p>
+          </div>
+        )}
 
-        {run && workspace && (workspace.trackLayout.mode === "linear"
-          ? workspace.trackLayout.linearStages.length > 0
-          : workspace.trackLayout.dagLayers.some((l) => l.length > 0) ||
-            workspace.detailListRows.length > 0) ? (
-          <RunTrack
-            trackLayout={workspace.trackLayout}
-            detailListRows={workspace.detailListRows}
-            selectedStageId={workspace.selectedStageId}
-            onSelect={(id) => {
-              setUserPickedStageId(id);
-              onOpenStream();
-            }}
-            onEnvelopeClick={(fromStageId) => setDrawerStageId(fromStageId)}
-            activeEnvelopeId={workspace.activeEnvelopeId}
-            retryingStageIds={retryingStageIds}
-            onRetryStage={retryAndSelect}
-            abandoningStageId={abandoningStageId}
-            onAbandonStage={abandon}
-          />
-        ) : null}
-
-        <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-          {run && run.stages.length > 0 && workspace ? (
-            <div style={{ width: 240, flexShrink: 0, borderRight: "1px solid var(--color-border)", overflow: "auto" }}>
-              <ArtifactAside
-                files={workspace.artifactFiles}
-                selectedPath={selectedPath}
-                onSelect={(path) => {
-                  const envelopeStageId = parseEnvelopeAsidePath(path);
-                  if (envelopeStageId) {
-                    setUserPickedStageId(envelopeStageId);
-                    onOpenEnvelope(envelopeStageId);
-                    return;
+        {showWorkspace && run && workspace ? (
+          <div className="work">
+            <div
+              className={`work-split${splitDragging ? " is-dragging" : ""}`}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize workspace"
+              aria-valuemin={splitMin}
+              aria-valuemax={splitMax}
+              aria-valuenow={Math.round(workHeight)}
+              tabIndex={0}
+              onPointerDown={(event) => {
+                if (event.button != null && event.button !== 0) return;
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                setSplitDragging(true);
+                splitGestureRef.current = {
+                  id: event.pointerId,
+                  y: event.clientY,
+                  h: workHeight,
+                };
+              }}
+              onPointerMove={(event) => {
+                const gesture = splitGestureRef.current;
+                if (!gesture || gesture.id !== event.pointerId) return;
+                applyWorkHeight(gesture.h + (gesture.y - event.clientY));
+              }}
+              onPointerUp={(event) => {
+                if (splitGestureRef.current?.id !== event.pointerId) return;
+                splitGestureRef.current = null;
+                setSplitDragging(false);
+              }}
+              onPointerCancel={(event) => {
+                if (splitGestureRef.current?.id !== event.pointerId) return;
+                splitGestureRef.current = null;
+                setSplitDragging(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  applyWorkHeight(workHeight + WORK_ARROW_STEP);
+                }
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  applyWorkHeight(workHeight - WORK_ARROW_STEP);
+                }
+                if (event.key === "Home") {
+                  event.preventDefault();
+                  applyWorkHeight(splitMax);
+                }
+                if (event.key === "End") {
+                  event.preventDefault();
+                  applyWorkHeight(splitMin);
+                }
+              }}
+            >
+              <span className="work-split__grip" aria-hidden="true"></span>
+            </div>
+            <div className="work-row">
+              <div className="aside" style={{ width: 240, flexShrink: 0, overflow: "auto" }}>
+                <ArtifactAside
+                  files={workspace.artifactFiles}
+                  selectedPath={selectedPath}
+                  onSelect={(path) => {
+                    const envelopeStageId = parseEnvelopeAsidePath(path);
+                    if (envelopeStageId) {
+                      setUserPickedStageId(envelopeStageId);
+                      onOpenEnvelope(envelopeStageId);
+                      return;
+                    }
+                    onOpenArtifact(path);
+                  }}
+                  footer={
+                    <Collapsible
+                      trigger={<span style={{ fontSize: "var(--font-size-sm)", fontWeight: 500 }}>Input</span>}
+                      defaultIsOpen={false}
+                    >
+                      <CodeBlock
+                        code={run.task_yaml}
+                        language="yaml"
+                        container="section"
+                        maxHeight={200}
+                        width="100%"
+                      />
+                    </Collapsible>
                   }
-                  onOpenArtifact(path);
-                }}
-                footer={
-                  <Collapsible
-                    trigger={<span style={{ fontSize: "var(--font-size-sm)", fontWeight: 500 }}>Input</span>}
-                    defaultIsOpen={false}
-                  >
-                    <CodeBlock
-                      code={run.task_yaml}
-                      language="yaml"
-                      container="section"
-                      maxHeight={200}
-                      width="100%"
-                    />
-                  </Collapsible>
-                }
-              />
-            </div>
-          ) : null}
+                />
+              </div>
 
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
-            {body}
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                {center}
+              </div>
+
+              {workspace.showDecide && workspace.decidePrompt && stage ? (
+                <div className="decide" style={{ width: 320, flexShrink: 0 }}>
+                  <ArtifactDecideColumn
+                    runId={runId}
+                    stageId={stage.stage_id}
+                    prompt={workspace.decidePrompt}
+                    events={stage.events}
+                    inboundEnvelope={workspace.inboundEnvelope}
+                    inboundFromStageId={workspace.inboundFromStageId}
+                    inboundToStageId={workspace.inboundToStageId}
+                    selectedPath={selectedPath}
+                    onSelectArtifact={onOpenArtifact}
+                    onOpenInboundEnvelope={
+                      workspace.inboundFromStageId
+                        ? () => {
+                            const fromId = workspace.inboundFromStageId;
+                            if (fromId) setDrawerStageId(fromId);
+                          }
+                        : undefined
+                    }
+                  />
+                </div>
+              ) : null}
+            </div>
           </div>
-
-          {workspace?.showDecide && workspace.decidePrompt && stage ? (
-            <div style={{ width: 320, flexShrink: 0, borderLeft: "1px solid var(--color-border)" }}>
-              <ArtifactDecideColumn
-                runId={runId}
-                stageId={stage.stage_id}
-                prompt={workspace.decidePrompt}
-                events={stage.events}
-                inboundEnvelope={workspace.inboundEnvelope}
-                inboundFromStageId={workspace.inboundFromStageId}
-                inboundToStageId={workspace.inboundToStageId}
-                selectedPath={selectedPath}
-                onSelectArtifact={onOpenArtifact}
-                onOpenInboundEnvelope={
-                  workspace.inboundFromStageId
-                    ? () => {
-                        const fromId = workspace.inboundFromStageId;
-                        if (fromId) setDrawerStageId(fromId);
-                      }
-                    : undefined
-                }
-              />
-            </div>
-          ) : null}
-        </div>
+        ) : null}
       </div>
 
       {workspace?.drawer ? (

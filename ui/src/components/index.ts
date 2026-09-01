@@ -37,6 +37,9 @@ export type { DagTrackNode, PipelineDagTrackProps } from "./PipelineDagTrack";
 export { RunTrack } from "./RunTrack";
 export type { RunTrackProps, TrackLayout } from "./RunTrack";
 
+export { SpatialRunMap } from "./SpatialRunMap";
+export type { SpatialRunMapProps } from "./SpatialRunMap";
+
 export { TrackDetailList } from "./TrackDetailList";
 export type { TrackDetailListProps, TrackDetailRow } from "./TrackDetailList";
 

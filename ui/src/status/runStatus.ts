@@ -1,4 +1,18 @@
-import type { RunStatus, RunSummary, StageSnapshot } from "../api";
+import type { RunStatus, RunSummary, StageLogEvent, StageSnapshot } from "../api";
+
+export const OPERATOR_ABANDON_REASON = "process_interrupted: operator abandoned stage";
+
+export function isAbandonedDisplay(events: StageLogEvent[]): boolean {
+  let lastFailedReason: string | undefined;
+  for (const event of events) {
+    if (event.event === "failed") lastFailedReason = event.reason;
+  }
+  return lastFailedReason === OPERATOR_ABANDON_REASON;
+}
+
+export function abandonedDisplayCopy(): string {
+  return "abandoned";
+}
 
 export type RunDisplayStatus = RunStatus | "waiting_for_input";
 export type StageDisplayStatus = StageSnapshot["status"];
@@ -17,6 +31,7 @@ export function cssStatusToken(status: DisplayStatus): CssStatusToken | undefine
     case "waiting_for_input":
       return "waiting";
     case "created":
+      return undefined;
     case "running":
       return "running";
     case "succeeded":
@@ -34,6 +49,7 @@ export function statusCopy(status: DisplayStatus): string {
     case "waiting_for_input":
       return "waiting on you";
     case "created":
+      return "not started";
     case "pending":
     case "running":
     case "succeeded":

@@ -40,4 +40,25 @@ describe("ui displayCatalogPath", () => {
       catalogPaths.runLocatorSubtitle({ pipeline_id: "demo", task_id: "hello" }),
     ).toBe("demo · hello");
   });
+
+  it("returns one label when pipeline and task labels match", () => {
+    expect(
+      catalogPaths.runLocatorSubtitle({
+        pipeline_id: "demo",
+        task_id: "demo",
+      }),
+    ).toBe("demo");
+    expect(
+      catalogPaths.runLocatorSubtitle({
+        pipeline_id: "demo",
+        pipeline_path: "/repo/demo.yaml",
+        task_path: "/repo/demo.yaml",
+        project_root: "/repo",
+      }),
+    ).toBe("demo.yaml");
+  });
+
+  it("returns the pipeline label when the task label is missing", () => {
+    expect(catalogPaths.runLocatorSubtitle({ pipeline_id: "demo" })).toBe("demo");
+  });
 });

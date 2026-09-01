@@ -54,7 +54,7 @@ export function runLocatorSubtitle(run: {
   const taskLabel = run.task_path
     ? displayCatalogPath(run.task_path, run.project_root)
     : run.task_id;
-  if (taskLabel) {
+  if (taskLabel && taskLabel !== pipelineLabel) {
     return `${pipelineLabel} · ${taskLabel}`;
   }
   return pipelineLabel;

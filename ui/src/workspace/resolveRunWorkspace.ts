@@ -28,6 +28,7 @@ export type OperatorSelection = {
   previousStageId: string | null;
   userPicked: boolean;
   drawerStageId: string | null;
+  dismissedWaitKey?: string | null;
   wasWaitingArtifact?: boolean;
 };
 
@@ -97,6 +98,16 @@ function stageExists(run: RunDetail, stageId: string): boolean {
   return run.stages.some((s) => s.stage_id === stageId);
 }
 
+export function stageIdKnown(
+  run: RunDetail,
+  stageId: string,
+  plannedStageIds?: string[],
+): boolean {
+  if (stageExists(run, stageId)) return true;
+  if (run.pipeline_track?.nodes?.some((n) => n.stage_id === stageId)) return true;
+  return Boolean(plannedStageIds?.includes(stageId));
+}
+
 function snapshotById(run: RunDetail): Map<string, StageSnapshot> {
   return new Map(run.stages.map((s) => [s.stage_id, s]));
 }
@@ -109,34 +120,48 @@ function orderedStageIds(run: RunDetail): string[] {
   return run.stages.map((s) => s.stage_id);
 }
 
-function pickStageId(
-  run: RunDetail,
-  previousStageId: string | null,
-  userPicked: boolean,
-): string | null {
-  const order = orderedStageIds(run);
-  const snapshotMap = snapshotById(run);
+export function activeWaitKey(run: RunDetail): string | null {
+  const stageId = run.waiting_stage_id;
+  if (!stageId) return null;
+  const snap = run.stages.find((s) => s.stage_id === stageId);
+  const promptId = snap?.pending_prompt?.id;
+  if (promptId) return `${stageId}:${promptId}`;
+  if (run.waiting_prompt_id) return run.waiting_prompt_id;
+  return stageExists(run, stageId) ? `${stageId}:` : null;
+}
 
-  if (userPicked && previousStageId && stageExists(run, previousStageId)) {
-    return previousStageId;
+function pickStageId(run: RunDetail, selection: OperatorSelection): string | null {
+  if (
+    selection.userPicked &&
+    selection.previousStageId &&
+    stageExists(run, selection.previousStageId)
+  ) {
+    return selection.previousStageId;
   }
-  if (run.waiting_stage_id && stageExists(run, run.waiting_stage_id)) {
+  const waitKey = activeWaitKey(run);
+  if (
+    waitKey &&
+    waitKey !== selection.dismissedWaitKey &&
+    run.waiting_stage_id &&
+    stageExists(run, run.waiting_stage_id)
+  ) {
     return run.waiting_stage_id;
   }
-  for (const stageId of order) {
-    const snap = snapshotMap.get(stageId);
-    if (snap?.status === "waiting_for_input") return stageId;
+  return null;
+}
+
+function stageOwnsArtifactPath(stage: StageSnapshot, path: string): boolean {
+  if (stage.artifacts.includes(path)) return true;
+  return Boolean(stage.envelope?.artifacts.includes(path));
+}
+
+function artifactOwnerStageId(run: RunDetail, path: string): string | null {
+  const snapshots = snapshotById(run);
+  for (const stageId of orderedStageIds(run)) {
+    const snap = snapshots.get(stageId);
+    if (snap && stageOwnsArtifactPath(snap, path)) return stageId;
   }
-  for (const stageId of order) {
-    const snap = snapshotMap.get(stageId);
-    if (snap?.status === "running") return stageId;
-  }
-  for (const stageId of order) {
-    const snap = snapshotMap.get(stageId);
-    if (snap?.status === "failed") return stageId;
-  }
-  if (previousStageId && stageExists(run, previousStageId)) return previousStageId;
-  return order[0] ?? run.stages[0]?.stage_id ?? null;
+  return null;
 }
 
 export function formatCloneLabel(
@@ -170,6 +195,13 @@ function nodeCloneLabel(nodes: PipelineTrackNode[], node: PipelineTrackNode): st
     node.definition_id,
     definitionOrdinal(nodes, node.stage_id, node.definition_id),
   );
+}
+
+export function stageCloneLabel(run: RunDetail, stageId: string): string {
+  const nodes = run.pipeline_track?.nodes ?? [];
+  const node = nodes.find((n) => n.stage_id === stageId);
+  if (!node) return formatCloneLabel(stageId);
+  return nodeCloneLabel(nodes, node);
 }
 
 function snapshotToTrackStage(
@@ -386,11 +418,17 @@ function composerState(
   status: StageSnapshot["status"] | undefined,
   prompt: PendingPrompt | undefined,
 ): ComposerState {
-  if (kind !== "stream" || !status) return { kind: "none" };
+  if (kind !== "stream") return { kind: "none" };
   if (status === "waiting_for_input" && prompt) {
     return { kind: "reply", prompt };
   }
-  if (status === "succeeded" || status === "failed" || status === "pending" || status === "skipped") {
+  if (
+    !status ||
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "pending" ||
+    status === "skipped"
+  ) {
     return { kind: "idle", label: "Session closed" };
   }
   return { kind: "none" };
@@ -410,7 +448,7 @@ function runArtifactFiles(run: RunDetail): ArtifactFile[] {
   const files: ArtifactFile[] = [];
   for (const s of run.stages) {
     for (const path of s.artifacts) {
-      files.push({ path, meta: s.stage_id });
+      files.push({ path, meta: stageCloneLabel(run, s.stage_id) });
     }
   }
   return files;
@@ -426,7 +464,7 @@ function asideArtifactFiles(
     {
       path: envelopeAsidePath(selectedStage.stage_id),
       label: "Handoff envelope",
-      meta: selectedStage.stage_id,
+      meta: stageCloneLabel(run, selectedStage.stage_id),
     },
     ...files,
   ];
@@ -502,15 +540,17 @@ export function resolveRunWorkspace(
   selection: OperatorSelection,
   plannedStageIds?: string[],
 ): RunWorkspace {
-  const pickedStageId = pickStageId(
-    run,
-    selection.previousStageId,
-    selection.userPicked,
-  );
-  const selectedStageId =
-    view.kind === "envelope" && stageExists(run, view.stageId)
+  const pickedStageId = pickStageId(run, selection);
+  const streamStageId =
+    view.kind === "stream" && view.stageId && stageIdKnown(run, view.stageId, plannedStageIds)
       ? view.stageId
       : pickedStageId;
+  const selectedStageId =
+    view.kind === "envelope"
+      ? view.stageId
+      : view.kind === "artifact"
+        ? artifactOwnerStageId(run, view.path)
+        : streamStageId;
   const selectedStage =
     run.stages.find((s) => s.stage_id === selectedStageId) ?? null;
   const catalogOverlay = run.pipeline_track?.nodes?.length
@@ -529,14 +569,14 @@ export function resolveRunWorkspace(
     !waitingArtifact;
 
   let kind: RunWorkspace["kind"];
-  if (!selectedStage) {
-    kind = "empty";
-  } else if (view.kind === "envelope") {
+  if (view.kind === "envelope") {
     kind = "envelope";
   } else if (view.kind === "artifact" && !autoReturnToStream) {
     kind = "artifact";
-  } else {
+  } else if (selectedStageId) {
     kind = "stream";
+  } else {
+    kind = "empty";
   }
 
   const showDecide = kind === "artifact" && waitingArtifact;

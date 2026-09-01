@@ -1,5 +1,5 @@
 export type DetailView =
-  | { kind: "stream" }
+  | { kind: "stream"; stageId?: string }
   | { kind: "envelope"; stageId: string }
   | { kind: "artifact"; path: string };
 
@@ -30,6 +30,10 @@ export function navigate(to: string): void {
 
 export function runStreamPath(runId: string): string {
   return `/runs/${encodeURIComponent(runId)}`;
+}
+
+export function runStagePath(runId: string, stageId: string): string {
+  return `/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}`;
 }
 
 export function runArtifactPath(runId: string, path: string): string {
@@ -160,6 +164,16 @@ export function parseHash(hash = window.location.hash): Route {
         runId,
         view: {
           kind: "envelope",
+          stageId: decodeURIComponent(parts[2]),
+        },
+      };
+    }
+    if (parts[1] === "stages" && parts[2] && parts.length === 3) {
+      return {
+        name: "detail",
+        runId,
+        view: {
+          kind: "stream",
           stageId: decodeURIComponent(parts[2]),
         },
       };

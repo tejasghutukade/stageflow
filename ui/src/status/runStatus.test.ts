@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { RunSummary } from "../api";
+import { canRetry } from "../stageAction/eligibility";
 import {
+  abandonedDisplayCopy,
   cssStatusToken,
+  isAbandonedDisplay,
   ringGlyph,
   ringStatus,
   runDisplayStatus,
   statusCopy,
   statusDotVariant,
+  statusIsPulsing,
   trackSegmentToken,
   waitingOnYouTitle,
   type DisplayStatus,
@@ -69,9 +73,9 @@ describe("runDisplayStatus", () => {
 });
 
 describe("cssStatusToken", () => {
-  it("maps every display status, with created and running both running", () => {
+  it("maps every display status, with created as an unpulsed gray default", () => {
     expect(cssStatusToken("waiting_for_input")).toBe("waiting");
-    expect(cssStatusToken("created")).toBe("running");
+    expect(cssStatusToken("created")).toBeUndefined();
     expect(cssStatusToken("running")).toBe("running");
     expect(cssStatusToken("succeeded")).toBe("succeeded");
     expect(cssStatusToken("failed")).toBe("failed");
@@ -80,10 +84,18 @@ describe("cssStatusToken", () => {
   });
 });
 
+describe("statusIsPulsing", () => {
+  it("is running-only, so created does not pulse", () => {
+    expect(statusIsPulsing("created")).toBe(false);
+    expect(statusIsPulsing("running")).toBe(true);
+    expect(statusIsPulsing("waiting_for_input")).toBe(false);
+  });
+});
+
 describe("statusCopy", () => {
   it("maps every display status, with waiting_for_input as waiting on you", () => {
     expect(statusCopy("waiting_for_input")).toBe("waiting on you");
-    expect(statusCopy("created")).toBe("created");
+    expect(statusCopy("created")).toBe("not started");
     expect(statusCopy("pending")).toBe("pending");
     expect(statusCopy("running")).toBe("running");
     expect(statusCopy("succeeded")).toBe("succeeded");
@@ -152,5 +164,42 @@ describe("stage statuses without a run-level equivalent", () => {
       expect(() => cssStatusToken(status)).not.toThrow();
       expect(() => statusCopy(status)).not.toThrow();
     }
+  });
+});
+
+describe("isAbandonedDisplay", () => {
+  it("treats the operator-abandon fail reason as abandoned", () => {
+    expect(
+      isAbandonedDisplay([
+        { event: "started" },
+        { event: "failed", reason: "process_interrupted: operator abandoned stage" },
+      ]),
+    ).toBe(true);
+    expect(abandonedDisplayCopy()).toBe("abandoned");
+    expect(canRetry("failed")).toBe(true);
+  });
+
+  it("keeps a server-restart interrupt as ordinary failed", () => {
+    expect(
+      isAbandonedDisplay([
+        { event: "failed", reason: "process_interrupted: no active worker (server restart)" },
+      ]),
+    ).toBe(false);
+    expect(canRetry("failed")).toBe(true);
+  });
+
+  it("treats a failed event with no reason as ordinary failed", () => {
+    expect(isAbandonedDisplay([{ event: "failed" }])).toBe(false);
+    expect(canRetry("failed")).toBe(true);
+  });
+
+  it("uses the last failed event, not an earlier abandon", () => {
+    expect(
+      isAbandonedDisplay([
+        { event: "failed", reason: "process_interrupted: operator abandoned stage" },
+        { event: "started" },
+        { event: "failed", reason: "tool error" },
+      ]),
+    ).toBe(false);
   });
 });
