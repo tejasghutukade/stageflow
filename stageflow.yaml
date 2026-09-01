@@ -8,7 +8,6 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
-    - examples/prototyping
   tasks:
     - examples/conditional-fork
     - examples/hello-world
@@ -17,7 +16,6 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
-    - examples/prototyping
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

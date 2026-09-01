@@ -19,13 +19,16 @@ PLAN.md
 .playwright-mcp/
 tmp/
 .scratch/
+# Local-only docs and catalogs (keep on disk; not part of the package)
 docs/plans/
 docs/architecture/
-docs/ideation/          # local-only; includes investor-outreach research dumps
+docs/ideation/
+docs/prototype/
 docs/manual-tests/
 docs/random-ideas/
 docs/explainers/
 docs/handoffs/
+examples/prototyping/
 
 # Public docs (planning subtrees above stay ignored)
 !docs/
@@ -34,8 +37,6 @@ docs/*
 !docs/*.md
 !docs/img/
 !docs/img/**
-!docs/prototype/
-!docs/prototype/**
 !docs/providers/
 docs/providers/*
 !docs/providers/*.md

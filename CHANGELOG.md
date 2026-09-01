@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Spatial map-first run detail page: zoomable stage graph, gated workspace (logs / files / envelopes / HITL), stage deep links (`#/runs/:id/stages/:stageId`), and a locked prototype under `docs/prototype/minimal/`
+- Spatial map-first run detail page: zoomable stage graph, gated workspace (logs / files / envelopes / HITL), and stage deep links (`#/runs/:id/stages/:stageId`)
 
 ### Changed
 
