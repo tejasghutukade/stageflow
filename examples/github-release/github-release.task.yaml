@@ -1,9 +1,13 @@
 id: github-release
-goal: Draft operator-facing GitHub release notes for this version bump, then publish them as a GitHub Release.
+goal: Draft operator-facing GitHub release notes for every version since the last GitHub Release, then publish them as one GitHub Release for the current tag.
 context: |
-  Bound checkout is the Stageflow repository. Current version, tag, and
-  previous version are in RELEASE_VERSION, RELEASE_TAG, and RELEASE_PREVIOUS
-  when those env vars are set; otherwise read them from package.json and git.
+  Bound checkout is the Stageflow repository. Current version, tag,
+  previous published GitHub Release, and optional changelog slice path
+  are in RELEASE_VERSION, RELEASE_TAG, RELEASE_PREVIOUS, and
+  RELEASE_CHANGELOG_SLICE when those env vars are set; otherwise read
+  them from package.json, git tags / GitHub Releases, and CHANGELOG.md.
 constraints: |
-  No HITL. Do not call ask_operator. Stage 1 only writes notes. Stage 2
-  only publishes those notes with gh. Do not use GitHub auto-generated notes.
+  No HITL. Do not call ask_operator. Stage 1 writes notes that include
+  a heading for every CHANGELOG version after previous through current.
+  Stage 2 only publishes those notes with gh for the current tag. Do
+  not use GitHub auto-generated notes. Do not create extra tags.
