@@ -17,7 +17,7 @@ Install the suite into a consumer project with `npx skills add tejasghutukade/st
 | `stageflow-setup` | Install Stageflow, a catalog, and provider login |
 | `stageflow-session-capture` | Turn a past session or this chat into a pipeline |
 | `stageflow-author` | Author a pipeline from a loop the human can explain |
-| `stageflow-run` | Start, watch, or answer a run |
+| `stageflow-run` | Start, watch, or answer a run. HITL uses the host native question UI when the gate maps; otherwise chat. |
 | `stageflow-delegate` | Notice a repeating pattern and turn it into a reusable job |
 
 Jobs share one MCP-vs-CLI rule: [`skills/stageflow/references/control-surface.md`](../skills/stageflow/references/control-surface.md). They do not each invent a second probe. When a host is up, prefer MCP; otherwise use the CLI. Tool and command names live in [MCP](mcp.md) and [CLI reference](cli-reference.md).

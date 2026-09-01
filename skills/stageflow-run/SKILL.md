@@ -2,19 +2,20 @@
 name: stageflow-run
 description: >-
   Starts a catalog pipeline from the harness, reports progress, and answers
-  every HITL gate in this chat. Triggers: run a pipeline, start <pipeline>,
-  check on my run, answer the pending question.
+  every HITL gate on the host native question UI when it can, otherwise in
+  this chat. Triggers: run a pipeline, start <pipeline>, check on my run,
+  answer the pending question.
 compatibility: Requires the sf CLI on PATH. An MCP host (sf ui or sf mcp) is optional.
 disable-model-invocation: true
 ---
 
 # Stageflow run
 
-Start a catalog pipeline, keep every HITL gate in this chat, and report the outcome. Author and session-capture own catalog YAML; this job owns the run and any throwaway `*.task.yaml`.
+Start a catalog pipeline, present HITL on the host native question UI when it can, and report the outcome. Author and session-capture own catalog YAML; this job owns the run and any throwaway `*.task.yaml`.
 
 Talking jobs cite [`../stageflow/references/control-surface.md`](../stageflow/references/control-surface.md). Probe with [`../stageflow/scripts/detect-host.mjs`](../stageflow/scripts/detect-host.mjs) only. Do not write a second probe.
 
-MCP tool shapes: [`docs/mcp.md`](../../docs/mcp.md). CLI flags and exit codes: [`docs/cli-reference.md`](../../docs/cli-reference.md). Direct tool calls: [`references/mcp-call.md`](references/mcp-call.md). Selection: [`references/task-and-pipeline-selection.md`](references/task-and-pipeline-selection.md).
+MCP tool shapes: [`docs/mcp.md`](../../docs/mcp.md). CLI flags and exit codes: [`docs/cli-reference.md`](../../docs/cli-reference.md). Direct tool calls: [`references/mcp-call.md`](references/mcp-call.md). Selection: [`references/task-and-pipeline-selection.md`](references/task-and-pipeline-selection.md). Gate presentation: [`references/native-question-ui.md`](references/native-question-ui.md).
 
 ## Preconditions
 
@@ -78,9 +79,11 @@ Call only `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `l
 
 ### Gate
 
+Read [`references/native-question-ui.md`](references/native-question-ui.md) before presenting a pending prompt.
+
 1. `list_waiting` with `{ "runId" }`.
 2. Print the pending prompt text **verbatim** (and artifacts / sub-questions when present).
-3. Collect the human's reply in this chat. Map it to the prompt `kind`:
+3. Present the decision on the host native question UI when that reference says the gate is representable; otherwise collect the reply in this chat. Map it to the prompt `kind`:
 
 | kind | `answer` |
 |---|---|
@@ -94,7 +97,7 @@ Call only `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `l
 4. `answer_gate` with `{ "runId", "stageId", "answer" }`.
 5. Return to [Wait](#wait).
 
-**Done when** `answer_gate` returns `{ "ok": true }` and Wait is re-entered. On `isError` (400 / 404 / 409), print the payload and ask for a corrected reply — do not open another surface.
+**Done when** `answer_gate` returns `{ "ok": true }` and Wait is re-entered. On `isError` (400 / 404 / 409), print the payload and collect a corrected reply the same way (picker if still representable; otherwise this chat).
 
 ## CLI path
 
@@ -119,7 +122,7 @@ Parse the single JSON document.
 
 ## Bridge
 
-A CLI waiting exit has no answer command. Keep the gate in this chat by joining a host on the same project root (git top-level when `git rev-parse --show-toplevel` succeeds, otherwise the current directory).
+A CLI waiting exit has no answer command. Stay in this job by joining a host on the same project root (git top-level when `git rev-parse --show-toplevel` succeeds, otherwise the current directory). Presentation still follows [Gate](#gate).
 
 1. Probe again with [`../stageflow/scripts/detect-host.mjs`](../stageflow/scripts/detect-host.mjs) (the host may have appeared).
 2. **Up:** use that host — native tools if present, otherwise `mcp-call.mjs` (omit `--stateless`). Continue at [Gate](#gate).

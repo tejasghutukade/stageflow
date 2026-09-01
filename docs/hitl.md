@@ -103,6 +103,8 @@ See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` runs — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console.
 
+When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate`. Open-ended `free_text` and hosts without a picker stay in chat. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
+
 ## See also
 
 - [Envelopes](envelopes.md) — completing a stage after gates

@@ -11,7 +11,7 @@ node ../scripts/detect-host.mjs
 node ../scripts/detect-host.mjs --base-url http://127.0.0.1:3847
 ```
 
-The script `GET`s `{baseUrl}/api/health` (default `http://127.0.0.1:3847`, 1500 ms timeout). **up** means HTTP 200 and parseable JSON. Non-200, non-JSON, or timeout is **down**.
+The script `GET`s `{baseUrl}/api/health` (default `http://127.0.0.1:3847`, 1500 ms timeout). **up** means HTTP 200 and parseable JSON. Non-200, non-JSON, or timeout is **down**. This probe is Stageflow host up/down only — it does not detect a coding-agent question UI. Gate presentation lives in [`../../stageflow-run/references/native-question-ui.md`](../../stageflow-run/references/native-question-ui.md).
 
 Stdout is one line: `up <baseUrl>` or `down <baseUrl>`. Exit `0` when up, `1` when down, `2` on usage error.
 
