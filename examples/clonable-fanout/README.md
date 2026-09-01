@@ -74,9 +74,10 @@ parallel 3
 7. On disk under `.stageflow/runs/<runId>/stages/` you should see
    `work~1/attempts/1/artifacts/codeword.md` (and `work~2`, `work~3`), **not**
    a shared `stages/work/artifacts/` folder for fan-out clones.
-8. **collect** starts only after all three are terminal, then succeeds. Open its
+8. **collect** starts only after all three succeeded, then succeeds. Open its
    envelope: summary and `payload.codewords` should list `maple`, `river`,
-   `pine` (clone-list order, not the order you answered).
+   `pine` (clone-list order, not the order you answered). If any work clone
+   fails, **collect** is skipped and the run fails; remaining clones still finish.
 
 ---
 

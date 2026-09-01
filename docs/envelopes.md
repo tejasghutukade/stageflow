@@ -110,7 +110,7 @@ Item shape:
 }
 ```
 
-Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**, the join waits until every clone is finished, including failures, then receives every envelope. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
+Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
 
 `clone_forks` is required for each clonable successor. When the parent also has `fork`, `fork_choice` names only non-clonable siblings. A fork parent whose every child is clonable does not require `fork_choice`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario F.
 
@@ -150,7 +150,7 @@ Accepted envelopes persist in the SQLite run store (`SF_STORE=sqlite` only; see 
 
 Later stages receive prior envelope context through the stage bootstrap (task + upstream summaries/payloads). Exact prompt assembly is handled by the runtime; authors focus on meaningful `payload` and `summary` content.
 
-After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order. After parallel clones the list includes failed clones. After sequential clones the join stage only runs if every clone succeeded. See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
+After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order. The join stage only runs if every clone succeeded (parallel and sequential). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
 
 Inspect envelopes in the operator console: run detail → stage → envelope view (`#/runs/<runId>/stages/<stageId>/envelope`).
 

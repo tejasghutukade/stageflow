@@ -188,7 +188,7 @@ A clonable successor is not selected via `fork_choice`. `clone_forks` is the onl
 
 Run-once keeps the catalog id. Fan-out mints `{catalogId}~{n}` with 1-based `n` in the predecessor's clone-list order. YAML `needs` stays the catalog id. Instance ids must not contain `/`, `\`, or `..`. The operator console labels clones `definition · N` (see [Operator console](operator-console.md#clone-tracks)); disk paths and API keys stay the raw instance id.
 
-Sequential versus parallel join rules for clones are documented on [envelopes](envelopes.md#clonable-successors).
+Join requires every clone to succeed in both modes. Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors).
 
 Fixtures:
 

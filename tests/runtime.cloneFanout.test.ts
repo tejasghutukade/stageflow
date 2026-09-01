@@ -749,7 +749,7 @@ describe("clone fan-out parallel mint (U3 / AE1)", () => {
 });
 
 describe("clone fan-out join gate (U4)", () => {
-  it("join opens after a parallel clone failure; run outcome is failed", async () => {
+  it("join stays skipped after a parallel clone failure; run outcome is failed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-clone-join-fail-"));
     const store = createRunStore({ rootDir: root });
     const agent = instanceKeyedAgent({
@@ -765,7 +765,7 @@ describe("clone fan-out join gate (U4)", () => {
         "design-doc~1": [{ type: "emit", envelope: okEnvelope("d1") }],
         "design-doc~2": [{ type: "fail", reason: "clone 2 boom" }],
         "design-doc~3": [{ type: "emit", envelope: okEnvelope("d3") }],
-        "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
+        "join-doc": [{ type: "throw", message: "join must not run" }],
       },
     });
     const manager = new RunManager({
@@ -786,18 +786,18 @@ describe("clone fan-out join gate (U4)", () => {
       return meta.status === "failed";
     });
 
-    expect(agent.openCounts.get("join-doc")).toBe(1);
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
     expect(agent.openCounts.get("design-doc~1")).toBe(1);
     expect(agent.openCounts.get("design-doc~3")).toBe(1);
-    const joinPriors = agent.priorEnvelopes.get("join-doc");
-    expect(joinPriors).toHaveLength(3);
-    expect(joinPriors?.[1]?.status).toBe("failure");
     const detail = await store.readRun(started.runId);
     expect(detail.stages.find((s) => s.stage_id === "design-doc~1")?.status).toBe(
       "succeeded",
     );
     expect(detail.stages.find((s) => s.stage_id === "design-doc~3")?.status).toBe(
       "succeeded",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "join-doc")?.status).toBe(
+      "skipped",
     );
   });
 
@@ -825,7 +825,7 @@ describe("clone fan-out join gate (U4)", () => {
           { type: "gate", gate, envelope: okEnvelope("d2") },
         ],
         "design-doc~3": [{ type: "emit", envelope: okEnvelope("d3") }],
-        "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
+        "join-doc": [{ type: "throw", message: "join must not run" }],
       },
     });
     const manager = new RunManager({
@@ -848,13 +848,13 @@ describe("clone fan-out join gate (U4)", () => {
       return meta.status === "failed";
     });
     expect(agent.openCounts.get("design-doc~3")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBe(1);
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
   });
 
-  it("hydrate of mixed clone failure starts join without halt-skip", async () => {
+  it("hydrate of mixed clone failure skips join without opening it", async () => {
     const dummyFail = instanceKeyedAgent({
       behaviorsByStage: {
-        "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
+        "join-doc": [{ type: "throw", message: "join must not run" }],
       },
     });
     const root = await mkdtemp(path.join(tmpdir(), "sf-clone-hydrate-join-"));
@@ -913,8 +913,12 @@ describe("clone fan-out join gate (U4)", () => {
       executionMode: "inprocess",
     });
     expect(result.outcome).toBe("failed");
-    expect(dummyFail.openCounts.get("join-doc")).toBe(1);
+    expect(dummyFail.openCounts.get("join-doc") ?? 0).toBe(0);
     expect(dummyFail.openCounts.get("design-doc~1") ?? 0).toBe(0);
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "join-doc")?.status).toBe(
+      "skipped",
+    );
   });
 });
 
@@ -1135,7 +1139,7 @@ describe("clone fan-out HITL and retry (U7)", () => {
     expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
-  it("retry of a failed clone keeps join closed until the new attempt terminals", async () => {
+  it("retry of a failed clone keeps join closed until every clone succeeded", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-clone-retry-"));
     const store = createRunStore({ rootDir: root });
     let releaseRetry: () => void = () => undefined;
@@ -1157,10 +1161,7 @@ describe("clone fan-out HITL and retry (U7)", () => {
           { type: "gate", gate: retryGate, envelope: okEnvelope("d1-retry") },
         ],
         "design-doc~2": [{ type: "emit", envelope: okEnvelope("d2") }],
-        "join-doc": [
-          { type: "emit", envelope: okEnvelope("join-ok") },
-          { type: "emit", envelope: okEnvelope("join-retry") },
-        ],
+        "join-doc": [{ type: "emit", envelope: okEnvelope("join-retry") }],
       },
     });
     const manager = new RunManager({
@@ -1180,12 +1181,15 @@ describe("clone fan-out HITL and retry (U7)", () => {
       const meta = await store.readRunMeta(started.runId);
       return meta.status === "failed";
     });
-    expect(agent.openCounts.get("join-doc")).toBe(1);
-    expect(agent.priorEnvelopes.get("join-doc")?.[0]?.status).toBe("failure");
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
+    const failedDetail = await store.readRun(started.runId);
+    expect(failedDetail.stages.find((s) => s.stage_id === "join-doc")?.status).toBe(
+      "skipped",
+    );
 
     const retryPromise = manager.retryStage(started.runId, "design-doc~1");
     await waitFor(() => (agent.openCounts.get("design-doc~1") ?? 0) >= 2);
-    expect(agent.openCounts.get("join-doc")).toBe(1);
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
     releaseRetry();
     const retry = await retryPromise;
     expect(retry.ok).toBe(true);
@@ -1194,8 +1198,11 @@ describe("clone fan-out HITL and retry (U7)", () => {
       const meta = await store.readRunMeta(started.runId);
       return meta.status === "succeeded";
     });
-    expect(agent.openCounts.get("join-doc")).toBe(2);
-    expect(agent.priorEnvelopes.get("join-doc")?.[0]?.summary).toBe("d1-retry");
+    expect(agent.openCounts.get("join-doc")).toBe(1);
+    expect(agent.priorEnvelopes.get("join-doc")?.map((e) => e.summary)).toEqual([
+      "d1-retry",
+      "d2",
+    ]);
   }, 15000);
 });
 
