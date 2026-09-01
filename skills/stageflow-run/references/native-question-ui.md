@@ -18,7 +18,7 @@ Do not run `detect-host.mjs` for this. That script is Stageflow host up/down (MC
 
 If none of those (or another options-based question tool already in the list) is present, collect in chat. Do not invent a tool name or call shape. Codex and OpenCode stay in chat until an options-based question tool appears in the list.
 
-Pass the pending message as the question text and the mapped labels as that tool's options. One question per call. If the picker returns a custom or Other value, map that text the same as a chat reply.
+Pass the pending message as the question text and the mapped labels as that tool's options. One question per call except `multi_question`: one call with one question per representable sub-item when the tool accepts a questions array (Cursor `AskQuestion` does). Do not invent placeholder options such as Type in Other — host Other is the custom-text escape. If the picker returns a custom or Other value, map that text the same as a chat reply.
 
 **Done when** you know picker or chat for this gate.
 
@@ -30,7 +30,7 @@ Pass the pending message as the question text and the mapped labels as that tool
 | `artifact_backed` | Accept and Reject (decision only) | Host has no picker |
 | `free_text` with a harvested closed set | Those names as options | Open-ended, or harvest is ambiguous |
 | `free_text` with no closed set | — | Always |
-| `multi_question` | Sequential pickers when **every** sub-question is representable; then one `answer_gate` | Any sub-question is open or unmappable — the **whole** gate in chat |
+| `multi_question` | One picker call with one question per sub-item when **every** sub-question is representable; then one `answer_gate` | Any sub-question is open or unmappable — the **whole** gate in chat |
 
 Map picker Accept / yes / approve → `accept`. Reject / no / deny → `reject`. Always include `promptId` (`pending_prompt.id` or `waiting_prompt_id`).
 

@@ -84,7 +84,7 @@ Read [`references/native-question-ui.md`](references/native-question-ui.md) befo
 1. `list_waiting` with `{ "runId" }`.
 2. Print the pending prompt text **verbatim** (and artifacts / sub-questions when present).
 3. Present the decision as that reference directs:
-   - If a host question tool is already in this harness's tool list and the gate is representable, invoke that picker. For `multi_question`, sequential pickers only when **every** sub-question is representable, then one `answer_gate`; otherwise the **whole** gate in this chat.
+   - If a host question tool is already in this harness's tool list and the gate is representable, invoke that picker. For `multi_question`, one picker call with one question per sub-item when **every** sub-question is representable, then one `answer_gate`; otherwise the **whole** gate in this chat.
    - Otherwise collect the reply in this chat.
 4. Map the reply to the prompt `kind` (picker Accept/Reject → `accept`/`reject`):
 

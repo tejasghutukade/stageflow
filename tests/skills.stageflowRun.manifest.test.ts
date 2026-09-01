@@ -81,6 +81,9 @@ describe("stageflow-run SKILL.md", () => {
     expect(reference).toMatch(/choose one of/);
     expect(reference).toMatch(/exactly one of/);
     expect(reference).toMatch(/whole[\s\S]*gate in chat/i);
+    expect(reference).toMatch(/One picker call with one question per sub-item/);
+    expect(reference).not.toMatch(/Sequential pickers/);
+    expect(reference).toMatch(/Do not invent placeholder options/);
     expect(reference).toMatch(/kind": "confirm"/);
     expect(reference).toMatch(/Never submit a `confirm` item as `free_text`/);
   });
