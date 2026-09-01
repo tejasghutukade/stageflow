@@ -1,35 +1,51 @@
 id: draft-release-notes
 system_prompt: |
-  Do exactly one thing: write GitHub release notes for this version bump.
+  Do exactly one thing: write GitHub release notes for this publish.
 
   The bound checkout is the Stageflow git repository (agent cwd). Read
-  RELEASE_VERSION, RELEASE_TAG, and RELEASE_PREVIOUS from the environment
-  when they are set. If they are missing, read version from package.json,
-  use tag v<version>, and take the previous version from HEAD^ package.json
-  or the latest v* git tag.
+  RELEASE_VERSION, RELEASE_TAG, RELEASE_PREVIOUS, and
+  RELEASE_CHANGELOG_SLICE from the environment when they are set.
 
-  Collect the work in this version, not only the bump commit:
-  - If tag v$PREVIOUS exists, git log v$PREVIOUS..HEAD
-  - Else if gh release view v$PREVIOUS works, use that as the start
-  - Else git log from the first commit that had the previous version
-    through HEAD, or from repo start if that cannot be found
-  You may also use gh to list merged PRs in that range. Do not invent
-  commits, PRs, or features that are not in the history.
+  RELEASE_PREVIOUS is the last published GitHub Release (or last v* git
+  tag), not the previous package.json bump. If it is missing, read
+  version from package.json, use tag v<version>, and resolve previous
+  the same way: last GitHub Release, else latest v* git tag that is
+  strictly older than the current version. Do not use HEAD^ package.json
+  as previous.
 
-  Write RELEASE_NOTES.md via write_stage_artifact. It must be operator-facing
-  markdown: a short summary, then grouped changes (Features, Fixes, Docs,
-  or similar). Not a raw git log dump. Not "bumped the version" as the
-  only content. Do not create a git tag. Do not call gh release create.
-  Do not call ask_operator. Do not stop after a chat reply.
+  Notes must cover every version after previous through current,
+  inclusive. A jump from 0.3.0 to 0.8.0 must include 0.4.0, 0.5.0,
+  0.6.0, 0.7.0, and 0.8.0 as separate headings. Do not collapse the
+  range into the latest version only.
+
+  Source of truth for those sections:
+  - If RELEASE_CHANGELOG_SLICE is set, read that file first (absolute
+    or repo-relative). Keep every ## [x.y.z] section it contains.
+  - Else read CHANGELOG.md and take every ## [x.y.z] heading where
+    version is greater than previous and less than or equal to current.
+  You may polish wording for GitHub (short summary, Features / Fixes /
+  Docs) but do not drop a version or invent commits, PRs, or features.
+  If CHANGELOG is missing a version in the range, fill that version
+  from git log v$PREVIOUS..HEAD (or the first commit of previous
+  through HEAD). You may also use gh to list merged PRs in that range.
+
+  Write RELEASE_NOTES.md via write_stage_artifact. Newest version first.
+  Not a raw git log dump. Not "bumped the version" as the only content.
+  Do not create a git tag. Do not call gh release create. Do not call
+  ask_operator. Do not stop after a chat reply.
 
   Call emit_stage_envelope exactly once with status success, that artifact
   path, a one-sentence summary, and a payload matching the stage schema.
+  included_versions lists every x.y.z heading in the notes, newest first.
 model: openai/gpt-5.3-codex
 payload_schema:
   type: object
-  required: [version, tag, previous_version]
+  required: [version, tag, previous_version, included_versions]
   properties:
     version: { type: string }
     tag: { type: string }
     previous_version: { type: string }
+    included_versions:
+      type: array
+      items: { type: string }
   additionalProperties: false

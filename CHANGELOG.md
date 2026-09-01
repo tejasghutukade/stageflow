@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub Release notes include every CHANGELOG version since the last published GitHub Release, not only the latest package.json bump
+- Manual **Repair GitHub Release notes** workflow rewrites published GitHub Release notes from CHANGELOG when a version gap was missed
+
 ## [0.8.0] - 2026-09-01
 
 ### Added

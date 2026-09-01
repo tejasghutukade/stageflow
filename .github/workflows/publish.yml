@@ -87,10 +87,7 @@ jobs:
             exit 1
           fi
           TAG="v${CURRENT}"
-          PREVIOUS=""
-          if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
-            PREVIOUS="$(git show HEAD^:package.json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).version")"
-          fi
+          PREVIOUS="$(node scripts/release-range.mjs previous --current "${CURRENT}")"
           echo "current=${CURRENT} previous=${PREVIOUS} tag=${TAG}"
           {
             echo "version=${CURRENT}"
@@ -155,6 +152,13 @@ jobs:
           RELEASE_TAG: ${{ steps.gate.outputs.tag }}
           RELEASE_PREVIOUS: ${{ steps.gate.outputs.previous }}
         run: |
+          SLICE="${GITHUB_WORKSPACE}/changelog-slice.md"
+          if [ -n "${RELEASE_PREVIOUS}" ]; then
+            node scripts/release-range.mjs changelog --after "${RELEASE_PREVIOUS}" --through "${RELEASE_VERSION}" --file CHANGELOG.md > "${SLICE}"
+          else
+            node scripts/release-range.mjs changelog --through "${RELEASE_VERSION}" --file CHANGELOG.md > "${SLICE}"
+          fi
+          export RELEASE_CHANGELOG_SLICE="${SLICE}"
           sf providers login openai --type api_key --api-key-env OPENAI_API_KEY
           sf validate --strict --json
           set +e
@@ -179,6 +183,7 @@ jobs:
           include-hidden-files: true
           path: |
             sf-run.json
+            changelog-slice.md
             .stageflow/state.db
             .stageflow/state.db-wal
             .stageflow/state.db-shm

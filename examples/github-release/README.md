@@ -4,6 +4,8 @@ Dogfood release automation: draft operator-facing GitHub release notes, then pub
 
 Stageflow uses this catalog in `.github/workflows/publish.yml` and `release.yml` when publishing new npm versions.
 
+One GitHub Release is created for the current tag. The notes body includes **every CHANGELOG version since the last GitHub Release**, not only the latest `package.json` bump. A publish that jumps from `0.3.0` to `0.8.0` therefore includes headings for `0.4.0` through `0.8.0`. Intermediate versions are not tagged or published as extra GitHub Releases.
+
 ## Layout
 
 | Path | Role |
@@ -13,6 +15,8 @@ Stageflow uses this catalog in `.github/workflows/publish.yml` and `release.yml`
 | `publish-github-release.yaml` | `gh release create` from prior artifact |
 | `github-release.task.yaml` | Task bound at run time |
 
+CI helpers: `scripts/release-range.mjs` resolves previous from published GitHub Releases (git tags if `gh` is unavailable) and extracts the CHANGELOG slice.
+
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow installed
@@ -20,7 +24,9 @@ Stageflow uses this catalog in `.github/workflows/publish.yml` and `release.yml`
 - **`gh` CLI** and `GH_TOKEN` or `GITHUB_TOKEN` for publish stage
 - Git checkout of the Stageflow repo (stages read version/tags from the bound checkout)
 
-Optional env vars (set by publish workflow): `RELEASE_VERSION`, `RELEASE_TAG`, `RELEASE_PREVIOUS`, `GITHUB_SHA`, `DRY_RUN=1` to skip actual release creation.
+Optional env vars (set by publish workflow): `RELEASE_VERSION`, `RELEASE_TAG`, `RELEASE_PREVIOUS`, `RELEASE_CHANGELOG_SLICE`, `GITHUB_SHA`, `DRY_RUN=1` to skip actual release creation.
+
+`RELEASE_PREVIOUS` is the last published GitHub Release version, not `HEAD^` `package.json`. `RELEASE_CHANGELOG_SLICE` is a markdown file of CHANGELOG sections in that range (workflows write `changelog-slice.md` before `sf run`).
 
 ## Commands
 
@@ -30,6 +36,14 @@ From the **repository git root**:
 sf validate --strict
 export OPENAI_API_KEY=…
 export GH_TOKEN=…
+CURRENT="$(node -p "require('./package.json').version")"
+PREVIOUS="$(node scripts/release-range.mjs previous --current "$CURRENT")"
+if [ -n "$PREVIOUS" ]; then
+  node scripts/release-range.mjs changelog --after "$PREVIOUS" --through "$CURRENT" > changelog-slice.md
+else
+  node scripts/release-range.mjs changelog --through "$CURRENT" > changelog-slice.md
+fi
+export RELEASE_VERSION="$CURRENT" RELEASE_TAG="v${CURRENT}" RELEASE_PREVIOUS="$PREVIOUS" RELEASE_CHANGELOG_SLICE="$PWD/changelog-slice.md"
 sf run \
   --pipeline examples/github-release/github-release.pipeline.yaml \
   --task examples/github-release/github-release.task.yaml \
@@ -43,4 +57,22 @@ DRY_RUN=1 sf run \
   --pipeline examples/github-release/github-release.pipeline.yaml \
   --task examples/github-release/github-release.task.yaml \
   --checkout "$PWD"
+```
+
+## Repair published notes
+
+If a GitHub Release was published with only the latest version's notes, run **Repair GitHub Release notes** from the Actions tab (`workflow_dispatch`). It overwrites that release's body with every CHANGELOG section since the previous GitHub Release. It does not create tags.
+
+| Input | Effect |
+|-------|--------|
+| *(empty)* | Repair the latest GitHub Release (closes the current `v0.8.0` gap) |
+| `tag` | Repair one tag (`v0.8.0` or `0.8.0`) |
+| `all` | Repair every published GitHub Release |
+| `dry_run` | Print notes in the job log; do not edit GitHub |
+
+Use the branch that contains `scripts/release-range.mjs` (this change must be on the branch you run). Locally:
+
+```bash
+node scripts/release-range.mjs repair --dry-run true
+node scripts/release-range.mjs repair --tag v0.8.0
 ```

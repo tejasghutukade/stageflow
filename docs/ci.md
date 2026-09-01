@@ -223,7 +223,7 @@ jobs:
         # --operator-cwd path/to/checkout
 ```
 
-Adjust task, pipeline, and secrets for your project. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/).
+Adjust task, pipeline, and secrets for your project. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/). To rewrite notes on an already-published GitHub Release, run **Repair GitHub Release notes** from the Actions tab.
 
 ## Concurrency env vars
 

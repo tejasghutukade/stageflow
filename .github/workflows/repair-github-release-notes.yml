@@ -1,0 +1,51 @@
+name: Repair GitHub Release notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to repair (v0.8.0 or 0.8.0). Leave empty to repair the latest GitHub Release."
+        required: false
+        type: string
+      all:
+        description: "Repair every published GitHub Release, not only the latest"
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: "Preview notes in the log without editing GitHub"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Rewrite release notes from CHANGELOG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPAIR_TAG: ${{ inputs.tag }}
+          REPAIR_ALL: ${{ inputs.all }}
+          REPAIR_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=(repair)
+          if [ "${REPAIR_ALL}" = "true" ]; then
+            args+=(--all true)
+          elif [ -n "${REPAIR_TAG}" ]; then
+            args+=(--tag "${REPAIR_TAG}")
+          fi
+          if [ "${REPAIR_DRY_RUN}" = "true" ]; then
+            args+=(--dry-run true)
+          fi
+          node scripts/release-range.mjs "${args[@]}"
