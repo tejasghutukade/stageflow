@@ -2,6 +2,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
@@ -535,25 +536,87 @@ function SpatialNode({
         showRetry={Boolean(showRetry)}
         showAbandon={Boolean(showAbandon)}
         busy={busy}
-        retryLabel={retrying ? "Retrying…" : "Retry"}
-        abandonLabel={abandoning ? "Abandoning…" : "Abandon"}
+        retryLabel={retrying ? "Retrying…" : "Retry stage"}
+        abandonLabel={abandoning ? "Abandoning…" : "Abandon stage"}
         onRetry={
           showRetry
-            ? (event) => {
-                event.stopPropagation();
+            ? () => {
                 onRetryStage?.(node.stageId);
               }
             : undefined
         }
         onAbandon={
           showAbandon
-            ? (event) => {
-                event.stopPropagation();
+            ? () => {
                 onAbandonStage?.(node.stageId);
               }
             : undefined
         }
       />
+    </g>
+  );
+}
+
+function NodeStatusAction({
+  kind,
+  cx,
+  cy,
+  busy,
+  label,
+  onActivate,
+}: {
+  kind: "retry" | "abandon";
+  cx: number;
+  cy: number;
+  busy: boolean;
+  label: string;
+  onActivate?: () => void;
+}) {
+  const onClick = (event: MouseEvent) => {
+    if (busy) return;
+    event.stopPropagation();
+    onActivate?.();
+  };
+  const onKeyDown = (event: ReactKeyboardEvent) => {
+    if (busy) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    onActivate?.();
+  };
+  return (
+    <g
+      className={`node-action-btn node-${kind}${busy ? " is-busy" : ""}`}
+      role="button"
+      tabIndex={busy ? -1 : 0}
+      aria-label={label}
+      aria-disabled={busy || undefined}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+    >
+      <title>{label}</title>
+      <circle className="action-bg" cx={cx} cy={cy} r={11} />
+      {kind === "retry" ? (
+        <path
+          className="action-icon"
+          d={[
+            `M${cx - 3.2} ${cy - 2.2}`,
+            `A4.2 4.2 0 1 0 ${cx + 0.2} ${cy - 4}`,
+            `M${cx + 0.2} ${cy - 7.2}`,
+            `L${cx + 0.2} ${cy - 3.6}`,
+            `L${cx - 3.4} ${cy - 3.6}`,
+          ].join(" ")}
+        />
+      ) : (
+        <rect
+          className="action-icon"
+          x={cx - 3.5}
+          y={cy - 3.5}
+          width={7}
+          height={7}
+          rx={1.25}
+        />
+      )}
     </g>
   );
 }
@@ -580,9 +643,10 @@ function NodeStatusColumn({
   busy: boolean;
   retryLabel: string;
   abandonLabel: string;
-  onRetry?: (event: MouseEvent) => void;
-  onAbandon?: (event: MouseEvent) => void;
+  onRetry?: () => void;
+  onAbandon?: () => void;
 }) {
+  const actionY = cy + 28;
   return (
     <g className="node-status">
       {status === "succeeded" ? (
@@ -684,28 +748,24 @@ function NodeStatusColumn({
         />
       ) : null}
       {showRetry ? (
-        <foreignObject x={cx - 36} y={cy + 14} width={72} height={24}>
-          <button
-            type="button"
-            className="node-action-btn node-retry"
-            disabled={busy}
-            onClick={onRetry}
-          >
-            {retryLabel}
-          </button>
-        </foreignObject>
+        <NodeStatusAction
+          kind="retry"
+          cx={cx}
+          cy={actionY}
+          busy={busy}
+          label={retryLabel}
+          onActivate={onRetry}
+        />
       ) : null}
       {showAbandon ? (
-        <foreignObject x={cx - 36} y={cy + 14} width={72} height={24}>
-          <button
-            type="button"
-            className="node-action-btn node-abandon"
-            disabled={busy}
-            onClick={onAbandon}
-          >
-            {abandonLabel}
-          </button>
-        </foreignObject>
+        <NodeStatusAction
+          kind="abandon"
+          cx={cx}
+          cy={actionY}
+          busy={busy}
+          label={abandonLabel}
+          onActivate={onAbandon}
+        />
       ) : null}
     </g>
   );

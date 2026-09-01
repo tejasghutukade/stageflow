@@ -48,7 +48,7 @@ export function isLinearPipelineTrack(
   return true;
 }
 
-export const SPATIAL_COL_W = 440;
+export const SPATIAL_COL_W = 520;
 export const SPATIAL_ROW_H = 340;
 export const SPATIAL_NODE_W = 400;
 export const SPATIAL_NODE_H = 128;

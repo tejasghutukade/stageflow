@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { StageSnapshot } from "../api";
 import {
+  SPATIAL_COL_W,
   SPATIAL_NODE_H,
   SPATIAL_NODE_W,
   type SpatialNodeBox,
@@ -64,11 +65,11 @@ describe("isPanGesture", () => {
 
 describe("spatialFitBounds", () => {
   it("contains every node box plus a small pad", () => {
-    const bounds = spatialFitBounds([box("a", 0, 0), box("b", 440, 340)], 24);
+    const bounds = spatialFitBounds([box("a", 0, 0), box("b", SPATIAL_COL_W, 340)], 24);
     expect(bounds).toEqual({
       x: -24,
       y: -24,
-      width: 440 + SPATIAL_NODE_W + 48,
+      width: SPATIAL_COL_W + SPATIAL_NODE_W + 48,
       height: 340 + SPATIAL_NODE_H + 48,
     });
   });

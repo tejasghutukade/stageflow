@@ -82,17 +82,17 @@ export function RunsPage({
             href={`#/runs/${run.run_id}`}
             onClick={e => { e.preventDefault(); onOpen(run.run_id); }}
           >
-            <span className="rrow__id" title={`${runTaskLabel(run)}\n${runLocatorSubtitle(run)} · ${run.run_id.slice(0, 8)}`}>
+            <span className="rrow__id">
               <span className="rrow__task">{runTaskLabel(run)}</span>
               <span className="rrow__pipe">{runLocatorSubtitle(run)} · {run.run_id.slice(0, 8)}</span>
-            </span>
-            <span>
-              <MiniTrack stages={run.stages ?? []} label={miniTrackLabel(run)} />
             </span>
             <span className="rrow__right">
               <span className={`status${token && token !== "running" ? ` status--${token}` : ""}`}>
                 <span className={`dot${token ? ` dot--${token}` : ""}`}></span> {relativeTime(run.updated_at ?? run.created_at)}
               </span>
+            </span>
+            <span className="rrow__track">
+              <MiniTrack stages={run.stages ?? []} label={miniTrackLabel(run)} />
             </span>
           </a>
         );
