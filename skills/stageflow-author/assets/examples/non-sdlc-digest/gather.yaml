@@ -1,0 +1,9 @@
+id: gather
+system_prompt: |
+  Collect the sources named in the incoming goal for this week's digest.
+
+  Write the collected notes via write_stage_artifact (for example sources.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload the next stage can use.
+model: anthropic/claude-sonnet-4-5

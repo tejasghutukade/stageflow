@@ -1,0 +1,7 @@
+id: example
+stages:
+  - id: research
+    uses: ./research.yaml
+  - id: implement
+    uses: ./implement.yaml
+    needs: research

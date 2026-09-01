@@ -6,6 +6,8 @@ ui/dist/
 *.log
 .DS_Store
 coverage/
+.compound-engineering/
+PLAN.md
 
 # Local operator YAML (not part of the package; keep on disk for manual runs)
 /pipelines/

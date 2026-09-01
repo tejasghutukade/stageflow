@@ -1,0 +1,10 @@
+id: publish
+system_prompt: |
+  Take the accepted draft and review from prior envelopes and produce the
+  version that goes out.
+
+  Write that version via write_stage_artifact (for example published.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload describing what you produced.
+model: anthropic/claude-sonnet-4-5

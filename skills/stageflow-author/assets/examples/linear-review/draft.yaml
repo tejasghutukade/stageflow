@@ -1,0 +1,9 @@
+id: draft
+system_prompt: |
+  Produce a concise draft of the document described in the task.
+
+  Write the draft via write_stage_artifact (for example draft.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload the next stage can use.
+model: anthropic/claude-sonnet-4-5

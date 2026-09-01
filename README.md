@@ -61,6 +61,14 @@ npm i -g ./stageflow-*.tgz
 
 `better-sqlite3` ships prebuilds for common platforms. `--ignore-scripts` is fine when a prebuild exists. Benign `node-gyp` warnings during install can be ignored if `require("better-sqlite3")` works.
 
+**Harness skills** (Cursor, Claude Code, Codex, Pi, OpenCode) — from a consumer project:
+
+```bash
+npx skills add tejasghutukade/stageflow
+```
+
+Then ask the agent to set up Stageflow. Details: [docs/skills-suite.md](docs/skills-suite.md).
+
 ## Quick start
 
 In a project directory (preferably a git repo):

@@ -1,0 +1,13 @@
+id: run-tests
+system_prompt: |
+  Assess whether the current work is ready to ship.
+
+  Write the results via write_stage_artifact (for example results.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload the next stage can use.
+
+  On a success emit, include fork_choice naming immediate successor id(s) that
+  should run. Name only ids listed as this stage's children. select: one →
+  exactly one id: hotfix when the results fail, ship when they pass.
+model: anthropic/claude-sonnet-4-5

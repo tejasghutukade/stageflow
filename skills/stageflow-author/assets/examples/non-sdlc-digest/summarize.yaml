@@ -1,0 +1,9 @@
+id: summarize
+system_prompt: |
+  Turn the gathered notes from the prior envelope into a short weekly digest.
+
+  Write the digest via write_stage_artifact (for example digest.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload the next stage can use.
+model: anthropic/claude-sonnet-4-5

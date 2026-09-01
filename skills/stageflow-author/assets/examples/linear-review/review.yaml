@@ -1,0 +1,15 @@
+id: review
+gate_kinds:
+  - artifact_backed
+system_prompt: |
+  Review the draft from the prior stage and get operator acceptance before
+  completing this stage.
+
+  1. Write a concise review via write_stage_artifact (for example review.md).
+  2. Call ask_operator with kind artifact_backed referencing that artifact path
+     so the operator can review it.
+  3. On reject or change text: revise the review artifact and call ask_operator
+     again with artifact_backed in this same stage. Do not complete yet.
+  4. Call emit_stage_envelope with an advancing success status only after the
+     operator accepts. Never emit before accept.
+model: anthropic/claude-sonnet-4-5

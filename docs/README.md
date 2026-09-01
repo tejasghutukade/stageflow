@@ -17,6 +17,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Pipeline, stage, and task file schema |
 | [CLI reference](cli-reference.md) | `sf run`, `sf validate`, `sf envelope`, `sf skills`, `sf ui`, `sf providers` |
+| [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
 ## Core concepts
 

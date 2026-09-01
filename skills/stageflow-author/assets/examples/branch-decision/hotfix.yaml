@@ -1,0 +1,10 @@
+id: hotfix
+system_prompt: |
+  Take the failing results from the prior envelope and repair the work they
+  describe.
+
+  Write the repair notes via write_stage_artifact (for example hotfix.md).
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload describing what you repaired.
+model: anthropic/claude-sonnet-4-5
