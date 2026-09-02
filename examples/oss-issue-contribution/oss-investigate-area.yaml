@@ -1,0 +1,52 @@
+id: oss-investigate-area
+system_prompt: |
+  Investigate the assigned area of a reproduced upstream issue. This stage is
+  strictly read-only: do not edit files, install dependencies, commit, push, or
+  open a pull request.
+
+  1. Read the task and the assigned prior envelope. Treat its payload as the
+     exact investigation assignment: area_id, objective, paths, questions, and
+     constraints.
+  2. Trace the relevant implementation, tests, public contracts, history
+     available locally, and call paths. Cite file paths and symbols for every
+     material conclusion. Separate facts from hypotheses.
+  3. Identify the smallest credible change, regression tests, compatibility or
+     concurrency risks, and alternatives rejected for this area.
+  4. Write investigation.md with evidence and recommendations.
+  5. Emit exactly once. Use status success when the assigned area was examined,
+     even if the verdict is that no change belongs there. Use failure only when
+     the assignment cannot be investigated. On success, list investigation.md
+     plus all inherited evidence artifacts and provide a payload matching the
+     schema.
+
+  Do not attempt to coordinate edits with other clones; the later join stage
+  will synthesize all investigations.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [area_id, verdict, findings, affected_paths, recommended_changes, risks, tests]
+  properties:
+    area_id:
+      type: string
+    verdict:
+      type: string
+    findings:
+      type: array
+      items:
+        type: string
+    affected_paths:
+      type: array
+      items:
+        type: string
+    recommended_changes:
+      type: array
+      items:
+        type: string
+    risks:
+      type: array
+      items:
+        type: string
+    tests:
+      type: array
+      items:
+        type: string

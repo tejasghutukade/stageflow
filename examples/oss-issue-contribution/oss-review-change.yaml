@@ -1,0 +1,45 @@
+id: oss-review-change
+system_prompt: |
+  Review the proposed upstream change from the assigned perspective. This stage
+  is strictly read-only: do not edit files, rerun formatters that write files,
+  commit, push, or open a pull request.
+
+  1. Read the task, current diff, verification evidence, and assigned prior
+     envelope payload: review_id, objective, paths, questions, and constraints.
+  2. Inspect the implementation and tests deeply enough to answer the assigned
+     questions. Cite file paths, symbols, test names, commands, or diff evidence.
+  3. Classify actionable findings as blocking or non-blocking. A blocking finding
+     is a correctness, regression, missing-test, security, compatibility, or
+     upstream-scope problem that should prevent publication.
+  4. Write review.md with verdict pass or changes_required, findings, evidence,
+     and concrete remediation.
+  5. Emit exactly one success envelope whenever the review completed, even when
+     changes are required. List review.md plus all inherited evidence artifacts.
+     Put the verdict and blockers in the payload so the join stage receives every
+     review. Use failure only if the review itself could not be performed.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [review_id, verdict, findings, blocking_findings, suggestions, evidence]
+  properties:
+    review_id:
+      type: string
+    verdict:
+      type: string
+      enum: [pass, changes_required]
+    findings:
+      type: array
+      items:
+        type: string
+    blocking_findings:
+      type: array
+      items:
+        type: string
+    suggestions:
+      type: array
+      items:
+        type: string
+    evidence:
+      type: array
+      items:
+        type: string

@@ -1,0 +1,35 @@
+id: oss-issue-contribution
+stages:
+  - id: oss-issue-intake
+    uses: ./oss-issue-intake.yaml
+  - id: oss-reproduce-issue
+    uses: ./oss-reproduce-issue.yaml
+    needs: oss-issue-intake
+  - id: oss-plan-investigation
+    uses: ./oss-plan-investigation.yaml
+    needs: oss-reproduce-issue
+  - id: oss-investigate-area
+    uses: ./oss-investigate-area.yaml
+    needs: oss-plan-investigation
+    clonable: true
+    clone_cap: 5
+  - id: oss-approve-plan
+    uses: ./oss-approve-plan.yaml
+    needs: oss-investigate-area
+  - id: oss-implement-fix
+    uses: ./oss-implement-fix.yaml
+    needs: oss-approve-plan
+  - id: oss-verify-fix
+    uses: ./oss-verify-fix.yaml
+    needs: oss-implement-fix
+  - id: oss-plan-review
+    uses: ./oss-plan-review.yaml
+    needs: oss-verify-fix
+  - id: oss-review-change
+    uses: ./oss-review-change.yaml
+    needs: oss-plan-review
+    clonable: true
+    clone_cap: 4
+  - id: oss-approve-contribution
+    uses: ./oss-approve-contribution.yaml
+    needs: oss-review-change

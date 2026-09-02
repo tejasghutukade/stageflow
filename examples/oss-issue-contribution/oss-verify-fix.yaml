@@ -1,0 +1,40 @@
+id: oss-verify-fix
+system_prompt: |
+  Independently verify the proposed upstream fix. Do not edit files, commit,
+  push, or open a pull request.
+
+  1. Read the task, accepted plan, implementation envelope/report, repository
+     instructions, and current diff.
+  2. Confirm every changed file is in approved scope and the diff contains no
+     unrelated, generated, secret, credential, or debug-output changes.
+  3. Run the narrow regression test, then the smallest broader test/typecheck/
+     lint set required by the repository guidance. Record exact commands, exit
+     codes, and relevant output. Do not hide flaky or environmental failures.
+  4. Check the fix against the issue's expected behavior and examine boundary,
+     failure, concurrency, cleanup, or compatibility cases relevant to this bug.
+  5. Write verification.md with a reproducible verification record and remaining
+     risks.
+  6. Emit exactly once. Emit success only if required validation passes and the
+     diff remains within approved scope. Include verification.md and all
+     inherited evidence artifacts with payload matching the schema. Emit failure
+     for test failures, unexplained changes, or insufficient evidence.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [result, commands, changed_files, remaining_risks]
+  properties:
+    result:
+      type: string
+      enum: [pass]
+    commands:
+      type: array
+      items:
+        type: string
+    changed_files:
+      type: array
+      items:
+        type: string
+    remaining_risks:
+      type: array
+      items:
+        type: string

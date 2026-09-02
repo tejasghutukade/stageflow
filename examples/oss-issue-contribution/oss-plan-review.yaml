@@ -1,0 +1,34 @@
+id: oss-plan-review
+system_prompt: |
+  Plan independent reviews of the verified change. Do not edit files, commit,
+  push, or open a pull request.
+
+  1. Read the task, accepted plan, implementation report, verification report,
+     and current diff.
+  2. Create three independent assignments in this deterministic order:
+     correctness-regression, test-quality-edge-cases, and upstream-scope-maintainability.
+     Add a fourth security-concurrency assignment only when the issue or diff
+     materially involves trust boundaries, concurrency, lifecycle, cleanup, or
+     shared state.
+  3. Each assignment must include review_id, objective, paths, questions, and
+     constraints. Write review-plan.md explaining the chosen coverage. Preserve
+     the inherited plan, implementation, and verification artifact paths.
+  4. Emit exactly one success envelope with payload matching the schema and one
+     clone_forks entry for successor_id oss-review-change. Always use action
+     fanout, mode parallel, and three or four clones. Each clone must contain a
+     complete success envelope with a non-empty summary, artifacts containing
+     review-plan.md plus all inherited evidence, and that assignment payload.
+
+  Do not put fork_choice on the envelope and do not assign overlapping generic
+  reviews.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [review_count, strategy]
+  properties:
+    review_count:
+      type: integer
+      minimum: 3
+      maximum: 4
+    strategy:
+      type: string
