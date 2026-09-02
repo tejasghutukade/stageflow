@@ -11,26 +11,39 @@ HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
 ## Gate kinds
 
-Declared in stage YAML as `gate_kinds` (optional but recommended for documentation and validation):
+Declared in stage YAML as `gate_kinds` (optional but recommended):
 
 | Kind | Purpose |
 |------|---------|
 | `free_text` | Open-ended operator reply |
-| `confirm` | Yes/no (or accept/reject) confirmation |
+| `confirm` | Accept/reject confirmation (yes/no is a UI label only) |
 | `multi_question` | Batch of sub-questions (each sub-question has its own kind) |
 | `artifact_backed` | Operator reviews one or more artifact paths before accepting |
 
-Allowed values are fixed in `STAGE_GATE_KINDS` (`src/types/stage.ts`).
+Allowed values are the catalog enum `STAGE_GATE_KINDS` (`src/types/stage.ts`). `gate_kinds` documents intent and catalog membership. Runtime does **not** require each `ask_operator` kind to be a subset of the declared list.
+
+Canonical `confirm` answers use `decision: "accept" | "reject"`.
 
 Canonical exercise stage: [`tests/fixtures/stages/hitl-four-kinds.yaml`](../tests/fixtures/stages/hitl-four-kinds.yaml) — walks all four kinds in order.
 
 Plan review with artifact gate: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
+## `ask_operator` contract
+
+Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt becomes `promptId` on the answer.
+
+| Kind | Params | Answer |
+|------|--------|--------|
+| `free_text` | `message`, optional `id` | `{ kind, promptId, text }` |
+| `confirm` | `message`, optional `id` | `{ kind, promptId, decision: "accept" \| "reject", text? }` |
+| `artifact_backed` | `message`, non-empty `artifacts[]`, optional `id` | `{ kind, promptId, decision: "accept" \| "reject", text? }` |
+| `multi_question` | `questions[]` of `free_text` or `confirm` only (nested `multi_question` / `artifact_backed` rejected) | `{ kind, promptId, answers }` — one entry per sub-question |
+
 ## Operator flow
 
 1. Stage agent calls `ask_operator` with a `kind` and message (and `artifacts` for `artifact_backed`)
 2. Run enters **waiting** state
-3. Operator replies in the console (run detail stream) or via runtime resume
+3. Operator replies in the console (select the stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>` — and use the workspace reply surface) or via runtime resume. Waiting cards on Today can also accept eligible gates.
 4. Stage agent continues; may call `ask_operator` again or finish with `emit_stage_envelope`
 
 `ask_operator` **does not** complete the stage — only `emit_stage_envelope` does.
@@ -62,11 +75,11 @@ JSON with `--json`:
 sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/plan-review-proving.pipeline.yaml --skip-gates
 ```
 
-If a stage would wait, the worker **fails immediately** with reason `skip-gates: stage requested wait`. Exit code **`1`**, not `2`.
+`--skip-gates` fires when the stage **enters wait** via `ask_operator`, not merely because `gate_kinds` is declared. The worker **fails immediately** with reason `skip-gates: stage requested wait`. Exit code **`1`**, not `2`.
 
 Use in CI when HITL must not block the job — but the run will not get operator answers. Pipelines with **no** HITL never need this flag.
 
-On a mixed pipeline (some stages with gates, some without), default behavior parks the whole run at the first gate; `--skip-gates` fails at that gate instead.
+On a mixed pipeline (some stages with gates, some without), default behavior parks the whole run at the first `ask_operator` wait; `--skip-gates` fails at that wait instead.
 
 ## Exit codes (summary)
 
@@ -89,11 +102,11 @@ system_prompt: |
 model: anthropic/claude-sonnet-4-5
 ```
 
-`gate_kinds` documents intent; runtime enforcement is via actual `ask_operator` calls in the agent session.
+`gate_kinds` documents intent and catalog enum membership; runtime enforcement is via actual `ask_operator` calls in the agent session.
 
 ## Console reply
 
-Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, and use the gate reply surface in the run detail stream.
+Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, and select the waiting stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>`. The reply surface lives in that gated workspace. Eligible waiting cards on Today can also Accept. See [Operator console](operator-console.md).
 
 Answers go to the **selected** stage instance id. Today shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
 
@@ -101,9 +114,9 @@ See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP
 
-Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` runs — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console.
+Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console.
 
-When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate`. Open-ended `free_text` and hosts without a picker stay in chat. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
+When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate`. Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
 
 ## See also
 

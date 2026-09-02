@@ -48,14 +48,20 @@ Bare string stage refs are rejected.
 
 ### Stage entries
 
-Each stage is an object with `id` and one of:
+Each stage is an object with one of:
 
 | Form | Fields | Use when |
 |------|--------|----------|
 | External | `uses: <path>` | Stage body lives in another YAML file |
 | Inline | `system_prompt`, `model`, … | Single-file pipeline |
 
-Optional on any entry: `needs`, `fork`, `clonable`, `clone_cap`, `gate_kinds`, `payload_schema`, `skill`.
+`id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
+
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`.
+
+**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`. The JSON Schema subset for `payload_schema` is in [Envelopes](envelopes.md#payload-schema).
+
+`uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
 
 **`uses:` paths are relative to the pipeline file's directory.**
 
@@ -102,6 +108,8 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
+`needs` is a single stage id (string), not an array. Fan-in and diamond DAGs are unsupported. Parallel fan-out is multiple children with the same parent, not multiple parents.
+
 ### Pipeline fragments (`include:`)
 
 At the **pipeline top level** (not inside a stage entry), merge stage lists from fragment files:
@@ -118,6 +126,8 @@ stages:
 
 Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory.
 
+Nested `include:` is allowed. Cycles and duplicate stage ids across files are rejected. Includes merge before the declaring file's own `stages`.
+
 Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml).
 
 ### Fork pipelines
@@ -127,13 +137,17 @@ A deciding stage may declare a `fork` object to require a runtime choice among i
 | Field | Required | Description |
 |-------|----------|-------------|
 | `select` | yes | `one` — exactly one immediate successor must be named in `fork_choice`. `subset` — one or more successors (including all, some, or none when `allow_none` is set). |
-| `allow_none` | no | Boolean, default `false`. When `true`, an empty `fork_choice: []` is valid and all immediate successors are skipped. |
+| `allow_none` | no | Boolean, default `false`. Only usable with `select: subset`. When `true`, an empty `fork_choice: []` is valid and all immediate successors are skipped. |
+
+`fork` accepts only `select` and `allow_none`. Catalog validation does not reject `select: one` together with `allow_none: true`; emit still requires exactly one choice — empty `fork_choice` fails even if `allow_none` is set.
+
+`fork_choice` names only non-clonable immediate successors. When every child is clonable, `fork_choice` is not required.
 
 Children list `needs: <parent>`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
 
 Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch.
 
-Skipped stages appear on every observable surface with the same `skipped` status used when a parent fails: operator console run timeline, CLI stage output, MCP `get_run`, and JSON run records. Unchosen fork branches are not failures; see [CI / headless](ci.md) for exit-code behavior.
+Skipped stages appear on every observable surface with the same `skipped` status used when a parent fails: operator console spatial map / run detail, CLI stage output, MCP `get_run`, and JSON run records. Unchosen fork branches are not failures; see [CI / headless](ci.md) for exit-code behavior.
 
 `fork` on a stage with no immediate successors (a DAG leaf) fails validation (`pipeline.dag_error`). Pipelines without `fork` are unaffected.
 
@@ -163,7 +177,7 @@ Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
 
 ### Clonable successors {#clonable-successors}
 
-A successor object entry may set `clonable: true`. The completing predecessor must then emit `clone_forks` for that successor (see [Envelopes](envelopes.md#clonable-successors)). Optional `clone_cap` is an integer; omit the field to take the default 5. When `clone_cap` is set, it must be an integer ≥ 2 — setting `1` is a catalog validation error. Bare string refs cannot carry `clonable`. Over-cap fails the predecessor.
+A successor object entry may set `clonable: true`. The completing predecessor must then emit `clone_forks` for that successor (see [Envelopes](envelopes.md#clonable-successors)). Optional `clone_cap` is an integer; omit the field to take the default 5. When `clone_cap` is set, it must be an integer ≥ 2 — setting `1` is a catalog validation error. Bare string refs cannot carry `clonable`. Over-cap fails the predecessor. `clonable: true` on a DAG leaf fails catalog validation — a clonable successor must have at least one child (typically a join).
 
 ```yaml
 id: clonable-demo
@@ -182,13 +196,13 @@ stages:
 
 A clone may skip, run once, or fan out its own successor only when that successor is also `clonable`. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). v1 does not support two clones both fanning out the same successor.
 
-A clonable successor is not selected via `fork_choice`. `clone_forks` is the only include/skip/N control for that successor. Named siblings still use `fork_choice` when the parent has `fork`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (`fork.select: subset` plus clonable `design-doc` and named `implementation-plan`).
+A clonable successor is not selected via `fork_choice`. `clone_forks` is the only include/skip/N control for that successor. `fork_choice` ids are non-clonable immediate successors; when every child is clonable, `fork_choice` is not required. Named siblings still use `fork_choice` when the parent has `fork`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (`fork.select: subset` plus clonable `design-doc` and named `implementation-plan`).
 
 #### Instance ids {#clonable-instance-ids}
 
 Run-once keeps the catalog id. Fan-out mints `{catalogId}~{n}` with 1-based `n` in the predecessor's clone-list order. YAML `needs` stays the catalog id. Instance ids must not contain `/`, `\`, or `..`. The operator console labels clones `definition · N` (see [Operator console](operator-console.md#clone-tracks)); disk paths and API keys stay the raw instance id.
 
-Join requires every clone to succeed in both modes. Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors).
+Join requires every clone to succeed in both modes. When the join runs, `priorEnvelopes` are success-only (0.7; 0.5 included failures). Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors).
 
 Fixtures:
 
@@ -204,7 +218,7 @@ Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; th
 
 ### Skill binding {#skill-binding}
 
-Bind a Pi skill to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The skill name is merged into the resolved stage config at load time — do not put `skill:` in external stage files referenced via `uses:`.
+Bind a Pi skill to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `skill:` in external stage files; a pipeline-entry `skill` overrides the file value on merge. Prefer the pipeline entry.
 
 ```yaml
 stages:
@@ -234,11 +248,11 @@ Stage YAML (referenced via `uses:`) requires:
 
 | Field | Description |
 |-------|-------------|
-| `id` | Must match pipeline entry `id` |
+| `id` | Must match the pipeline entry `id` and the filename stem (`sf validate`) |
 | `system_prompt` | Agent instructions |
 | `model` | Provider/model string |
 
-Optional: `gate_kinds`, `payload_schema`. (`skill:` is set on the pipeline entry, not in external stage files — see [Skill binding](#skill-binding).)
+Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `payload_schema` — see [Envelopes](envelopes.md#payload-schema). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -282,12 +296,12 @@ Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (wi
 ## Validation
 
 ```bash
-sf validate --strict                    # manifest-all from git root
-sf validate --pipeline path/to/x.pipeline.yaml --strict
-sf validate --task path/to/x.task.yaml --strict
+sf validate --strict                    # manifest-all: pipelines, stages, and tasks from git root
+sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and its stages
+sf validate --task path/to/x.task.yaml --strict           # that task
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), and stage file shape. It does not verify provider credentials or checkout paths.
+Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. It does not verify provider credentials or checkout paths.
 
 ## CLI run
 

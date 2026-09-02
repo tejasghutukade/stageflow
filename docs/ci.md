@@ -27,11 +27,11 @@ sf validate --strict --json
 | `0` | No errors |
 | `1` | Validation errors (warnings alone pass unless `--strict` promotes manifest warnings) |
 
-With no flags, `sf validate` validates all pipelines and tasks declared in `stageflow.yaml`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors.
+With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors.
 
-Validate scope: **pipeline and stage YAML only**. It does not verify task files (unless `--task`), provider credentials, or checkout paths.
+Does not prove provider auth or checkout paths.
 
-JSON output includes `ok`, `scope`, `summary`, and `findings[]` with `severity`, `code`, `file`, `message`.
+JSON output includes `ok`, `scope`, `checks`, `summary`, and `findings[]` with `severity`, `code`, `file`, `message`, `category`. The CLI remaps each finding’s `path` to `file`; MCP `validate` keeps `path`.
 
 ## Run in CI
 
@@ -80,7 +80,7 @@ One document per invocation with `--json`:
 }
 ```
 
-**Failed:**
+**Failed (run created):**
 
 ```json
 {
@@ -92,11 +92,41 @@ One document per invocation with `--json`:
 }
 ```
 
+**Busy** (`outcome: "busy"`, no `runId`):
+
+```json
+{
+  "ok": false,
+  "outcome": "busy",
+  "code": "busy_capacity",
+  "reason": "…",
+  "activeCount": 3,
+  "maxConcurrent": 3,
+  "activeRunIds": ["…"]
+}
+```
+
+`code` is `busy_capacity` or `busy_checkout`. Capacity includes `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`.
+
+**Start failed without a run** (`outcome: "failed"`, no `runId`):
+
+```json
+{
+  "ok": false,
+  "outcome": "failed",
+  "reason": "…"
+}
+```
+
+Optional `code` when the start failure reports one.
+
+**Validation failure during `sf run --json`:** stdout is **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId`. Exit `1`. Distinct from `outcome: "failed"`.
+
 `ok` is `true` only for `succeeded`.
 
 ### Including stage projections {#including-stage-projections}
 
-Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. The projection matches MCP/console run detail (stage id, status, envelope, artifacts). `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. CLI completion JSON does **not** include `pipeline_track` (that field is on `sf export-run` and MCP `get_run`). `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
 ```bash
 sf run --task examples/hello-world/my-task.task.yaml \
@@ -128,7 +158,9 @@ Use `--from sf-run.json` to read `runId` and `runDir` from a prior `sf run --jso
 
 ### Composite action
 
-This repo ships [`.github/actions/sf-run`](../.github/actions/sf-run) for same-repo workflows. It runs `sf run --json --include stages`, optionally extracts a handoff envelope, and optionally writes `run-export.json`.
+This repo ships [`.github/actions/sf-run`](../.github/actions/sf-run) for **same-repo** workflows only. It invokes `node dist/cli.js` (the **repo must be built** with `npm run build`), not the global `sf` from `npm i -g stageflow` used in the [recipe below](#github-actions-recipe). It runs `sf run --json --include stages`, optionally extracts a handoff envelope, and optionally writes `run-export.json`.
+
+The action propagates any non-zero exit from `sf run`, including exit `2` (HITL waiting fails the GHA step). For unattended HITL pipelines pass `extra-args: --skip-gates`.
 
 ```yaml
 - id: sf-run

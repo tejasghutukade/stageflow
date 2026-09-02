@@ -28,6 +28,8 @@ The URL is printed on boot. Point Cursor or another MCP client at this URL while
 
 Sessions enable run **resource subscribe** and `notifications/resources/updated`. Without a GET listen stream, tools still work on the session; push updates will not be delivered.
 
+`createHttpHost` applies `localhostHostValidation` and `localhostOriginValidation` from `@modelcontextprotocol/node` on `/mcp`. Non-localhost `Origin` / `Host` is rejected. Point clients at `http://127.0.0.1:3847/mcp` (not a LAN hostname).
+
 ### Stateless escape hatch (test/debug)
 
 For clients or harnesses that must avoid session headers:
@@ -101,17 +103,21 @@ List manifest-declared pipeline paths from the project catalog.
   "pipelines": [
     {
       "path": "examples/hello-world/hello.pipeline.yaml",
-      "id": "hello"
+      "id": "hello",
+      "stages": [
+        { "id": "research", "uses_path": "examples/hello-world/research.yaml" }
+      ]
     },
     {
       "path": "examples/plan-review/plan-review.pipeline.yaml",
-      "id": "plan-review"
+      "id": "plan-review",
+      "stages": [{ "id": "plan-review" }]
     }
   ]
 }
 ```
 
-Paths are relative to the project git root (as declared in `stageflow.yaml`). Listing objects may include additional catalog fields (for example stage summaries) depending on browse.
+Paths are relative to the project git root (as declared in `stageflow.yaml`). Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`).
 
 ### `list_tasks`
 
@@ -244,7 +250,7 @@ Start a pipeline run using a **filesystem pipeline path** and either a catalog t
 }
 ```
 
-Exactly one of `task_path` or `task` is required.
+Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus `task_path` or `task` — no skip-gates, no CI identity flags, and no `--checkout` override (checkout comes from `task.checkout` only). HITL always parks.
 
 **Success output:** `{ "runId": "…" }`
 
@@ -348,7 +354,7 @@ Read the full `StageEnvelope` for a stage (latest attempt).
 
 **Output:** `{ "runId", "stageId", "envelope": { … } }`
 
-Returns `404` when the run, stage, or envelope is missing.
+Returns `404` when the run, stage, or envelope is missing. MCP does **not** synthesize an envelope for fork-skipped stages. CLI `envelope get` synthesizes `{ status: "skipped", summary: "stage was fork-skipped", artifacts: [], fork_choice: null }` when the stage is skipped and no envelope is stored.
 
 ### `read_artifact`
 
@@ -365,7 +371,7 @@ Read a text artifact from a run workspace.
 
 **Output:** `{ "runId", "path", "content" }`
 
-Path must be contained under the run workspace. Returns `404` for missing run or artifact.
+UTF-8 text only. Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
 
 Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories. After clonable fan-out, `stageId` is the instance id (`author-diagrams~2`); run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
@@ -375,9 +381,9 @@ Validate the project catalog, a pipeline path, or a task path (same authority as
 
 **Input:** `{ "pipeline?", "task?", "strict?" }`
 
-Scope is inferred: `pipeline` set → pipeline scope; else `task` set → task scope; else full catalog.
+Scope is inferred: `pipeline` set → pipeline scope; else `task` set → task scope; else full catalog (pipelines **and** tasks). If both `pipeline` and `task` are set, **pipeline wins** (CLI `sf validate` rejects both).
 
-**Output:** `ValidationResult` — `{ "scope", "ok", "summary": { "errors", "warnings" }, "findings": [ … ] }` (findings include severity, code, path, message, category, and optional pipeline/stage ids).
+**Output:** `ValidationResult` — `{ "scope", "ok", "summary": { "errors", "warnings" }, "findings": [ … ] }` (findings include severity, code, `path`, message, category, and optional pipeline/stage ids). MCP keeps `path`; CLI `--json` remaps that field to `file`.
 
 ### `describe_pipeline`
 
@@ -430,11 +436,13 @@ There is **no** run-level cancel/abort MCP tool.
 
 ### `rerun`
 
-Start a new run from a completed or failed run’s pipeline/task locators.
+Start a new run from a stored run’s `pipeline_path` plus task YAML (`RunManager.rerun`). Does **not** require the source run to be completed or failed (unlike CLI `sf export-run`, which requires `succeeded` or `failed`).
 
 **Input:** `{ "runId": "…" }`
 
 **Success:** `{ "runId": "…" }` (new run id)
+
+Fails if catalog locators are missing (`400` / `404`). May return the same busy codes as `start_run` (`busy_capacity`, `busy_checkout`).
 
 ## Cursor configuration
 
@@ -450,11 +458,12 @@ Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` or `sf
 }
 ```
 
-Exact config shape depends on your MCP client version. Prefer session-capable Streamable HTTP clients. Use `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` only for test/debug clients that cannot send session headers.
+Exact config shape depends on your MCP client version. Prefer session-capable Streamable HTTP clients. Use `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` only for test/debug clients that cannot send session headers. The host rejects non-localhost `Origin` / `Host`, so use `127.0.0.1` (or `localhost`) in the URL.
 
 ## Limitations
 
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
+- `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
 - No provider/settings/catalog-write MCP tools
 - Default `get_run` / run resource read stay lean (no stage event streams); use `list_stage_events` / `get_envelope` for detail

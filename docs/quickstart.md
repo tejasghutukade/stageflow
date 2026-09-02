@@ -73,9 +73,9 @@ Stages are **object entries** with inline bodies or `uses:` paths — not bare s
 sf validate --strict
 ```
 
-With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all). `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors.
+With no flags, `sf validate` checks all pipelines and tasks declared in `stageflow.yaml` (manifest-all), plus the stages those pipelines reference. `--strict` promotes manifest warnings (missing manifest, empty catalog) to errors.
 
-Validation checks pipeline and stage YAML only — not task files, provider auth, or checkout paths.
+It does not prove provider auth or checkout paths.
 
 ## 3. Connect a provider
 
@@ -109,10 +109,12 @@ Each stage runs in a **fresh Pi session**. When the stage agent finishes, it mus
 With `sf ui` running (default `http://127.0.0.1:3847`):
 
 - **Runs** — see active and recent runs
-- **Run detail** — stage timeline, transcripts, envelope payloads
+- **Run detail** — spatial stage map; select a stage for transcripts, envelopes, and HITL
 - **Start a run** — rail button or `#/new` with pipeline and task pre-filled
 
 If a stage calls `ask_operator`, the run pauses until you reply in the console. See [Human-in-the-loop](hitl.md).
+
+For MCP without the console, use `sf mcp` — see [MCP](mcp.md).
 
 ## Multi-stage pipelines
 
@@ -146,4 +148,5 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [YAML catalog](yaml-catalog.md) — full schema reference
 - [CLI reference](cli-reference.md) — all `sf` commands
 - [Operator console](operator-console.md) — console navigation and settings
+- [MCP](mcp.md) — Streamable HTTP tools (`sf ui` or `sf mcp`)
 - [Envelopes](envelopes.md) — what stages must emit to advance

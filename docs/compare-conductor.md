@@ -17,7 +17,7 @@ This page is positioning, not a feature scorecard. Choose based on whether you w
 | **Orchestration** | Pipeline DAG + stage worker | Jinja routing, no LLM in router |
 | **Unit of work** | Task → Pipeline → Stage attempts | Workflow → Agents |
 | **Handoff** | Typed **envelope** + artifacts | Agent output → context |
-| **Human gates** | Operator console + MCP | Dashboard + TUI fleet |
+| **Human gates** | Console + MCP + harness native question UI (`stageflow-run`) | Dashboard + TUI fleet |
 | **Runtime** | Node.js, Pi coding agent | Python, Copilot/Claude SDKs |
 | **Best for** | Personal/team **multi-stage Pi workflows** you define (releases, research, SDLC, …) | Enterprise multi-agent workflows |
 
@@ -62,7 +62,7 @@ If you want stage-bound Pi runs with reviewable envelopes and an operator consol
 | Config format | Pipeline-owned YAML (`*.pipeline.yaml`, `uses:`, `stageflow.yaml`) | Workflow YAML + agent definitions |
 | Parallelism | Pipeline DAG (`needs`) | Graph parallelism |
 | CI story | `sf validate`, `sf run --json`, exit 0/1/2 | Conductor CLI / Actions patterns |
-| MCP | Streamable HTTP when `sf ui` runs | Varies by deployment |
+| MCP | Streamable HTTP when `sf ui` or `sf mcp` runs (not both on the same store) | Varies by deployment |
 | Fleet TUI | Not planned — single-project console | Fleet Manager |
 
 Stageflow dogfoods its own release pipeline (`examples/github-release/`) — proof that configurable stages can run real automation, not just demos.

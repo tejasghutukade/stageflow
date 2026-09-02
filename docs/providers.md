@@ -25,6 +25,8 @@ sf providers detect
 
 `detect` prints `piHomeUsable`, `credentialSource`, `provisional`, and `bindingSource`.
 
+If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/` settings can persist or override the source versus global `~/.stageflow`.
+
 Set explicitly:
 
 ```bash
