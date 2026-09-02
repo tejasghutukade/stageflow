@@ -586,6 +586,39 @@ export class RunManager {
   }
 
   async retryStage(runId: string, stageId: string): Promise<RetryStageResult> {
+    return this.retryStageInternal(runId, stageId, true);
+  }
+
+  async retryStageUntilStop(
+    runId: string,
+    stageId: string,
+  ): Promise<
+    | { ok: true; pipeline: PipelineRunResult }
+    | Extract<RetryStageResult, { ok: false }>
+  > {
+    const retryKey = waitKey(runId, stageId);
+    const retried = await this.retryStageInternal(runId, stageId, false);
+    if (!retried.ok) return retried;
+    try {
+      if (retried.done === undefined) {
+        return {
+          ok: false,
+          reason: `Retry orchestration did not start for run ${runId} stage ${stageId}`,
+          status: 500,
+        };
+      }
+      const pipeline = await retried.done;
+      return { ok: true, pipeline };
+    } finally {
+      this.retryInFlight.delete(retryKey);
+    }
+  }
+
+  private async retryStageInternal(
+    runId: string,
+    stageId: string,
+    awaitRoot: boolean,
+  ): Promise<RetryStageResult> {
     const retryKey = waitKey(runId, stageId);
     if (this.retryInFlight.has(retryKey)) {
       return {
@@ -601,7 +634,7 @@ export class RunManager {
       const orchestrationConflict =
         this.active.has(runId) &&
         !this.attachedWaiting.has(waitKey(runId, stageId));
-      return await this.retryCoordinator.retryStage({
+      const result = await this.retryCoordinator.retryStage({
         runId,
         stageId,
         store: this.options.store,
@@ -614,9 +647,15 @@ export class RunManager {
         hitl: this.hitl,
         orchestrationConflict,
         tracking: this.retryTracking,
+        awaitRoot,
       });
-    } finally {
+      if (!result.ok || awaitRoot !== false) {
+        this.retryInFlight.delete(retryKey);
+      }
+      return result;
+    } catch (err) {
       this.retryInFlight.delete(retryKey);
+      throw err;
     }
   }
 

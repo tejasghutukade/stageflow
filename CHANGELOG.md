@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-02
+
+### Added
+
+- `sf --version` / `sf -V` print the package version without opening a catalog or run store
+- `sf runs` host-down operator verbs: `list`, `show`, `waiting`, `wait`, `answer`, `retry`, `abandon`, `rerun`
+
 ### Changed
 
+- Harness `stageflow-run` answers HITL on a down host with `sf runs waiting` / `answer` / `wait` instead of starting a disposable `sf mcp --mcp-stateless` bridge
 - Harness `stageflow-run` presents mappable HITL gates on the host native question UI when one exists, and still submits through `answer_gate`. A representable `multi_question` is one picker call, not sequential cards.
 - Public docs catch up to the 0.8 console (spatial map, gated workspace, stage deep links), full-catalog task validation, MCP via `sf mcp`, and YAML wiring vs body / clone-join contracts
 
@@ -131,7 +139,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/tejasghutukade/stageflow/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tejasghutukade/stageflow/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/tejasghutukade/stageflow/compare/v0.5.0...v0.6.0

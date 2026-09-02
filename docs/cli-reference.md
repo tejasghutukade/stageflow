@@ -19,8 +19,12 @@ Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite ha
 ## Global
 
 ```bash
+sf --version
+sf -V
 sf --help
 ```
+
+`sf --version` and `sf -V` print the npm package version on stdout and exit `0`. They do not open a catalog, run store, or git root.
 
 ## `sf init`
 
@@ -100,6 +104,134 @@ sf run --task examples/hello-world/my-task.task.yaml \
 Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. CLI completion JSON does **not** include `pipeline_track` (that field is on `sf export-run` and MCP `get_run`).
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
+
+## `sf runs`
+
+Inspect and control existing stored runs (in-progress, parked, or terminal). These verbs are not a 1:1 MCP tool list and they do not list pipelines or tasks. `sf run` stays the blocking start command.
+
+```bash
+sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
+sf runs show --run <runId> [--from <sf-run.json>] [--json]
+sf runs waiting [--run <runId>] [--json]
+sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
+sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
+sf runs retry --run <runId> --stage <stageId> [--json]
+sf runs abandon --run <runId> --stage <stageId> [--json]
+sf runs rerun --run <runId> [--json]
+```
+
+| Subcommand | Role |
+|------------|------|
+| `list` | Stored runs (same filters as MCP `list_runs`) |
+| `show` | Live `projectRun` for any run status (not the `export-run` completeness gate) |
+| `waiting` | Waiting gates with `pending_prompt` |
+| `wait` | Block until waiting, terminal, or timeout |
+| `answer` | Submit an `AskOperatorAnswer` for a parked stage |
+| `retry` | Retry a failed stage; process waits until waiting or terminal |
+| `abandon` | Mark a running stage abandoned |
+| `rerun` | Start a new run from a stored run; process waits until waiting or terminal |
+
+`--from` is accepted on `show` and `wait` only (reads `runId` from a prior `sf run --json` file). `--answer` is `answer` only.
+
+### Read vs mutate
+
+| Kind | Verbs | Host up |
+|------|-------|---------|
+| Read | `list`, `show`, `waiting`, `wait` | Allowed |
+| Mutate | `answer`, `retry`, `abandon`, `rerun` | Refused |
+
+Mutating verbs probe `GET http://127.0.0.1:3847/api/health` (1500 ms). HTTP 200 with parseable JSON → exit `1` without opening a mutating writer. This is not a single-writer lock: a host on another port (`sf ui --port 4000`) and a live blocking `sf run` are undetected second writers. Reads still work while a host is up.
+
+### Parked runs
+
+A HITL park keeps store status `running`. `--status waiting` is not a valid `list` filter; use `sf runs waiting`.
+
+### JSON and exits
+
+`--json` pretty-prints one document. Two families:
+
+**Inspect / wait / answer** — MCP field names for the overlapping verb:
+
+| Verb | `--json` shape | Exit |
+|------|----------------|------|
+| `list` | `{ "runs": [ … ] }` | `0` success, `1` error |
+| `show` | `projectRun` object | `0` success, `1` error |
+| `waiting` | `{ "waiting": [ … ] }` | `0` success, `1` error |
+| `wait` | waitRun result: `ok`, `reason`, `elapsed_ms`, `until`, nested `run` | `0` for `waiting` / `terminal` / `already` / `timeout`; **130** (or platform abort) with `{ "error", "code": "aborted" }` |
+| `answer` | `{ "ok": true }` | `0` on success even if the run parks again; `1` on error |
+
+Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `waiting` for the next state. Do not reuse `sf run` exit `2` for a completed `wait` that woke on waiting.
+
+**Retry / rerun / abandon:**
+
+| Verb | `--json` shape | Exit |
+|------|----------------|------|
+| `retry`, `rerun` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy, `2` waiting |
+| `abandon` | `{ "ok", "runId", "stageId" }` | `0` success, `1` error |
+
+### `sf runs list`
+
+| Flag | Description |
+|------|-------------|
+| `--status` | `created` \| `running` \| `succeeded` \| `failed` |
+| `--since` | ISO timestamp; keep runs with `created_at >= since` |
+| `--pipeline` | Match `pipeline_id` or `pipeline_path` |
+| `--json` | Pretty-printed `{ "runs": [ … ] }` |
+
+### `sf runs show`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (optional when `--from` provides `runId`) |
+| `--from` | Read `runId` from a prior `sf run --json` output file |
+| `--json` | Pretty-printed `projectRun` |
+
+Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`.
+
+### `sf runs waiting`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Limit to one run (omit to scan all) |
+| `--json` | Pretty-printed `{ "waiting": [ … ] }` (MCP `list_waiting` fields, including `pending_prompt`) |
+
+### `sf runs wait`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (optional when `--from` provides `runId`) |
+| `--from` | Read `runId` from a prior `sf run --json` output file |
+| `--until` | `any` (default), `waiting`, or `terminal` |
+| `--timeout-ms` | Wait budget in ms. Default `60000`. Must be in `(0, 240000]`. |
+| `--json` | Pretty-printed waitRun result |
+
+`reason` is `waiting` \| `terminal` \| `timeout` \| `already`. Timeout is success (`ok: true`, exit `0`); the run is unchanged. Abort cancels only the wait, not the run.
+
+Host-down park-and-answer:
+
+```
+sf runs waiting → sf runs answer → sf runs wait --until any
+  reason waiting  → waiting then answer
+  reason terminal → done
+  reason timeout  → wait again
+```
+
+### `sf runs answer`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--stage` | Stage id (required) |
+| `--answer` | `AskOperatorAnswer` JSON |
+| `--json` | `{ "ok": true }` on success |
+
+If `--answer` is omitted, read stdin JSON only when stdin is not a TTY. On a TTY or empty stdin, exit `1` with a missing-answer error.
+
+Answer kinds match [HITL](hitl.md) (`free_text`, `confirm`, `artifact_backed`, `multi_question`).
+
+### `sf runs retry` / `abandon` / `rerun`
+
+Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
 
 ## `sf envelope get`
 
@@ -322,4 +454,4 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [Quick start](quickstart.md) — first run walkthrough
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `pi_home` vs `sf_owned`
-- [HITL](hitl.md) — `--skip-gates` and exit `2`
+- [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait

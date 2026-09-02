@@ -17,7 +17,7 @@ Install the suite into a consumer project with `npx skills add tejasghutukade/st
 | `stageflow-setup` | Install Stageflow, a catalog, and provider login |
 | `stageflow-session-capture` | Turn a past session or this chat into a pipeline |
 | `stageflow-author` | Author a pipeline from a loop the human can explain |
-| `stageflow-run` | Start, watch, or answer a run. HITL uses the host native question UI when the gate maps; otherwise chat. Submit is always MCP `answer_gate`. |
+| `stageflow-run` | Start, watch, or answer a run. HITL uses the host native question UI when the gate maps; otherwise chat. Submit with MCP `answer_gate` when the host is up, or `sf runs answer` when it is down. |
 | `stageflow-delegate` | Notice a repeating pattern and turn it into a reusable job |
 
 Jobs share one MCP-vs-CLI rule: [`skills/stageflow/references/control-surface.md`](../skills/stageflow/references/control-surface.md). They do not each invent a second probe. When a host is up, prefer MCP; otherwise use the CLI. Tool and command names live in [MCP](mcp.md) and [CLI reference](cli-reference.md).
@@ -26,7 +26,7 @@ This suite is for **operator harnesses** (Cursor, Claude Code, Codex, Pi CLI, Op
 
 ### Native question UI (`stageflow-run`)
 
-The run job presents a waiting gate on the host picker when one is already in the tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`). Representable gates go on the picker. Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. Submit is still MCP `answer_gate`. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
+The run job presents a waiting gate on the host picker when one is already in the tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`). Representable gates go on the picker. Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. Submit with MCP `answer_gate` when the host is up, or `sf runs answer --json` when it is down. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
 
 ## Install
 
@@ -80,6 +80,6 @@ Five harnesses collapse to three physical copy targets used by `install-suite.sh
 This suite does **not**:
 
 - Publish to a skill marketplace
-- Auto-start a standing MCP host. Setup (`stageflow-setup`) does not start `sf ui` or `sf mcp`. The run job may start a disposable `sf mcp --mcp-stateless` bridge to answer parked CLI HITL — that is not a standing host. See [`stageflow-run` Bridge](../skills/stageflow-run/SKILL.md#bridge), [MCP](mcp.md), and [Quick start](quickstart.md).
+- Auto-start a standing MCP host. Setup (`stageflow-setup`) does not start `sf ui` or `sf mcp`. Host-down HITL uses `sf runs waiting` / `answer` / `wait` instead of a disposable MCP process. See [CLI reference — `sf runs`](cli-reference.md#sf-runs), [MCP](mcp.md), and [Quick start](quickstart.md).
 - Add new MCP HITL tools
 - Replace `sf skills` / `.pi/skills/` for pipeline stage skill binding

@@ -63,7 +63,13 @@ export type RunRetryCoordinatorStartOptions = {
 };
 
 export type RetryStageResult =
-  | { ok: true; runId: string; stageId: string; attemptIndex: number }
+  | {
+      ok: true;
+      runId: string;
+      stageId: string;
+      attemptIndex: number;
+      done?: Promise<PipelineRunResult>;
+    }
   | { ok: false; reason: string; status?: number };
 
 export type RetryTrackingPort = {
@@ -98,6 +104,7 @@ export type RetryStageRequest = {
   hitl: StageHitlController;
   orchestrationConflict: boolean;
   tracking: RetryTrackingPort;
+  awaitRoot?: boolean;
 };
 
 export function assertStageRetryEligible(
@@ -448,13 +455,16 @@ export class RunRetryCoordinator {
         }
       }
 
-      await this.waitForRoot(runId, stageId, store);
+      if (req.awaitRoot !== false) {
+        await this.waitForRoot(runId, stageId, store);
+      }
 
       return {
         ok: true,
         runId,
         stageId,
         attemptIndex: execution.attempt,
+        done: this.getOrchestrationPromise(runId),
       };
     } catch (err) {
       await tracking.rollbackStartTracking(runId, {

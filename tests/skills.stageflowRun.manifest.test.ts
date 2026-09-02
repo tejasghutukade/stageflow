@@ -72,6 +72,31 @@ describe("stageflow-run SKILL.md", () => {
     expect(body).toMatch(/AskQuestion/);
   });
 
+  it("uses host-down CLI wait/answer instead of a disposable MCP bridge", () => {
+    expect(body).toMatch(/sf runs waiting/);
+    expect(body).toMatch(/sf runs answer/);
+    expect(body).toMatch(/sf runs wait/);
+    expect(body).not.toMatch(/## Bridge/);
+    expect(body).not.toMatch(/start `sf mcp --mcp-stateless`/);
+    expect(body).not.toMatch(/disposable HITL bridge/);
+    expect(body).not.toMatch(/sf runs retry/);
+    expect(body).not.toMatch(/sf runs abandon/);
+    expect(body).not.toMatch(/sf runs rerun/);
+    const controlSurface = readFileSync(
+      path.join(root, "skills", "stageflow", "references", "control-surface.md"),
+      "utf8",
+    );
+    expect(controlSurface).toMatch(
+      /Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`\./,
+    );
+    expect(controlSurface).not.toMatch(/sf runs retry/);
+    const mcpCall = readFileSync(path.join(skillDir, "scripts", "mcp-call.mjs"), "utf8");
+    expect(mcpCall).toMatch(/"answer_gate"/);
+    expect(mcpCall).not.toMatch(/retry_stage/);
+    expect(mcpCall).not.toMatch(/abandon_stage/);
+    expect(mcpCall).not.toMatch(/"rerun"/);
+  });
+
   it("locks picker routing, harvest, and confirm submit shape in the reference", () => {
     const reference = readFileSync(nativeQuestionUi, "utf8");
     expect(reference).toMatch(/AskQuestion/);

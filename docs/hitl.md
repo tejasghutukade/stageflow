@@ -43,7 +43,7 @@ Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt bec
 
 1. Stage agent calls `ask_operator` with a `kind` and message (and `artifacts` for `artifact_backed`)
 2. Run enters **waiting** state
-3. Operator replies in the console (select the stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>` — and use the workspace reply surface) or via runtime resume. Waiting cards on Today can also accept eligible gates.
+3. Operator replies in the console (select the stage on the spatial map — or open `#/runs/<runId>/stages/<stageId>` — and use the workspace reply surface), via MCP `answer_gate` while `sf ui` or `sf mcp` is running, or via `sf runs answer` when the host is down. Waiting cards on Today can also accept eligible gates.
 4. Stage agent continues; may call `ask_operator` again or finish with `emit_stage_envelope`
 
 `ask_operator` **does not** complete the stage — only `emit_stage_envelope` does.
@@ -56,7 +56,7 @@ Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt bec
 sf run --task tests/fixtures/tasks/sample.task.yaml --pipeline tests/fixtures/pipelines/plan-review-proving.pipeline.yaml
 ```
 
-When a stage waits, the CLI exits **`2`** and prints the run folder path. The run stays resumable from the console.
+When a stage waits, the CLI exits **`2`** and prints the run folder path. Continue with `sf runs waiting` / `answer` / `wait` (host down), or from the console / MCP while a host is up. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
 
 JSON with `--json`:
 
@@ -114,9 +114,11 @@ See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP
 
-Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console.
+Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console. Console and MCP stay valid when a host is up; mutating `sf runs` verbs refuse in that case.
 
-When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate`. Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
+When no host is up, the same loop is `sf runs waiting` / `answer` / `wait`. After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
+
+When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate` (host up) or `sf runs answer --json` (host down). Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
 
 ## See also
 

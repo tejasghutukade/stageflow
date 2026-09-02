@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PACKAGE_NAME } from "../src/package-meta.js";
+import { PACKAGE_NAME, PACKAGE_VERSION } from "../src/package-meta.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,6 +19,7 @@ describe("package identity", () => {
     const ui = readJson("ui/package.json");
     expect(pkg.name).toBe("stageflow");
     expect(PACKAGE_NAME).toBe("stageflow");
+    expect(PACKAGE_VERSION).toBe(pkg.version);
     expect(ui.name).toBe("@stageflow/ui");
   });
 
