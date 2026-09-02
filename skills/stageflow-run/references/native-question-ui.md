@@ -1,8 +1,8 @@
 # Native question UI
 
-Present a waiting HITL gate on the coding-agent host's structured question tool when that tool can represent the gate. Otherwise collect the reply in this chat. Submit with `answer_gate` either way. This file is presentation only — it does not change MCP tools, `detect-host.mjs`, or the operator console.
+Present a waiting HITL gate on the coding-agent host's structured question tool when that tool can represent the gate. Otherwise collect the reply in this chat. Submit with `answer_gate` when the Stageflow host is up, or `sf runs answer --json` when it is down. This file is presentation only — it does not change MCP tools, `detect-host.mjs`, or the operator console.
 
-Read `pending_prompt` from `list_waiting` (not only `waiting_questions` strings).
+Read `pending_prompt` from `list_waiting` or `sf runs waiting --json` (not only `waiting_questions` strings).
 
 ## Detect a picker
 
@@ -30,7 +30,7 @@ Pass the pending message as the question text and the mapped labels as that tool
 | `artifact_backed` | Accept and Reject (decision only) | Host has no picker |
 | `free_text` with a harvested closed set | Those names as options | Open-ended, or harvest is ambiguous |
 | `free_text` with no closed set | — | Always |
-| `multi_question` | One picker call with one question per sub-item when **every** sub-question is representable; then one `answer_gate` | Any sub-question is open or unmappable — the **whole** gate in chat |
+| `multi_question` | One picker call with one question per sub-item when **every** sub-question is representable; then one submit | Any sub-question is open or unmappable — the **whole** gate in chat |
 
 Map picker Accept / yes / approve → `accept`. Reject / no / deny → `reject`. Always include `promptId` (`pending_prompt.id` or `waiting_prompt_id`).
 
@@ -40,7 +40,7 @@ Map picker Accept / yes / approve → `accept`. Reject / no / deny → `reject`.
 | Top-level `artifact_backed` | `{ "kind": "artifact_backed", "decision": "accept" \| "reject" }` plus optional `text` after a reject follow-up |
 | Top-level or sub `free_text` (including harvested) | `{ "kind": "free_text", "text": "<selected label>" }` |
 
-Never submit a `confirm` item as `free_text`. For `multi_question`, wrap sub-answers in the Gate `answers` object and call `answer_gate` once.
+Never submit a `confirm` item as `free_text`. For `multi_question`, wrap sub-answers in the Gate `answers` object and submit once (`answer_gate` or `sf runs answer --json`).
 
 When in doubt, chat.
 
@@ -73,6 +73,6 @@ Submit the selected label as `text` for `free_text` items. If the prompt also li
 
 ## Errors
 
-On `answer_gate` `isError` (400 / 404 / 409), print the payload. Collect a corrected reply on the picker if the gate is still representable; otherwise chat. Then `answer_gate` again.
+On MCP `answer_gate` `isError` (400 / 404 / 409) or CLI `sf runs answer` exit `1`, print the payload. Collect a corrected reply on the picker if the gate is still representable; otherwise chat. Then submit again.
 
 **Done when** `{ "ok": true }` or the error payload has been printed and a corrected reply is in hand.

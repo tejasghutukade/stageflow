@@ -1,6 +1,6 @@
 # mcp-call
 
-Use [`../scripts/mcp-call.mjs`](../scripts/mcp-call.mjs) when this harness has no native Stageflow MCP tools, and always for a self-started `sf mcp --mcp-stateless` bridge.
+Use [`../scripts/mcp-call.mjs`](../scripts/mcp-call.mjs) when the Stageflow host is up and this harness has no native Stageflow MCP tools. Do not start `sf mcp` from this skill.
 
 ```
 node scripts/mcp-call.mjs --base-url <url> --tool <name> --args '<json>' [--stateless]
@@ -8,7 +8,7 @@ node scripts/mcp-call.mjs --base-url <url> --tool <name> --args '<json>' [--stat
 
 Default `--base-url` is `http://127.0.0.1:3847`. `--args` defaults to `{}`.
 
-`--stateless` sends one `tools/call` and no session header. Use it for hosts started with `sf mcp --mcp-stateless`.
+`--stateless` sends one `tools/call` and no session header. Use it for hosts the **user** started with `sf mcp --mcp-stateless`, not a skill-started process.
 
 Without `--stateless`: `initialize`, capture `Mcp-Session-Id`, reuse it for `tools/call`.
 

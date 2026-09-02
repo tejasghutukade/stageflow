@@ -23,4 +23,6 @@ Use MCP tools over the Streamable HTTP endpoint at `{baseUrl}/mcp`. Tool names a
 
 ## When the host is down
 
-Use the `sf` CLI. Command names and flags live in [docs/cli-reference.md](../../../docs/cli-reference.md). Typical talking-job commands: `sf run`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`.
+Use the `sf` CLI. Command names and flags live in [docs/cli-reference.md](../../../docs/cli-reference.md). Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`.
+
+Probe before each mutating `sf runs` verb. If the probe is **up** or the command refuses because a host is up, continue that gate via MCP — do not start a second mutating writer, and do not start `sf mcp` as a disposable bridge.

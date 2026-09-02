@@ -17,7 +17,7 @@ export {
   type StageflowContext,
   type CatalogManifestStatus,
 } from "./project/resolveStageflowContext.js";
-export { PACKAGE_NAME } from "./package-meta.js";
+export { PACKAGE_NAME, PACKAGE_VERSION } from "./package-meta.js";
 export type { StageEnvelope } from "./types/envelope.js";
 export {
   assertRequiredEnvelope,

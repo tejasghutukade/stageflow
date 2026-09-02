@@ -71,7 +71,48 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/Stageflow \(sf\)/);
     expect(result.stdout).not.toMatch(/software-factory \(sf\)/);
     expect(result.stdout).toMatch(/Data under \.stageflow\/\./);
+    expect(result.stdout).toMatch(/sf --version/);
+    expect(result.stdout).toMatch(/sf -V/);
+    expect(result.stdout).toMatch(/sf runs list/);
+    expect(result.stdout).toMatch(/sf runs show/);
+    expect(result.stdout).toMatch(/sf runs waiting/);
+    expect(result.stdout).toMatch(/sf runs wait/);
+    expect(result.stdout).toMatch(/sf runs answer/);
+    expect(result.stdout).toMatch(/sf runs retry/);
+    expect(result.stdout).toMatch(/sf runs abandon/);
+    expect(result.stdout).toMatch(/sf runs rerun/);
     expect(result.stdout).not.toMatch(/\.software-factory/);
+  });
+
+  it("runs with no subcommand exits non-zero with usage", () => {
+    const result = runCli(["runs"]);
+    expect(result.status).not.toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf runs list/);
+    expect(out).toMatch(/sf runs answer/);
+  });
+
+  it("runs unknown subcommand exits non-zero with usage", () => {
+    const result = runCli(["runs", "nope"]);
+    expect(result.status).not.toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/Unknown runs subcommand: nope/);
+    expect(out).toMatch(/sf runs list/);
+    expect(out).not.toMatch(/stack|at Object|Error: /i);
+  });
+
+  it("runs --help prints runs usage and exits zero", () => {
+    const result = runCli(["runs", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf runs list/);
+    expect(out).toMatch(/sf runs show/);
+    expect(out).toMatch(/sf runs waiting/);
+    expect(out).toMatch(/sf runs wait/);
+    expect(out).toMatch(/sf runs answer/);
+    expect(out).toMatch(/sf runs retry/);
+    expect(out).toMatch(/sf runs abandon/);
+    expect(out).toMatch(/sf runs rerun/);
   });
 
   it("rejects --checkout without a value", () => {

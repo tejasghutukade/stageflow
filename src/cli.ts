@@ -17,6 +17,7 @@ import {
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
+import { RUNS_USAGE, runRunsCommand } from "./cli/runsCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
@@ -28,6 +29,7 @@ import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcpHost.js";
 import { resolveMcpStateless } from "./mcp/server.js";
+import { PACKAGE_VERSION } from "./package-meta.js";
 
 const USAGE = `Usage:
   sf init
@@ -36,6 +38,14 @@ const USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
+  sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
+  sf runs show --run <runId> [--from <sf-run.json>] [--json]
+  sf runs waiting [--run <runId>] [--json]
+  sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
+  sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
+  sf runs retry --run <runId> --stage <stageId> [--json]
+  sf runs abandon --run <runId> --stage <stageId> [--json]
+  sf runs rerun --run <runId> [--json]
   sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf mcp [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf providers list
@@ -47,6 +57,8 @@ const USAGE = `Usage:
   sf skills list
   sf skills install --from-path <dir> [--skill-name <name>]
   sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
+  sf --version
+  sf -V
   sf --help
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
@@ -65,12 +77,15 @@ ${ENVELOPE_USAGE}
 
 ${EXPORT_RUN_USAGE}
 
+${RUNS_USAGE}
+
 ${PROVIDERS_USAGE}
 
 ${SKILLS_USAGE}`;
 
 function parseArgs(argv: string[]): {
   help: boolean;
+  version?: boolean;
   command?: string;
   task?: string;
   pipeline?: string;
@@ -88,6 +103,12 @@ function parseArgs(argv: string[]): {
   ) {
     return { help: true };
   }
+  if (args[0] === "--version" || args[0] === "-V") {
+    if (args.length > 1) {
+      throw new Error(`Unexpected argument: ${args[1]}`);
+    }
+    return { help: false, version: true };
+  }
 
   const command = args[0];
   if (
@@ -98,6 +119,7 @@ function parseArgs(argv: string[]): {
     command === "artifact" ||
     command === "envelope" ||
     command === "export-run" ||
+    command === "runs" ||
     command === "skills"
   ) {
     return { help: false, command };
@@ -264,6 +286,10 @@ async function main(argv: string[]): Promise<number> {
       console.log(USAGE);
       return argv.slice(2).length === 0 ? 1 : 0;
     }
+    if (parsed.version) {
+      console.log(PACKAGE_VERSION);
+      return 0;
+    }
 
     const ctx = await resolveStageflowContext(process.cwd());
 
@@ -301,6 +327,14 @@ async function main(argv: string[]): Promise<number> {
       return runExportRunCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "runs") {
+      return runRunsCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+        isGitProject: ctx.isGitProject,
       });
     }
 

@@ -9,7 +9,7 @@ Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://
 - Users author **pipeline-owned YAML** (`*.pipeline.yaml`, `*.task.yaml`, optional `stageflow.yaml` manifest)
 - Each stage runs in a fresh Pi agent session
 - Stages hand off via typed envelopes and artifacts
-- HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), and via MCP when `sf ui` or `sf mcp` is running
+- HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), via MCP when `sf ui` or `sf mcp` is running, and host-down via `sf runs`
 
 **Stages are domain-agnostic.** Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns. Stageflow validates shape and wiring; it does not ship domain-specific stage types.
 
@@ -28,7 +28,7 @@ Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://
 
 | Directory | Responsibility |
 |-----------|----------------|
-| `cli/` | `sf run`, `sf validate`, `sf ui`, `sf providers` |
+| `cli/` | `sf run`, `sf runs`, `sf validate`, `sf ui`, `sf providers` |
 | `config/` | YAML load/validate, pipeline DAG resolution |
 | `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
 | `runstore/` | SQLite run state under `.stageflow/` |
