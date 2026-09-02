@@ -28,16 +28,16 @@ type StageEnvelope = {
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `status` | yes | `"success"` advances the pipeline; `"failure"` stops it |
+| `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage halts scheduling; a parallel clone failure lets sibling clones finish and skips the join and its descendants |
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
-| `payload` | no | Structured data for downstream stages |
-| `fork_choice` | no* | Named immediate successor ids to run; required on success when the stage has a `fork` field |
+| `payload` | no | Structured data for downstream stages; required on success when the stage declares `payload_schema` |
+| `fork_choice` | no* | Non-clonable immediate successor ids to run; required on success when the stage has a `fork` field and at least one non-clonable child |
 | `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
-\* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On stages without those fields the extra keys are optional; extra `clone_forks` for a non-clonable successor is ignored, not an emit error.
+\* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On failure, neither field is required or validated. Extra `clone_forks` is ignored only when the emitting stage has no clonable children; if any clonable child exists, `clone_forks` must cover every clonable successor exactly once (extra `successor_id`s are rejected).
 
 ## Emitting an envelope
 
@@ -57,13 +57,13 @@ Example success emit (conceptual):
 }
 ```
 
-On `status: "failure"`, the envelope is accepted but the **pipeline stops** — the stage does not advance successors.
+On `status: "failure"`, the envelope is accepted. A named-stage failure halts scheduling. A parallel clone failure does not stop sibling clones; the join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
 
-If the stage declares `payload_schema` in YAML, `payload` is validated against that JSON Schema subset on success.
+If the stage declares `payload_schema` in YAML, `payload` is validated against that JSON Schema subset on success — see [payload_schema](#payload-schema).
 
 ### Fork stages
 
-If the stage's pipeline entry has a `fork` field, the success emit **must** include `fork_choice: string[]` naming which immediate successors to run. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
+If the stage's pipeline entry has a `fork` field and at least one non-clonable child, the success emit **must** include `fork_choice: string[]` naming which of those successors to run. A fork parent whose every child is clonable does not require `fork_choice`. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
 
 ```json
 {
@@ -75,9 +75,9 @@ If the stage's pipeline entry has a `fork` field, the success emit **must** incl
 ```
 
 Rules:
-- Every id in `fork_choice` must be an immediate successor of this stage.
-- `fork_choice: []` is accepted only when `allow_none: true` is set in the pipeline `fork` field.
-- `fork_choice` on a failure emit is ignored; no successor is named.
+- Every id in `fork_choice` must be a non-clonable immediate successor of this stage.
+- `fork_choice: []` is accepted only when `allow_none: true` is set with `select: subset`. `select: one` always requires exactly one choice — empty `fork_choice` fails emit even if `allow_none: true`.
+- On failure, `fork_choice` is not required or validated.
 
 Unchosen successors are `skipped` — the same status used when a parent fails. See [YAML catalog](yaml-catalog.md#fork-pipelines) for the `fork` field.
 
@@ -85,11 +85,15 @@ Unchosen successors are `skipped` — the same status used when a parent fails. 
 
 If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout`. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
 
-Item shape:
+Item shape (exact coverage of every clonable successor):
 
-- `{ successor_id, action }` for every item
-- plus `envelope` when `action` is `once`
-- plus `mode` (`parallel` | `sequential`) and `clones` when `action` is `fanout`
+| `action` | Required | Forbidden |
+|----------|----------|-----------|
+| `skip` | `successor_id`, `action` | `envelope`, `mode`, `clones` |
+| `once` | `successor_id`, `action`, `envelope` | `mode`, `clones` |
+| `fanout` | `successor_id`, `action`, `mode`, `clones` (length in `[2, clone_cap]`) | top-level `envelope` |
+
+Nested `clones[].envelope` values are full envelopes.
 
 ```json
 {
@@ -114,19 +118,25 @@ Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**
 
 `clone_forks` is required for each clonable successor. When the parent also has `fork`, `fork_choice` names only non-clonable siblings. A fork parent whose every child is clonable does not require `fork_choice`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario F.
 
-A clone may skip / once / fan-out its next stage only when that successor is clonable. A non-clonable successor is silence-is-valid: omit `clone_forks`; extra `clone_forks` for that successor is ignored, not an emit error. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). Two clones fanning out the same successor is unsupported in v1 because instance ids are `{catalogId}~{n}`. Dual-parent nested fan-out is fail-closed at apply.
+A clone may skip / once / fan-out its next stage only when that successor is clonable. Extra `clone_forks` is ignored only when the emitting stage has no clonable children (for example a nested clone whose successor is a non-clonable join). If any clonable child exists, `clone_forks` must list every clonable successor exactly once; extra `successor_id`s are rejected. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). Two clones fanning out the same successor is unsupported in v1 because instance ids are `{catalogId}~{n}`. Dual-parent nested fan-out is fail-closed at apply.
 
 After fan-out, workspace paths and `--stage` keys use the instance id (`{catalogId}~{n}`); run-once keeps the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
+### payload_schema {#payload-schema}
+
+When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only).
+
+Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
+
 ## Artifacts
 
-Use **`write_stage_artifact`** to create files under the stage attempt directory:
+Use **`write_stage_artifact`** to create files under the stage attempt directory. The tool `path` is relative to `stages/<stageId>/attempts/<n>/artifacts/`:
 
 ```
 stages/<stageId>/attempts/<n>/artifacts/<your-file>
 ```
 
-The tool returns a **run-relative path** to include in `emit_stage_envelope.artifacts`.
+The tool returns a **run-relative path** for `emit_stage_envelope` and `ask_operator`.
 
 Example paths referenced in fixtures:
 
@@ -150,7 +160,7 @@ Accepted envelopes persist in the SQLite run store (`SF_STORE=sqlite` only; see 
 
 Later stages receive prior envelope context through the stage bootstrap (task + upstream summaries/payloads). Exact prompt assembly is handled by the runtime; authors focus on meaningful `payload` and `summary` content.
 
-After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order. The join stage only runs if every clone succeeded (parallel and sequential). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
+After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order (`priorEnvelopes`). The join stage only runs if every clone succeeded (parallel and sequential); those priors are success envelopes only (0.7). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
 
 Inspect envelopes in the operator console: run detail → stage → envelope view (`#/runs/<runId>/stages/<stageId>/envelope`).
 
@@ -185,7 +195,7 @@ Full recipe: [CI / headless](ci.md#handoff-envelope-extraction) · CLI flags: [`
 
 ## See also
 
-- [YAML catalog](yaml-catalog.md) — `payload_schema` on stages
+- [YAML catalog](yaml-catalog.md) — `payload_schema` on stage bodies
 - [HITL](hitl.md) — gates before emit
 - [CLI reference](cli-reference.md) — `sf envelope get`, handoff format
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — stages that exercise emit + artifacts

@@ -14,7 +14,7 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 | `<git-root>/.stageflow/` | Run store (SQLite) and per-run workspaces when inside a git repo |
 | `~/.stageflow/` | Global home — `sf_owned` auth (`agent/auth.json`), global settings |
 
-Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected.
+Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era `.stageflow/runs` tree may be imported; if `.stageflow` is missing and `.software-factory` exists, the next store open renames it.
 
 ## Global
 
@@ -45,7 +45,7 @@ Also ensures `~/.stageflow/` exists for global config.
 Run a pipeline against a task file.
 
 ```bash
-sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
 ```
 
 | Flag | Description |
@@ -81,6 +81,8 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--skip-gate
 
 Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout leased).
 
+Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). See [CI / headless](ci.md#json-stdout).
+
 Example:
 
 ```bash
@@ -94,6 +96,8 @@ sf run --task examples/hello-world/my-task.task.yaml \
   --pipeline examples/hello-world/hello.pipeline.yaml \
   --json --include stages > sf-run.json
 ```
+
+Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. CLI completion JSON does **not** include `pipeline_track` (that field is on `sf export-run` and MCP `get_run`).
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
 
@@ -146,15 +150,15 @@ sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
 |------|-------------|
 | `--run` | Run id (optional when `--from` provides `runId`) |
 | `--from` | Read `runId` from a prior `sf run --json` output file |
-| `--out` | Write JSON to a file under the current working directory (stdout when omitted) |
+| `--out` | Write JSON to a file under the current working directory (stdout when omitted). Path must stay under cwd (no `..`). |
 
-The run must be complete (`succeeded` or `failed`). In-progress runs exit `1`.
+Writes the full `projectRun` projection (includes `pipeline_track` and waiting fields). The run must be complete (`succeeded` or `failed`). In-progress runs exit `1`.
 
 **Exit codes:** `0` success, `1` error.
 
 ## `sf artifact read`
 
-Read a run workspace artifact file safely (path confined to the run workspace).
+Read a run workspace artifact as UTF-8 text (same path rules as MCP `read_artifact`).
 
 ```bash
 sf artifact read --run <runId> --path <relPath> [--out <file>]
@@ -163,10 +167,10 @@ sf artifact read --run <runId> --path <relPath> [--out <file>]
 | Flag | Description |
 |------|-------------|
 | `--run` | Run id (required) |
-| `--path` | Run-relative artifact path (as returned in envelope `artifacts[]`) |
+| `--path` | Run-relative artifact path (as returned in envelope `artifacts[]`). Must be relative, with no `..`, and confined to the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json`. |
 | `--out` | Write contents to a file under cwd (stdout when omitted) |
 
-**Exit codes:** `0` success, `1` error (missing artifact, path escape).
+**Exit codes:** `0` success, `1` error (missing artifact, path escape, denied path).
 
 Example:
 
@@ -187,7 +191,7 @@ sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | Installed project skills under `.pi/skills/` |
+| `list` | Installed project skills under `.pi/skills/`. Prints TSV `name\tversion\tbin/<name>.mjs` (one line per skill). An empty or missing skills dir prints no lines. |
 | `install --from-path` | Copy a local skill tree into `.pi/skills/<name>/` |
 | `install --from-zip` | Download or read a zip, locate skill root, copy, then run skill `doctor` |
 
@@ -209,26 +213,26 @@ See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yam
 
 ## `sf validate`
 
-Validate pipeline and stage YAML.
+Validate catalog YAML (pipelines, their stages, and tasks).
 
 ```bash
 sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
 ```
 
-With no flags, validates all pipelines and tasks declared in `stageflow.yaml` (manifest-all).
+With no flags, validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages (`uses:` / `include:`).
 
 | Flag | Description |
 |------|-------------|
-| `--pipeline` | Validate one pipeline file (includes `uses:` / `include:` transitively) |
-| `--task` | Validate one task file |
+| `--pipeline` | Validate that pipeline file and its stages (`uses:` / `include:` transitively). Does not validate all tasks. |
+| `--task` | Validate that task file only |
 | `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors |
 | `--json` | Machine-readable findings |
 
-Use at most one of `--pipeline` or `--task`.
+Use at most one of `--pipeline` or `--task`. The CLI rejects both.
 
 **Exit codes:** `0` pass, `1` fail. Validate never exits `2` — no waiting state.
 
-Scope: pipeline and stage YAML only. Does not prove provider auth, task shape beyond `--task` scope, or checkout paths.
+Does not prove provider auth or checkout paths.
 
 Example:
 
@@ -303,7 +307,9 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `SF_STORE` | Must be `sqlite` (default) |
 | `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft max parallel runs |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Stage concurrency per run |
-| `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode (`process` default) |
+| `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap (also in [CI / headless](ci.md)) |
+| `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |
+| `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT` | Transcript text truncation |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |

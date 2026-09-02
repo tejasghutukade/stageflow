@@ -225,7 +225,7 @@ describe("formatValidationHuman", () => {
       ],
     });
     const output = formatValidationHuman(result);
-    expect(output).toMatch(/Scope: pipeline and stage YAML only/);
+    expect(output).toMatch(/Scope: catalog YAML/);
     expect(output.indexOf("stages/a.yaml")).toBeLessThan(output.indexOf("pipelines/b.yaml"));
     const aSection = output.slice(
       output.indexOf("stages/a.yaml"),
@@ -290,7 +290,9 @@ describe("formatValidationJson and exitCodeForValidation", () => {
     };
     expect(parsed.ok).toBe(false);
     expect(parsed.scope).toBe("full");
-    expect(parsed.checks).toMatch(/pipeline and stage YAML only/);
+    expect(parsed.checks).toMatch(
+      /catalog YAML \(pipelines, stages, tasks as selected by flags\)/,
+    );
     expect(parsed.summary).toEqual({ errors: 1, warnings: 0 });
     expect(parsed.findings[0]).toEqual({
       severity: "error",

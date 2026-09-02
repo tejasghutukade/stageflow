@@ -21,7 +21,7 @@ The same pipeline runs three ways without rewriting anything:
 
 - **Locally** — `sf ui` for triage, provider setup, and gate replies
 - **Headless / CI** — `sf validate` and `sf run --json` with predictable exit codes
-- **Via MCP** — Streamable HTTP tools when the console is running
+- **Via MCP** — Streamable HTTP tools when `sf ui` or `sf mcp` is running
 
 **Stageflow is not an SDLC tool.** Software delivery is a popular pattern in fixtures and dogfood flows, but stages are user-authored and domain-agnostic. If you can express a multi-step workflow in YAML, Stageflow can run it on Pi.
 
@@ -33,7 +33,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
-- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` is running
+- **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
 - **Clonable fan-out** — clone one successor N times at completion, then join (see [YAML catalog](docs/yaml-catalog.md#clonable-successors))
@@ -126,12 +126,12 @@ Full reference: [docs/providers.md](docs/providers.md)
 Start the console with `sf ui` (default `http://127.0.0.1:3847`).
 
 - **Runs** — active and recent pipeline runs, capacity, and status at a glance
-- **Run detail** — stage timeline, transcripts, envelope payloads, and artifact paths
+- **Run detail** — spatial stage map; select a stage for the gated workspace (logs, files, envelopes, HITL). Created runs show **not started** with a **Start run** action until history exists
 - **HITL reply** — answer operator gates (`ask_operator`) without leaving the browser
 - **Pipelines** — browse manifest-declared pipeline definitions
 - **Settings → Providers** — connect model providers (`pi_home` or `sf_owned` credential storage)
 
-*Screenshot coming soon — capture after console polish lands (see `docs/img/`).*
+Brand assets live under `docs/img/` (`stageflow-og.svg`, `stageflow-icon.svg`).
 
 ## Headless / CI
 
@@ -141,7 +141,7 @@ The guest actor is the CLI (`sf` / `stageflow`). `sf ui` and MCP are not require
 sf validate --strict --json
 ```
 
-Validate exits `0` or `1` only (no waiting / `2`). It checks pipeline and stage YAML only; it does not prove provider auth, Task, or checkout.
+Validate exits `0` or `1` only (no waiting / `2`). With no flags, `sf validate` checks pipelines and tasks in the manifest (plus stages). `--pipeline` validates that pipeline and its stages only; `--task` validates that task file. It never proves provider auth or checkout paths.
 
 ```bash
 sf providers login <providerId> --api-key-env <VAR>
@@ -180,11 +180,9 @@ Runtime state lives in **`<git-root>/.stageflow/`** when inside a git repository
 
 ## MCP
 
-`sf ui` also serves a Streamable HTTP MCP endpoint at `http://127.0.0.1:3847/mcp` (URL printed on boot). Point a Cursor (or other) MCP client at that URL.
+Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
 
-Available tools: `list_pipelines`, `list_tasks`, `list_runs`, `get_health`, `start_run`, `get_run`, `read_artifact`.
-
-Full reference: [docs/mcp.md](docs/mcp.md)
+HITL-aware tools include `wait_run`, `answer_gate`, and `list_waiting`. Full tool list: [docs/mcp.md](docs/mcp.md).
 
 ## Stageflow vs Conductor
 
@@ -196,7 +194,7 @@ Both projects address multi-step agent workflows. They differ in orchestration m
 | **Orchestration** | Pipeline DAG + stage worker | Jinja routing, no LLM in router |
 | **Unit of work** | Task → Pipeline → Stage attempts | Workflow → Agents |
 | **Handoff** | Typed **envelope** + artifacts | Agent output → context |
-| **Human gates** | Operator console + MCP | Dashboard + TUI fleet |
+| **Human gates** | Console + MCP + harness native question UI | Dashboard + TUI fleet |
 | **Runtime** | Node.js, Pi coding agent | Python, Copilot/Claude SDKs |
 | **Best for** | Personal/team **multi-stage Pi workflows** you define (releases, research, SDLC, …) | Enterprise multi-agent workflows |
 
@@ -210,6 +208,7 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 | [hello-world](examples/hello-world/) | Single stage, domain-neutral |
 | [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** |
 | [conditional-fork](examples/conditional-fork/) | Exclusive fork routing with operator branch choice |
+| [clonable-fanout](examples/clonable-fanout/) | Clone one successor N times, then join |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
 | [ci-validate](examples/ci-validate/) | Strict validate in CI |
 
@@ -224,13 +223,14 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/README.md](docs/README.md) | Documentation index |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
-| [docs/cli-reference.md](docs/cli-reference.md) | `sf run`, `sf envelope`, `sf skills`, `sf validate`, `sf ui`, `sf providers` |
+| [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
 | [docs/envelopes.md](docs/envelopes.md) | Handoff envelope contract |
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
 | [docs/mcp.md](docs/mcp.md) | MCP tool reference |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
+| [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
 | [docs/compare-conductor.md](docs/compare-conductor.md) | Positioning deep dive |
 
 ## Develop from source

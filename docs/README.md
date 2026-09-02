@@ -16,7 +16,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Pipeline, stage, and task file schema |
-| [CLI reference](cli-reference.md) | `sf run`, `sf validate`, `sf envelope`, `sf skills`, `sf ui`, `sf providers` |
+| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
 ## Core concepts
@@ -31,8 +31,8 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 | Doc | What you'll learn |
 |-----|-------------------|
-| [Operator console](operator-console.md) | Console pages, navigation, settings |
-| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` is running |
+| [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
+| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running |
 | [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions, PR diagram dogfood |
 
 ## Featured example
@@ -55,7 +55,7 @@ Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of tr
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, payload schemas (referenced via `uses:`)
 - [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 
-Runnable walkthroughs live in [`examples/`](../examples/) (see `examples/README.md` when present).
+Runnable walkthroughs live in [`examples/`](../examples/) (see [`examples/README.md`](../examples/README.md)).
 
 ## See also
 
