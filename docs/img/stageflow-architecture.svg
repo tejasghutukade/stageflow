@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">Stageflow architecture</title>
+  <desc id="desc">Pipeline definitions and operator interfaces drive the Stageflow orchestration runtime. The runtime coordinates agent execution through AgentPort and persists run state through RunStore.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrow-muted" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8b949e"/>
+    </marker>
+    <style>
+      .label { fill: #f0f6fc; font: 600 18px system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .small { fill: #8b949e; font: 15px system-ui, -apple-system, "Segoe UI", sans-serif; }
+      .group { fill: #8b949e; font: 700 14px system-ui, -apple-system, "Segoe UI", sans-serif; letter-spacing: 1.5px; }
+      .node { fill: #161b22; stroke: #30363d; stroke-width: 2; }
+      .port { fill: #10253f; stroke: #58a6ff; stroke-width: 2; }
+      .edge { fill: none; stroke: #58a6ff; stroke-width: 2.5; marker-end: url(#arrow); }
+      .feedback { fill: none; stroke: #8b949e; stroke-width: 2; stroke-dasharray: 7 6; marker-end: url(#arrow-muted); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" rx="24" fill="#0d1117"/>
+
+  <text class="group" x="65" y="70">DEFINITIONS &amp; INTERFACES</text>
+  <text class="group" x="437" y="70">STAGEFLOW RUNTIME</text>
+  <text class="group" x="885" y="70">EXECUTION &amp; STATE</text>
+
+  <rect class="node" x="65" y="105" width="275" height="88" rx="14"/>
+  <text class="label" x="202.5" y="140" text-anchor="middle">Pipeline + task YAML</text>
+  <text class="small" x="202.5" y="168" text-anchor="middle">versioned workflow contract</text>
+
+  <rect class="node" x="65" y="247" width="275" height="88" rx="14"/>
+  <text class="label" x="202.5" y="282" text-anchor="middle">CLI · Console · MCP</text>
+  <text class="small" x="202.5" y="310" text-anchor="middle">one runtime, three surfaces</text>
+
+  <rect class="node" x="420" y="105" width="330" height="88" rx="14"/>
+  <text class="label" x="585" y="140" text-anchor="middle">Load + validate</text>
+  <text class="small" x="585" y="168" text-anchor="middle">resolve DAG and snapshot inputs</text>
+
+  <rect class="node" x="420" y="247" width="330" height="88" rx="14"/>
+  <text class="label" x="585" y="282" text-anchor="middle">Run manager + DAG scheduler</text>
+  <text class="small" x="585" y="310" text-anchor="middle">readiness · routing · retries · capacity</text>
+
+  <rect class="node" x="420" y="389" width="330" height="88" rx="14"/>
+  <text class="label" x="585" y="424" text-anchor="middle">Stage worker + HITL</text>
+  <text class="small" x="585" y="452" text-anchor="middle">attempt lifecycle · wait · answer · resume</text>
+
+  <rect class="port" x="855" y="105" width="280" height="88" rx="14"/>
+  <text class="label" x="995" y="140" text-anchor="middle">AgentPort</text>
+  <text class="small" x="995" y="168" text-anchor="middle">Pi adapter → fresh session</text>
+
+  <rect class="port" x="855" y="247" width="280" height="88" rx="14"/>
+  <text class="label" x="995" y="282" text-anchor="middle">RunStore</text>
+  <text class="small" x="995" y="310" text-anchor="middle">SQLite · attempts · events · DAG</text>
+
+  <rect class="node" x="855" y="389" width="280" height="88" rx="14"/>
+  <text class="label" x="995" y="424" text-anchor="middle">Envelopes + artifacts</text>
+  <text class="small" x="995" y="452" text-anchor="middle">explicit stage handoffs</text>
+
+  <path class="edge" d="M 340 149 H 420"/>
+  <path class="edge" d="M 340 291 H 420"/>
+  <path class="edge" d="M 585 193 V 247"/>
+  <path class="edge" d="M 585 335 V 389"/>
+  <path class="edge" d="M 750 433 H 815 V 149 H 855"/>
+  <path class="edge" d="M 750 433 H 790 V 291 H 855"/>
+  <path class="edge" d="M 750 433 H 855"/>
+  <path class="edge" d="M 995 389 V 335"/>
+  <path class="feedback" d="M 855 291 H 770 V 365 H 585 V 335"/>
+
+  <rect x="65" y="556" width="1070" height="52" rx="12" fill="#161b22" stroke="#30363d"/>
+  <text class="small" x="600" y="588" text-anchor="middle">Stageflow owns orchestration and durable local state. Pi is the current agent execution backend.</text>
+</svg>

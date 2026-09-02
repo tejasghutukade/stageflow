@@ -4,12 +4,13 @@ Guidance for contributors and AI coding agents working on the Stageflow reposito
 
 ## What Stageflow is
 
-Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono), with a local operator console.
+Stageflow is a runtime for **configurable multi-stage agent workflows**, with a local operator console. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend.
 
 - Users author **pipeline-owned YAML** (`*.pipeline.yaml`, `*.task.yaml`, optional `stageflow.yaml` manifest)
 - Each stage runs in a fresh Pi agent session
 - Stages hand off via typed envelopes and artifacts
 - HITL gates pause for operator input; the same pipeline runs locally, in CI (`sf run --json`), via MCP when `sf ui` or `sf mcp` is running, and host-down via `sf runs`
+- The orchestration layer is separated from agent execution by `AgentPort`
 
 **Stages are domain-agnostic.** Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns. Stageflow validates shape and wiring; it does not ship domain-specific stage types.
 

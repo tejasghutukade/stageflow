@@ -6,7 +6,7 @@ permalink: /
 
 # Stageflow documentation
 
-Stageflow is a CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono). You author **pipeline-owned YAML** — `*.pipeline.yaml`, separate `*.task.yaml` files, optional repo-root `stageflow.yaml` manifest — and Stageflow runs each stage in a fresh Pi agent session with structured handoffs between steps.
+Stageflow is an open-source runtime for **configurable multi-stage agent workflows**. You author **pipeline-owned YAML** — `*.pipeline.yaml`, separate `*.task.yaml` files, optional repo-root `stageflow.yaml` manifest — and Stageflow schedules fresh agent sessions with explicit envelopes and artifacts between stages. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend.
 
 Stages are **author-defined and domain-agnostic**. Release automation, research flows, content review, SDLC, and ops runbooks are all valid patterns; nothing in Stageflow hard-codes a domain.
 
@@ -23,6 +23,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 | Doc | What you'll learn |
 |-----|-------------------|
+| [Architecture](architecture.md) | Runtime boundaries, execution flow, persistence, recovery, and design tradeoffs |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |

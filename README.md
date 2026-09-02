@@ -1,6 +1,6 @@
 # <img src="ui/public/stageflow-icon.svg" alt="" width="44" height="44" valign="middle"> Stageflow
 
-CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badlogic/pi-mono), with a local operator console.
+Open-source runtime for **configurable multi-stage agent workflows** with typed handoffs, DAG execution, human gates, MCP, CI, and a local operator console.
 
 [![npm version](https://img.shields.io/npm/v/stageflow)](https://www.npmjs.com/package/stageflow)
 [![npm downloads](https://img.shields.io/npm/dm/stageflow)](https://www.npmjs.com/package/stageflow)
@@ -9,7 +9,7 @@ CLI pipeline runtime for **configurable stages** on [Pi](https://github.com/badl
 [![GitHub issues](https://img.shields.io/github/issues/tejasghutukade/stageflow)](https://github.com/tejasghutukade/stageflow/issues)
 [![CI](https://img.shields.io/github/actions/workflow/status/tejasghutukade/stageflow/ci.yml?branch=main)](https://github.com/tejasghutukade/stageflow/actions/workflows/ci.yml)
 
-Author pipeline-owned YAML in your project. Stageflow runs each stage in a fresh Pi agent session, writes a structured handoff envelope, and keeps run state under `.stageflow/`. Bins: **`sf`** and **`stageflow`**.
+Author pipeline-owned YAML in your project. Stageflow schedules each stage in a fresh agent session, moves context through explicit envelopes and artifacts, and persists run state under `.stageflow/`. [Pi](https://github.com/badlogic/pi-mono) is the current agent execution backend. Bins: **`sf`** and **`stageflow`**.
 
 ## Why Stageflow?
 
@@ -38,6 +38,14 @@ The same pipeline runs three ways without rewriting anything:
 - **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
 - **Clonable fan-out** — clone one successor N times at completion, then join (see [YAML catalog](docs/yaml-catalog.md#clonable-successors))
 - **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
+
+## Architecture at a glance
+
+![Stageflow architecture: pipeline definitions and operator interfaces drive the orchestration runtime, which coordinates agent execution and persisted state](docs/img/stageflow-architecture.svg)
+
+The scheduler owns orchestration semantics: DAG readiness, bounded parallelism, fan-out/join, conditional routing, retries, skipped branches, and resumable human gates. Agent execution sits behind `AgentPort`; Pi supplies the current coding-agent session, while Stageflow owns pipeline state, stage workspaces, handoff validation, and the interfaces used by the CLI, console, MCP, and CI.
+
+See [Architecture](docs/architecture.md) for component boundaries, execution flow, persistence, recovery behavior, and the tradeoffs behind fresh sessions and explicit handoffs.
 
 ## Installation
 
@@ -117,7 +125,7 @@ sf providers detect
 sf providers source set pi_home    # or sf_owned
 ```
 
-Stageflow is a thin Pi shell — you do not need Pi CLI `/login` as a hard prerequisite if you configure providers via the console or `sf providers`.
+Pi is Stageflow's current agent execution backend. Stageflow owns the workflow layer around it, and you do not need Pi CLI `/login` as a prerequisite when providers are configured through the console or `sf providers`.
 
 Full reference: [docs/providers.md](docs/providers.md)
 
@@ -221,6 +229,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | Doc | Description |
 |-----|-------------|
 | [docs/README.md](docs/README.md) | Documentation index |
+| [docs/architecture.md](docs/architecture.md) | Runtime components, execution flow, persistence, and design decisions |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
 | [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
