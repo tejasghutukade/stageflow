@@ -54,7 +54,7 @@ function validateStageId(id: string): string | null {
 
 function parseGateKinds(raw: unknown): StageGateKind[] | "invalid" | undefined {
   if (raw === undefined) return undefined;
-  if (!Array.isArray(raw) || raw.length === 0) return "invalid";
+  if (!Array.isArray(raw)) return "invalid";
   const kinds: StageGateKind[] = [];
   for (const item of raw) {
     if (typeof item !== "string" || !isGateKind(item)) {
@@ -110,7 +110,7 @@ export function parseCreateStageBody(
     return {
       ok: false,
       status: 400,
-      error: `gate_kinds must be a non-empty array of: ${STAGE_GATE_KINDS.join(", ")}`,
+      error: `gate_kinds must be an array of: ${STAGE_GATE_KINDS.join(", ")}`,
     };
   }
 
@@ -120,7 +120,7 @@ export function parseCreateStageBody(
     id: body.id,
     system_prompt: body.system_prompt,
     model: body.model,
-    ...(gateKinds ? { gate_kinds: gateKinds } : {}),
+    ...(gateKinds !== undefined ? { gate_kinds: gateKinds } : {}),
   };
 }
 
@@ -140,10 +140,14 @@ function formatInlineYamlScalar(value: string): string {
 
 export function stageConfigToYaml(stage: Omit<CreateStageInput, "pipeline_directory" | "filename">): string {
   const lines: string[] = [`id: ${stage.id}`];
-  if (stage.gate_kinds && stage.gate_kinds.length > 0) {
-    lines.push("gate_kinds:");
-    for (const kind of stage.gate_kinds) {
-      lines.push(`  - ${kind}`);
+  if (stage.gate_kinds !== undefined) {
+    if (stage.gate_kinds.length === 0) {
+      lines.push("gate_kinds: []");
+    } else {
+      lines.push("gate_kinds:");
+      for (const kind of stage.gate_kinds) {
+        lines.push(`  - ${kind}`);
+      }
     }
   }
   if (stage.system_prompt.includes("\n")) {
@@ -251,7 +255,7 @@ export async function createStage(
         id: input.id,
         system_prompt: input.system_prompt,
         model: input.model,
-        ...(input.gate_kinds ? { gate_kinds: input.gate_kinds } : {}),
+        ...(input.gate_kinds !== undefined ? { gate_kinds: input.gate_kinds } : {}),
       }),
       "utf8",
     );
@@ -267,7 +271,7 @@ export async function createStage(
       stage: {
         path: relPath,
         id: stage.id,
-        ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
+        ...(stage.gate_kinds !== undefined ? { gate_kinds: stage.gate_kinds } : {}),
       },
     };
   } catch (err) {

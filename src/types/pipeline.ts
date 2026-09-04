@@ -1,3 +1,4 @@
+import type { CloneAction } from "./forkChoice.js";
 import type { StageConfig, StageGateKind } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
@@ -27,6 +28,8 @@ export type PipelineStageYamlEntry = PipelineStageRef & {
   model?: string;
   payload_schema?: unknown;
   gate_kinds?: StageGateKind[];
+  clone_input_schema?: unknown;
+  clone_actions?: CloneAction[];
   skill?: string;
 };
 

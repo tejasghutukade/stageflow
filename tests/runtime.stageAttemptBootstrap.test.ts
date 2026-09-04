@@ -13,6 +13,7 @@ import {
   resolvePriorEnvelope,
 } from "../src/runtime/envelopeRouting.js";
 import { openStageAttempt } from "../src/runtime/stageAttemptBootstrap.js";
+import type { RunPipelineDagSnapshot } from "../src/runstore/port.js";
 import type { ResolvedPipelineDag } from "../src/types/pipeline.js";
 import type { StageConfig } from "../src/types/stage.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -124,6 +125,31 @@ describe("openStageAttempt", () => {
     expect(result.ok).toBe(true);
     expect(opened).toHaveLength(1);
     expect(opened[0]?.skillFilePath).toBe(filePath);
+  });
+
+  it("forwards stage.timeout_ms as timeoutMs to openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-timeout-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("approve"), timeout_ms: 3600000 },
+      task,
+      dag: rootDag("approve"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.timeoutMs).toBe(3600000);
   });
 
   it("fails closed without openStage when the named skill is missing", async () => {
@@ -313,5 +339,72 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.resumeToken).toMatch(
       /stages\/work~2\/attempts\/1\/pi-session\.jsonl$/,
     );
+  });
+
+  it("wires parent clone_actions and successor clone_input_schema into clone emit context", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-clone-ctx-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const assignmentSchema = {
+      type: "object",
+      properties: { area_id: { type: "string" } },
+      required: ["area_id"],
+    };
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["oss-plan-investigation", "oss-investigate-area"],
+      nodes: [
+        {
+          id: "oss-plan-investigation",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+        },
+        {
+          id: "oss-investigate-area",
+          needs: "oss-plan-investigation",
+          ancestors: ["oss-plan-investigation"],
+          stageIndex: 1,
+          clonable: true,
+          clone_cap: 4,
+        },
+      ],
+      roots: ["oss-plan-investigation"],
+      childrenOf: {
+        "oss-plan-investigation": ["oss-investigate-area"],
+      },
+      clone_input_schema: {
+        "oss-investigate-area": assignmentSchema,
+      },
+    };
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: {
+        ...stage("oss-plan-investigation"),
+        clone_actions: ["once", "fanout"],
+      },
+      task,
+      dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.cloneEmitContext).toEqual({
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 4,
+          cloneInputSchema: assignmentSchema,
+        },
+      ],
+      allowedActions: ["once", "fanout"],
+    });
   });
 });

@@ -113,4 +113,37 @@ describe("assertRequiredEnvelope", () => {
       }),
     ).toThrow(EnvelopeError);
   });
+
+  it("U1: pathPrefix qualifies missing status", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { summary: "ok", artifacts: [] },
+        "clone_forks[0].envelope",
+      ),
+    ).toThrow(/clone_forks\[0\]\.envelope\.status must be/);
+  });
+
+  it("U1: pathPrefix qualifies missing summary on fanout clone", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { status: "success", artifacts: [] },
+        "clone_forks[0].clones[1].envelope",
+      ),
+    ).toThrow(/clone_forks\[0\]\.clones\[1\]\.envelope\.summary/);
+  });
+
+  it("U1: pathPrefix qualifies bad artifacts", () => {
+    expect(() =>
+      assertRequiredEnvelope(
+        { status: "success", summary: "ok", artifacts: "nope" },
+        "clone_forks[0].envelope",
+      ),
+    ).toThrow(/clone_forks\[0\]\.envelope\.artifacts/);
+  });
+
+  it("U1: no pathPrefix retains bare status message", () => {
+    expect(() =>
+      assertRequiredEnvelope({ summary: "ok", artifacts: [] }),
+    ).toThrow(/^status must be "success" or "failure"$/);
+  });
 });

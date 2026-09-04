@@ -83,7 +83,9 @@ Unchosen successors are `skipped` — the same status used when a parent fails. 
 
 ### Clonable successors {#clonable-successors}
 
-If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout`. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
+If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout` unless the parent declares `clone_actions` (a non-empty subset). Omit `clone_actions` to keep all three. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
+
+The user prompt and emit tool both name the legal successor ids, clone caps, allowed actions, and each successor's assignment schema. `successor_id` is an enum of those ids. Invented ids, an empty `clone_forks` list, a disallowed action, or an assignment payload that fails `clone_input_schema` stay in-session (`isError`, no `terminate`).
 
 Item shape (exact coverage of every clonable successor):
 
@@ -93,7 +95,7 @@ Item shape (exact coverage of every clonable successor):
 | `once` | `successor_id`, `action`, `envelope` | `mode`, `clones` |
 | `fanout` | `successor_id`, `action`, `mode`, `clones` (length in `[2, clone_cap]`) | top-level `envelope` |
 
-Nested `clones[].envelope` values are full envelopes.
+Nested `clone_forks[i].envelope` (for `once`) and `clones[j].envelope` (for `fanout`) are full `StageEnvelope` objects: they require `status`, `summary`, and `artifacts`, and may include `payload`. After the parent emits, that nested envelope becomes the clone child's prior envelope (the child reads it like any predecessor).
 
 ```json
 {
@@ -114,7 +116,9 @@ Nested `clones[].envelope` values are full envelopes.
 }
 ```
 
-Illegal items are rejected by emit. Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
+Illegal items are rejected by emit. A successor may declare `clone_input_schema` (same JSON Schema subset as `payload_schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `payload_schema`. `skip` does not need an assignment payload.
+
+Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
 
 `clone_forks` is required for each clonable successor. When the parent also has `fork`, `fork_choice` names only non-clonable siblings. A fork parent whose every child is clonable does not require `fork_choice`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario F.
 
@@ -124,7 +128,7 @@ After fan-out, workspace paths and `--stage` keys use the instance id (`{catalog
 
 ### payload_schema {#payload-schema}
 
-When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only).
+When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. Unknown keywords are ignored.
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
