@@ -15,9 +15,14 @@ export function mintCloneInstanceId(catalogId: string, n: number): string {
   return instanceId;
 }
 
-export function mintCloneInstanceIds(catalogId: string, count: number): string[] {
+export function mintCloneInstanceIds(
+  catalogId: string,
+  count: number,
+  startAt = 1,
+): string[] {
   guardPositiveInteger(count, "count");
-  return Array.from({ length: count }, (_, i) => mintCloneInstanceId(catalogId, i + 1));
+  guardPositiveInteger(startAt, "startAt");
+  return Array.from({ length: count }, (_, i) => mintCloneInstanceId(catalogId, startAt + i));
 }
 
 export function definitionIdForInstance(
