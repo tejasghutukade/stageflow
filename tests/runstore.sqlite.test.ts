@@ -155,6 +155,114 @@ CREATE TABLE stage_events (
     expect(cols.some((c) => c.name === "attempt")).toBe(true);
   });
 
+  it("adds verification evidence storage to an existing DB", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-verification-migrate-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stages (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  status TEXT,
+  summary TEXT,
+  envelope_json TEXT,
+  started_at TEXT,
+  finished_at TEXT,
+  PRIMARY KEY (run_id, stage_id)
+);
+CREATE TABLE stage_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  at TEXT NOT NULL,
+  event TEXT NOT NULL,
+  payload_json TEXT
+);
+`);
+    legacy.close();
+
+    createRunStore({ rootDir: root, kind: "sqlite" });
+
+    const probe = new Database(dbPath);
+    const table = probe
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'verification_check_results'`,
+      )
+      .get();
+    probe.close();
+    expect(table).toBeDefined();
+  });
+
+  it("adds and backfills verification dispositions on existing attempts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-verification-outcome-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stage_executions (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  envelope_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt)
+);
+CREATE TABLE verification_check_results (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  check_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  evidence_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt, check_id)
+);
+INSERT INTO stage_executions (run_id, stage_id, attempt, status)
+  VALUES ('legacy-run', 'verify', 1, 'failed');
+INSERT INTO verification_check_results
+  (run_id, stage_id, attempt, check_id, check_type, status)
+  VALUES ('legacy-run', 'verify', 1, 'unit-tests', 'command', 'failed');
+`);
+    legacy.close();
+
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    await expect(
+      store.getStageExecution("legacy-run", "verify", 1),
+    ).resolves.toMatchObject({ verification_outcome: "failed" });
+
+    const probe = new Database(dbPath);
+    const cols = probe.prepare(`PRAGMA table_info(stage_executions)`).all() as {
+      name: string;
+    }[];
+    probe.close();
+    expect(cols.some((c) => c.name === "verification_outcome")).toBe(true);
+  });
+
   it("adds checkout_root via ALTER on existing DB missing the column", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-alter-"));
     const storeRoot = storeRootFor(root);

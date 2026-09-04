@@ -191,6 +191,34 @@ describe("appendCloneInstances", () => {
     ).toThrow();
   });
 
+  it("carries the catalog completion policy to every clone", () => {
+    const frozen = linearCompatDagSnapshot(["detect", "author-diagrams"]);
+    const author = frozen.nodes.find((node) => node.id === "author-diagrams");
+    if (!author) throw new Error("missing author-diagrams node");
+    author.completion = {
+      mode: "all",
+      checks: [{ id: "tests", type: "command", run: "npm test" }],
+    };
+    author.recovery = {
+      mode: "repair",
+      max_attempts: 2,
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    };
+
+    const { snapshot, instanceIds } = appendCloneInstances(frozen, {
+      catalogId: "author-diagrams",
+      predecessorId: "detect",
+      count: 2,
+    });
+
+    for (const id of instanceIds) {
+      const clone = snapshot.nodes.find((node) => node.id === id);
+      expect(clone?.completion).toEqual(author.completion);
+      expect(clone?.recovery).toEqual(author.recovery);
+    }
+  });
+
   it("moves nested clone predecessor off the YAML parent in childrenOf", () => {
     const frozen = linearCompatDagSnapshot(["a", "b", "c", "d"]);
     const afterB = appendCloneInstances(frozen, {

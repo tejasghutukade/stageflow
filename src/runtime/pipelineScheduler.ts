@@ -554,11 +554,9 @@ export async function runPipelineDag(
       const execution = await store.createStageExecution(run.runId, stageId);
       return execution.attempt;
     }
-    const attemptCount = await store.countStageAttempts(run.runId, stageId);
-    if (attemptCount === 0) {
-      await store.createStageExecution(run.runId, stageId);
-    }
-    return 1;
+    const latest = await store.getLatestStageExecution(run.runId, stageId);
+    if (latest !== null) return latest.attempt;
+    return (await store.createStageExecution(run.runId, stageId)).attempt;
   };
 
   if (options.resumeFromStageId !== undefined) {
@@ -699,11 +697,31 @@ export async function runPipelineDag(
     }
   };
 
+  const scheduleAutomaticRepair = async (
+    stageId: string,
+  ): Promise<boolean> => {
+    const recovery = dag.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return false;
+    const latestAttempt = await store.getLatestStageExecution(run.runId, stageId);
+    if (latestAttempt?.verification_outcome !== "failed") return false;
+    const attempts = await store.countStageAttempts(run.runId, stageId);
+    if (attempts >= recovery.max_attempts) return false;
+
+    const nextAttempt = await store.createStageExecution(run.runId, stageId);
+    if (retryContext !== undefined) {
+      retryContext.retryRoots.set(stageId, nextAttempt.attempt);
+    }
+    states.set(stageId, "pending");
+    completedEnvelopes.delete(stageId);
+    return true;
+  };
+
   const onStageFailure = async (
     stageId: string,
     reason: string,
     envelope?: StageEnvelope,
   ) => {
+    if (await scheduleAutomaticRepair(stageId)) return;
     states.set(stageId, "failed");
     notifyRetryRootTerminal(stageId, "failed");
     await recordCloneFailureEnvelope(stageId, reason, envelope);

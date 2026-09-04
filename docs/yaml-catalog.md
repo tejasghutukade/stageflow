@@ -57,11 +57,16 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`.
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`.
 
 **Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`. The JSON Schema subset for `payload_schema` is in [Envelopes](envelopes.md#payload-schema).
 
 `uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
+
+`completion` and `recovery` are pipeline-stage execution policy. They may sit beside
+`uses:` because a reusable stage can require different proof or recovery behavior in
+different pipelines. See [Verified Stage Execution](verified-stage-execution.md) for
+the fixed Slice 1 check types and schema.
 
 **`uses:` paths are relative to the pipeline file's directory.**
 

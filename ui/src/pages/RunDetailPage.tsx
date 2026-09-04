@@ -4,9 +4,13 @@ import { Collapsible } from "@astryxdesign/core/Collapsible";
 import {
   fetchPipelines,
   fetchRun,
+  fetchStageVerification,
+  recoverManualStage,
   rerun,
+  stopManualRecovery,
   type PipelineListing,
   type RunDetail,
+  type StageVerificationHistory,
 } from "../api";
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
 import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
@@ -20,6 +24,7 @@ import { EnvelopeRecord } from "../components/EnvelopeFields";
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
+import { VerificationHistory } from "../components/VerificationHistory";
 import type { DetailView } from "../routes";
 import {
   abandonedDisplayCopy,
@@ -114,6 +119,10 @@ export function RunDetailPage({
   const [run, setRun] = useState<RunDetail | null>(null);
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [verification, setVerification] = useState<StageVerificationHistory | null>(null);
+  const [verificationError, setVerificationError] = useState<string | null>(null);
+  const [manualRecoveryBusy, setManualRecoveryBusy] = useState(false);
+  const [manualRecoveryError, setManualRecoveryError] = useState<string | null>(null);
   const [userPickedStageId, setUserPickedStageId] = useState<string | null>(
     () => (view.kind === "stream" && view.stageId ? view.stageId : null),
   );
@@ -146,6 +155,41 @@ export function RunDetailPage({
     await load();
     catalog.refresh();
   }, [load, catalog]);
+
+  const recoverStage = useCallback(
+    async (stageId: string, guidance: string) => {
+      setManualRecoveryBusy(true);
+      setManualRecoveryError(null);
+      try {
+        await recoverManualStage(runId, stageId, guidance);
+        await onStageActionSuccess();
+      } catch (err) {
+        setManualRecoveryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setManualRecoveryBusy(false);
+      }
+    },
+    [onStageActionSuccess, runId],
+  );
+
+  const stopStageRecovery = useCallback(
+    async (stageId: string) => {
+      if (!window.confirm("Stop manual recovery? This stage will remain failed in this run.")) {
+        return;
+      }
+      setManualRecoveryBusy(true);
+      setManualRecoveryError(null);
+      try {
+        await stopManualRecovery(runId, stageId);
+        await onStageActionSuccess();
+      } catch (err) {
+        setManualRecoveryError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setManualRecoveryBusy(false);
+      }
+    },
+    [onStageActionSuccess, runId],
+  );
 
   const {
     retryingStageIds,
@@ -183,6 +227,10 @@ export function RunDetailPage({
     setWorkHeight(WORK_DEFAULT_H);
     setRun(null);
     setError(null);
+    setVerification(null);
+    setVerificationError(null);
+    setManualRecoveryBusy(false);
+    setManualRecoveryError(null);
     wasWaitingArtifact.current = false;
   }, [runId]);
 
@@ -238,6 +286,31 @@ export function RunDetailPage({
         plannedStageIds,
       )
     : null;
+
+  const verificationStageId = workspace?.selectedStageId;
+  const verificationAttemptCount = workspace?.selectedStage?.attempt_count;
+  useEffect(() => {
+    if (!verificationStageId) {
+      setVerification(null);
+      setVerificationError(null);
+      return;
+    }
+    let cancelled = false;
+    setVerification(null);
+    setVerificationError(null);
+    void fetchStageVerification(runId, verificationStageId)
+      .then((history) => {
+        if (!cancelled) setVerification(history);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setVerificationError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, verificationStageId, verificationAttemptCount]);
 
   if (workspace) previousStageIdRef.current = workspace.selectedStageId;
 
@@ -327,6 +400,10 @@ export function RunDetailPage({
   }
 
   const stage = workspace?.selectedStage ?? null;
+  const manualRecovery =
+    verification !== null && verification.stage_id === stage?.stage_id
+      ? verification.manual_recovery
+      : undefined;
   const selectedPath = workspace?.selectedPath;
   const runToken = run ? cssStatusToken(run.status) : undefined;
   const composer = workspace
@@ -422,7 +499,7 @@ export function RunDetailPage({
             )}
             {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
             {sessionChipEl(workspace.sessionChip)}
-            {stage && canRetry(stage.status) ? (
+            {stage && canRetry(stage.status) && manualRecovery === undefined ? (
               <button
                 type="button"
                 className="btn btn--sm"
@@ -454,6 +531,13 @@ export function RunDetailPage({
         <TranscriptTurns
           events={stage?.events ?? []}
           inboundEnvelope={workspace.inboundEnvelope}
+        />
+        <VerificationHistory
+          history={verification}
+          error={verificationError}
+          recovering={manualRecoveryBusy}
+          onRecover={stage ? (guidance) => void recoverStage(stage.stage_id, guidance) : undefined}
+          onStop={stage ? () => void stopStageRecovery(stage.stage_id) : undefined}
         />
       </TranscriptStream>
     );
@@ -505,6 +589,12 @@ export function RunDetailPage({
           {abandonError ? (
             <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
               {abandonError}
+            </div>
+          ) : null}
+
+          {manualRecoveryError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {manualRecoveryError}
             </div>
           ) : null}
         </div>

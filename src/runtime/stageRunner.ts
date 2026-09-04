@@ -22,6 +22,7 @@ import {
   openStageAttempt,
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
+import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
 
 export type RunStageOutcome = StageRunResult | { waiting: true };
 
@@ -253,6 +254,16 @@ export async function runStage(
       attemptCtx,
     });
   }
+  const verifiedExecution = createVerifiedStageExecution({
+    store,
+    runId,
+    stageId,
+    attempt,
+    stage,
+    dag,
+    roots,
+  });
+  await verifiedExecution.prepare();
   console.error(`Running stage ${stageId} (${stage.model})...`);
 
   let activityChain = Promise.resolve();
@@ -340,11 +351,22 @@ export async function runStage(
   }
 
   try {
+    let result: StageRunResult = outcome;
+    if (outcome.ok) {
+      try {
+        result = await verifiedExecution.verify(outcome);
+      } catch (error) {
+        result = {
+          ok: false,
+          reason: `Completion verification errored: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+    }
     return await finalizeStageResult({
       store,
       runId,
       stageId,
-      result: outcome,
+      result,
       activityChain,
       attemptCtx,
     });

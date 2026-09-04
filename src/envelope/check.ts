@@ -121,6 +121,32 @@ export function assertRequiredEnvelope(value: unknown): StageEnvelope {
     envelope.clone_forks = parseCloneForks(record.clone_forks);
   }
 
+  if (record.checklist_attestations !== undefined) {
+    if (!Array.isArray(record.checklist_attestations)) {
+      throw new EnvelopeError("checklist_attestations must be an array");
+    }
+    const ids = new Set<string>();
+    envelope.checklist_attestations = record.checklist_attestations.map(
+      (value, index) => {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) {
+          throw new EnvelopeError(`checklist_attestations[${index}] must be an object`);
+        }
+        const attestation = value as Record<string, unknown>;
+        if (typeof attestation.check_id !== "string" || attestation.check_id.trim() === "") {
+          throw new EnvelopeError(`checklist_attestations[${index}].check_id must be a non-empty string`);
+        }
+        if (ids.has(attestation.check_id)) {
+          throw new EnvelopeError(`checklist_attestations contains duplicate check_id "${attestation.check_id}"`);
+        }
+        ids.add(attestation.check_id);
+        if (!Array.isArray(attestation.items) || !attestation.items.every((item) => typeof item === "string")) {
+          throw new EnvelopeError(`checklist_attestations[${index}].items must be an array of strings`);
+        }
+        return { check_id: attestation.check_id, items: attestation.items as string[] };
+      },
+    );
+  }
+
   if (record.payload !== undefined) {
     if (
       record.payload === null ||

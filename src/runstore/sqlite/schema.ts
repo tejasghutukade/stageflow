@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   stage_id TEXT NOT NULL,
   attempt INTEGER NOT NULL,
   status TEXT NOT NULL,
+  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
   started_at TEXT,
   finished_at TEXT,
   envelope_json TEXT,
@@ -62,4 +63,22 @@ CREATE TABLE IF NOT EXISTS stage_executions (
 
 CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
   ON stage_executions (run_id, stage_id, attempt);
+
+CREATE TABLE IF NOT EXISTS verification_check_results (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  check_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  evidence_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt, check_id),
+  FOREIGN KEY (run_id, stage_id, attempt)
+    REFERENCES stage_executions(run_id, stage_id, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS idx_verification_check_results_execution
+  ON verification_check_results (run_id, stage_id, attempt, check_id);
 `;

@@ -271,7 +271,8 @@ Poll run status without loading the full event stream.
 
 **Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**). When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`.
 
-Use `list_stage_events` / `get_envelope` for timelines and full envelopes.
+Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
+stage records.
 
 Returns `404`-style error JSON when the run is not found.
 
@@ -345,6 +346,34 @@ List persisted stage log events (lifecycle/activity). Optional `attempt` scopes 
 **Input:** `{ "runId", "stageId", "attempt?" }`
 
 **Output:** `{ "runId", "stageId", "attempt?", "events": [ … ] }`
+
+### `get_stage_verification`
+
+Read the completion-check history for one stage. Each attempt contains its check
+statuses and persisted evidence, including command output where configured.
+
+**Input:** `{ "runId", "stageId" }`
+
+**Output:** `{ "run_id", "stage_id", "attempts": [{ "attempt", "status", "checks" }] }`
+
+Use this to understand an automatic repair: the failed attempt and the successful
+repair are returned as separate records. It returns `404` when the run or stage is
+unknown.
+
+### `recover_manual_stage`
+
+Explicitly authorize a new attempt after a `recovery.mode: manual` completion
+verification failure. Optional `guidance` (up to 4,000 characters) is persisted and
+supplied to the agent along with the failed-check capsule.
+
+**Input:** `{ "runId", "stageId", "guidance?" }`
+
+### `stop_manual_recovery`
+
+Record the operator decision to leave a manual-recovery stage failed. It cannot be
+recovered again in that run.
+
+**Input:** `{ "runId", "stageId" }`
 
 ### `get_envelope`
 
@@ -466,7 +495,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
 - No provider/settings/catalog-write MCP tools
-- Default `get_run` / run resource read stay lean (no stage event streams); use `list_stage_events` / `get_envelope` for detail
+- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence); use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 

@@ -19,6 +19,8 @@ import {
   type StageExecutionPatch,
   type StageLogEvent,
   type StageSnapshot,
+  type VerificationCheckResult,
+  type VerificationCheckResultPatch,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
 import { normalizeCatalogPath } from "../normalizeCatalogPath.js";
@@ -72,9 +74,22 @@ type ExecutionRow = {
   stage_id: string;
   attempt: number;
   status: string;
+  verification_outcome: StageExecution["verification_outcome"] | null;
   started_at: string | null;
   finished_at: string | null;
   envelope_json: string | null;
+};
+
+type VerificationCheckResultRow = {
+  run_id: string;
+  stage_id: string;
+  attempt: number;
+  check_id: string;
+  check_type: VerificationCheckResult["check_type"];
+  status: VerificationCheckResult["status"];
+  started_at: string | null;
+  finished_at: string | null;
+  evidence_json: string | null;
 };
 
 const ensuredStageDirs = new Set<string>();
@@ -134,6 +149,7 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   stage_id TEXT NOT NULL,
   attempt INTEGER NOT NULL,
   status TEXT NOT NULL,
+  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
   started_at TEXT,
   finished_at TEXT,
   envelope_json TEXT,
@@ -142,6 +158,50 @@ CREATE TABLE IF NOT EXISTS stage_executions (
 );
 CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
   ON stage_executions (run_id, stage_id, attempt);
+`);
+}
+
+function ensureStageExecutionVerificationOutcomeColumn(db: Database.Database): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(stage_executions)`)
+    .all() as { name: string }[];
+  if (!cols.some((c) => c.name === "verification_outcome")) {
+    db.exec(
+      `ALTER TABLE stage_executions ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT 'not_run'`,
+    );
+  }
+}
+
+function backfillVerificationOutcomes(db: Database.Database): void {
+  db.exec(`
+UPDATE stage_executions
+SET verification_outcome = CASE
+  WHEN status = 'succeeded'
+    AND EXISTS (
+      SELECT 1 FROM verification_check_results AS check_result
+      WHERE check_result.run_id = stage_executions.run_id
+        AND check_result.stage_id = stage_executions.stage_id
+        AND check_result.attempt = stage_executions.attempt
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM verification_check_results AS check_result
+      WHERE check_result.run_id = stage_executions.run_id
+        AND check_result.stage_id = stage_executions.stage_id
+        AND check_result.attempt = stage_executions.attempt
+        AND check_result.status != 'passed'
+    )
+    THEN 'passed'
+  WHEN status = 'failed'
+    AND EXISTS (
+      SELECT 1 FROM verification_check_results AS check_result
+      WHERE check_result.run_id = stage_executions.run_id
+        AND check_result.stage_id = stage_executions.stage_id
+        AND check_result.attempt = stage_executions.attempt
+    )
+    THEN 'failed'
+  ELSE verification_outcome
+END
+WHERE verification_outcome = 'not_run';
 `);
 }
 
@@ -158,17 +218,57 @@ CREATE INDEX IF NOT EXISTS idx_stage_events_run_stage_attempt_at
   }
 }
 
+function ensureVerificationCheckResultsTable(db: Database.Database): void {
+  db.exec(`
+CREATE TABLE IF NOT EXISTS verification_check_results (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  check_id TEXT NOT NULL,
+  check_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  evidence_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt, check_id),
+  FOREIGN KEY (run_id, stage_id, attempt)
+    REFERENCES stage_executions(run_id, stage_id, attempt)
+);
+CREATE INDEX IF NOT EXISTS idx_verification_check_results_execution
+  ON verification_check_results (run_id, stage_id, attempt, check_id);
+`);
+}
+
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
     run_id: row.run_id,
     stage_id: row.stage_id,
     attempt: row.attempt,
     status: row.status as StageExecution["status"],
+    verification_outcome: row.verification_outcome ?? "not_run",
     ...(row.started_at != null ? { started_at: row.started_at } : {}),
     ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
     envelope: row.envelope_json
       ? (JSON.parse(row.envelope_json) as StageExecution["envelope"])
       : null,
+  };
+}
+
+function verificationCheckResultFromRow(
+  row: VerificationCheckResultRow,
+): VerificationCheckResult {
+  return {
+    run_id: row.run_id,
+    stage_id: row.stage_id,
+    attempt: row.attempt,
+    check_id: row.check_id,
+    check_type: row.check_type,
+    status: row.status,
+    ...(row.started_at != null ? { started_at: row.started_at } : {}),
+    ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+    ...(row.evidence_json != null
+      ? { evidence: JSON.parse(row.evidence_json) as Record<string, unknown> }
+      : {}),
   };
 }
 
@@ -187,7 +287,10 @@ export class SqliteRunStore implements RunStore {
     ensurePipelineDagColumn(this.db);
     ensureRunLocatorColumns(this.db);
     ensureStageExecutionsTable(this.db);
+    ensureStageExecutionVerificationOutcomeColumn(this.db);
     ensureStageEventsAttemptColumn(this.db);
+    ensureVerificationCheckResultsTable(this.db);
+    backfillVerificationOutcomes(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }
 
@@ -346,18 +449,19 @@ export class SqliteRunStore implements RunStore {
       const attempt = (maxRow?.max_attempt ?? 0) + 1;
       this.db
         .prepare(
-          `INSERT INTO stage_executions (run_id, stage_id, attempt, status)
-           VALUES (@run_id, @stage_id, @attempt, @status)`,
+          `INSERT INTO stage_executions (run_id, stage_id, attempt, status, verification_outcome)
+           VALUES (@run_id, @stage_id, @attempt, @status, @verification_outcome)`,
         )
         .run({
           run_id: runId,
           stage_id: stageId,
           attempt,
           status: "pending",
+          verification_outcome: "not_run",
         });
       const row = this.db
         .prepare(
-          `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+          `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
            FROM stage_executions
            WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
         )
@@ -373,7 +477,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt ASC`,
@@ -389,7 +493,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt DESC
@@ -418,7 +522,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
       )
@@ -448,6 +552,10 @@ export class SqliteRunStore implements RunStore {
       sets.push("status = @status");
       params.status = patch.status;
     }
+    if (patch.verification_outcome !== undefined) {
+      sets.push("verification_outcome = @verification_outcome");
+      params.verification_outcome = patch.verification_outcome;
+    }
     if (patch.started_at !== undefined) {
       sets.push("started_at = @started_at");
       params.started_at = patch.started_at;
@@ -473,6 +581,68 @@ export class SqliteRunStore implements RunStore {
         `Stage execution not found: ${runId}/${stageId} attempt ${attempt}`,
       );
     }
+  }
+
+  async upsertVerificationCheckResult(
+    runId: string,
+    stageId: string,
+    result: VerificationCheckResultPatch,
+    options?: { attempt?: number },
+  ): Promise<void> {
+    await this.ready();
+    const attempt = options?.attempt ?? 1;
+    await this.getStageExecution(runId, stageId, attempt);
+    this.db
+      .prepare(
+        `INSERT INTO verification_check_results
+          (run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json)
+         VALUES
+          (@run_id, @stage_id, @attempt, @check_id, @check_type, @status, @started_at, @finished_at, @evidence_json)
+         ON CONFLICT(run_id, stage_id, attempt, check_id) DO UPDATE SET
+          check_type = excluded.check_type,
+          status = excluded.status,
+          started_at = COALESCE(excluded.started_at, verification_check_results.started_at),
+          finished_at = COALESCE(excluded.finished_at, verification_check_results.finished_at),
+          evidence_json = COALESCE(excluded.evidence_json, verification_check_results.evidence_json)`,
+      )
+      .run({
+        run_id: runId,
+        stage_id: stageId,
+        attempt,
+        check_id: result.check_id,
+        check_type: result.check_type,
+        status: result.status,
+        started_at: result.started_at ?? null,
+        finished_at: result.finished_at ?? null,
+        evidence_json:
+          result.evidence !== undefined ? JSON.stringify(result.evidence) : null,
+      });
+  }
+
+  async listVerificationCheckResults(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<VerificationCheckResult[]> {
+    await this.ready();
+    const rows = attempt === undefined
+      ? (this.db
+          .prepare(
+            `SELECT run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json
+             FROM verification_check_results
+             WHERE run_id = ? AND stage_id = ?
+             ORDER BY attempt ASC, rowid ASC`,
+          )
+          .all(runId, stageId) as VerificationCheckResultRow[])
+      : (this.db
+          .prepare(
+            `SELECT run_id, stage_id, attempt, check_id, check_type, status, started_at, finished_at, evidence_json
+             FROM verification_check_results
+             WHERE run_id = ? AND stage_id = ? AND attempt = ?
+             ORDER BY rowid ASC`,
+          )
+          .all(runId, stageId, attempt) as VerificationCheckResultRow[]);
+    return rows.map(verificationCheckResultFromRow);
   }
 
   async writeEnvelope(

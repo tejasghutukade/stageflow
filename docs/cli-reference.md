@@ -112,6 +112,8 @@ Inspect and control existing stored runs (in-progress, parked, or terminal). The
 ```bash
 sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
 sf runs show --run <runId> [--from <sf-run.json>] [--json]
+sf runs verify --run <runId> --stage <stageId> [--json]
+sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
 sf runs waiting [--run <runId>] [--json]
 sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
 sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
@@ -124,6 +126,8 @@ sf runs rerun --run <runId> [--json]
 |------------|------|
 | `list` | Stored runs (same filters as MCP `list_runs`) |
 | `show` | Live `projectRun` for any run status (not the `export-run` completeness gate) |
+| `verify` | Completion-check attempts and evidence for one stage |
+| `recover` | Explicitly retry or stop a manual-recovery stage |
 | `waiting` | Waiting gates with `pending_prompt` |
 | `wait` | Block until waiting, terminal, or timeout |
 | `answer` | Submit an `AskOperatorAnswer` for a parked stage |
@@ -137,8 +141,8 @@ sf runs rerun --run <runId> [--json]
 
 | Kind | Verbs | Host up |
 |------|-------|---------|
-| Read | `list`, `show`, `waiting`, `wait` | Allowed |
-| Mutate | `answer`, `retry`, `abandon`, `rerun` | Refused |
+| Read | `list`, `show`, `verify`, `waiting`, `wait` | Allowed |
+| Mutate | `answer`, `retry`, `recover`, `abandon`, `rerun` | Refused |
 
 Mutating verbs probe `GET http://127.0.0.1:3847/api/health` (1500 ms). HTTP 200 with parseable JSON → exit `1` without opening a mutating writer. This is not a single-writer lock: a host on another port (`sf ui --port 4000`) and a live blocking `sf run` are undetected second writers. Reads still work while a host is up.
 
@@ -156,6 +160,8 @@ A HITL park keeps store status `running`. `--status waiting` is not a valid `lis
 |------|----------------|------|
 | `list` | `{ "runs": [ … ] }` | `0` success, `1` error |
 | `show` | `projectRun` object | `0` success, `1` error |
+| `verify` | Stage verification history: attempts, checks, and evidence | `0` success, `1` error |
+| `recover` | Completion result after an approved retry, or `{ "ok", "runId", "stageId" }` for `--stop` | `0` success, `1` error, `2` waiting after retry |
 | `waiting` | `{ "waiting": [ … ] }` | `0` success, `1` error |
 | `wait` | waitRun result: `ok`, `reason`, `elapsed_ms`, `until`, nested `run` | `0` for `waiting` / `terminal` / `already` / `timeout`; **130** (or platform abort) with `{ "error", "code": "aborted" }` |
 | `answer` | `{ "ok": true }` | `0` on success even if the run parks again; `1` on error |
@@ -187,6 +193,31 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--json` | Pretty-printed `projectRun` |
 
 Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`.
+
+### `sf runs verify`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--stage` | Stage id (required) |
+| `--json` | Attempt-scoped checks and their stored evidence |
+
+Use this to see why a completion check failed and what an automatic repair later
+changed. It is intentionally stage-scoped, so run listings do not carry command output.
+
+### `sf runs recover`
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--stage` | Stage id (required) |
+| `--guidance` | Optional instruction recorded for the next agent attempt |
+| `--stop` | Record the decision to leave the stage failed; cannot be combined with `--guidance` |
+| `--json` | Completion JSON after retry, or the recorded stop decision |
+
+Only a stage with `recovery.mode: manual` that failed completion verification is
+eligible. A recovery retry starts a fresh attempt; a stop is terminal for that stage
+in this run.
 
 ### `sf runs waiting`
 

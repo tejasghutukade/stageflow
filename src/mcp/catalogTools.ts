@@ -122,7 +122,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_run",
     {
       description:
-        "Poll a run: status, stage statuses, waiting_* / pending_prompt HITL fields, and envelope summary/payload/artifact paths (no events). Use list_stage_events / get_envelope for timelines and full envelopes.",
+        "Poll a run: status, stage statuses, waiting_* / pending_prompt HITL fields, and envelope summary/payload/artifact paths (no events). Use list_stage_events, get_envelope, or get_stage_verification for stage detail.",
       inputSchema: z.object({
         runId: z.string(),
       }),

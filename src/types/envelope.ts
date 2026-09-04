@@ -9,6 +9,8 @@ export type StageEnvelope = {
   payload?: Record<string, unknown>;
   fork_choice?: string[];
   clone_forks?: CloneForkItem[];
+  /** Agent's explicit acknowledgement of pipeline-owned checklist items. */
+  checklist_attestations?: Array<{ check_id: string; items: string[] }>;
   stage_id?: string;
   notes?: string;
 };

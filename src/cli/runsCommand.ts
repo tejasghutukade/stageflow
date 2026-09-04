@@ -9,6 +9,7 @@ import { completeCliRun } from "./runCommand.js";
 import { reportCliRun, type CliRunReportIo } from "./runOutput.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
+import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import { RunManager } from "../runtime/runManager.js";
 import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
 import { DEFAULT_PORT } from "../server/createHttpHost.js";
@@ -21,6 +22,8 @@ import {
 export const RUNS_USAGE = `Usage:
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
+  sf runs verify --run <runId> --stage <stageId> [--json]
+  sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
   sf runs waiting [--run <runId>] [--json]
   sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
@@ -56,6 +59,16 @@ const LIST_FLAGS = new Set([
   "-h",
 ]);
 const SHOW_FLAGS = new Set(["--run", "--from", "--json", "--help", "-h"]);
+const VERIFY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
+const RECOVER_FLAGS = new Set([
+  "--run",
+  "--stage",
+  "--guidance",
+  "--stop",
+  "--json",
+  "--help",
+  "-h",
+]);
 const WAITING_FLAGS = new Set(["--run", "--json", "--help", "-h"]);
 const WAIT_FLAGS = new Set([
   "--run",
@@ -70,6 +83,7 @@ const ANSWER_FLAGS = new Set([
   "--run",
   "--stage",
   "--answer",
+  "--guidance",
   "--json",
   "--help",
   "-h",
@@ -103,6 +117,8 @@ type ParsedRunsArgs = {
   timeoutMs?: number;
   stageId?: string;
   answer?: string;
+  guidance?: string;
+  stop?: boolean;
 };
 
 function flagsFor(subcommand: string): Set<string> | undefined {
@@ -111,6 +127,10 @@ function flagsFor(subcommand: string): Set<string> | undefined {
       return LIST_FLAGS;
     case "show":
       return SHOW_FLAGS;
+    case "verify":
+      return VERIFY_FLAGS;
+    case "recover":
+      return RECOVER_FLAGS;
     case "waiting":
       return WAITING_FLAGS;
     case "wait":
@@ -153,6 +173,8 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let timeoutMs: number | undefined;
   let stageId: string | undefined;
   let answer: string | undefined;
+  let guidance: string | undefined;
+  let stop = false;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -160,6 +182,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
       help = true;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--stop") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      stop = true;
     } else if (VALUE_FLAGS.has(arg)) {
       if (!allowed.has(arg)) {
         throw new Error(`Unknown flag: ${arg}`);
@@ -177,6 +202,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
       else if (arg === "--timeout-ms") timeoutMs = Number(value);
       else if (arg === "--stage") stageId = value;
       else if (arg === "--answer") answer = value;
+      else if (arg === "--guidance") guidance = value;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else {
@@ -197,6 +223,8 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     timeoutMs,
     stageId,
     answer,
+    guidance,
+    stop,
   };
 }
 
@@ -416,6 +444,33 @@ export async function runRunsCommand(
       }
     }
 
+    case "verify": {
+      if (!parsed.runId) return usageError(out, "Missing --run");
+      if (!parsed.stageId) return usageError(out, "Missing --stage");
+      try {
+        const history = await readStageVerificationHistory(
+          getStore(),
+          parsed.runId,
+          parsed.stageId,
+        );
+        if (parsed.json) {
+          printJson(out, history);
+        } else {
+          for (const attempt of history.attempts) {
+            const checks = attempt.checks
+              .map((check) => `${check.check_id}:${check.status}`)
+              .join(", ");
+            out.log(`attempt ${attempt.attempt}\t${attempt.status}${checks ? `\t${checks}` : ""}`);
+          }
+        }
+        return 0;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        out.error(message);
+        return 1;
+      }
+    }
+
     case "waiting": {
       const waiting = await projectWaitingGates(getStore(), {
         runId: parsed.runId,
@@ -590,6 +645,55 @@ export async function runRunsCommand(
             ...mapRetryStageFailure(result),
             status: result.status,
           });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      return reportCliRun(
+        { kind: "completion", result: result.pipeline },
+        { json: parsed.json, io: mutatingIo },
+      );
+    }
+
+    case "recover": {
+      const blocked = await guardHost();
+      if (blocked !== undefined) return blocked;
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      const manager = buildManager();
+      if (parsed.stop) {
+        if (parsed.guidance !== undefined) {
+          return usageError(out, "--guidance cannot be used with --stop");
+        }
+        const result = await manager.stopManualRecovery(
+          parsed.runId,
+          parsed.stageId,
+        );
+        if (!result.ok) {
+          if (parsed.json) {
+            printJson(out, { error: result.reason, status: result.status });
+          } else {
+            out.error(result.reason);
+          }
+          return 1;
+        }
+        if (parsed.json) {
+          printJson(out, result);
+        } else {
+          out.log(`${result.runId}\t${result.stageId}\tstopped`);
+        }
+        return 0;
+      }
+      const result = await manager.recoverManualStageUntilStop(
+        parsed.runId,
+        parsed.stageId,
+        parsed.guidance,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, { ...mapRetryStageFailure(result), status: result.status });
         } else {
           out.error(result.reason);
         }

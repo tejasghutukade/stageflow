@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type { NormalizedPipelineStageEntry } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import {
@@ -6,6 +7,7 @@ import {
   isAllowedPipelineStageEntryKey,
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
+import { parseExecutionPolicy } from "./parseCompletionContract.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -156,6 +158,9 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
+    const policyOutcome = parseExecutionPolicy(raw, id);
+    if (!policyOutcome.ok) return policyOutcome;
+
     if (raw.needs !== undefined) {
       if (Array.isArray(raw.needs)) {
         return loadFailure([
@@ -210,6 +215,12 @@ export function normalizePipelineStageEntries(
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
       ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
+      ...(policyOutcome.value.completion !== undefined
+        ? { completion: policyOutcome.value.completion }
+        : {}),
+      ...(policyOutcome.value.recovery !== undefined
+        ? { recovery: policyOutcome.value.recovery }
+        : {}),
       ...(skill !== undefined ? { skill } : {}),
     };
 
@@ -239,6 +250,8 @@ export function toWiringRefs(
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  completion?: CompletionContract;
+  recovery?: RecoveryPolicy;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
@@ -246,5 +259,7 @@ export function toWiringRefs(
     ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
     ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
     ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+    ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
+    ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
   }));
 }

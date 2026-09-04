@@ -52,6 +52,97 @@ describe("stage and pipeline runners", () => {
     });
   });
 
+  it("treats agent success as a candidate until its completion contract passes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-completion-stage-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const stage = {
+      id: "clarify",
+      system_prompt: "x",
+      model: "anthropic/claude-sonnet-4-5",
+      payload_schema: {
+        type: "object",
+        properties: { changed_files: { type: "array", items: { type: "string" } } },
+        required: ["changed_files"],
+      },
+    };
+    const completion = {
+      mode: "all" as const,
+      checks: [
+        { id: "payload", type: "payload_schema" as const },
+        {
+          id: "self-review",
+          type: "checklist" as const,
+          items: ["Implementation matches the approved plan"],
+        },
+      ],
+    };
+    const dag = {
+      nodes: [{ id: "clarify", needs: null, ancestors: [], stageIndex: 0, completion }],
+      roots: ["clarify"],
+      childrenOf: {},
+    };
+
+    const passed = await runStage({
+      agent: scriptedFakeAgent([{
+        type: "emit",
+        envelope: {
+          status: "success",
+          summary: "ready",
+          artifacts: [],
+          payload: { changed_files: [] },
+          checklist_attestations: [{
+            check_id: "self-review",
+            items: ["Implementation matches the approved plan"],
+          }],
+        },
+      }]),
+      store,
+      runId: run.runId,
+      stage,
+      task: { id: "t", goal: "g" },
+      dag,
+    });
+    expect(passed.ok).toBe(true);
+    await expect(store.listVerificationCheckResults(run.runId, "clarify")).resolves.toMatchObject([
+      { check_id: "payload", status: "passed" },
+      { check_id: "self-review", status: "passed" },
+    ]);
+
+    const rejectedRun = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const rejected = await runStage({
+      agent: scriptedFakeAgent([{
+        type: "emit",
+        envelope: {
+          status: "success",
+          summary: "ready",
+          artifacts: [],
+          payload: { changed_files: [] },
+        },
+      }]),
+      store,
+      runId: rejectedRun.runId,
+      stage,
+      task: { id: "t", goal: "g" },
+      dag,
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      reason: "Completion verification failed: self-review",
+    });
+    await expect(store.readEnvelope(rejectedRun.runId, "clarify")).rejects.toThrow();
+    await expect(store.listVerificationCheckResults(rejectedRun.runId, "clarify")).resolves.toMatchObject([
+      { check_id: "payload", status: "passed" },
+      { check_id: "self-review", status: "failed" },
+    ]);
+  });
+
   it("missing emit fails the stage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-pipe-"));
     const store = createRunStore({ rootDir: root });

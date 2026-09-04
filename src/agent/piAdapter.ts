@@ -477,6 +477,23 @@ function buildUserPrompt(
     emitHint += `\nOn status=success, payload is required and must match this JSON Schema:\n${JSON.stringify(input.stage.payload_schema, null, 2)}`;
   }
 
+  const checklistChecks = input.completionContract?.checks.filter(
+    (check) => check.type === "checklist",
+  ) ?? [];
+  if (checklistChecks.length > 0) {
+    emitHint += `\nBefore emitting success, self-review every required checklist item. Include checklist_attestations in the envelope with each check_id and its complete item list exactly as declared:\n${JSON.stringify(checklistChecks, null, 2)}`;
+  }
+
+  if (input.repairContext !== undefined) {
+    emitHint += `\nThis is recovery attempt ${input.roots.attempt ?? input.repairContext.prior_attempt + 1}. The previous candidate did not pass Stageflow verification. Address the failed checks before emitting success.`;
+    if (input.repairContext.operator_guidance) {
+      emitHint += `\nThe operator approved this retry with these instructions:\n${input.repairContext.operator_guidance}`;
+    }
+    if (input.repairContext.failed_checks?.length) {
+      emitHint += `\nFailed-check evidence from attempt ${input.repairContext.prior_attempt}:\n${JSON.stringify(input.repairContext.failed_checks, null, 2)}`;
+    }
+  }
+
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
   const skillBaseDir =

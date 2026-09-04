@@ -1,4 +1,9 @@
-import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
+import type {
+  AgentPort,
+  StageHandle,
+  StageRepairContext,
+  StageRunInput,
+} from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import type { RunStore } from "../runstore/port.js";
@@ -115,6 +120,59 @@ function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): Sta
     : baseRoots;
 }
 
+function evidencePreview(evidence: Record<string, unknown> | undefined): string | undefined {
+  if (evidence === undefined) return undefined;
+  try {
+    const text = JSON.stringify(evidence);
+    return text.length <= 4_000 ? text : `${text.slice(0, 4_000)}…`;
+  } catch {
+    return "Verification evidence could not be serialized.";
+  }
+}
+
+async function repairContextForAttempt(
+  input: StageAttemptOpenInput,
+  stageId: string,
+  attempt: number,
+): Promise<StageRepairContext | undefined> {
+  if (attempt <= 1) return undefined;
+  const recovery = input.dag.nodes.find((node) => node.id === stageId)?.recovery;
+  if (recovery?.mode !== "repair" && recovery?.mode !== "manual") {
+    return undefined;
+  }
+  const events = await input.store.listStageEvents(input.runId, stageId, attempt);
+  const guidance = events
+    .slice()
+    .reverse()
+    .find((event) => event.event === "manual_recovery_requested")?.guidance;
+  if (recovery.mode === "manual" && typeof guidance !== "string") {
+    return undefined;
+  }
+  const failed = (await input.store.listVerificationCheckResults(
+    input.runId,
+    stageId,
+    attempt - 1,
+  )).filter((check) => check.status === "failed");
+  return {
+    prior_attempt: attempt - 1,
+    ...(typeof guidance === "string" && guidance.trim() !== ""
+      ? { operator_guidance: guidance.trim() }
+      : {}),
+    ...(recovery.include_failed_checks !== false
+      ? {
+          failed_checks: failed.map((check) => {
+            const preview = evidencePreview(check.evidence);
+            return {
+              id: check.check_id,
+              type: check.check_type,
+              ...(preview !== undefined ? { evidence_preview: preview } : {}),
+            };
+          }),
+        }
+      : {}),
+  };
+}
+
 export async function openStageAttempt(
   input: StageAttemptOpenInput,
 ): Promise<StageAttemptOpenResult> {
@@ -145,6 +203,10 @@ export async function openStageAttempt(
 
   const forkEmitContext = resolveForkEmitContext(input.dag, definitionId);
   const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId);
+  const completionContract = input.dag.nodes.find(
+    (node) => node.id === stageId,
+  )?.completion;
+  const repairContext = await repairContextForAttempt(input, stageId, attempt);
 
   const opened = await openStageWithOperatorCatalog(
     input.agent,
@@ -161,6 +223,8 @@ export async function openStageAttempt(
       onActivity: input.onActivity,
       forkEmitContext,
       cloneEmitContext,
+      ...(completionContract !== undefined ? { completionContract } : {}),
+      ...(repairContext !== undefined ? { repairContext } : {}),
     },
     input.operatorCatalog,
   );

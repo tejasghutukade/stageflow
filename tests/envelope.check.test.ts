@@ -80,6 +80,29 @@ describe("assertRequiredEnvelope", () => {
     expect(envelope.clone_forks).toBeUndefined();
   });
 
+  it("accepts explicit checklist attestations and rejects malformed ones", () => {
+    const envelope = assertRequiredEnvelope({
+      status: "success",
+      summary: "reviewed",
+      artifacts: [],
+      checklist_attestations: [
+        { check_id: "self-review", items: ["Tests pass", "No unrelated changes"] },
+      ],
+    });
+    expect(envelope.checklist_attestations).toEqual([
+      { check_id: "self-review", items: ["Tests pass", "No unrelated changes"] },
+    ]);
+
+    expect(() =>
+      assertRequiredEnvelope({
+        status: "success",
+        summary: "bad",
+        artifacts: [],
+        checklist_attestations: [{ check_id: "self-review", items: "not-an-array" }],
+      }),
+    ).toThrow(/checklist_attestations/);
+  });
+
   it("rejects clone_forks that is not an array", () => {
     expect(() =>
       assertRequiredEnvelope({

@@ -1,4 +1,5 @@
 import type { StageConfig, StageGateKind } from "./stage.js";
+import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
 export type PipelineConfig = {
   id: string;
@@ -16,6 +17,8 @@ export type PipelineStageRef = {
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  completion?: CompletionContract;
+  recovery?: RecoveryPolicy;
 };
 
 export type PipelineStageYamlEntry = PipelineStageRef & {
@@ -42,6 +45,8 @@ export type NormalizedPipelineStageEntry = {
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  completion?: CompletionContract;
+  recovery?: RecoveryPolicy;
   skill?: string;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
@@ -62,6 +67,8 @@ export type ResolvedPipelineStageNode = {
   clonable?: boolean;
   clone_cap?: number;
   definition_id?: string;
+  completion?: CompletionContract;
+  recovery?: RecoveryPolicy;
 };
 
 export type ResolvedPipelineDag = {

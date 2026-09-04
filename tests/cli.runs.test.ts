@@ -111,6 +111,86 @@ describe("runRunsCommand inspect/wait", () => {
     expect(parsed).toEqual(projectRun(detail));
   });
 
+  it("verify prints one stage's completion-check history", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-verify-"));
+    const { runId, store } = await seedRun(projectRoot, { stageIds: ["stage-a"] });
+    await store.upsertVerificationCheckResult(runId, "stage-a", {
+      check_id: "tests",
+      check_type: "command",
+      status: "passed",
+      evidence: { kind: "command", exit_code: 0 },
+    });
+
+    const cap = captureIo();
+    const code = await runRunsCommand(
+      ["verify", "--run", runId, "--stage", "stage-a", "--json"],
+      { projectRoot, store, io: cap.io },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(cap.stdout.join("\n"))).toEqual(
+      expect.objectContaining({
+        run_id: runId,
+        stage_id: "stage-a",
+        attempts: [
+          expect.objectContaining({
+            attempt: 1,
+            checks: [expect.objectContaining({ check_id: "tests", status: "passed" })],
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("recover --stop records a terminal manual-recovery decision", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-recover-stop-"));
+    const store = createRunStore({ rootDir: projectRoot });
+    const dag = linearCompatDagSnapshot(["verify"]);
+    dag.nodes[0]!.completion = {
+      mode: "all",
+      checks: [{ id: "tests", type: "command", run: "npm test" }],
+    };
+    dag.nodes[0]!.recovery = {
+      mode: "manual",
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    };
+    const created = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineDag: dag,
+    });
+    await store.createStageExecution(created.runId, "verify");
+    await store.appendStageEvent(created.runId, "verify", { event: "started" });
+    await store.appendStageEvent(created.runId, "verify", {
+      event: "failed",
+      reason: "Completion verification failed: tests",
+    });
+    await store.updateStageExecution(created.runId, "verify", 1, {
+      status: "failed",
+      verification_outcome: "failed",
+    });
+    await store.updateRunStatus(created.runId, "failed");
+
+    const cap = captureIo();
+    const code = await runRunsCommand(
+      ["recover", "--run", created.runId, "--stage", "verify", "--stop", "--json"],
+      {
+        projectRoot,
+        store,
+        io: cap.io,
+        probeHost: async () => "down",
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+      ok: true,
+      runId: created.runId,
+      stageId: "verify",
+    });
+  });
+
   it("waiting --json includes pending_prompt for a parked stage", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-waiting-"));
     const store = createRunStore({ rootDir: projectRoot });

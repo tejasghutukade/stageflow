@@ -4,7 +4,9 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
+import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
+import { parseExecutionPolicy } from "./parseCompletionContract.js";
 
 const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
@@ -15,6 +17,8 @@ type NormalizedEdge = {
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  completion?: CompletionContract;
+  recovery?: RecoveryPolicy;
 };
 
 export type ResolvePipelineDagContext = {
@@ -89,12 +93,30 @@ export function parsePipelineStageEntries(
       ...(entry.clonable !== undefined ? { clonable: entry.clonable as boolean } : {}),
       ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap as number } : {}),
     };
+    const policyOutcome = parseExecutionPolicy(entry, entry.id);
+    if (!policyOutcome.ok) {
+      throw new Error(
+        formatError(
+          ctx,
+          policyOutcome.issues[0]?.message ?? "invalid execution policy",
+        ),
+      );
+    }
+    const policyFields = {
+      ...(policyOutcome.value.completion !== undefined
+        ? { completion: policyOutcome.value.completion }
+        : {}),
+      ...(policyOutcome.value.recovery !== undefined
+        ? { recovery: policyOutcome.value.recovery }
+        : {}),
+    };
 
     if (entry.needs === undefined) {
       entries.push({
         id: entry.id,
         ...(forkValue !== undefined ? { fork: forkValue } : {}),
         ...clonableFields,
+        ...policyFields,
       });
       continue;
     }
@@ -119,6 +141,7 @@ export function parsePipelineStageEntries(
       needs: entry.needs,
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...clonableFields,
+      ...policyFields,
     });
   }
 
@@ -133,6 +156,8 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
     ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
     ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
     ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+    ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
+    ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
   }));
 }
 
@@ -300,6 +325,8 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     ...(edge.clonable === true
       ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
       : {}),
+    ...(edge.completion !== undefined ? { completion: edge.completion } : {}),
+    ...(edge.recovery !== undefined ? { recovery: edge.recovery } : {}),
   }));
 
   return { nodes, roots, childrenOf };
