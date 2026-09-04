@@ -349,12 +349,13 @@ List persisted stage log events (lifecycle/activity). Optional `attempt` scopes 
 
 ### `get_stage_verification`
 
-Read the completion-check history for one stage. Each attempt contains its check
-statuses and persisted evidence, including command output where configured.
+Read the completion-check history for one stage. Each attempt contains its verification
+disposition, check statuses, and persisted evidence, including command output where
+configured.
 
 **Input:** `{ "runId", "stageId" }`
 
-**Output:** `{ "run_id", "stage_id", "attempts": [{ "attempt", "status", "checks" }] }`
+**Output:** `{ "run_id", "stage_id", "attempts": [{ "attempt", "status", "verification_outcome", "checks" }], "manual_recovery?" }`
 
 Use this to understand an automatic repair: the failed attempt and the successful
 repair are returned as separate records. It returns `404` when the run or stage is

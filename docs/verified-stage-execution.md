@@ -173,7 +173,15 @@ MCP: recover_manual_stage / stop_manual_recovery
 Stageflow keeps verification evidence with the individual attempt that produced it.
 Each attempt also records its verification disposition (`not_run`, `passed`, `failed`,
 or `error`), so recovery policy is based on a durable fact rather than an error-message
-convention.
+convention:
+
+| Disposition | Meaning |
+| --- | --- |
+| `not_run` | The agent did not reach completion verification. |
+| `passed` | Every declared completion check passed. |
+| `failed` | At least one completion check did not pass. |
+| `error` | The verification runtime could not complete its work. |
+
 The operator console shows this history when a stage is open: each attempt lists its
 completion checks, their status, and expandable evidence. This makes an automatic
 repair legible rather than looking like a single unexplained retry.

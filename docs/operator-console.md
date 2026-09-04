@@ -76,7 +76,11 @@ A created run shows status **not started**. The primary action is **Start run** 
 
 `#/runs/<runId>/stages/<stageId>` selects that stage on the map and opens the workspace.
 
-Failed stage nodes offer **Retry**. Running stage nodes offer **Abandon**. A stage waiting on HITL uses the workspace reply surface (`answer_gate`), not retry.
+Failed stage nodes offer **Retry**. When a failed completion check has
+`recovery.mode: manual`, the selected stage instead shows its verification history
+and offers **Retry with guidance** or **Stop recovery**. Running stage nodes offer
+**Abandon**. A stage waiting on HITL uses the workspace reply surface (`answer_gate`),
+not retry.
 
 Use the envelope view to read `summary`, `payload`, and artifact paths without parsing logs.
 

@@ -31,6 +31,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Path-based CLI** — `--pipeline` and `--task` take filesystem paths (no bare-id lookup)
 - **Pi-native** — runs on `@earendil-works/pi-coding-agent`; reuse an existing Pi login (`pi_home`) or store credentials in `~/.stageflow/agent/auth.json` (`sf_owned`)
 - **Envelope handoffs** — typed stage payloads and artifacts via `write_stage_artifact` / `emit_stage_envelope`
+- **Verified stage execution** — pipeline-owned completion checks with durable evidence, automatic repair, and manual recovery ([guide](docs/verified-stage-execution.md))
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running

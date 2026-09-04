@@ -126,7 +126,7 @@ sf runs rerun --run <runId> [--json]
 |------------|------|
 | `list` | Stored runs (same filters as MCP `list_runs`) |
 | `show` | Live `projectRun` for any run status (not the `export-run` completeness gate) |
-| `verify` | Completion-check attempts and evidence for one stage |
+| `verify` | Completion-check attempts, verification dispositions, and evidence for one stage |
 | `recover` | Explicitly retry or stop a manual-recovery stage |
 | `waiting` | Waiting gates with `pending_prompt` |
 | `wait` | Block until waiting, terminal, or timeout |
@@ -160,7 +160,7 @@ A HITL park keeps store status `running`. `--status waiting` is not a valid `lis
 |------|----------------|------|
 | `list` | `{ "runs": [ … ] }` | `0` success, `1` error |
 | `show` | `projectRun` object | `0` success, `1` error |
-| `verify` | Stage verification history: attempts, checks, and evidence | `0` success, `1` error |
+| `verify` | Stage verification history: attempts, dispositions, checks, and evidence | `0` success, `1` error |
 | `recover` | Completion result after an approved retry, or `{ "ok", "runId", "stageId" }` for `--stop` | `0` success, `1` error, `2` waiting after retry |
 | `waiting` | `{ "waiting": [ … ] }` | `0` success, `1` error |
 | `wait` | waitRun result: `ok`, `reason`, `elapsed_ms`, `until`, nested `run` | `0` for `waiting` / `terminal` / `already` / `timeout`; **130** (or platform abort) with `{ "error", "code": "aborted" }` |
@@ -200,10 +200,11 @@ Works for in-progress and parked runs. `sf export-run` still requires `succeeded
 |------|-------------|
 | `--run` | Run id (required) |
 | `--stage` | Stage id (required) |
-| `--json` | Attempt-scoped checks and their stored evidence |
+| `--json` | Attempt-scoped verification dispositions, checks, and stored evidence |
 
-Use this to see why a completion check failed and what an automatic repair later
-changed. It is intentionally stage-scoped, so run listings do not carry command output.
+Use this to see whether verification ran, why a completion check failed, and what an
+automatic repair later changed. It is intentionally stage-scoped, so run listings do
+not carry command output.
 
 ### `sf runs recover`
 
