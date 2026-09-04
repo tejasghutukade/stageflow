@@ -958,7 +958,17 @@ async function prepareStageSessionWiring(
 
   try {
     const modelRuntime = await ModelRuntime.create(
-      roots.authPath ? { authPath: roots.authPath } : undefined,
+      roots.authPath
+        ? {
+            authPath: roots.authPath,
+            // ModelRuntime otherwise resolves models.json from getAgentDir(),
+            // which bindPiAgentDirEnv seals to an empty per-attempt sandbox
+            // dir. Point it at the same durable agent dir as authPath so
+            // custom providers (e.g. a self-hosted OpenAI-compatible
+            // gateway) defined there stay usable in sealed stage sessions.
+            modelsPath: path.join(path.dirname(roots.authPath), "models.json"),
+          }
+        : undefined,
     );
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
