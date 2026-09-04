@@ -6,6 +6,7 @@ import type {
 } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
+import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
@@ -215,6 +216,12 @@ export async function openStageAttempt(
     (node) => node.id === stageId,
   )?.completion;
   const repairContext = await repairContextForAttempt(input, stageId, attempt);
+  const readQaTrail = createAttemptQaTrailReader(
+    input.store,
+    input.runId,
+    stageId,
+    attempt,
+  );
 
   const opened = await openStageWithOperatorCatalog(
     input.agent,
@@ -233,6 +240,7 @@ export async function openStageAttempt(
       cloneEmitContext,
       ...(completionContract !== undefined ? { completionContract } : {}),
       ...(repairContext !== undefined ? { repairContext } : {}),
+      readQaTrail,
       ...(input.stage.timeout_ms !== undefined
         ? { timeoutMs: input.stage.timeout_ms }
         : {}),

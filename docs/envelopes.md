@@ -132,6 +132,48 @@ When a stage declares `payload_schema`, success `payload` is required and checke
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
+### pre_emit_checks {#pre-emit-checks}
+
+A stage may declare `pre_emit_checks` (`src/types/preEmitCheck.ts`) — a small,
+in-session gate `emit_stage_envelope` itself enforces on every **success** emit,
+this attempt, before a candidate envelope is even captured:
+
+```yaml
+id: approve-plan
+gate_kinds: [artifact_backed]
+pre_emit_checks:
+  - id: plan-approved
+    type: gate
+    kind: artifact_backed          # last artifact_backed exchange this attempt must be accept
+  - id: plan-artifact-present
+    type: artifact_declared
+    basename: implementation-plan.md  # must appear in envelope.artifacts (suffix match, no disk I/O)
+system_prompt: |
+  Review the plan artifact. Ask the operator to accept it, then emit success.
+model: anthropic/claude-sonnet-4-5
+```
+
+| Check type | Required fields | Semantics |
+| --- | --- | --- |
+| `gate` | `id`, `kind` | The *last* `ask_operator` exchange of this kind **in this attempt** must satisfy it: `confirm`/`artifact_backed` need `decision: "accept"`; `free_text`/`multi_question` need any completed (answered) exchange. |
+| `artifact_declared` | `id`, `basename` | `basename` must appear in the emitted `artifacts` list, either verbatim or as a `/<basename>` path suffix. Purely a list check — no filesystem access. |
+
+A failing check rejects the emit (`isError: true`, no `terminate`) so the agent can
+retry in the same turn; it never fails the stage outright. Checks run in declaration
+order and stop at the first failure. `pre_emit_checks` is skipped entirely on
+`status: "failure"` emits, and omitted/empty `pre_emit_checks` is a no-op — existing
+stages are unaffected.
+
+**Not the same as `completion`.** [`completion`](verified-stage-execution.md) is a
+pipeline-wiring field that runs **after** a candidate envelope has already been
+captured (via repair/manual recovery), and its `gate`/`artifact` check types are
+disk- and history-aware (`completion`'s `gate` accepts *any* accepted decision over
+the run so far; its `artifact` type does a real on-disk `lstat`/`sha256` check).
+`pre_emit_checks` is a stage-body field the agent's own `emit_stage_envelope` call
+enforces synchronously, mid-turn, with no disk access — a different mechanism for a
+different moment. A stage may declare both; they are allowed to look at overlapping
+facts (defense in depth), never the same field or the same check runner.
+
 ## Artifacts
 
 Use **`write_stage_artifact`** to create files under the stage attempt directory. The tool `path` is relative to `stages/<stageId>/attempts/<n>/artifacts/`:
@@ -201,5 +243,6 @@ Full recipe: [CI / headless](ci.md#handoff-envelope-extraction) · CLI flags: [`
 
 - [YAML catalog](yaml-catalog.md) — `payload_schema` on stage bodies
 - [HITL](hitl.md) — gates before emit
+- [Verified Stage Execution](verified-stage-execution.md) — the post-hoc `completion` contract `pre_emit_checks` is distinct from
 - [CLI reference](cli-reference.md) — `sf envelope get`, handoff format
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — stages that exercise emit + artifacts

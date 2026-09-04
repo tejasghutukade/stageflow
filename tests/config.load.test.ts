@@ -156,6 +156,81 @@ checkout: 42
     );
   });
 
+  it("loads declared pre_emit_checks from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-pre-emit-checks-"));
+    const withChecks = path.join(dir, "with-checks.yaml");
+    await writeFile(
+      withChecks,
+      [
+        "id: approve-plan",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "gate_kinds: [artifact_backed]",
+        "pre_emit_checks:",
+        "  - id: plan-approved",
+        "    type: gate",
+        "    kind: artifact_backed",
+        "  - id: plan-artifact-present",
+        "    type: artifact_declared",
+        "    basename: implementation-plan.md",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(withChecks);
+    expect(loaded.pre_emit_checks).toEqual([
+      { id: "plan-approved", type: "gate", kind: "artifact_backed" },
+      {
+        id: "plan-artifact-present",
+        type: "artifact_declared",
+        basename: "implementation-plan.md",
+      },
+    ]);
+
+    const withoutChecks = path.join(dir, "without-checks.yaml");
+    await writeFile(
+      withoutChecks,
+      ["id: no-checks", "system_prompt: x", "model: anthropic/claude-sonnet-4-5", ""].join(
+        "\n",
+      ),
+    );
+    const loadedWithout = await loadStage(withoutChecks);
+    expect(loadedWithout.pre_emit_checks).toBeUndefined();
+  });
+
+  it("rejects invalid pre_emit_checks", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-pre-emit-checks-bad-"));
+    const emptyArray = path.join(dir, "empty.yaml");
+    await writeFile(
+      emptyArray,
+      [
+        "id: empty",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "pre_emit_checks: []",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(emptyArray)).rejects.toThrow(
+      /pre_emit_checks must be a non-empty array/,
+    );
+
+    const badKind = path.join(dir, "bad-kind.yaml");
+    await writeFile(
+      badKind,
+      [
+        "id: bad-kind",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "pre_emit_checks:",
+        "  - id: x",
+        "    type: gate",
+        "    kind: not_a_kind",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(badKind)).rejects.toThrow(/\.kind must be one of/);
+  });
+
   it("loads optional clone_input_schema and clone_actions from stage YAML", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-fields-"));
     const filePath = path.join(dir, "investigate-area.yaml");

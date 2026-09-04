@@ -32,6 +32,7 @@ export type ValidationFindingCode =
   | "stage.invalid_clone_input_schema"
   | "stage.invalid_clone_actions"
   | "stage.invalid_gate_kinds"
+  | "stage.invalid_pre_emit_checks"
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.load_error"

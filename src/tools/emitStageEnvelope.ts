@@ -21,6 +21,10 @@ import {
   assertEnvelopePayload,
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
+import {
+  assertPreEmitChecks,
+  type PreEmitCheckOptions,
+} from "../envelope/preEmitChecks.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import {
   CLONE_ACTIONS,
@@ -148,6 +152,7 @@ export function createEmitStageEnvelopeTool(
   payloadSchema?: unknown,
   forkEmitContext?: ForkEmitContext,
   cloneEmitContext?: CloneEmitContext,
+  preEmitCheckOptions?: PreEmitCheckOptions,
 ) {
   const compiledPayload =
     payloadSchema !== undefined
@@ -210,6 +215,9 @@ export function createEmitStageEnvelopeTool(
         }
         const envelope = assertRequiredEnvelope(params);
         assertEnvelopePayload(envelope, payloadSchema);
+        if (envelope.status !== "failure") {
+          await assertPreEmitChecks(envelope, preEmitCheckOptions);
+        }
         capture.envelope = envelope;
         const advancing = isAdvancingEnvelope(envelope);
         return toolResult(

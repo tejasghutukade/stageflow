@@ -16,6 +16,9 @@ import {
   createAskOperatorTool,
   type AskOperatorPrompt,
 } from "../src/tools/askOperator.js";
+import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
+import type { QaExchange } from "../src/hitl/qaTrail.js";
+import type { PreEmitCheck } from "../src/types/preEmitCheck.js";
 
 const tempDirs: string[] = [];
 
@@ -377,5 +380,89 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
     expect(raw).toContain('"toolCall"');
     expect(raw).not.toContain("stage handle closed");
     expect(raw).not.toContain("This operation was aborted");
+  });
+});
+
+describe("Pi adapter pre_emit_checks wiring uses a live QA trail", () => {
+  it("prepareStageSessionWiring-shaped options (checks + readQaTrail) consult the trail at execute", async () => {
+    // Mirrors src/agent/piAdapter.ts's prepareStageSessionWiring call site:
+    // createEmitStageEnvelopeTool(capture, payloadSchema, forkEmitContext,
+    // cloneEmitContext, { checks: input.stage.pre_emit_checks, readQaTrail: input.readQaTrail }).
+    const exchanges: QaExchange[] = [];
+    const input = {
+      stage: {
+        pre_emit_checks: [
+          { id: "plan-approved", type: "gate" as const, kind: "artifact_backed" as const },
+        ],
+      },
+      readQaTrail: () => exchanges,
+    };
+    const capture = {};
+    const tool = createEmitStageEnvelopeTool(
+      capture,
+      undefined,
+      undefined,
+      undefined,
+      {
+        checks: input.stage.pre_emit_checks,
+        readQaTrail: input.readQaTrail,
+      },
+    );
+    const before = await tool.execute("emit-1", {
+      status: "success",
+      summary: "plan accepted",
+      artifacts: [],
+      payload: { approved: true },
+    });
+    expect(before.isError).toBe(true);
+    expect(before.terminate).toBeUndefined();
+    expect(capture).not.toHaveProperty("envelope");
+
+    exchanges.push({
+      prompt: {
+        kind: "artifact_backed",
+        id: "plan-1",
+        message: "Review the plan",
+        artifacts: ["plan.md"],
+      },
+      answer: {
+        promptId: "plan-1",
+        kind: "artifact_backed",
+        decision: "accept",
+      },
+    });
+    const after = await tool.execute("emit-1", {
+      status: "success",
+      summary: "plan accepted",
+      artifacts: [],
+      payload: { approved: true },
+    });
+    expect(after.isError).toBeUndefined();
+    expect(after.terminate).toBe(true);
+    expect(capture).toHaveProperty("envelope");
+  });
+
+  it("a stage with no pre_emit_checks emits successfully without a reader", async () => {
+    const stage: { pre_emit_checks?: PreEmitCheck[] } = {};
+    const input = { stage, readQaTrail: undefined as (() => QaExchange[]) | undefined };
+    const capture = {};
+    const tool = createEmitStageEnvelopeTool(
+      capture,
+      undefined,
+      undefined,
+      undefined,
+      {
+        checks: input.stage.pre_emit_checks,
+        readQaTrail: input.readQaTrail,
+      },
+    );
+    const result = await tool.execute("emit-1", {
+      status: "success",
+      summary: "done",
+      artifacts: [],
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.terminate).toBe(true);
+    expect(capture).toHaveProperty("envelope");
   });
 });

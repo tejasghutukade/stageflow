@@ -145,6 +145,22 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/unknown key "label"/i);
   });
 
+  it("accepts pre_emit_checks as a body key on a stage entry", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          {
+            id: "clarify",
+            pre_emit_checks: [
+              { id: "gate-1", type: "gate", kind: "confirm" },
+            ],
+          } as unknown as { id: string },
+        ],
+        ctx("pre-emit-checks"),
+      ),
+    ).not.toThrow();
+  });
+
   it("AE1: fork select:one on a two-child stage sets fork on resolved node", () => {
     const { dag } = resolvePipelineDag(
       [
