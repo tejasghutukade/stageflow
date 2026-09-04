@@ -71,7 +71,7 @@ function mapStageListing(
 ): PipelineStageListing {
   const listing: PipelineStageListing = {
     id: stage.id,
-    ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
+    ...(stage.gate_kinds !== undefined ? { gate_kinds: stage.gate_kinds } : {}),
   };
   if (source?.kind === "inline") {
     listing.inline = true;

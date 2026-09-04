@@ -32,6 +32,24 @@ describe("parseCreateStageBody", () => {
 
     expect(
       parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "no-hitl.yaml",
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "anthropic/claude-sonnet-4-5",
+        gate_kinds: [],
+      }),
+    ).toEqual({
+      pipeline_directory: "pipelines",
+      filename: "no-hitl.yaml",
+      id: "no-hitl",
+      system_prompt: "Implement only.",
+      model: "anthropic/claude-sonnet-4-5",
+      gate_kinds: [],
+    });
+
+    expect(
+      parseCreateStageBody({
         id: "clarify",
         system_prompt: "Clarify.",
         model: "cursor/auto",
@@ -83,6 +101,33 @@ describe("stageConfigToYaml", () => {
       ].join("\n"),
     );
   });
+
+  it("writes empty gate_kinds as [] and omits the key when undefined (KTD1)", () => {
+    expect(
+      stageConfigToYaml({
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "anthropic/claude-sonnet-4-5",
+        gate_kinds: [],
+      }),
+    ).toBe(
+      [
+        "id: no-hitl",
+        "gate_kinds: []",
+        "system_prompt: Implement only.",
+        "model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      stageConfigToYaml({
+        id: "compat",
+        system_prompt: "Ask if needed.",
+        model: "anthropic/claude-sonnet-4-5",
+      }),
+    ).not.toMatch(/gate_kinds/);
+  });
 });
 
 describe("createStage", () => {
@@ -110,6 +155,31 @@ describe("createStage", () => {
         system_prompt: "Do the thing.",
         model: "cursor/auto",
       });
+
+      const emptyHitl = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "no-hitl.yaml",
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "cursor/auto",
+        gate_kinds: [],
+      });
+      expect(emptyHitl).toEqual({
+        ok: true,
+        stage: {
+          path: "pipelines/no-hitl.yaml",
+          id: "no-hitl",
+          gate_kinds: [],
+        },
+      });
+      await expect(loadStage(path.join(root, "pipelines/no-hitl.yaml"))).resolves.toEqual({
+        id: "no-hitl",
+        system_prompt: "Implement only.",
+        model: "cursor/auto",
+        gate_kinds: [],
+      });
+      const emptyYaml = await readFile(path.join(root, "pipelines/no-hitl.yaml"), "utf8");
+      expect(emptyYaml).toMatch(/^gate_kinds: \[\]$/m);
 
       const pathCollision = await createStage(root, {
         pipeline_directory: "pipelines",

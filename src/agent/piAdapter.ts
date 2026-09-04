@@ -26,8 +26,8 @@
  * fails closed with `StageSessionReconstructError` (KTD7). Epic proving
  * vehicle: pipeline `plan-review-proving` (Pi live wait + console answers).
  *
- * `ask_operator` is always registered on sealed stage sessions (allowlist +
- * customTools).
+ * `ask_operator` is registered on sealed stage sessions unless the stage
+ * declares `gate_kinds: []`.
  */
 import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -76,16 +76,19 @@ import type {
   StageRunResult,
 } from "./port.js";
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
+import type { StageGateKind } from "../types/stage.js";
 
 /**
  * Stage tool allowlist for sealed Pi sessions.
- * Always includes `ask_operator` (R7); `write_stage_artifact` when registered
- * (always, for bound and unbound — bound/unbound only gates cwd / env bind).
+ * Includes `ask_operator` unless `gateKinds` is an empty list (R6).
+ * `write_stage_artifact` when registered (always, for bound and unbound —
+ * bound/unbound only gates cwd / env bind).
  */
 export function resolveStageToolNames(
   emitToolName: string,
   artifactToolName?: string,
   askOperatorToolName = "ask_operator",
+  gateKinds?: StageGateKind[],
 ): string[] {
   const tools = [
     "read",
@@ -93,8 +96,10 @@ export function resolveStageToolNames(
     "write",
     "edit",
     emitToolName,
-    askOperatorToolName,
   ];
+  if (gateKinds === undefined || gateKinds.length > 0) {
+    tools.push(askOperatorToolName);
+  }
   if (artifactToolName) {
     tools.push(artifactToolName);
   }
@@ -917,7 +922,7 @@ type StageSessionWiring = {
   tools: string[];
   customTools: ReturnType<typeof defineTool>[];
   emitDefName: string;
-  askOperatorDefName: string;
+  askOperatorDefName?: string;
   artifactDefName?: string;
   providerEmitHint?: string;
   restoreProvider?: () => void;
@@ -943,10 +948,15 @@ async function prepareStageSessionWiring(
   );
   const emitTool = defineTool(emitDef);
 
-  const askDef = createAskOperatorTool({
-    requestWait: (prompt) => askWaitChannel.requestWait(prompt),
-  });
-  const askTool = defineTool(askDef);
+  const gateKinds = input.stage.gate_kinds;
+  const includeAsk = gateKinds === undefined || gateKinds.length > 0;
+  const askDef = includeAsk
+    ? createAskOperatorTool({
+        requestWait: (prompt) => askWaitChannel.requestWait(prompt),
+        ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
+      })
+    : undefined;
+  const askTool = askDef ? defineTool(askDef) : undefined;
 
   const artifactDef = createWriteStageArtifactTool({
     runWorkspaceDir: roots.runWorkspaceDir,
@@ -1036,17 +1046,24 @@ async function prepareStageSessionWiring(
       };
     }
 
-    const customTools = [emitTool, askTool, artifactTool];
+    const customTools = askTool
+      ? [emitTool, askTool, artifactTool]
+      : [emitTool, artifactTool];
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name),
+      tools: resolveStageToolNames(
+        emitDef.name,
+        artifactDef.name,
+        askDef?.name ?? "ask_operator",
+        gateKinds,
+      ),
       customTools,
       emitDefName: emitDef.name,
-      askOperatorDefName: askDef.name,
+      ...(askDef ? { askOperatorDefName: askDef.name } : {}),
       artifactDefName: artifactDef.name,
       providerEmitHint: provider?.emitToolHint?.(emitDef.name),
       restoreProvider,

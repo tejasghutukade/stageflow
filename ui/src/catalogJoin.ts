@@ -2,14 +2,20 @@ import type { PipelineListing, RunSummary, StageGateKind } from "./api";
 
 export type StageLibraryRow = {
   id: string;
-  gate_kinds: StageGateKind[];
+  gate_kinds?: StageGateKind[];
   pipelineIds: string[];
 };
+
+export function stageMayAsk(
+  gateKinds: unknown[] | undefined,
+): boolean {
+  return gateKinds === undefined || gateKinds.length > 0;
+}
 
 export function gateCount(
   stages: { gate_kinds?: unknown[] }[],
 ): number {
-  return stages.filter((stage) => (stage.gate_kinds?.length ?? 0) > 0).length;
+  return stages.filter((stage) => stageMayAsk(stage.gate_kinds)).length;
 }
 
 export function relativeTime(iso: string, now = Date.now()): string {
@@ -54,13 +60,21 @@ export function stageLibrary(pipelines: PipelineListing[]): StageLibraryRow[] {
       const existing = map.get(stage.id);
       if (existing) {
         existing.pipelineIds.push(pipeline.id);
-        if (existing.gate_kinds.length === 0 && stage.gate_kinds?.length) {
+        if (existing.gate_kinds === undefined && stage.gate_kinds !== undefined) {
+          existing.gate_kinds = [...stage.gate_kinds];
+        } else if (
+          existing.gate_kinds !== undefined &&
+          existing.gate_kinds.length === 0 &&
+          stage.gate_kinds?.length
+        ) {
           existing.gate_kinds = [...stage.gate_kinds];
         }
       } else {
         map.set(stage.id, {
           id: stage.id,
-          gate_kinds: stage.gate_kinds ? [...stage.gate_kinds] : [],
+          ...(stage.gate_kinds !== undefined
+            ? { gate_kinds: [...stage.gate_kinds] }
+            : {}),
           pipelineIds: [pipeline.id],
         });
       }

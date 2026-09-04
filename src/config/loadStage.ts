@@ -38,7 +38,7 @@ function parseGateKinds(
     }
     kinds.push(item);
   }
-  return loadSuccess(kinds.length > 0 ? kinds : undefined);
+  return loadSuccess(kinds);
 }
 
 function parseStageFields(
@@ -105,7 +105,9 @@ function parseStageFields(
     }));
     return loadFailure(issues);
   }
-  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+  if (gateKindsOutcome.value !== undefined) {
+    stage.gate_kinds = gateKindsOutcome.value;
+  }
 
   if (raw.skill !== undefined) {
     if (typeof raw.skill !== "string" || raw.skill.trim() === "") {
