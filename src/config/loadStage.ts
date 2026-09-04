@@ -60,7 +60,7 @@ function parseGateKinds(
     }
     kinds.push(item);
   }
-  return loadSuccess(kinds.length > 0 ? kinds : undefined);
+  return loadSuccess(kinds);
 }
 
 function parseStageFields(
@@ -127,7 +127,9 @@ function parseStageFields(
     }));
     return loadFailure(issues);
   }
-  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+  if (gateKindsOutcome.value !== undefined) {
+    stage.gate_kinds = gateKindsOutcome.value;
+  }
 
   const timeoutMsOutcome = parseTimeoutMs(raw.timeout_ms, label);
   if (!timeoutMsOutcome.ok) {

@@ -106,6 +106,24 @@ checkout: 42
     expect(followup.gate_kinds).toBeUndefined();
   });
 
+  it("preserves empty gate_kinds as [] rather than omitting (KTD1)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-gate-kinds-empty-"));
+    const emptyKinds = path.join(dir, "no-hitl.yaml");
+    await writeFile(
+      emptyKinds,
+      [
+        "id: no-hitl",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "gate_kinds: []",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(emptyKinds);
+    expect(loaded.gate_kinds).toEqual([]);
+    expect(loaded.gate_kinds).not.toBeUndefined();
+  });
+
   it("rejects unknown or non-array gate_kinds", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-gate-kinds-"));
     const unknownKind = path.join(dir, "unknown.yaml");

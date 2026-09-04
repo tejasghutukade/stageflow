@@ -8,7 +8,7 @@ export function buildPipelineDagSnapshotFromLoaded(
 ): RunPipelineDagSnapshot {
   const gate_kinds: Record<string, StageGateKind[]> = {};
   for (const stage of loaded.stages) {
-    if (stage.gate_kinds?.length) {
+    if (stage.gate_kinds !== undefined) {
       gate_kinds[stage.id] = stage.gate_kinds;
     }
   }

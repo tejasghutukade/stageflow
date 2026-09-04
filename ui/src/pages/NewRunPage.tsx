@@ -4,9 +4,17 @@ import {
   fetchTasks,
   startRunWithDetails,
   type PipelineListing,
+  type StageGateKind,
   type StartRunResult,
   type TaskListing,
 } from "../api";
+import { stageMayAsk } from "../catalogJoin";
+
+export function previewGateMeta(gateKinds?: StageGateKind[]): string {
+  if (gateKinds === undefined) return "all kinds";
+  if (gateKinds.length === 0) return "no gate";
+  return "will ask you";
+}
 import { useRunCatalog } from "../catalog/useRunCatalog";
 import { waitingRunsAmongView } from "../catalog/views";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
@@ -64,8 +72,8 @@ export function NewRunPage({
     return selectedPipeline.stages.map((s) => ({
       id: s.id,
       label: s.id,
-      status: ((s.gate_kinds?.length ?? 0) > 0 ? "waiting" : "pending") as TrackStage["status"],
-      meta: (s.gate_kinds?.length ?? 0) > 0 ? "will ask you" : "no gate",
+      status: (stageMayAsk(s.gate_kinds) ? "waiting" : "pending") as TrackStage["status"],
+      meta: previewGateMeta(s.gate_kinds),
     }));
   }, [selectedPipeline]);
 

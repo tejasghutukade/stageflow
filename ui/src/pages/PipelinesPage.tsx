@@ -14,6 +14,7 @@ import { runsForPipelineView } from "../catalog/views";
 import {
   gateCount,
   relativeTime,
+  stageMayAsk,
 } from "../catalogJoin";
 import { NewPipelinePanel } from "../components/NewPipelinePanel";
 import { NewStagePanel } from "../components/NewStagePanel";
@@ -25,18 +26,19 @@ import { showToast } from "../toast";
 
 function definitionTrack(stages: PipelineStageListing[]): TrackStage[] {
   return stages.map((stage) => {
-    const kinds = stage.gate_kinds ?? [];
+    const kinds = stage.gate_kinds;
     return {
       id: stage.id,
       label: stage.id,
-      status: kinds.length > 0 ? "waiting" : "pending",
-      meta: kinds.length > 0 ? kinds.join(" · ") : "no gate",
+      status: stageMayAsk(kinds) ? "waiting" : "pending",
+      meta: gateLabel(kinds),
     };
   });
 }
 
-function gateLabel(kinds: string[] | undefined): string {
-  if (!kinds || kinds.length === 0) return "none";
+export function gateLabel(kinds: string[] | undefined): string {
+  if (kinds === undefined) return "all kinds";
+  if (kinds.length === 0) return "none";
   return kinds.join(" · ");
 }
 
@@ -74,9 +76,9 @@ function PipelineMiniTrack({ stages }: { stages: PipelineStageListing[] }) {
             {i > 0 ? <i className="mini__w"></i> : null}
             <i
               className="mini__n"
-              data-s={(stage.gate_kinds?.length ?? 0) > 0 ? "waiting" : undefined}
+              data-s={stageMayAsk(stage.gate_kinds) ? "waiting" : undefined}
             >
-              {(stage.gate_kinds?.length ?? 0) > 0 ? "?" : String(i + 1)}
+              {stageMayAsk(stage.gate_kinds) ? "?" : String(i + 1)}
             </i>
           </Fragment>
         ))}

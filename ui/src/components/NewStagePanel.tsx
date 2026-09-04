@@ -6,6 +6,17 @@ import {
   type CreatedStageListing,
 } from "../api";
 
+export type GateKindsMode = "all" | "none" | "allowlist";
+
+export function createStageGateKindsPayload(
+  mode: GateKindsMode,
+  selected: StageGateKind[],
+): { gate_kinds?: StageGateKind[] } {
+  if (mode === "all") return {};
+  if (mode === "none") return { gate_kinds: [] };
+  return { gate_kinds: selected };
+}
+
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 const MODEL_OTHER = "__other__";
 
@@ -58,6 +69,7 @@ function stageCreateBanner(status: number, serverError?: string): string {
 const emptyForm = () => ({
   id: "",
   system_prompt: "",
+  gateMode: "all" as GateKindsMode,
   gateKinds: [] as StageGateKind[],
   modelSelect: "",
   customModel: "",
@@ -151,7 +163,7 @@ export function NewStagePanel({
       pipeline_directory: pipelineDirectory,
       filename: `${form.id.trim()}.yaml`,
       ...payload,
-      ...(form.gateKinds.length > 0 ? { gate_kinds: form.gateKinds } : {}),
+      ...createStageGateKindsPayload(form.gateMode, form.gateKinds),
     });
     setSubmitting(false);
     if (result.ok) {
@@ -296,24 +308,66 @@ export function NewStagePanel({
           </div>
 
           <div className="form-field">
-            <span className="eyebrow">Gate kinds</span>
+            <span className="eyebrow">HITL</span>
             <p className="muted" style={{ fontSize: "var(--font-size-sm)", margin: "var(--spacing-1) 0 var(--spacing-3)" }}>
-              Optional. Declare which kinds of human input this stage may stop for.
+              All kinds keeps every ask kind available. No HITL unregisters ask_operator. Allowlist restricts kinds.
             </p>
             <div className="pick">
-              {GATE_KINDS.map((kind) => (
-                <label key={kind} className="pick__opt">
-                  <input
-                    type="checkbox"
-                    checked={form.gateKinds.includes(kind)}
-                    onChange={() => toggleGateKind(kind)}
-                  />
-                  <span>
-                    <strong className="mono">{kind}</strong>
-                  </span>
-                </label>
-              ))}
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "all"}
+                  onChange={() => setForm((prev) => ({ ...prev, gateMode: "all" }))}
+                />
+                <span>
+                  <strong>All kinds</strong>
+                  <span className="muted"> Compatible default. Every ask kind is available.</span>
+                </span>
+              </label>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "none"}
+                  onChange={() => setForm((prev) => ({ ...prev, gateMode: "none" }))}
+                />
+                <span>
+                  <strong>No HITL</strong>
+                  <span className="muted"> Writes gate_kinds: []. The stage cannot ask the operator.</span>
+                </span>
+              </label>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-stage-hitl"
+                  checked={form.gateMode === "allowlist"}
+                  onChange={() =>
+                    setForm((prev) => ({ ...prev, gateMode: "allowlist" }))
+                  }
+                />
+                <span>
+                  <strong>Allowlist</strong>
+                  <span className="muted"> Only the kinds you select.</span>
+                </span>
+              </label>
             </div>
+            {form.gateMode === "allowlist" ? (
+              <div className="pick" style={{ marginTop: "var(--spacing-3)" }}>
+                {GATE_KINDS.map((kind) => (
+                  <label key={kind} className="pick__opt">
+                    <input
+                      type="checkbox"
+                      checked={form.gateKinds.includes(kind)}
+                      onChange={() => toggleGateKind(kind)}
+                    />
+                    <span>
+                      <strong className="mono">{kind}</strong>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="form-actions">
