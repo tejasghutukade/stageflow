@@ -95,7 +95,7 @@ Item shape (exact coverage of every clonable successor):
 | `once` | `successor_id`, `action`, `envelope` | `mode`, `clones` |
 | `fanout` | `successor_id`, `action`, `mode`, `clones` (length in `[2, clone_cap]`) | top-level `envelope` |
 
-Nested `clones[].envelope` values are full envelopes.
+Nested `clone_forks[i].envelope` (for `once`) and `clones[j].envelope` (for `fanout`) are full `StageEnvelope` objects: they require `status`, `summary`, and `artifacts`, and may include `payload`. After the parent emits, that nested envelope becomes the clone child's prior envelope (the child reads it like any predecessor).
 
 ```json
 {
@@ -116,7 +116,7 @@ Nested `clones[].envelope` values are full envelopes.
 }
 ```
 
-Illegal items are rejected by emit. A successor may declare `clone_input_schema` (same JSON Schema subset as `payload_schema`). Parent emit validates `once` and `fanout` assignment envelopes against that schema. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `payload_schema`. `skip` does not need an assignment payload.
+Illegal items are rejected by emit. A successor may declare `clone_input_schema` (same JSON Schema subset as `payload_schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `payload_schema`. `skip` does not need an assignment payload.
 
 Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
 

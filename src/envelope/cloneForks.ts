@@ -28,15 +28,16 @@ export function assertCloneForks(
   const expectedSet = new Set(expectedIds);
   const seen = new Set<string>();
 
-  for (const item of items) {
+  for (const [i, item] of items.entries()) {
+    const itemPath = `clone_forks[${i}]`;
     if (seen.has(item.successor_id)) {
       throw new EnvelopeError(
-        `clone_forks contains duplicate successor_id: ${item.successor_id}`,
+        `${itemPath} contains duplicate successor_id: ${item.successor_id}`,
       );
     }
     if (!expectedSet.has(item.successor_id)) {
       throw new EnvelopeError(
-        `clone_forks contains extra successor_id: ${item.successor_id}`,
+        `${itemPath} contains extra successor_id: ${item.successor_id}`,
       );
     }
     seen.add(item.successor_id);
@@ -48,7 +49,7 @@ export function assertCloneForks(
     const allowedActions = cloneEmitContext.allowedActions ?? [...CLONE_ACTIONS];
     if (!allowedActions.includes(item.action)) {
       throw new EnvelopeError(
-        `clone_forks action "${item.action}" is not allowed for ${item.successor_id} (allowed: ${allowedActions.join(", ")})`,
+        `${itemPath} action "${item.action}" is not allowed for ${item.successor_id} (allowed: ${allowedActions.join(", ")})`,
       );
     }
 
@@ -59,18 +60,18 @@ export function assertCloneForks(
         fieldPresent(item, "clones")
       ) {
         throw new EnvelopeError(
-          `clone_forks skip for ${item.successor_id} must not include envelope, mode, or clones`,
+          `${itemPath} skip for ${item.successor_id} must not include envelope, mode, or clones`,
         );
       }
     } else if (item.action === "once") {
       if (!fieldPresent(item, "envelope")) {
         throw new EnvelopeError(
-          `clone_forks once for ${item.successor_id} requires envelope`,
+          `${itemPath} once for ${item.successor_id} requires envelope`,
         );
       }
       if (fieldPresent(item, "mode") || fieldPresent(item, "clones")) {
         throw new EnvelopeError(
-          `clone_forks once for ${item.successor_id} must not include mode or clones`,
+          `${itemPath} once for ${item.successor_id} must not include mode or clones`,
         );
       }
       if (capEntry?.cloneInputSchema !== undefined) {
@@ -78,30 +79,32 @@ export function assertCloneForks(
           item.envelope,
           capEntry.cloneInputSchema,
           item.successor_id,
+          `${itemPath}.envelope`,
         );
       }
     } else if (item.action === "fanout") {
       if (fieldPresent(item, "envelope")) {
         throw new EnvelopeError(
-          `clone_forks fanout for ${item.successor_id} must not include a top-level envelope`,
+          `${itemPath} fanout for ${item.successor_id} must not include a top-level envelope`,
         );
       }
       if (!fieldPresent(item, "mode") || !fieldPresent(item, "clones") || item.clones === undefined) {
         throw new EnvelopeError(
-          `clone_forks fanout for ${item.successor_id} requires mode and clones`,
+          `${itemPath} fanout for ${item.successor_id} requires mode and clones`,
         );
       }
       if (cloneCap === undefined || item.clones.length < 2 || item.clones.length > cloneCap) {
         throw new EnvelopeError(
-          `clone_forks fanout for ${item.successor_id} must have between 2 and ${cloneCap} clones`,
+          `${itemPath} fanout for ${item.successor_id} must have between 2 and ${cloneCap} clones`,
         );
       }
       if (capEntry?.cloneInputSchema !== undefined) {
-        for (const clone of item.clones) {
+        for (const [j, clone] of item.clones.entries()) {
           assertCloneAssignmentPayload(
             clone.envelope,
             capEntry.cloneInputSchema,
             item.successor_id,
+            `${itemPath}.clones[${j}].envelope`,
           );
         }
       }

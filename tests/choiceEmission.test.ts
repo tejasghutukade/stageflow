@@ -81,13 +81,36 @@ function schemaEnumValues(schema: unknown): string[] {
   return [];
 }
 
-function cloneForkItemProperties(
+function cloneForkItemVariants(
   tool: ReturnType<typeof createEmitStageEnvelopeTool>,
-): Record<string, unknown> | undefined {
+): Array<{ properties?: Record<string, unknown> }> {
   const params = tool.parameters as {
-    properties?: { clone_forks?: { items?: { properties?: Record<string, unknown> } } };
+    properties?: {
+      clone_forks?: {
+        items?: {
+          properties?: Record<string, unknown>;
+          anyOf?: Array<{ properties?: Record<string, unknown> }>;
+        };
+      };
+    };
   };
-  return params.properties?.clone_forks?.items?.properties;
+  const items = params.properties?.clone_forks?.items;
+  if (items === undefined) return [];
+  if (Array.isArray(items.anyOf)) return items.anyOf;
+  return [items];
+}
+
+function cloneForkSchemaEnum(
+  tool: ReturnType<typeof createEmitStageEnvelopeTool>,
+  field: "successor_id" | "action",
+): string[] {
+  const values = new Set<string>();
+  for (const variant of cloneForkItemVariants(tool)) {
+    for (const value of schemaEnumValues(variant.properties?.[field])) {
+      values.add(value);
+    }
+  }
+  return [...values];
 }
 
 async function makeBaseInput(workspaceDir: string): Promise<Omit<StageRunInput, "forkEmitContext">> {
@@ -520,9 +543,10 @@ describe("createEmitStageEnvelopeTool - clone stage", () => {
         clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
       },
     );
-    const props = cloneForkItemProperties(tool);
-    expect(schemaEnumValues(props?.successor_id)).toEqual(["oss-investigate-area"]);
-    expect(schemaEnumValues(props?.action)).toEqual(
+    expect(cloneForkSchemaEnum(tool, "successor_id")).toEqual([
+      "oss-investigate-area",
+    ]);
+    expect(cloneForkSchemaEnum(tool, "action")).toEqual(
       expect.arrayContaining(["skip", "once", "fanout"]),
     );
   });
@@ -614,9 +638,8 @@ describe("createEmitStageEnvelopeTool - clone stage", () => {
       allowedActions: ["once", "fanout"],
     } as CloneEmitContext;
     const tool = createEmitStageEnvelopeTool(capture, undefined, undefined, ctx);
-    const props = cloneForkItemProperties(tool);
-    expect(schemaEnumValues(props?.action)).toEqual(["once", "fanout"]);
-    expect(schemaEnumValues(props?.action)).not.toContain("skip");
+    expect(cloneForkSchemaEnum(tool, "action")).toEqual(["once", "fanout"]);
+    expect(cloneForkSchemaEnum(tool, "action")).not.toContain("skip");
 
     const result = await tool.execute("id1", {
       status: "success",

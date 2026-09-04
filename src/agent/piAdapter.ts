@@ -507,6 +507,7 @@ function buildUserPrompt(
       },
     );
     emitHint += `\nClonable successors — emit clone_forks covering each of these ids exactly once:\n${successorLines.join("\n")}`;
+    emitHint += `\nEach once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). clone_input_schema fields belong in envelope.payload, not at the top level of the clone_forks item.`;
     emitHint += `\nAllowed clone actions: ${allowedActions.join(", ")}`;
   }
 

@@ -358,6 +358,75 @@ describe("assertCloneForks", () => {
       ),
     ).not.toThrow();
   });
+
+  it("AE-2: once missing assignment payload is path-qualified", () => {
+    const ctx = {
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 5,
+          cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
+        },
+      ],
+    } as CloneEmitContext;
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "oss-investigate-area",
+              action: "once",
+              envelope: innerEnvelope("full envelope without payload"),
+            },
+          ],
+        },
+        ctx,
+      ),
+    ).toThrow(
+      /clone_forks\[0\]\.envelope: clone assignment payload is required/,
+    );
+  });
+
+  it("U1: once missing nested status is path-qualified", () => {
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "author-diagrams",
+              action: "once",
+              envelope: { summary: "ok", artifacts: [] },
+            },
+          ],
+        },
+        cloneCtx(),
+      ),
+    ).toThrow(/clone_forks\[0\]\.envelope\.status/);
+  });
+
+  it("U1: fanout second clone missing status is path-qualified", () => {
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "author-diagrams",
+              action: "fanout",
+              mode: "parallel",
+              clones: [
+                { envelope: innerEnvelope("a") },
+                { envelope: { summary: "b", artifacts: [] } },
+              ],
+            },
+          ],
+        },
+        cloneCtx(),
+      ),
+    ).toThrow(/clone_forks\[0\]\.clones\[1\]\.envelope\.status/);
+  });
 });
 
 const AREA_ASSIGNMENT_SCHEMA = {
