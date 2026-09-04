@@ -190,6 +190,52 @@ checkout: 42
     }
   });
 
+  it("loads optional timeout_ms from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-timeout-ms-"));
+    const filePath = path.join(dir, "approve.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: approve",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 3600000",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(filePath);
+    expect(loaded.timeout_ms).toBe(3600000);
+  });
+
+  it("rejects non-positive timeout_ms", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-timeout-ms-bad-"));
+    const zero = path.join(dir, "zero.yaml");
+    await writeFile(
+      zero,
+      [
+        "id: zero",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 0",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(zero)).rejects.toThrow(/timeout_ms/);
+
+    const notInt = path.join(dir, "float.yaml");
+    await writeFile(
+      notInt,
+      [
+        "id: float",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 1.5",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(notInt)).rejects.toThrow(/timeout_ms/);
+  });
+
   it.skip("lists pipelines with per-stage gate_kinds objects — legacy fixtures S7", async () => {
     const pipelines = await listPipelines(fixtures);
     const proving = pipelines.find((p) => p.id === "plan-review-proving");

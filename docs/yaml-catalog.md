@@ -59,7 +59,7 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`.
 
-**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`. The JSON Schema subset for `payload_schema` is in [Envelopes](envelopes.md#payload-schema).
+**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`, `timeout_ms`. The JSON Schema subset for `payload_schema` is in [Envelopes](envelopes.md#payload-schema). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 900000 / 15 minutes when omitted).
 
 `uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
 
@@ -297,7 +297,7 @@ Stage YAML (referenced via `uses:`) requires:
 | `system_prompt` | Agent instructions |
 | `model` | Provider/model string |
 
-Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `payload_schema` — see [Envelopes](envelopes.md#payload-schema). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)).
+Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `payload_schema`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)). `timeout_ms` is an optional positive integer millisecond attempt budget (default 15 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
