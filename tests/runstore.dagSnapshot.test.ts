@@ -16,6 +16,56 @@ const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fix
 const owned = path.join(fixtures, "pipeline-owned");
 
 describe("pipeline DAG snapshot persistence", () => {
+  it("copies successor clone_input_schema and never the child payload_schema", () => {
+    const assignment = {
+      type: "object",
+      properties: { area_id: { type: "string" } },
+      required: ["area_id"],
+    };
+    const output = {
+      type: "object",
+      properties: { verdict: { type: "string" } },
+      required: ["verdict"],
+    };
+    const snapshot = buildPipelineDagSnapshotFromLoaded({
+      pipeline: { id: "clone-assign", stages: ["plan", "area"] },
+      pipelinePath: "clone-assign.pipeline.yaml",
+      stages: [
+        {
+          id: "plan",
+          system_prompt: "x",
+          model: "m",
+          clone_actions: ["once", "fanout"],
+        },
+        {
+          id: "area",
+          system_prompt: "x",
+          model: "m",
+          clone_input_schema: assignment,
+          payload_schema: output,
+        },
+      ],
+      dag: {
+        nodes: [
+          { id: "plan", needs: null, ancestors: [], stageIndex: 0 },
+          {
+            id: "area",
+            needs: "plan",
+            ancestors: ["plan"],
+            stageIndex: 1,
+            clonable: true,
+            clone_cap: 4,
+          },
+        ],
+        roots: ["plan"],
+        childrenOf: { plan: ["area"] },
+      },
+    });
+    expect(snapshot.clone_input_schema?.area).toEqual(assignment);
+    expect(snapshot.clone_input_schema?.area).not.toEqual(output);
+    expect(JSON.stringify(snapshot)).not.toContain("verdict");
+  });
+
   it("persists omitted vs empty vs allowlist gate_kinds (KTD1)", () => {
     const snapshot = buildPipelineDagSnapshotFromLoaded({
       pipeline: { id: "three-state", stages: ["compat", "no-hitl", "allowlist"] },

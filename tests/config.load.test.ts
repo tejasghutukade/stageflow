@@ -156,6 +156,101 @@ checkout: 42
     );
   });
 
+  it("loads optional clone_input_schema and clone_actions from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-fields-"));
+    const filePath = path.join(dir, "investigate-area.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: investigate-area",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_input_schema:",
+        "  type: object",
+        "  properties:",
+        "    area_id:",
+        "      type: string",
+        "    objective:",
+        "      type: string",
+        "    paths:",
+        "      type: array",
+        "      items:",
+        "        type: string",
+        "  required:",
+        "    - area_id",
+        "    - objective",
+        "    - paths",
+        "clone_actions:",
+        "  - once",
+        "  - fanout",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(filePath);
+    expect(loaded.clone_input_schema).toMatchObject({
+      type: "object",
+      required: ["area_id", "objective", "paths"],
+    });
+    expect(loaded.clone_actions).toEqual(["once", "fanout"]);
+  });
+
+  it("rejects invalid clone_input_schema and empty or non-array clone_actions", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-bad-"));
+    const badSchema = path.join(dir, "bad-schema.yaml");
+    await writeFile(
+      badSchema,
+      [
+        "id: bad-schema",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_input_schema:",
+        "  type: not-a-valid-type",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(badSchema)).rejects.toThrow(/clone_input_schema/);
+
+    const emptyActions = path.join(dir, "empty-actions.yaml");
+    await writeFile(
+      emptyActions,
+      [
+        "id: empty-actions",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_actions: []",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(emptyActions)).rejects.toThrow(/clone_actions/);
+
+    const stringAction = path.join(dir, "string-action.yaml");
+    await writeFile(
+      stringAction,
+      [
+        "id: string-action",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        'clone_actions: "skip"',
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(stringAction)).rejects.toThrow(/clone_actions/);
+
+    const unknownAction = path.join(dir, "unknown-action.yaml");
+    await writeFile(
+      unknownAction,
+      [
+        "id: unknown-action",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_actions:",
+        "  - explode",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(unknownAction)).rejects.toThrow(/clone_actions/);
+  });
+
   it("loads optional skill name from stage YAML", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-skill-"));
     const named = path.join(dir, "named.yaml");

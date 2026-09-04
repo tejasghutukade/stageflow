@@ -8,6 +8,7 @@ import type { StageRunInput } from "../src/agent/port.js";
 import { loadStage } from "../src/config/loadStage.js";
 import { assertRequiredEnvelope } from "../src/envelope/check.js";
 import {
+  assertCloneAssignmentPayload,
   assertEnvelopePayload,
   compilePayloadSchema,
 } from "../src/envelope/payloadSchema.js";
@@ -76,6 +77,49 @@ describe("payload_schema", () => {
       artifacts: [],
     });
     expect(() => assertEnvelopePayload(failure, nameListSchema)).not.toThrow();
+  });
+
+  it("KTD2: mismatch messages use payload.field dialect not slash instancePath", () => {
+    const success = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: { boy_names: "Arjun", girl_names: ["Meera"] },
+    });
+    let topMessage = "";
+    try {
+      assertEnvelopePayload(success, nameListSchema);
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvelopeError);
+      topMessage = err instanceof Error ? err.message : String(err);
+    }
+    expect(topMessage).toMatch(/payload\.boy_names/);
+    expect(topMessage).not.toMatch(/\/boy_names/);
+
+    const cloneEnv = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: { branch: 12 },
+    });
+    let cloneMessage = "";
+    try {
+      assertCloneAssignmentPayload(
+        cloneEnv,
+        {
+          type: "object",
+          properties: { branch: { type: "string" } },
+          required: ["branch"],
+        },
+        "investigate",
+        "clone_forks[0].envelope",
+      );
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvelopeError);
+      cloneMessage = err instanceof Error ? err.message : String(err);
+    }
+    expect(cloneMessage).toMatch(/payload\.branch/);
+    expect(cloneMessage).not.toMatch(/\/branch/);
   });
 
   it("loads naming-ceremony stages with payload_schema", async () => {
@@ -372,5 +416,21 @@ describe("payload_schema", () => {
     expect(capture).toMatchObject({
       envelope: { payload: { anything: true } },
     });
+  });
+
+  it("U1: assertCloneAssignmentPayload missing payload includes itemPath", () => {
+    const envelope = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+    expect(() =>
+      assertCloneAssignmentPayload(
+        envelope,
+        nameListSchema,
+        "author-diagrams",
+        "clone_forks[0].envelope",
+      ),
+    ).toThrow(/clone_forks\[0\]\.envelope/);
   });
 });

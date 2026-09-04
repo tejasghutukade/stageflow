@@ -190,6 +190,20 @@ export function compilePayloadSchema(raw: unknown): CompiledPayloadSchema {
   return compiled;
 }
 
+function formatPayloadInstancePath(instancePath: string): string {
+  const translated = instancePath.replace(/\//g, ".").replace(/^\./, "");
+  return translated ? `payload.${translated}` : "payload";
+}
+
+function payloadSchemaMismatchDetails(
+  schema: CompiledPayloadSchema,
+  payload: unknown,
+): string {
+  return [...Value.Errors(schema, payload)]
+    .map((err) => `${formatPayloadInstancePath(err.instancePath)} ${err.message}`)
+    .join("; ");
+}
+
 export function assertEnvelopePayload(
   envelope: StageEnvelope,
   payloadSchema: unknown | undefined,
@@ -206,13 +220,37 @@ export function assertEnvelopePayload(
     throw new EnvelopeError("payload is required by stage payload_schema");
   }
   if (!Value.Check(schema, envelope.payload)) {
-    const details = [...Value.Errors(schema, envelope.payload)]
-      .map((err) => `${err.instancePath || "/"} ${err.message}`)
-      .join("; ");
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
     throw new EnvelopeError(
       details
         ? `payload does not match payload_schema: ${details}`
         : "payload does not match payload_schema",
+    );
+  }
+}
+
+export function assertCloneAssignmentPayload(
+  envelope: StageEnvelope,
+  cloneInputSchema: unknown,
+  successorId: string,
+  itemPath: string = "",
+): void {
+  if (envelope.status !== "success") {
+    return;
+  }
+  const schema = compilePayloadSchema(cloneInputSchema);
+  const pathLead = itemPath ? `${itemPath}: ` : "";
+  if (envelope.payload === undefined) {
+    throw new EnvelopeError(
+      `${pathLead}clone assignment payload is required by clone_input_schema for ${successorId}`,
+    );
+  }
+  if (!Value.Check(schema, envelope.payload)) {
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
+    throw new EnvelopeError(
+      details
+        ? `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}: ${details}`
+        : `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}`,
     );
   }
 }

@@ -12,6 +12,7 @@ export type RunStatus = "created" | "running" | "succeeded" | "failed";
 export type RunPipelineDagSnapshot = ResolvedPipelineDag & {
   stage_ids: string[];
   gate_kinds?: Record<string, StageGateKind[]>;
+  clone_input_schema?: Record<string, unknown>;
 };
 
 export type StageReadiness =
