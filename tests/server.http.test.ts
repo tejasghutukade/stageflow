@@ -2048,7 +2048,7 @@ describe("localhost HTTP API", () => {
       }
     });
 
-    it("returns 409 stage_not_failed for succeeded stage on failed run (AE3)", async () => {
+    it("allows retrying a succeeded stage on a failed run (succeeded-stage retry guard)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-succ-"));
       const agent = scriptedFakeAgent([
         {
@@ -2058,6 +2058,14 @@ describe("localhost HTTP API", () => {
         {
           type: "emit",
           envelope: { status: "failure", summary: "design-fail", artifacts: [] },
+        },
+        {
+          type: "emit",
+          envelope: {
+            status: "success",
+            summary: "clarify-ok-retry",
+            artifacts: [],
+          },
         },
       ]);
       const { server, base, store } = await withServer(root, agent);
@@ -2079,14 +2087,27 @@ describe("localhost HTTP API", () => {
         });
 
         const retried = await postRetry(base, runId, "clarify");
-        expect(retried.status).toBe(409);
-        expect(retried.body.code).toBe("stage_not_failed");
+        expect(retried.status).toBe(202);
+        expect(retried.body).toEqual({
+          runId,
+          stageId: "clarify",
+          attemptIndex: 2,
+        });
+
+        await waitFor(async () => {
+          const detail = await store.readRun(runId);
+          const clarify = detail.stages.find(
+            (s: { stage_id: string }) => s.stage_id === "clarify",
+          );
+          return clarify?.status === "succeeded" && clarify.attempt_count === 2;
+        });
       } finally {
         await new Promise<void>((resolve, reject) => {
           server.close((err) => (err ? reject(err) : resolve()));
         });
       }
     });
+
 
     it("returns 409 hitl_not_retriable for waiting stage (AE3)", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-retry-hitl-"));
