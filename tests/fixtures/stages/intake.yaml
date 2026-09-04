@@ -1,0 +1,3 @@
+id: intake
+system_prompt: Intake stage.
+model: anthropic/claude-sonnet-4-5

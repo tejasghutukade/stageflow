@@ -11,6 +11,28 @@ function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
 }
 
+function parseTimeoutMs(
+  raw: unknown,
+  label: string,
+): LoadOutcome<number | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw <= 0
+  ) {
+    return loadFailure([
+      {
+        code: "stage.invalid_timeout_ms",
+        message: `Invalid stage ${label}: timeout_ms must be a positive integer (milliseconds)`,
+        category: "stage",
+      },
+    ]);
+  }
+  return loadSuccess(raw);
+}
+
 function parseGateKinds(
   raw: unknown,
   label: string,
@@ -38,7 +60,7 @@ function parseGateKinds(
     }
     kinds.push(item);
   }
-  return loadSuccess(kinds.length > 0 ? kinds : undefined);
+  return loadSuccess(kinds);
 }
 
 function parseStageFields(
@@ -105,7 +127,21 @@ function parseStageFields(
     }));
     return loadFailure(issues);
   }
-  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+  if (gateKindsOutcome.value !== undefined) {
+    stage.gate_kinds = gateKindsOutcome.value;
+  }
+
+  const timeoutMsOutcome = parseTimeoutMs(raw.timeout_ms, label);
+  if (!timeoutMsOutcome.ok) {
+    const issues: LoadIssue[] = timeoutMsOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (timeoutMsOutcome.value !== undefined) {
+    stage.timeout_ms = timeoutMsOutcome.value;
+  }
 
   if (raw.skill !== undefined) {
     if (typeof raw.skill !== "string" || raw.skill.trim() === "") {
