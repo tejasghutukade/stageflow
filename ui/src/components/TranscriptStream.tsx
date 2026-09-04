@@ -1,4 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode, type UIEvent } from "react";
+
+const NEAR_BOTTOM_PX = 64;
 
 export type TranscriptStreamProps = {
   stageName: string;
@@ -10,6 +12,16 @@ export type TranscriptStreamProps = {
   scrollKey?: number | string;
 };
 
+type ScrollMetrics = {
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+};
+
+export function isNearBottom(el: ScrollMetrics): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+}
+
 export function TranscriptStream({
   stageName,
   status,
@@ -20,13 +32,24 @@ export function TranscriptStream({
   scrollKey,
 }: TranscriptStreamProps) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    if (!autoScroll) return;
+    if (autoScroll) {
+      stickToBottomRef.current = true;
+    }
+  }, [autoScroll]);
+
+  useEffect(() => {
+    if (!autoScroll || !stickToBottomRef.current) return;
     const el = bodyRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [autoScroll, scrollKey, children]);
+  }, [autoScroll, scrollKey]);
+
+  function onBodyScroll(event: UIEvent<HTMLDivElement>) {
+    stickToBottomRef.current = isNearBottom(event.currentTarget);
+  }
 
   return (
     <div className="stream" style={{ height: "100%" }}>
@@ -41,7 +64,7 @@ export function TranscriptStream({
         ) : null}
       </header>
 
-      <div ref={bodyRef} className="stream__body">
+      <div ref={bodyRef} className="stream__body" onScroll={onBodyScroll}>
         <div className="thread">
           {children}
         </div>

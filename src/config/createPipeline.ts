@@ -336,10 +336,14 @@ export function pipelineConfigToYaml(
       lines.push(`    needs: ${stage.needs}`);
     }
     if (stage.inline) {
-      if (stage.inline.gate_kinds && stage.inline.gate_kinds.length > 0) {
-        lines.push("    gate_kinds:");
-        for (const kind of stage.inline.gate_kinds) {
-          lines.push(`      - ${kind}`);
+      if (stage.inline.gate_kinds !== undefined) {
+        if (stage.inline.gate_kinds.length === 0) {
+          lines.push("    gate_kinds: []");
+        } else {
+          lines.push("    gate_kinds:");
+          for (const kind of stage.inline.gate_kinds) {
+            lines.push(`      - ${kind}`);
+          }
         }
       }
       if (stage.inline.system_prompt.includes("\n")) {
@@ -473,7 +477,7 @@ function buildPipelineListing(
       const source = loaded.stageSources?.[stage.id];
       const listing = {
         id: stage.id,
-        ...(stage.gate_kinds ? { gate_kinds: stage.gate_kinds } : {}),
+        ...(stage.gate_kinds !== undefined ? { gate_kinds: stage.gate_kinds } : {}),
       };
       if (source?.kind === "inline") {
         return { ...listing, inline: true };

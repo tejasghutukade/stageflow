@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeAgent } from "../src/agent/fakeAgent.js";
+import { composeStageUserPrompt } from "../src/agent/piAdapter.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { createEmitStageEnvelopeTool } from "../src/tools/emitStageEnvelope.js";
@@ -42,6 +43,74 @@ function makeCloneContext(
 
 function innerEnvelope(summary = "clone prior") {
   return { status: "success" as const, summary, artifacts: [] as string[] };
+}
+
+const AREA_ASSIGNMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    area_id: { type: "string" },
+    objective: { type: "string" },
+    paths: { type: "array", items: { type: "string" } },
+  },
+  required: ["area_id", "objective", "paths"],
+};
+
+const LEGAL_AREA_ASSIGNMENT = {
+  area_id: "routing",
+  objective: "Find the routing bug",
+  paths: ["src/routing.ts"],
+};
+
+function assignmentEnvelope(payload: Record<string, unknown>) {
+  return {
+    status: "success" as const,
+    summary: "assign",
+    artifacts: [] as string[],
+    payload,
+  };
+}
+
+function schemaEnumValues(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object") return [];
+  const rec = schema as Record<string, unknown>;
+  if (Array.isArray(rec.enum)) return rec.enum.filter((v): v is string => typeof v === "string");
+  if (Array.isArray(rec.anyOf)) {
+    return rec.anyOf.flatMap((item) => schemaEnumValues(item));
+  }
+  if (typeof rec.const === "string") return [rec.const];
+  return [];
+}
+
+function cloneForkItemVariants(
+  tool: ReturnType<typeof createEmitStageEnvelopeTool>,
+): Array<{ properties?: Record<string, unknown> }> {
+  const params = tool.parameters as {
+    properties?: {
+      clone_forks?: {
+        items?: {
+          properties?: Record<string, unknown>;
+          anyOf?: Array<{ properties?: Record<string, unknown> }>;
+        };
+      };
+    };
+  };
+  const items = params.properties?.clone_forks?.items;
+  if (items === undefined) return [];
+  if (Array.isArray(items.anyOf)) return items.anyOf;
+  return [items];
+}
+
+function cloneForkSchemaEnum(
+  tool: ReturnType<typeof createEmitStageEnvelopeTool>,
+  field: "successor_id" | "action",
+): string[] {
+  const values = new Set<string>();
+  for (const variant of cloneForkItemVariants(tool)) {
+    for (const value of schemaEnumValues(variant.properties?.[field])) {
+      values.add(value);
+    }
+  }
+  return [...values];
 }
 
 async function makeBaseInput(workspaceDir: string): Promise<Omit<StageRunInput, "forkEmitContext">> {
@@ -463,6 +532,162 @@ describe("createEmitStageEnvelopeTool - clone stage", () => {
     expect(second.terminate).toBe(true);
     expect(second.content[0]?.text).toMatch(/already accepted/i);
     expect(capture.envelope?.summary).toBe("first");
+  });
+
+  it("AE3: successor_id tool enum names only the clonable child id", () => {
+    const tool = createEmitStageEnvelopeTool(
+      {},
+      undefined,
+      undefined,
+      {
+        clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
+      },
+    );
+    expect(cloneForkSchemaEnum(tool, "successor_id")).toEqual([
+      "oss-investigate-area",
+    ]);
+    expect(cloneForkSchemaEnum(tool, "action")).toEqual(
+      expect.arrayContaining(["skip", "once", "fanout"]),
+    );
+  });
+
+  it("AE3: invented successor id is rejected in-session", async () => {
+    const capture = {};
+    const tool = createEmitStageEnvelopeTool(
+      capture,
+      undefined,
+      undefined,
+      {
+        clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
+      },
+    );
+    const result = await tool.execute("id1", {
+      status: "success",
+      summary: "invented",
+      artifacts: [],
+      clone_forks: [{ successor_id: "invented-successor", action: "skip" }],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(capture.envelope).toBeUndefined();
+    expect(result.content[0]?.text).toMatch(/invented-successor/);
+  });
+
+  it("AE4: thin fanout assignment is rejected; verdict is not required", async () => {
+    const capture = {};
+    const ctx = {
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 5,
+          cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
+        },
+      ],
+    } as CloneEmitContext;
+    const tool = createEmitStageEnvelopeTool(capture, undefined, undefined, ctx);
+    const thin = await tool.execute("id1", {
+      status: "success",
+      summary: "thin",
+      artifacts: [],
+      clone_forks: [
+        {
+          successor_id: "oss-investigate-area",
+          action: "fanout",
+          mode: "parallel",
+          clones: [
+            { envelope: assignmentEnvelope({ strategy: "search broadly" }) },
+            { envelope: assignmentEnvelope({ strategy: "narrow the files" }) },
+          ],
+        },
+      ],
+    });
+    expect(thin.isError).toBe(true);
+    expect(thin.terminate).toBeUndefined();
+    expect(capture.envelope).toBeUndefined();
+
+    const legal = await tool.execute("id2", {
+      status: "success",
+      summary: "legal fanout",
+      artifacts: [],
+      clone_forks: [
+        {
+          successor_id: "oss-investigate-area",
+          action: "fanout",
+          mode: "parallel",
+          clones: [
+            { envelope: assignmentEnvelope(LEGAL_AREA_ASSIGNMENT) },
+            {
+              envelope: assignmentEnvelope({
+                ...LEGAL_AREA_ASSIGNMENT,
+                area_id: "auth",
+              }),
+            },
+          ],
+        },
+      ],
+    });
+    expect(legal.isError).toBeUndefined();
+    expect(legal.terminate).toBe(true);
+    expect(capture.envelope?.clone_forks?.[0]).toMatchObject({ action: "fanout" });
+  });
+
+  it("restricted clone_actions reject skip in schema and execute", async () => {
+    const capture = {};
+    const ctx = {
+      clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
+      allowedActions: ["once", "fanout"],
+    } as CloneEmitContext;
+    const tool = createEmitStageEnvelopeTool(capture, undefined, undefined, ctx);
+    expect(cloneForkSchemaEnum(tool, "action")).toEqual(["once", "fanout"]);
+    expect(cloneForkSchemaEnum(tool, "action")).not.toContain("skip");
+
+    const result = await tool.execute("id1", {
+      status: "success",
+      summary: "skip anyway",
+      artifacts: [],
+      clone_forks: [{ successor_id: "oss-investigate-area", action: "skip" }],
+    });
+    expect(result.isError).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(capture.envelope).toBeUndefined();
+    expect(result.content[0]?.text).toMatch(/skip/);
+  });
+});
+
+describe("composeStageUserPrompt - clone emit context", () => {
+  it("AE3/KTD7: prompt names legal successor id, cap, actions, and assignment schema", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        roots: buildStageRoots("/tmp/run-ws", "oss-plan-investigation"),
+        stage: {
+          id: "oss-plan-investigation",
+          system_prompt: "plan",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        task: { id: "t", goal: "plan investigation" },
+        priorEnvelope: null,
+        cloneEmitContext: {
+          clonableSuccessors: [
+            {
+              successorId: "oss-investigate-area",
+              cloneCap: 4,
+              cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
+            },
+          ],
+          allowedActions: ["once", "fanout"],
+        } as CloneEmitContext,
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("oss-investigate-area");
+    expect(prompt).toContain("4");
+    expect(prompt).toContain("once");
+    expect(prompt).toContain("fanout");
+    expect(prompt).not.toMatch(/allowed clone actions:.*skip/i);
+    expect(prompt).toContain(JSON.stringify(AREA_ASSIGNMENT_SCHEMA, null, 2));
+    expect(prompt).toContain("area_id");
+    expect(prompt).toContain("objective");
+    expect(prompt).toContain("paths");
   });
 });
 

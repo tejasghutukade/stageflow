@@ -1,3 +1,4 @@
+import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import {
   STAGE_GATE_KINDS,
   type StageConfig,
@@ -10,6 +11,71 @@ import { readYamlObject } from "./readYamlObject.js";
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
+}
+
+function isCloneAction(value: string): value is CloneAction {
+  return (CLONE_ACTIONS as readonly string[]).includes(value);
+}
+
+function parseCloneActions(
+  raw: unknown,
+  label: string,
+): LoadOutcome<CloneAction[] | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: clone_actions must be a non-empty array of strings`,
+        category: "stage",
+      },
+    ]);
+  }
+  if (raw.length === 0) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: clone_actions must not be empty`,
+        category: "stage",
+      },
+    ]);
+  }
+  const actions: CloneAction[] = [];
+  for (const item of raw) {
+    if (!isCloneAction(item)) {
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_actions",
+          message: `Invalid stage ${label}: unsupported clone_actions value "${item}" (allowed: ${CLONE_ACTIONS.join(", ")})`,
+          category: "stage",
+        },
+      ]);
+    }
+    actions.push(item);
+  }
+  return loadSuccess(actions);
+}
+
+function parseTimeoutMs(
+  raw: unknown,
+  label: string,
+): LoadOutcome<number | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw <= 0
+  ) {
+    return loadFailure([
+      {
+        code: "stage.invalid_timeout_ms",
+        message: `Invalid stage ${label}: timeout_ms must be a positive integer (milliseconds)`,
+        category: "stage",
+      },
+    ]);
+  }
+  return loadSuccess(raw);
 }
 
 function parseGateKinds(
@@ -39,7 +105,7 @@ function parseGateKinds(
     }
     kinds.push(item);
   }
-  return loadSuccess(kinds.length > 0 ? kinds : undefined);
+  return loadSuccess(kinds);
 }
 
 function parseStageFields(
@@ -98,6 +164,49 @@ function parseStageFields(
     stage.payload_schema = raw.payload_schema;
   }
 
+  if (raw.clone_input_schema !== undefined) {
+    if (
+      raw.clone_input_schema === null ||
+      typeof raw.clone_input_schema !== "object" ||
+      Array.isArray(raw.clone_input_schema)
+    ) {
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_input_schema",
+          message: `Invalid stage ${label}: clone_input_schema must be an object`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    try {
+      compilePayloadSchema(raw.clone_input_schema);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_input_schema",
+          message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.clone_input_schema = raw.clone_input_schema;
+  }
+
+  const cloneActionsOutcome = parseCloneActions(raw.clone_actions, label);
+  if (!cloneActionsOutcome.ok) {
+    const issues: LoadIssue[] = cloneActionsOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (cloneActionsOutcome.value !== undefined) {
+    stage.clone_actions = cloneActionsOutcome.value;
+  }
+
   const gateKindsOutcome = parseGateKinds(raw.gate_kinds, label);
   if (!gateKindsOutcome.ok) {
     const issues: LoadIssue[] = gateKindsOutcome.issues.map((issue) => ({
@@ -106,7 +215,21 @@ function parseStageFields(
     }));
     return loadFailure(issues);
   }
-  if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+  if (gateKindsOutcome.value !== undefined) {
+    stage.gate_kinds = gateKindsOutcome.value;
+  }
+
+  const timeoutMsOutcome = parseTimeoutMs(raw.timeout_ms, label);
+  if (!timeoutMsOutcome.ok) {
+    const issues: LoadIssue[] = timeoutMsOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (timeoutMsOutcome.value !== undefined) {
+    stage.timeout_ms = timeoutMsOutcome.value;
+  }
 
   const preEmitChecksOutcome = parsePreEmitChecks(raw.pre_emit_checks, label);
   if (!preEmitChecksOutcome.ok) {

@@ -1,4 +1,5 @@
 import type { PreEmitCheck } from "./preEmitCheck.js";
+import type { CloneAction } from "./forkChoice.js";
 
 export const STAGE_GATE_KINDS = [
   "free_text",
@@ -19,5 +20,9 @@ export type StageConfig = {
   gate_kinds?: StageGateKind[];
   /** In-session checks emit must satisfy this attempt before success is accepted. */
   pre_emit_checks?: PreEmitCheck[];
+  clone_input_schema?: unknown;
+  clone_actions?: CloneAction[];
+  /** Optional stage wall-clock timeout in milliseconds (default 15 minutes). */
+  timeout_ms?: number;
   skill?: string;
 };

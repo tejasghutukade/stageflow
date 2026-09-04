@@ -11,7 +11,67 @@ type JsonSchemaNode = {
   required?: unknown;
   items?: unknown;
   additionalProperties?: unknown;
+  minItems?: unknown;
+  enum?: unknown;
+  minimum?: unknown;
+  maximum?: unknown;
 };
+
+function readEnum(
+  schema: JsonSchemaNode,
+  path: string,
+  valueType: "string" | "integer",
+): readonly (string | number)[] | undefined {
+  if (schema.enum === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+    throw new Error(`${path}: enum must be a non-empty array when present`);
+  }
+  if (valueType === "string") {
+    if (!schema.enum.every((value) => typeof value === "string")) {
+      throw new Error(`${path}: enum values must be strings`);
+    }
+    return schema.enum as string[];
+  }
+  if (
+    !schema.enum.every(
+      (value) => typeof value === "number" && Number.isInteger(value),
+    )
+  ) {
+    throw new Error(`${path}: enum values must be integers`);
+  }
+  return schema.enum as number[];
+}
+
+function readBound(
+  value: unknown,
+  path: string,
+  keyword: "minimum" | "maximum",
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${path}: ${keyword} must be a number when present`);
+  }
+  return value;
+}
+
+function numericOptions(
+  schema: JsonSchemaNode,
+  path: string,
+): { minimum?: number; maximum?: number } | undefined {
+  const minimum = readBound(schema.minimum, path, "minimum");
+  const maximum = readBound(schema.maximum, path, "maximum");
+  if (minimum === undefined && maximum === undefined) {
+    return undefined;
+  }
+  return {
+    ...(minimum !== undefined ? { minimum } : {}),
+    ...(maximum !== undefined ? { maximum } : {}),
+  };
+}
 
 function compileNode(node: unknown, path: string): TSchema {
   if (node === null || typeof node !== "object" || Array.isArray(node)) {
@@ -24,19 +84,44 @@ function compileNode(node: unknown, path: string): TSchema {
   }
 
   switch (schema.type) {
-    case "string":
-      return Type.String();
-    case "number":
-      return Type.Number();
-    case "integer":
-      return Type.Integer();
+    case "string": {
+      const enumerated = readEnum(schema, path, "string");
+      return enumerated !== undefined
+        ? Type.Enum(enumerated as string[])
+        : Type.String();
+    }
+    case "number": {
+      const options = numericOptions(schema, path);
+      return options !== undefined ? Type.Number(options) : Type.Number();
+    }
+    case "integer": {
+      const enumerated = readEnum(schema, path, "integer");
+      const options = numericOptions(schema, path);
+      if (enumerated !== undefined) {
+        return Type.Enum(enumerated as number[], options);
+      }
+      return options !== undefined ? Type.Integer(options) : Type.Integer();
+    }
     case "boolean":
       return Type.Boolean();
     case "array": {
       if (schema.items === undefined) {
         throw new Error(`${path}: array requires items`);
       }
-      return Type.Array(compileNode(schema.items, `${path}.items`));
+      if (
+        schema.minItems !== undefined &&
+        (typeof schema.minItems !== "number" ||
+          !Number.isInteger(schema.minItems) ||
+          schema.minItems < 0)
+      ) {
+        throw new Error(
+          `${path}: minItems must be a non-negative integer when present`,
+        );
+      }
+      const items = compileNode(schema.items, `${path}.items`);
+      return schema.minItems !== undefined
+        ? Type.Array(items, { minItems: schema.minItems })
+        : Type.Array(items);
     }
     case "object": {
       const properties = schema.properties ?? {};
@@ -94,7 +179,8 @@ function compileNode(node: unknown, path: string): TSchema {
 /**
  * Compile a JSON Schema subset used for stage payload_schema.
  * Supported: type object/string/number/integer/boolean/array,
- * properties, required, items, additionalProperties (boolean).
+ * properties, required, items, additionalProperties (boolean),
+ * minItems, enum, minimum, maximum. Unknown keywords are ignored.
  */
 export function compilePayloadSchema(raw: unknown): CompiledPayloadSchema {
   const compiled = compileNode(raw, "payload_schema");
@@ -102,6 +188,20 @@ export function compilePayloadSchema(raw: unknown): CompiledPayloadSchema {
     throw new Error("payload_schema: root type must be object");
   }
   return compiled;
+}
+
+function formatPayloadInstancePath(instancePath: string): string {
+  const translated = instancePath.replace(/\//g, ".").replace(/^\./, "");
+  return translated ? `payload.${translated}` : "payload";
+}
+
+function payloadSchemaMismatchDetails(
+  schema: CompiledPayloadSchema,
+  payload: unknown,
+): string {
+  return [...Value.Errors(schema, payload)]
+    .map((err) => `${formatPayloadInstancePath(err.instancePath)} ${err.message}`)
+    .join("; ");
 }
 
 export function assertEnvelopePayload(
@@ -120,13 +220,37 @@ export function assertEnvelopePayload(
     throw new EnvelopeError("payload is required by stage payload_schema");
   }
   if (!Value.Check(schema, envelope.payload)) {
-    const details = [...Value.Errors(schema, envelope.payload)]
-      .map((err) => `${err.instancePath || "/"} ${err.message}`)
-      .join("; ");
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
     throw new EnvelopeError(
       details
         ? `payload does not match payload_schema: ${details}`
         : "payload does not match payload_schema",
+    );
+  }
+}
+
+export function assertCloneAssignmentPayload(
+  envelope: StageEnvelope,
+  cloneInputSchema: unknown,
+  successorId: string,
+  itemPath: string = "",
+): void {
+  if (envelope.status !== "success") {
+    return;
+  }
+  const schema = compilePayloadSchema(cloneInputSchema);
+  const pathLead = itemPath ? `${itemPath}: ` : "";
+  if (envelope.payload === undefined) {
+    throw new EnvelopeError(
+      `${pathLead}clone assignment payload is required by clone_input_schema for ${successorId}`,
+    );
+  }
+  if (!Value.Check(schema, envelope.payload)) {
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
+    throw new EnvelopeError(
+      details
+        ? `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}: ${details}`
+        : `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}`,
     );
   }
 }

@@ -1,5 +1,10 @@
 import type { AgentPort } from "../agent/port.js";
-import type { RunDetail, RunStatus, RunStore } from "../runstore/port.js";
+import type {
+  RunDetail,
+  RunStatus,
+  RunStore,
+  StageSnapshot,
+} from "../runstore/port.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
 import {
   retryRun,
@@ -108,6 +113,25 @@ export type RetryStageRequest = {
   beforeAttemptStart?: (attempt: number) => Promise<void>;
 };
 
+export function succeededStageRetryBlocker(
+  stageSnap: StageSnapshot,
+): string | undefined {
+  if (
+    stageSnap.definition_id !== undefined &&
+    stageSnap.definition_id !== stageSnap.stage_id
+  ) {
+    return `Cannot re-run a succeeded clone instance stage (stage=${stageSnap.stage_id}, definition=${stageSnap.definition_id}): clone instances are created by upstream fan-out and cannot be rebuilt in place. Use rerun to start a new run.`;
+  }
+  const forks = stageSnap.envelope?.clone_forks;
+  if (Array.isArray(forks) && forks.length > 0) {
+    return `Cannot re-run a succeeded clonable-fanout stage (stage=${stageSnap.stage_id}): its envelope declared clone_forks and existing clone instances cannot be pruned. Use rerun to start a new run.`;
+  }
+  if (stageSnap.envelope?.fork_choice !== undefined) {
+    return `Cannot re-run a succeeded fork stage (stage=${stageSnap.stage_id}): its envelope recorded a fork_choice and skipped branches cannot be restored. Use rerun to start a new run.`;
+  }
+  return undefined;
+}
+
 export function assertStageRetryEligible(
   detail: RunDetail,
   stageId: string,
@@ -131,22 +155,29 @@ export function assertStageRetryEligible(
   }
 
   const recoveryActive = opts?.recoveryActive === true;
-  if (detail.status !== "failed") {
+  if (detail.status !== "failed" && detail.status !== "succeeded") {
     if (!(detail.status === "running" && recoveryActive)) {
       return {
         ok: false,
-        reason: `Run is not failed (status=${detail.status})`,
+        reason: `Run is not failed or succeeded (status=${detail.status})`,
         status: 409,
       };
     }
   }
 
-  if (stageSnap.status !== "failed") {
+  if (stageSnap.status !== "failed" && stageSnap.status !== "succeeded") {
     return {
       ok: false,
-      reason: `Stage is not failed (status=${stageSnap.status})`,
+      reason: `Stage is not failed or succeeded (status=${stageSnap.status})`,
       status: 409,
     };
+  }
+
+  if (stageSnap.status === "succeeded") {
+    const blocker = succeededStageRetryBlocker(stageSnap);
+    if (blocker !== undefined) {
+      return { ok: false, reason: blocker, status: 409 };
+    }
   }
 
   return { ok: true };
@@ -403,7 +434,7 @@ export class RunRetryCoordinator {
         }
         insertedForResume = tracked.insertedForResume === true;
 
-        if (priorRunStatus === "failed") {
+        if (priorRunStatus === "failed" || priorRunStatus === "succeeded") {
           await store.updateRunStatus(runId, "running");
           bumpedRunning = true;
         }

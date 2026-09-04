@@ -106,6 +106,24 @@ checkout: 42
     expect(followup.gate_kinds).toBeUndefined();
   });
 
+  it("preserves empty gate_kinds as [] rather than omitting (KTD1)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-gate-kinds-empty-"));
+    const emptyKinds = path.join(dir, "no-hitl.yaml");
+    await writeFile(
+      emptyKinds,
+      [
+        "id: no-hitl",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "gate_kinds: []",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(emptyKinds);
+    expect(loaded.gate_kinds).toEqual([]);
+    expect(loaded.gate_kinds).not.toBeUndefined();
+  });
+
   it("rejects unknown or non-array gate_kinds", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-gate-kinds-"));
     const unknownKind = path.join(dir, "unknown.yaml");
@@ -213,6 +231,101 @@ checkout: 42
     await expect(loadStage(badKind)).rejects.toThrow(/\.kind must be one of/);
   });
 
+  it("loads optional clone_input_schema and clone_actions from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-fields-"));
+    const filePath = path.join(dir, "investigate-area.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: investigate-area",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_input_schema:",
+        "  type: object",
+        "  properties:",
+        "    area_id:",
+        "      type: string",
+        "    objective:",
+        "      type: string",
+        "    paths:",
+        "      type: array",
+        "      items:",
+        "        type: string",
+        "  required:",
+        "    - area_id",
+        "    - objective",
+        "    - paths",
+        "clone_actions:",
+        "  - once",
+        "  - fanout",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(filePath);
+    expect(loaded.clone_input_schema).toMatchObject({
+      type: "object",
+      required: ["area_id", "objective", "paths"],
+    });
+    expect(loaded.clone_actions).toEqual(["once", "fanout"]);
+  });
+
+  it("rejects invalid clone_input_schema and empty or non-array clone_actions", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-bad-"));
+    const badSchema = path.join(dir, "bad-schema.yaml");
+    await writeFile(
+      badSchema,
+      [
+        "id: bad-schema",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_input_schema:",
+        "  type: not-a-valid-type",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(badSchema)).rejects.toThrow(/clone_input_schema/);
+
+    const emptyActions = path.join(dir, "empty-actions.yaml");
+    await writeFile(
+      emptyActions,
+      [
+        "id: empty-actions",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_actions: []",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(emptyActions)).rejects.toThrow(/clone_actions/);
+
+    const stringAction = path.join(dir, "string-action.yaml");
+    await writeFile(
+      stringAction,
+      [
+        "id: string-action",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        'clone_actions: "skip"',
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(stringAction)).rejects.toThrow(/clone_actions/);
+
+    const unknownAction = path.join(dir, "unknown-action.yaml");
+    await writeFile(
+      unknownAction,
+      [
+        "id: unknown-action",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_actions:",
+        "  - explode",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(unknownAction)).rejects.toThrow(/clone_actions/);
+  });
+
   it("loads optional skill name from stage YAML", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-skill-"));
     const named = path.join(dir, "named.yaml");
@@ -263,6 +376,52 @@ checkout: 42
       );
       await expect(loadStage(filePath)).rejects.toThrow(/skill/);
     }
+  });
+
+  it("loads optional timeout_ms from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-timeout-ms-"));
+    const filePath = path.join(dir, "approve.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: approve",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 3600000",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadStage(filePath);
+    expect(loaded.timeout_ms).toBe(3600000);
+  });
+
+  it("rejects non-positive timeout_ms", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-timeout-ms-bad-"));
+    const zero = path.join(dir, "zero.yaml");
+    await writeFile(
+      zero,
+      [
+        "id: zero",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 0",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(zero)).rejects.toThrow(/timeout_ms/);
+
+    const notInt = path.join(dir, "float.yaml");
+    await writeFile(
+      notInt,
+      [
+        "id: float",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "timeout_ms: 1.5",
+        "",
+      ].join("\n"),
+    );
+    await expect(loadStage(notInt)).rejects.toThrow(/timeout_ms/);
   });
 
   it.skip("lists pipelines with per-stage gate_kinds objects — legacy fixtures S7", async () => {

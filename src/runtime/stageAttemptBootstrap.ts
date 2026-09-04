@@ -7,7 +7,7 @@ import type {
 import { resolveSkillByName } from "../config/listSkills.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
-import type { RunStore } from "../runstore/port.js";
+import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
@@ -203,7 +203,15 @@ export async function openStageAttempt(
     resumeSessionFilePath(input.workspaceDir, stageId, attempt);
 
   const forkEmitContext = resolveForkEmitContext(input.dag, definitionId);
-  const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId);
+  const snapshot = input.dag as RunPipelineDagSnapshot;
+  const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId, {
+    ...(input.stage.clone_actions !== undefined
+      ? { allowedActions: input.stage.clone_actions }
+      : {}),
+    ...(snapshot.clone_input_schema !== undefined
+      ? { successorCloneInputSchemas: snapshot.clone_input_schema }
+      : {}),
+  });
   const completionContract = input.dag.nodes.find(
     (node) => node.id === stageId,
   )?.completion;
@@ -233,6 +241,9 @@ export async function openStageAttempt(
       ...(completionContract !== undefined ? { completionContract } : {}),
       ...(repairContext !== undefined ? { repairContext } : {}),
       readQaTrail,
+      ...(input.stage.timeout_ms !== undefined
+        ? { timeoutMs: input.stage.timeout_ms }
+        : {}),
     },
     input.operatorCatalog,
   );

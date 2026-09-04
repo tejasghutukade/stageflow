@@ -169,4 +169,32 @@ describe("loadStageFromObjectOutcome", () => {
     if (outcome.ok) return;
     expect(outcome.issues[0]?.code).toBe("stage.invalid_pre_emit_checks");
   });
+
+  it("rejects invalid clone_input_schema", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        clone_input_schema: { type: "not-a-valid-type" },
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_clone_input_schema");
+  });
+
+  it("rejects empty clone_actions", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        clone_actions: [],
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_clone_actions");
+  });
 });

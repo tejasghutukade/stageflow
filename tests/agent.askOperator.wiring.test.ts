@@ -107,6 +107,77 @@ describe("ask_operator wiring (U3)", () => {
     ]);
   });
 
+  it("empty gate_kinds omits ask_operator from the sealed-session allowlist (AE5)", () => {
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        undefined,
+        "ask_operator",
+        [],
+      ),
+    ).toEqual(["read", "bash", "write", "edit", "emit_stage_envelope"]);
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        "write_stage_artifact",
+        "ask_operator",
+        [],
+      ),
+    ).toEqual([
+      "read",
+      "bash",
+      "write",
+      "edit",
+      "emit_stage_envelope",
+      "write_stage_artifact",
+    ]);
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        undefined,
+        "ask_operator",
+        ["confirm"],
+      ),
+    ).toContain("ask_operator");
+  });
+
+  it("non-empty gate_kinds allowlists kinds on the ask tool", async () => {
+    const channel = new AskOperatorWaitChannel();
+    channel.setWaitHandler(() => {});
+    const tool = createAskOperatorTool({
+      requestWait: (prompt) => channel.requestWait(prompt),
+      allowedKinds: ["confirm"],
+    });
+
+    const undeclared = await tool.execute("t-deny", {
+      kind: "free_text",
+      message: "Write a report only?",
+    });
+    expect(undeclared.isError).toBe(true);
+    expect(undeclared.details.error).toMatch(/free_text/);
+    expect(undeclared.details.prompt).toBeNull();
+
+    const exec = tool.execute("t-ok", {
+      kind: "confirm",
+      id: "prompt-ok",
+      message: "Proceed?",
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(channel.hasPending).toBe(true);
+    expect(
+      channel.deliverAnswer({
+        promptId: "prompt-ok",
+        kind: "confirm",
+        decision: "accept",
+      }),
+    ).toBe(true);
+    const declared = await exec;
+    expect(declared.isError).toBeUndefined();
+    expect(declared.details).toMatchObject({
+      prompt: { kind: "confirm", id: "prompt-ok" },
+    });
+  });
+
   it("FakeAgent wait with T2 free_text opaque + deliverAnswer unblocks without success until emit", async () => {
     const agent = new FakeAgent({
       type: "wait_then_emit",
