@@ -7,9 +7,13 @@ export function buildPipelineDagSnapshotFromLoaded(
   loaded: LoadedPipeline,
 ): RunPipelineDagSnapshot {
   const gate_kinds: Record<string, StageGateKind[]> = {};
+  const clone_input_schema: Record<string, unknown> = {};
   for (const stage of loaded.stages) {
     if (stage.gate_kinds?.length) {
       gate_kinds[stage.id] = stage.gate_kinds;
+    }
+    if (stage.clone_input_schema !== undefined) {
+      clone_input_schema[stage.id] = stage.clone_input_schema;
     }
   }
   return {
@@ -21,6 +25,9 @@ export function buildPipelineDagSnapshotFromLoaded(
     roots: loaded.dag.roots,
     childrenOf: loaded.dag.childrenOf,
     ...(Object.keys(gate_kinds).length > 0 ? { gate_kinds } : {}),
+    ...(Object.keys(clone_input_schema).length > 0
+      ? { clone_input_schema }
+      : {}),
   };
 }
 

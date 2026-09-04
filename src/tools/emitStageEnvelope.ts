@@ -21,12 +21,30 @@ import {
   compilePayloadSchema,
 } from "../envelope/payloadSchema.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
+import {
+  CLONE_ACTIONS,
+  type CloneAction,
+  type CloneEmitContext,
+  type ForkEmitContext,
+} from "../types/forkChoice.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
   error?: string;
 };
+
+function stringLiteralsSchema(values: readonly string[]) {
+  if (values.length === 1) {
+    return Type.Literal(values[0]!);
+  }
+  return Type.Union(
+    values.map((value) => Type.Literal(value)) as [
+      ReturnType<typeof Type.Literal>,
+      ReturnType<typeof Type.Literal>,
+      ...ReturnType<typeof Type.Literal>[],
+    ],
+  );
+}
 
 function toolResult(
   text: string,
@@ -52,14 +70,17 @@ export function createEmitStageEnvelopeTool(
       ? compilePayloadSchema(payloadSchema)
       : undefined;
 
+  const legalSuccessorIds =
+    cloneEmitContext?.clonableSuccessors.map((s) => s.successorId) ?? [];
+  const allowedActions: CloneAction[] =
+    cloneEmitContext?.allowedActions ?? [...CLONE_ACTIONS];
   const cloneForksSchema = Type.Array(
     Type.Object({
-      successor_id: Type.String(),
-      action: Type.Union([
-        Type.Literal("skip"),
-        Type.Literal("once"),
-        Type.Literal("fanout"),
-      ]),
+      successor_id:
+        legalSuccessorIds.length > 0
+          ? stringLiteralsSchema(legalSuccessorIds)
+          : Type.String(),
+      action: stringLiteralsSchema(allowedActions),
       envelope: Type.Optional(Type.Unknown()),
       mode: Type.Optional(
         Type.Union([Type.Literal("parallel"), Type.Literal("sequential")]),

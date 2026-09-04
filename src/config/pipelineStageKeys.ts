@@ -14,6 +14,8 @@ export const BODY_KEYS = new Set([
   "model",
   "payload_schema",
   "gate_kinds",
+  "clone_input_schema",
+  "clone_actions",
   "skill",
 ]);
 

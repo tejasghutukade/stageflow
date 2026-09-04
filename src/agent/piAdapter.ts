@@ -494,6 +494,22 @@ function buildUserPrompt(
     }
   }
 
+  if (input.cloneEmitContext !== undefined) {
+    const allowedActions =
+      input.cloneEmitContext.allowedActions ?? ["skip", "once", "fanout"];
+    const successorLines = input.cloneEmitContext.clonableSuccessors.map(
+      (successor) => {
+        const header = `- ${successor.successorId} (clone_cap: ${successor.cloneCap})`;
+        if (successor.cloneInputSchema === undefined) {
+          return header;
+        }
+        return `${header}\n  Assignment schema (clone_input_schema):\n${JSON.stringify(successor.cloneInputSchema, null, 2)}`;
+      },
+    );
+    emitHint += `\nClonable successors — emit clone_forks covering each of these ids exactly once:\n${successorLines.join("\n")}`;
+    emitHint += `\nAllowed clone actions: ${allowedActions.join(", ")}`;
+  }
+
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
   const skillBaseDir =

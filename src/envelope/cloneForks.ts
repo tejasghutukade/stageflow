@@ -1,6 +1,7 @@
 import { parseCloneForks } from "./check.js";
+import { assertCloneAssignmentPayload } from "./payloadSchema.js";
 import { EnvelopeError } from "../types/envelope.js";
-import type { CloneEmitContext, CloneForkItem } from "../types/forkChoice.js";
+import { CLONE_ACTIONS, type CloneEmitContext, type CloneForkItem } from "../types/forkChoice.js";
 
 function fieldPresent(item: CloneForkItem, key: "envelope" | "mode" | "clones"): boolean {
   return (item as Record<string, unknown>)[key] !== undefined;
@@ -44,6 +45,12 @@ export function assertCloneForks(
       (s) => s.successorId === item.successor_id,
     );
     const cloneCap = capEntry?.cloneCap;
+    const allowedActions = cloneEmitContext.allowedActions ?? [...CLONE_ACTIONS];
+    if (!allowedActions.includes(item.action)) {
+      throw new EnvelopeError(
+        `clone_forks action "${item.action}" is not allowed for ${item.successor_id} (allowed: ${allowedActions.join(", ")})`,
+      );
+    }
 
     if (item.action === "skip") {
       if (
@@ -66,6 +73,13 @@ export function assertCloneForks(
           `clone_forks once for ${item.successor_id} must not include mode or clones`,
         );
       }
+      if (capEntry?.cloneInputSchema !== undefined) {
+        assertCloneAssignmentPayload(
+          item.envelope,
+          capEntry.cloneInputSchema,
+          item.successor_id,
+        );
+      }
     } else if (item.action === "fanout") {
       if (fieldPresent(item, "envelope")) {
         throw new EnvelopeError(
@@ -81,6 +95,15 @@ export function assertCloneForks(
         throw new EnvelopeError(
           `clone_forks fanout for ${item.successor_id} must have between 2 and ${cloneCap} clones`,
         );
+      }
+      if (capEntry?.cloneInputSchema !== undefined) {
+        for (const clone of item.clones) {
+          assertCloneAssignmentPayload(
+            clone.envelope,
+            capEntry.cloneInputSchema,
+            item.successor_id,
+          );
+        }
       }
     }
   }

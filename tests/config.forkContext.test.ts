@@ -165,4 +165,42 @@ describe("resolveCloneEmitContext", () => {
       clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
     });
   });
+
+  it("attaches successor assignment schema and parent allowed actions", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        { id: "plan", needs: null, ancestors: [], stageIndex: 0 },
+        {
+          id: "oss-investigate-area",
+          needs: "plan",
+          ancestors: ["plan"],
+          stageIndex: 1,
+          clonable: true,
+          clone_cap: 4,
+        },
+      ],
+      roots: ["plan"],
+      childrenOf: { plan: ["oss-investigate-area"], "oss-investigate-area": [] },
+    };
+    const schema = {
+      type: "object",
+      properties: { area_id: { type: "string" } },
+      required: ["area_id"],
+    };
+    expect(
+      resolveCloneEmitContext(dag, "plan", {
+        allowedActions: ["once", "fanout"],
+        successorCloneInputSchemas: { "oss-investigate-area": schema },
+      }),
+    ).toEqual({
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 4,
+          cloneInputSchema: schema,
+        },
+      ],
+      allowedActions: ["once", "fanout"],
+    });
+  });
 });

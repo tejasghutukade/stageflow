@@ -230,4 +230,159 @@ describe("assertCloneForks", () => {
       assertCloneForks({ status: "failure" }, cloneCtx()),
     ).not.toThrow();
   });
+
+  it("AE3: invented successor id is rejected when the only legal id is named", () => {
+    const ctx = {
+      clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
+    } as CloneEmitContext;
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [{ successor_id: "invented-successor", action: "skip" }],
+        },
+        ctx,
+      ),
+    ).toThrow(/extra successor_id: invented-successor/);
+  });
+
+  it("AE4: fanout assignment missing objective and paths is rejected", () => {
+    const ctx = {
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 5,
+          cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
+        },
+      ],
+    } as CloneEmitContext;
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "oss-investigate-area",
+              action: "fanout",
+              mode: "parallel",
+              clones: [
+                { envelope: assignmentEnvelope({ strategy: "search broadly" }) },
+                { envelope: assignmentEnvelope({ strategy: "narrow the files" }) },
+              ],
+            },
+          ],
+        },
+        ctx,
+      ),
+    ).toThrow(/clone_input_schema|objective|paths/);
+  });
+
+  it("AE4: assignment without child output fields is accepted", () => {
+    const ctx = {
+      clonableSuccessors: [
+        {
+          successorId: "oss-investigate-area",
+          cloneCap: 5,
+          cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
+        },
+      ],
+    } as CloneEmitContext;
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "oss-investigate-area",
+              action: "fanout",
+              mode: "parallel",
+              clones: [
+                { envelope: assignmentEnvelope(LEGAL_AREA_ASSIGNMENT) },
+                {
+                  envelope: assignmentEnvelope({
+                    ...LEGAL_AREA_ASSIGNMENT,
+                    area_id: "auth",
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+        ctx,
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects skip when parent allowedActions omit it", () => {
+    const ctx = {
+      clonableSuccessors: [{ successorId: "oss-investigate-area", cloneCap: 5 }],
+      allowedActions: ["once", "fanout"],
+    } as CloneEmitContext;
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [{ successor_id: "oss-investigate-area", action: "skip" }],
+        },
+        ctx,
+      ),
+    ).toThrow(/skip/);
+  });
+
+  it("omitted clone_input_schema still accepts any well-shaped clone envelope", () => {
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [
+            {
+              successor_id: "author-diagrams",
+              action: "once",
+              envelope: assignmentEnvelope({ strategy: "anything" }),
+            },
+          ],
+        },
+        cloneCtx(),
+      ),
+    ).not.toThrow();
+  });
+
+  it("omitted allowedActions still accepts skip", () => {
+    expect(() =>
+      assertCloneForks(
+        {
+          status: "success",
+          clone_forks: [{ successor_id: "author-diagrams", action: "skip" }],
+        },
+        cloneCtx(),
+      ),
+    ).not.toThrow();
+  });
 });
+
+const AREA_ASSIGNMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    area_id: { type: "string" },
+    objective: { type: "string" },
+    paths: { type: "array", items: { type: "string" } },
+    questions: { type: "array", items: { type: "string" } },
+    constraints: { type: "array", items: { type: "string" } },
+  },
+  required: ["area_id", "objective", "paths"],
+};
+
+const LEGAL_AREA_ASSIGNMENT = {
+  area_id: "routing",
+  objective: "Find the routing bug",
+  paths: ["src/routing.ts"],
+};
+
+function assignmentEnvelope(payload: Record<string, unknown>) {
+  return {
+    status: "success" as const,
+    summary: "assign",
+    artifacts: [] as string[],
+    payload,
+  };
+}

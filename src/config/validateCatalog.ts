@@ -29,6 +29,8 @@ export type ValidationFindingCode =
   | "pipeline.include_duplicate_stage"
   | "stage.invalid_shape"
   | "stage.invalid_payload_schema"
+  | "stage.invalid_clone_input_schema"
+  | "stage.invalid_clone_actions"
   | "stage.invalid_gate_kinds"
   | "stage.invalid_skill"
   | "stage.load_error"

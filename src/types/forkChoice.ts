@@ -10,6 +10,10 @@ export type ForkEmitContext = {
   forkShape: ForkChoiceShape | null;
 };
 
+export const CLONE_ACTIONS = ["skip", "once", "fanout"] as const;
+
+export type CloneAction = (typeof CLONE_ACTIONS)[number];
+
 export type CloneForkItem =
   | { successor_id: string; action: "skip" }
   | { successor_id: string; action: "once"; envelope: StageEnvelope }
@@ -20,6 +24,13 @@ export type CloneForkItem =
       clones: Array<{ envelope: StageEnvelope }>;
     };
 
+export type CloneSuccessorEmit = {
+  successorId: string;
+  cloneCap: number;
+  cloneInputSchema?: unknown;
+};
+
 export type CloneEmitContext = {
-  clonableSuccessors: Array<{ successorId: string; cloneCap: number }>;
+  clonableSuccessors: CloneSuccessorEmit[];
+  allowedActions?: CloneAction[];
 };

@@ -119,6 +119,45 @@ describe("load seam outcomes", () => {
     expect(outcome.issues[0]?.code).toBe("stage.invalid_gate_kinds");
   });
 
+  it("assigns stage.invalid_clone_input_schema for compile failures", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-clone-schema-"));
+    const stagePath = path.join(root, "bad-clone-schema.yaml");
+    await writeFile(
+      stagePath,
+      [
+        "id: bad-clone-schema",
+        "system_prompt: test",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_input_schema:",
+        "  type: not-a-valid-type",
+        "",
+      ].join("\n"),
+    );
+    const outcome = await loadStageOutcome(stagePath);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_clone_input_schema");
+  });
+
+  it("assigns stage.invalid_clone_actions for empty or unknown actions", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-clone-actions-"));
+    const emptyPath = path.join(root, "empty-actions.yaml");
+    await writeFile(
+      emptyPath,
+      [
+        "id: empty-actions",
+        "system_prompt: test",
+        "model: anthropic/claude-sonnet-4-5",
+        "clone_actions: []",
+        "",
+      ].join("\n"),
+    );
+    const empty = await loadStageOutcome(emptyPath);
+    expect(empty.ok).toBe(false);
+    if (empty.ok) return;
+    expect(empty.issues[0]?.code).toBe("stage.invalid_clone_actions");
+  });
+
   it("loadPipeline throws for missing uses target", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-load-throw-"));
     const pipelinePath = path.join(root, "broken.pipeline.yaml");

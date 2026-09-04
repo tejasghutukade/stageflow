@@ -1,3 +1,4 @@
+import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import {
   STAGE_GATE_KINDS,
   type StageConfig,
@@ -9,6 +10,49 @@ import { readYamlObject } from "./readYamlObject.js";
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
+}
+
+function isCloneAction(value: string): value is CloneAction {
+  return (CLONE_ACTIONS as readonly string[]).includes(value);
+}
+
+function parseCloneActions(
+  raw: unknown,
+  label: string,
+): LoadOutcome<CloneAction[] | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: clone_actions must be a non-empty array of strings`,
+        category: "stage",
+      },
+    ]);
+  }
+  if (raw.length === 0) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: clone_actions must not be empty`,
+        category: "stage",
+      },
+    ]);
+  }
+  const actions: CloneAction[] = [];
+  for (const item of raw) {
+    if (!isCloneAction(item)) {
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_actions",
+          message: `Invalid stage ${label}: unsupported clone_actions value "${item}" (allowed: ${CLONE_ACTIONS.join(", ")})`,
+          category: "stage",
+        },
+      ]);
+    }
+    actions.push(item);
+  }
+  return loadSuccess(actions);
 }
 
 function parseGateKinds(
@@ -95,6 +139,49 @@ function parseStageFields(
       ]);
     }
     stage.payload_schema = raw.payload_schema;
+  }
+
+  if (raw.clone_input_schema !== undefined) {
+    if (
+      raw.clone_input_schema === null ||
+      typeof raw.clone_input_schema !== "object" ||
+      Array.isArray(raw.clone_input_schema)
+    ) {
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_input_schema",
+          message: `Invalid stage ${label}: clone_input_schema must be an object`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    try {
+      compilePayloadSchema(raw.clone_input_schema);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return loadFailure([
+        {
+          code: "stage.invalid_clone_input_schema",
+          message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
+          category: "stage",
+          stageId: entryId,
+        },
+      ]);
+    }
+    stage.clone_input_schema = raw.clone_input_schema;
+  }
+
+  const cloneActionsOutcome = parseCloneActions(raw.clone_actions, label);
+  if (!cloneActionsOutcome.ok) {
+    const issues: LoadIssue[] = cloneActionsOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (cloneActionsOutcome.value !== undefined) {
+    stage.clone_actions = cloneActionsOutcome.value;
   }
 
   const gateKindsOutcome = parseGateKinds(raw.gate_kinds, label);
