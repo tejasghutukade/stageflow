@@ -5,6 +5,7 @@ import {
 } from "../types/stage.js";
 import { compilePayloadSchema } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 
 function isGateKind(value: string): value is StageGateKind {
@@ -106,6 +107,18 @@ function parseStageFields(
     return loadFailure(issues);
   }
   if (gateKindsOutcome.value) stage.gate_kinds = gateKindsOutcome.value;
+
+  const preEmitChecksOutcome = parsePreEmitChecks(raw.pre_emit_checks, label);
+  if (!preEmitChecksOutcome.ok) {
+    const issues: LoadIssue[] = preEmitChecksOutcome.issues.map((issue) => ({
+      ...issue,
+      stageId: entryId,
+    }));
+    return loadFailure(issues);
+  }
+  if (preEmitChecksOutcome.value !== undefined) {
+    stage.pre_emit_checks = preEmitChecksOutcome.value;
+  }
 
   if (raw.skill !== undefined) {
     if (typeof raw.skill !== "string" || raw.skill.trim() === "") {

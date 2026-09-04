@@ -7,12 +7,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  appendOperatorAnswer,
+  appendOperatorPrompt,
+} from "../src/hitl/qaTrail.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import {
   buildCompletedEnvelopesFromRun,
   resolvePriorEnvelope,
 } from "../src/runtime/envelopeRouting.js";
+import { attemptContext } from "../src/runtime/stageAttemptContext.js";
 import { openStageAttempt } from "../src/runtime/stageAttemptBootstrap.js";
+import type { AskOperatorAnswer, AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { ResolvedPipelineDag } from "../src/types/pipeline.js";
 import type { StageConfig } from "../src/types/stage.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -313,5 +319,60 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.resumeToken).toMatch(
       /stages\/work~2\/attempts\/1\/pi-session\.jsonl$/,
     );
+  });
+
+  it("passes a live attempt-scoped QA trail reader into openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-trail-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.ensureStageWorkspace(run.runId, "clarify");
+    const prompt: AskOperatorPrompt = {
+      kind: "artifact_backed",
+      id: "plan-1",
+      message: "Review the plan",
+      artifacts: ["plan.md"],
+    };
+    const accept: AskOperatorAnswer = {
+      promptId: "plan-1",
+      kind: "artifact_backed",
+      decision: "accept",
+    };
+    await appendOperatorPrompt(store, run.runId, "clarify", prompt, {
+      attempt: 1,
+    });
+    await appendOperatorAnswer(store, run.runId, "clarify", accept, {
+      attempt: 1,
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      attemptCtx: attemptContext(2),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    const reader = opened[0]?.readQaTrail;
+    expect(typeof reader).toBe("function");
+    // Attempt-scoped: attempt 1's prompt/answer must not leak into attempt 2.
+    expect(await reader?.()).toEqual([]);
+
+    await appendOperatorPrompt(store, run.runId, "clarify", prompt, {
+      attempt: 2,
+    });
+    await appendOperatorAnswer(store, run.runId, "clarify", accept, {
+      attempt: 2,
+    });
+    expect(await reader?.()).toEqual([{ prompt, answer: accept }]);
   });
 });

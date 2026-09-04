@@ -5,6 +5,7 @@ import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
+import type { QaExchange } from "../hitl/qaTrail.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
@@ -39,6 +40,8 @@ export type StageRunInput = {
   completionContract?: CompletionContract;
   /** Compact evidence from the failed verification that triggered this repair. */
   repairContext?: StageRepairContext;
+  /** Live attempt-scoped QA trail; read at emit execute time, not bootstrap time. */
+  readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
 };
 
 export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {

@@ -28,6 +28,33 @@ Canonical exercise stage: [`tests/fixtures/stages/hitl-four-kinds.yaml`](../test
 
 Plan review with artifact gate: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
+## Pre-emit checks
+
+`gate_kinds` alone documents intent — it does not stop a stage from calling
+`emit_stage_envelope` with `status: "success"` before the operator has actually
+answered. To make a gate load-bearing *this attempt*, declare it in `pre_emit_checks`
+(`src/types/preEmitCheck.ts`) too:
+
+```yaml
+id: plan-review
+gate_kinds: [artifact_backed]
+pre_emit_checks:
+  - id: plan-approved
+    type: gate
+    kind: artifact_backed
+system_prompt: |
+  Write plan.md, ask_operator artifact_backed, emit on accept.
+model: anthropic/claude-sonnet-4-5
+```
+
+With this declared, a success emit is rejected (`isError`, no `terminate` — the agent
+retries in the same turn) unless the *last* `artifact_backed` exchange this attempt is
+`decision: "accept"`. `pre_emit_checks` also has an `artifact_declared` check type for
+requiring a named artifact basename in `envelope.artifacts`; see
+[Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks) for the full check-type
+table and how this differs from the post-hoc `completion` contract in
+[Verified Stage Execution](verified-stage-execution.md).
+
 ## `ask_operator` contract
 
 Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt becomes `promptId` on the answer.
@@ -122,7 +149,7 @@ When a coding-agent host is driving the run (the `stageflow-run` skill), a mappa
 
 ## See also
 
-- [Envelopes](envelopes.md) — completing a stage after gates
+- [Envelopes](envelopes.md) — completing a stage after gates; [pre_emit_checks](envelopes.md#pre-emit-checks) for making a gate load-bearing
 - [CI / headless](ci.md) — `--skip-gates` in automation
-- [YAML catalog](yaml-catalog.md) — `gate_kinds` field
+- [YAML catalog](yaml-catalog.md) — `gate_kinds` and `pre_emit_checks` fields
 - [`tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml`](../tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml)

@@ -940,6 +940,10 @@ async function prepareStageSessionWiring(
     input.stage.payload_schema,
     input.forkEmitContext,
     input.cloneEmitContext,
+    {
+      checks: input.stage.pre_emit_checks,
+      readQaTrail: input.readQaTrail,
+    },
   );
   const emitTool = defineTool(emitDef);
 

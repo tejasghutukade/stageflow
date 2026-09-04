@@ -1,3 +1,5 @@
+import type { PreEmitCheck } from "./preEmitCheck.js";
+
 export const STAGE_GATE_KINDS = [
   "free_text",
   "confirm",
@@ -15,5 +17,7 @@ export type StageConfig = {
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */
   gate_kinds?: StageGateKind[];
+  /** In-session checks emit must satisfy this attempt before success is accepted. */
+  pre_emit_checks?: PreEmitCheck[];
   skill?: string;
 };

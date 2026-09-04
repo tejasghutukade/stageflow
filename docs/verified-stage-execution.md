@@ -87,6 +87,14 @@ payload_schema:
 `gate.kind` is one of `free_text`, `confirm`, `multi_question`, or
 `artifact_backed`.
 
+This `completion` contract's `gate`/`artifact` checks run **after** a candidate
+envelope has already been captured (via repair/manual recovery) and ask a looser,
+retrospective question ("was this ever satisfied over the run so far" / real on-disk
+evidence). A stage that instead wants to block a self-approved success emit **within
+the same attempt, before capture** should declare the stage-body `pre_emit_checks`
+field instead — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The
+two are independent and may coexist on the same stage as defense in depth.
+
 ## Contract rules
 
 - `completion.mode` is currently only `all`: every listed check must pass.

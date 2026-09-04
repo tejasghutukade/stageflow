@@ -30,6 +30,7 @@ export type ValidationFindingCode =
   | "stage.invalid_shape"
   | "stage.invalid_payload_schema"
   | "stage.invalid_gate_kinds"
+  | "stage.invalid_pre_emit_checks"
   | "stage.invalid_skill"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
