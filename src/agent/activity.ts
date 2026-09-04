@@ -119,7 +119,11 @@ export type StageLifecycleEvent =
   | { event: "resumed" }
   | { event: "succeeded" }
   | { event: "failed"; reason: string }
-  | { event: "skipped" };
+  | { event: "skipped" }
+  /** Operator explicitly authorized a new attempt after verified failure. */
+  | { event: "manual_recovery_requested"; guidance?: string }
+  /** Operator chose to leave the verified failure terminal. */
+  | { event: "manual_recovery_stopped" };
 
 export type StageLogLine = StageActivityEvent | StageLifecycleEvent;
 

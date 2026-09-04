@@ -61,6 +61,14 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(second.attempt).toBe(2);
     expect(third.attempt).toBe(3);
     expect(first.status).toBe("pending");
+    expect(first.verification_outcome).toBe("not_run");
+
+    await store.updateStageExecution(run.runId, "build", 1, {
+      verification_outcome: "failed",
+    });
+    await expect(
+      store.getStageExecution(run.runId, "build", 1),
+    ).resolves.toMatchObject({ verification_outcome: "failed" });
   });
 
   it("AE1: lists two attempts with distinct statuses", async () => {
@@ -145,6 +153,91 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(attempt1Events.some((e) => e.event === "succeeded")).toBe(false);
     expect(attempt2Events.some((e) => e.event === "succeeded")).toBe(true);
     expect(attempt2Events.some((e) => e.event === "failed")).toBe(false);
+  });
+
+  it("persists verification evidence independently for each attempt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-verification-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\\ngoal: g\\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "running",
+      started_at: "2026-09-03T10:00:00.000Z",
+    });
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "failed",
+      finished_at: "2026-09-03T10:00:02.000Z",
+      evidence: { exit_code: 1, stderr: "expected true to be false" },
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.upsertVerificationCheckResult(run.runId, "build", {
+      check_id: "unit-tests",
+      check_type: "command",
+      status: "passed",
+      started_at: "2026-09-03T10:01:00.000Z",
+      finished_at: "2026-09-03T10:01:01.000Z",
+      evidence: { exit_code: 0, stdout: "all tests passed" },
+    }, { attempt: 2 });
+
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build", 1),
+    ).resolves.toEqual([
+      {
+        run_id: run.runId,
+        stage_id: "build",
+        attempt: 1,
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "failed",
+        started_at: "2026-09-03T10:00:00.000Z",
+        finished_at: "2026-09-03T10:00:02.000Z",
+        evidence: { exit_code: 1, stderr: "expected true to be false" },
+      },
+    ]);
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build", 2),
+    ).resolves.toEqual([
+      {
+        run_id: run.runId,
+        stage_id: "build",
+        attempt: 2,
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "passed",
+        started_at: "2026-09-03T10:01:00.000Z",
+        finished_at: "2026-09-03T10:01:01.000Z",
+        evidence: { exit_code: 0, stdout: "all tests passed" },
+      },
+    ]);
+    await expect(
+      store.listVerificationCheckResults(run.runId, "build"),
+    ).resolves.toHaveLength(2);
+  });
+
+  it("rejects verification evidence for an execution that does not exist", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-verification-missing-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\\ngoal: g\\n",
+    });
+
+    await expect(
+      store.upsertVerificationCheckResult(run.runId, "build", {
+        check_id: "unit-tests",
+        check_type: "command",
+        status: "passed",
+      }),
+    ).rejects.toThrow(/Stage execution not found/);
   });
 
   it("attempt workspace dirs exist after ensureAttemptWorkspace", async () => {

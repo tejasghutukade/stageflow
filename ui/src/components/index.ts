@@ -69,3 +69,5 @@ export { TranscriptStream } from "./TranscriptStream";
 export type { TranscriptStreamProps } from "./TranscriptStream";
 
 export { TranscriptTurns } from "./TranscriptTurns";
+
+export { VerificationHistory } from "./VerificationHistory";

@@ -9,6 +9,7 @@ import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 import { projectWaitingGates } from "./waitingGates.js";
+import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 
 export function registerControlTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store } = deps;
@@ -95,6 +96,81 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           true,
         );
       }
+    },
+  );
+
+  server.registerTool(
+    "get_stage_verification",
+    {
+      description:
+        "Read every execution attempt for a stage, including durable completion-check results and their evidence. Use this to understand an automatic repair or a failed verification.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+      }),
+    },
+    async ({ runId, stageId }) => {
+      try {
+        return textResult(
+          await readStageVerificationHistory(store, runId, stageId),
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const notFound = /not found|no such/i.test(message);
+        return textResult(
+          { error: message, status: notFound ? 404 : 500 },
+          true,
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "recover_manual_stage",
+    {
+      description:
+        "Explicitly approve one fresh attempt for a manual-recovery stage after a completion verification failure. Optional guidance is recorded and supplied to the agent with the failed-check evidence.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+        guidance: z.string().max(4_000).optional(),
+      }),
+    },
+    async ({ runId, stageId, guidance }) => {
+      const result = await manager.recoverManualStage(runId, stageId, guidance);
+      if (!result.ok) {
+        return textResult(
+          { ...mapRetryStageFailure(result), status: result.status },
+          true,
+        );
+      }
+      return textResult({
+        runId: result.runId,
+        stageId: result.stageId,
+        attemptIndex: result.attemptIndex,
+      });
+    },
+  );
+
+  server.registerTool(
+    "stop_manual_recovery",
+    {
+      description:
+        "Record the operator's decision to leave a manual-recovery stage failed. This is terminal for that stage; start a fresh run to try again later.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+      }),
+    },
+    async ({ runId, stageId }) => {
+      const result = await manager.stopManualRecovery(runId, stageId);
+      if (!result.ok) {
+        return textResult(
+          { error: result.reason, status: result.status },
+          true,
+        );
+      }
+      return textResult(result);
     },
   );
 

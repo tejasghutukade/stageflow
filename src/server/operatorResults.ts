@@ -9,6 +9,7 @@ export function inferRetryStageErrorCode(reason: string): string | undefined {
   if (/already has active orchestration/i.test(reason)) return "run_not_retryable";
   if (/run is not failed/i.test(reason)) return "run_not_retryable";
   if (/stage is not failed/i.test(reason)) return "stage_not_failed";
+  if (/manual recovery/i.test(reason)) return "manual_recovery_required";
   return undefined;
 }
 

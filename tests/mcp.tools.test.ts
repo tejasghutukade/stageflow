@@ -912,6 +912,21 @@ describe("MCP Tier 1 operator parity", () => {
       expect(detail.isError).toBe(false);
       expect(detail.payload.stages[0].events).toBeUndefined();
 
+      await store.upsertVerificationCheckResult(runId, "clarify", {
+        check_id: "handoff",
+        check_type: "payload_schema",
+        status: "passed",
+        evidence: { kind: "payload_schema", schema_declared: true },
+      });
+      const verification = await mcpCall(base, "get_stage_verification", {
+        runId,
+        stageId: "clarify",
+      });
+      expect(verification.isError).toBe(false);
+      expect(verification.payload.attempts[0].checks).toEqual([
+        expect.objectContaining({ check_id: "handoff", status: "passed" }),
+      ]);
+
       const events = await mcpCall(base, "list_stage_events", {
         runId,
         stageId: "clarify",

@@ -57,11 +57,56 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`.
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`.
 
 **Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`. The JSON Schema subset for `payload_schema` is in [Envelopes](envelopes.md#payload-schema).
 
 `uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
+
+`completion` and `recovery` are pipeline-stage execution policy. They may sit beside
+`uses:` because a reusable stage can require different proof or recovery behavior in
+different pipelines.
+
+### Completion and recovery
+
+`completion` declares the checks Stageflow runs after an agent emits a successful
+envelope. It is optional; without it, normal envelope validation remains the stage's
+success condition.
+
+```yaml
+completion:
+  mode: all
+  checks:
+    - id: tests
+      type: command
+      run: npm test
+```
+
+| Check type | Required fields | Optional fields |
+| --- | --- | --- |
+| `command` | `id`, `run` | `cwd`, `timeout_ms` |
+| `artifact` | `id`, `path` | `nonempty` |
+| `checklist` | `id`, `items` | — |
+| `payload_schema` | `id` | — |
+| `gate` | `id`, `kind` | — |
+| `checkout_changes` | `id` | `path_fields` |
+
+`mode` is currently `all`, so every check must pass. Check IDs are unique within
+the stage. `artifact.path` is relative to the stage attempt's artifact directory.
+`gate.kind` must also appear in the reusable stage's `gate_kinds`. Each
+`checkout_changes.path_fields` entry must name a required array-of-strings field in
+the reusable stage's `payload_schema`.
+
+`recovery` is optional and applies only after a completion verification failure:
+
+| Mode | Required fields | Behavior |
+| --- | --- | --- |
+| `repair` | `max_attempts`, `retry_safety: idempotent`, `include_failed_checks` | Stageflow starts fresh attempts until the limit, carrying failed-check evidence when configured. |
+| `manual` | `retry_safety` | An operator explicitly starts a new attempt with optional guidance or stops recovery for that run. |
+
+Use `manual` for side-effecting work such as publishing or payments. See
+[Verified Stage Execution](verified-stage-execution.md) for evidence semantics,
+recovery behavior, and examples.
 
 **`uses:` paths are relative to the pipeline file's directory.**
 

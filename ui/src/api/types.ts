@@ -158,6 +158,52 @@ export type StageSnapshot = {
   attempt_count: number;
 };
 
+export type VerificationCheckStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "skipped";
+
+export type CompletionCheckType =
+  | "command"
+  | "artifact"
+  | "checklist"
+  | "payload_schema"
+  | "gate"
+  | "checkout_changes";
+
+export type VerificationCheckResult = {
+  run_id: string;
+  stage_id: string;
+  attempt: number;
+  check_id: string;
+  check_type: CompletionCheckType;
+  status: VerificationCheckStatus;
+  started_at?: string;
+  finished_at?: string;
+  evidence?: Record<string, unknown>;
+};
+
+export type StageVerificationAttempt = {
+  attempt: number;
+  status: StageSnapshot["status"];
+  verification_outcome: "not_run" | "passed" | "failed" | "error";
+  started_at?: string;
+  finished_at?: string;
+  checks: VerificationCheckResult[];
+};
+
+export type StageVerificationHistory = {
+  run_id: string;
+  stage_id: string;
+  attempts: StageVerificationAttempt[];
+  manual_recovery?: {
+    status: "available" | "stopped";
+    failed_attempt: number;
+  };
+};
+
 export type RunDetail = Omit<RunSummary, "stages"> & {
   task_yaml: string;
   stages: StageSnapshot[];

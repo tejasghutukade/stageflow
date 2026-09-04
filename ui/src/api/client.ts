@@ -15,6 +15,7 @@ import type {
   RetryStageResult,
   RunDetail,
   RunSummary,
+  StageVerificationHistory,
   SettingsSnapshot,
   SkillDiagnostic,
   SkillListing,
@@ -47,6 +48,15 @@ export function fetchRuns(): Promise<{ runs: RunSummary[] }> {
 
 export function fetchRun(runId: string): Promise<RunDetail> {
   return api(`/api/runs/${encodeURIComponent(runId)}`);
+}
+
+export function fetchStageVerification(
+  runId: string,
+  stageId: string,
+): Promise<StageVerificationHistory> {
+  return api(
+    `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/verification`,
+  );
 }
 
 export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
@@ -409,6 +419,30 @@ export function retryStage(
   return api(
     `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
     { method: "POST" },
+  );
+}
+
+export function recoverManualStage(
+  runId: string,
+  stageId: string,
+  guidance?: string,
+): Promise<{ runId: string; stageId: string; attemptIndex: number }> {
+  return api(
+    `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/recovery`,
+    {
+      method: "POST",
+      body: JSON.stringify(guidance?.trim() ? { guidance: guidance.trim() } : {}),
+    },
+  );
+}
+
+export function stopManualRecovery(
+  runId: string,
+  stageId: string,
+): Promise<{ ok: true; runId: string; stageId: string }> {
+  return api(
+    `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/recovery/stop`,
+    { method: "POST", body: JSON.stringify({}) },
   );
 }
 

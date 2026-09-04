@@ -1,4 +1,13 @@
-export const WIRING_KEYS = new Set(["id", "needs", "fork", "uses", "clonable", "clone_cap"]);
+export const WIRING_KEYS = new Set([
+  "id",
+  "needs",
+  "fork",
+  "uses",
+  "clonable",
+  "clone_cap",
+  "completion",
+  "recovery",
+]);
 
 export const BODY_KEYS = new Set([
   "system_prompt",

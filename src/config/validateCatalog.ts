@@ -22,6 +22,8 @@ export type ValidationFindingCode =
   | "pipeline.stage_uses_inline_conflict"
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
+  | "pipeline.invalid_completion"
+  | "pipeline.invalid_recovery"
   | "pipeline.include_cycle"
   | "pipeline.include_invalid"
   | "pipeline.include_duplicate_stage"

@@ -18,6 +18,7 @@ import { browseCatalog } from "../config/browseCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import { readRunArtifact } from "../mcp/readArtifact.js";
+import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
@@ -139,6 +140,8 @@ function isMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/runs\/[^/]+\/rerun$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
+    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
+    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
@@ -291,6 +294,22 @@ export async function startUiServer(
           return true;
         }
 
+        const verificationMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/verification$/,
+        );
+        if (method === "GET" && verificationMatch) {
+          const runId = decodeURIComponent(verificationMatch[1] ?? "");
+          const stageId = decodeURIComponent(verificationMatch[2] ?? "");
+          try {
+            json(res, 200, await readStageVerificationHistory(store, runId, stageId));
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            const notFound = /not found|no such/i.test(message);
+            json(res, notFound ? 404 : 500, { error: message });
+          }
+          return true;
+        }
+
         if (method === "GET" && pathname.startsWith("/api/runs/")) {
           const rest = pathname.slice("/api/runs/".length);
           if (rest && !rest.includes("/")) {
@@ -390,6 +409,56 @@ export async function startUiServer(
             stageId: result.stageId,
             attemptIndex: result.attemptIndex,
           });
+          return true;
+        }
+
+        const recoverMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/recovery$/,
+        );
+        if (method === "POST" && recoverMatch) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const guidance =
+            body !== null && typeof body === "object" && !Array.isArray(body)
+              ? (body as { guidance?: unknown }).guidance
+              : undefined;
+          if (guidance !== undefined && typeof guidance !== "string") {
+            json(res, 400, { error: "guidance must be a string" });
+            return true;
+          }
+          const runId = decodeURIComponent(recoverMatch[1] ?? "");
+          const stageId = decodeURIComponent(recoverMatch[2] ?? "");
+          const result = await manager.recoverManualStage(runId, stageId, guidance);
+          if (!result.ok) {
+            json(res, result.status ?? 500, mapRetryStageFailure(result));
+            return true;
+          }
+          json(res, 202, {
+            runId: result.runId,
+            stageId: result.stageId,
+            attemptIndex: result.attemptIndex,
+          });
+          return true;
+        }
+
+        const stopRecoveryMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/recovery\/stop$/,
+        );
+        if (method === "POST" && stopRecoveryMatch) {
+          await readJsonBody(req);
+          const runId = decodeURIComponent(stopRecoveryMatch[1] ?? "");
+          const stageId = decodeURIComponent(stopRecoveryMatch[2] ?? "");
+          const result = await manager.stopManualRecovery(runId, stageId);
+          if (!result.ok) {
+            json(res, result.status ?? 500, { error: result.reason });
+            return true;
+          }
+          json(res, 202, result);
           return true;
         }
 

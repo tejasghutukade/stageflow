@@ -7,6 +7,7 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { startUiServer } from "../src/server/http.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
@@ -26,6 +27,107 @@ describe("HTTP stage id capture", () => {
     );
     expect(match).not.toBeNull();
     expect(decodeURIComponent(match?.[2] ?? "")).toBe(stageId);
+  });
+});
+
+describe("HTTP verification history", () => {
+  it("returns attempt-scoped completion-check evidence", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-verification-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: task\ngoal: verify\n",
+      pipelineDag: linearCompatDagSnapshot(["verify"]),
+    });
+    await store.createStageExecution(created.runId, "verify");
+    await store.appendStageEvent(created.runId, "verify", { event: "started" });
+    await store.upsertVerificationCheckResult(created.runId, "verify", {
+      check_id: "tests",
+      check_type: "command",
+      status: "failed",
+      evidence: { kind: "command", exit_code: 1 },
+    });
+
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+    try {
+      const result = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/verification`,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          run_id: created.runId,
+          stage_id: "verify",
+          attempts: [
+            expect.objectContaining({
+              checks: [
+                expect.objectContaining({
+                  check_id: "tests",
+                  evidence: { kind: "command", exit_code: 1 },
+                }),
+              ],
+            }),
+          ],
+        }),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("records an operator stop for a manual recovery stage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-manual-stop-"));
+    const store = createRunStore({ rootDir: root });
+    const dag = linearCompatDagSnapshot(["verify"]);
+    dag.nodes[0]!.completion = {
+      mode: "all",
+      checks: [{ id: "tests", type: "command", run: "npm test" }],
+    };
+    dag.nodes[0]!.recovery = {
+      mode: "manual",
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    };
+    const created = await store.createRun({
+      pipelineId: "verified",
+      taskYaml: "id: task\ngoal: verify\n",
+      pipelineDag: dag,
+    });
+    await store.createStageExecution(created.runId, "verify");
+    await store.appendStageEvent(created.runId, "verify", { event: "started" });
+    await store.appendStageEvent(created.runId, "verify", {
+      event: "failed",
+      reason: "Completion verification failed: tests",
+    });
+    await store.updateStageExecution(created.runId, "verify", 1, {
+      status: "failed",
+      verification_outcome: "failed",
+    });
+    await store.updateRunStatus(created.runId, "failed");
+
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+    try {
+      const stopped = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/recovery/stop`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      expect(stopped.status).toBe(202);
+      expect(stopped.body).toEqual({ ok: true, runId: created.runId, stageId: "verify" });
+
+      const history = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/stages/verify/verification`,
+      );
+      expect(history.body.manual_recovery).toEqual({
+        status: "stopped",
+        failed_attempt: 1,
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });
 

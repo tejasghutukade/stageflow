@@ -51,6 +51,12 @@ import {
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import {
+  blocksGenericRetry,
+  manualRecoveryEligibility,
+  readManualRecoveryState,
+  type ManualRecoveryEligibility,
+} from "./manualRecoveryState.js";
 
 export type BusyCode = "busy_capacity" | "busy_checkout";
 
@@ -83,6 +89,10 @@ export type { DeliverAnswerResult };
 export type { RetryStageResult };
 
 export type AbandonStageResult =
+  | { ok: true; runId: string; stageId: string }
+  | { ok: false; reason: string; status?: number };
+
+export type StopManualRecoveryResult =
   | { ok: true; runId: string; stageId: string }
   | { ok: false; reason: string; status?: number };
 
@@ -589,6 +599,92 @@ export class RunManager {
     return this.retryStageInternal(runId, stageId, true);
   }
 
+  async recoverManualStage(
+    runId: string,
+    stageId: string,
+    guidance?: string,
+  ): Promise<RetryStageResult> {
+    return this.recoverManualStageInternal(runId, stageId, guidance, true);
+  }
+
+  async recoverManualStageUntilStop(
+    runId: string,
+    stageId: string,
+    guidance?: string,
+  ): Promise<
+    | { ok: true; pipeline: PipelineRunResult }
+    | Extract<RetryStageResult, { ok: false }>
+  > {
+    const retryKey = waitKey(runId, stageId);
+    const retried = await this.recoverManualStageInternal(
+      runId,
+      stageId,
+      guidance,
+      false,
+    );
+    if (!retried.ok) return retried;
+    try {
+      if (retried.done === undefined) {
+        return {
+          ok: false,
+          reason: `Recovery orchestration did not start for run ${runId} stage ${stageId}`,
+          status: 500,
+        };
+      }
+      return { ok: true, pipeline: await retried.done };
+    } finally {
+      this.retryInFlight.delete(retryKey);
+    }
+  }
+
+  private async recoverManualStageInternal(
+    runId: string,
+    stageId: string,
+    guidance: string | undefined,
+    awaitRoot: boolean,
+  ): Promise<RetryStageResult> {
+    if (guidance !== undefined && guidance.trim().length > 4_000) {
+      return {
+        ok: false,
+        reason: "Manual recovery guidance must be 4,000 characters or fewer",
+        status: 400,
+      };
+    }
+    const eligibility = await this.manualRecoveryEligibility(runId, stageId);
+    if (!eligibility.ok) return eligibility;
+    return this.retryStageInternal(runId, stageId, awaitRoot, {
+      manualRecovery: true,
+      beforeAttemptStart: async (attempt) => {
+        await this.options.store.appendStageEvent(
+          runId,
+          stageId,
+          {
+            event: "manual_recovery_requested",
+            ...(guidance !== undefined && guidance.trim() !== ""
+              ? { guidance: guidance.trim() }
+              : {}),
+          },
+          { attempt },
+        );
+      },
+    });
+  }
+
+  async stopManualRecovery(
+    runId: string,
+    stageId: string,
+  ): Promise<StopManualRecoveryResult> {
+    const eligibility = await this.manualRecoveryEligibility(runId, stageId);
+    if (!eligibility.ok) return eligibility;
+    await this.options.store.appendStageEvent(
+      runId,
+      stageId,
+      { event: "manual_recovery_stopped" },
+      { attempt: eligibility.failedAttempt },
+    );
+    return { ok: true, runId, stageId };
+  }
+
   async retryStageUntilStop(
     runId: string,
     stageId: string,
@@ -618,6 +714,10 @@ export class RunManager {
     runId: string,
     stageId: string,
     awaitRoot: boolean,
+    options?: {
+      manualRecovery?: boolean;
+      beforeAttemptStart?: (attempt: number) => Promise<void>;
+    },
   ): Promise<RetryStageResult> {
     const retryKey = waitKey(runId, stageId);
     if (this.retryInFlight.has(retryKey)) {
@@ -627,8 +727,19 @@ export class RunManager {
         status: 409,
       };
     }
-
     this.retryInFlight.add(retryKey);
+
+    if (
+      options?.manualRecovery !== true &&
+      await this.blocksGenericRetry(runId, stageId)
+    ) {
+      this.retryInFlight.delete(retryKey);
+      return {
+        ok: false,
+        reason: "Stage uses manual recovery; use the manual recovery action instead of retry",
+        status: 409,
+      };
+    }
 
     try {
       const orchestrationConflict =
@@ -648,6 +759,9 @@ export class RunManager {
         orchestrationConflict,
         tracking: this.retryTracking,
         awaitRoot,
+        ...(options?.beforeAttemptStart !== undefined
+          ? { beforeAttemptStart: options.beforeAttemptStart }
+          : {}),
       });
       if (!result.ok || awaitRoot !== false) {
         this.retryInFlight.delete(retryKey);
@@ -656,6 +770,44 @@ export class RunManager {
     } catch (err) {
       this.retryInFlight.delete(retryKey);
       throw err;
+    }
+  }
+
+  private async manualRecoveryEligibility(
+    runId: string,
+    stageId: string,
+  ): Promise<ManualRecoveryEligibility> {
+    try {
+      const eligibility = manualRecoveryEligibility(
+        await readManualRecoveryState(this.options.store, runId, stageId),
+      );
+      if (!eligibility.ok) {
+        return {
+          ...eligibility,
+          reason:
+            eligibility.reason === "Stage is not configured for manual recovery"
+              ? `${eligibility.reason}: ${stageId}`
+              : eligibility.reason === "Stage not found"
+                ? `${eligibility.reason}: ${stageId}`
+                : eligibility.reason,
+        };
+      }
+      return eligibility;
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+  }
+
+  private async blocksGenericRetry(
+    runId: string,
+    stageId: string,
+  ): Promise<boolean> {
+    try {
+      return blocksGenericRetry(
+        await readManualRecoveryState(this.options.store, runId, stageId),
+      );
+    } catch {
+      return false;
     }
   }
 

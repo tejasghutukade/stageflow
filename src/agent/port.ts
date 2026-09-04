@@ -1,4 +1,5 @@
 import type { StageEnvelope } from "../types/envelope.js";
+import type { CompletionContract } from "../types/completion.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
@@ -7,6 +8,17 @@ import type { StageRoots } from "../runtime/stageRoots.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
+
+export type StageRepairContext = {
+  prior_attempt: number;
+  /** Operator-authored instructions for an explicitly approved manual retry. */
+  operator_guidance?: string;
+  failed_checks?: Array<{
+    id: string;
+    type: string;
+    evidence_preview?: string;
+  }>;
+};
 
 export type StageRunInput = {
   roots: StageRoots;
@@ -23,6 +35,10 @@ export type StageRunInput = {
   skillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
+  /** Frozen pipeline-owned checks that must pass before Stageflow advances. */
+  completionContract?: CompletionContract;
+  /** Compact evidence from the failed verification that triggered this repair. */
+  repairContext?: StageRepairContext;
 };
 
 export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {

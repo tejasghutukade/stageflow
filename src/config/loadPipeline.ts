@@ -14,6 +14,7 @@ import {
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
+import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
@@ -138,6 +139,13 @@ async function loadPipelineFromPath(
     id: pipelineId,
     stages: stageIds,
   };
+
+  const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
+  for (const stage of stages) {
+    const completion = nodeById.get(stage.id)?.completion;
+    const completionOutcome = validateCompletionContractForStage(stage, completion);
+    if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
+  }
 
   return loadSuccess({
     pipeline,

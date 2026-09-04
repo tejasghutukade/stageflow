@@ -112,6 +112,12 @@ export function appendCloneInstances(
     ancestors: [...predNode.ancestors, predecessorId],
     stageIndex: 0,
     ...(catalogNode.fork !== undefined ? { fork: catalogNode.fork } : {}),
+    ...(catalogNode.completion !== undefined
+      ? { completion: catalogNode.completion }
+      : {}),
+    ...(catalogNode.recovery !== undefined
+      ? { recovery: catalogNode.recovery }
+      : {}),
   }));
 
   const remaining = new Map(

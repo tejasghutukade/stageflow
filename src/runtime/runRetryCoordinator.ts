@@ -105,6 +105,7 @@ export type RetryStageRequest = {
   orchestrationConflict: boolean;
   tracking: RetryTrackingPort;
   awaitRoot?: boolean;
+  beforeAttemptStart?: (attempt: number) => Promise<void>;
 };
 
 export function assertStageRetryEligible(
@@ -419,6 +420,7 @@ export class RunRetryCoordinator {
         }
       }
       const execution = await store.createStageExecution(runId, stageId);
+      await req.beforeAttemptStart?.(execution.attempt);
 
       const { meta, task, loaded, workspaceDir } = await loadRunContext(
         store,

@@ -25,6 +25,8 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Architecture](architecture.md) | Runtime boundaries, execution flow, persistence, recovery, and design tradeoffs |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
+| [Verified Stage Execution](verified-stage-execution.md) | Completion checks, evidence, and repair policy |
+| [Migrate the Real OSS Issue Pipeline](migrate-real-oss-issue-pipeline.md) | Replace the older OSS contract runtime with Verified Stage Execution |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 

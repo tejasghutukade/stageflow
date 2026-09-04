@@ -4,6 +4,7 @@ import type { StageEnvelope } from "../types/envelope.js";
 import type {
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
+import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed";
@@ -96,6 +97,7 @@ export type StageExecution = {
   stage_id: string;
   attempt: number;
   status: StageSnapshot["status"];
+  verification_outcome: VerificationOutcome;
   started_at?: string;
   finished_at?: string;
   envelope: StageEnvelope | null;
@@ -103,9 +105,50 @@ export type StageExecution = {
 
 export type StageExecutionPatch = {
   status?: StageSnapshot["status"];
+  verification_outcome?: VerificationOutcome;
   started_at?: string;
   finished_at?: string;
   envelope?: StageEnvelope | null;
+};
+
+/** The durable disposition of completion verification for one stage attempt. */
+export type VerificationOutcome = "not_run" | "passed" | "failed" | "error";
+
+/** The lifecycle state of one independently-run completion check. */
+export type VerificationCheckStatus =
+  | "pending"
+  | "running"
+  | "passed"
+  | "failed"
+  | "skipped";
+
+/**
+ * Durable evidence for one check in one stage execution attempt.
+ *
+ * `evidence` is intentionally JSON-shaped: each checker owns its evidence
+ * schema (for example, command output metadata or an artifact digest), while
+ * the run store preserves it without privileging a particular checker.
+ */
+export type VerificationCheckResult = {
+  run_id: string;
+  stage_id: string;
+  attempt: number;
+  check_id: string;
+  check_type: CompletionCheck["type"];
+  status: VerificationCheckStatus;
+  started_at?: string;
+  finished_at?: string;
+  evidence?: Record<string, unknown>;
+};
+
+/** Input for creating or updating a verification-check lifecycle record. */
+export type VerificationCheckResultPatch = {
+  check_id: string;
+  check_type: CompletionCheck["type"];
+  status: VerificationCheckStatus;
+  started_at?: string;
+  finished_at?: string;
+  evidence?: Record<string, unknown>;
 };
 
 export type CompactStage = {
@@ -205,6 +248,22 @@ export interface RunStore {
     attempt: number,
     patch: StageExecutionPatch,
   ): Promise<void>;
+  /** Create or update evidence for one check in a stage execution attempt. */
+  upsertVerificationCheckResult(
+    runId: string,
+    stageId: string,
+    result: VerificationCheckResultPatch,
+    options?: { attempt?: number },
+  ): Promise<void>;
+  /**
+   * List verification evidence in write order. Without an attempt, returns all
+   * attempts for the stage; callers may pass an attempt to inspect one retry.
+   */
+  listVerificationCheckResults(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<VerificationCheckResult[]>;
   writeEnvelope(
     runId: string,
     stageId: string,

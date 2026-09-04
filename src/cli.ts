@@ -40,6 +40,8 @@ const USAGE = `Usage:
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
+  sf runs verify --run <runId> --stage <stageId> [--json]
+  sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
   sf runs waiting [--run <runId>] [--json]
   sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]

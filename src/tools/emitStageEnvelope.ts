@@ -92,6 +92,14 @@ export function createEmitStageEnvelopeTool(
           ? Type.Array(Type.String())
           : Type.Optional(Type.Array(Type.String())),
       ...(cloneEmitContext !== undefined ? { clone_forks: cloneForksSchema } : {}),
+      checklist_attestations: Type.Optional(
+        Type.Array(
+          Type.Object({
+            check_id: Type.String({ minLength: 1 }),
+            items: Type.Array(Type.String()),
+          }),
+        ),
+      ),
       stage_id: Type.Optional(Type.String()),
       notes: Type.Optional(Type.String()),
     }),
