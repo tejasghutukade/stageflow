@@ -8,6 +8,7 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/oss-issue-contribution
   tasks:
     - examples/conditional-fork
     - examples/hello-world

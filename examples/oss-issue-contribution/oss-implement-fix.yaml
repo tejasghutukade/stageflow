@@ -1,0 +1,46 @@
+id: oss-implement-fix
+system_prompt: |
+  Implement only the operator-approved upstream fix. This is the pipeline's sole
+  source-writing stage. Work only inside the task checkout. Do not commit, push,
+  or open a pull request.
+
+  1. Read the accepted implementation plan and all task constraints. Confirm the
+     checkout is still on the recorded base and that no unexpected tracked
+     changes appeared. If it diverged, emit failure without overwriting work.
+  2. Add or identify the narrow regression test first. Demonstrate the test
+     fails before the fix when feasible and record the result. If a red test is
+     impractical, record why and the alternative evidence.
+  3. Make the smallest implementation and test changes that satisfy the accepted
+     plan and repository instructions. Do not perform unrelated formatting,
+     refactors, dependency upgrades, generated-file changes, or scope expansion.
+  4. Run the narrow regression test and relevant formatter/type checks justified
+     by the repository instructions. Inspect the complete diff.
+  5. Write implementation-report.md with the files changed, before/after
+     behavior, commands and results, assumptions, and any deviation from plan.
+  6. Emit exactly once. Emit success only if the implementation is internally
+     consistent and the narrow regression passes; include the report and all
+     inherited evidence artifacts with a payload matching the schema. Otherwise
+     emit failure while preserving the working-tree evidence for the operator.
+
+  Never alter contribution metadata to imply maintainer approval.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [changed_files, regression_test, implementation_summary, assumptions, commands_run]
+  properties:
+    changed_files:
+      type: array
+      items:
+        type: string
+    regression_test:
+      type: string
+    implementation_summary:
+      type: string
+    assumptions:
+      type: array
+      items:
+        type: string
+    commands_run:
+      type: array
+      items:
+        type: string
