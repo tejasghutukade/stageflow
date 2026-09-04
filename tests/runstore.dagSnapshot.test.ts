@@ -66,6 +66,59 @@ describe("pipeline DAG snapshot persistence", () => {
     expect(JSON.stringify(snapshot)).not.toContain("verdict");
   });
 
+  it("persists omitted vs empty vs allowlist gate_kinds (KTD1)", () => {
+    const snapshot = buildPipelineDagSnapshotFromLoaded({
+      pipeline: { id: "three-state", stages: ["compat", "no-hitl", "allowlist"] },
+      pipelinePath: "three-state.pipeline.yaml",
+      stages: [
+        {
+          id: "compat",
+          system_prompt: "x",
+          model: "m",
+        },
+        {
+          id: "no-hitl",
+          system_prompt: "x",
+          model: "m",
+          gate_kinds: [],
+        },
+        {
+          id: "allowlist",
+          system_prompt: "x",
+          model: "m",
+          gate_kinds: ["confirm"],
+        },
+      ],
+      dag: {
+        nodes: [
+          {
+            id: "compat",
+            needs: null,
+            ancestors: [],
+            stageIndex: 0,
+          },
+          {
+            id: "no-hitl",
+            needs: "compat",
+            ancestors: ["compat"],
+            stageIndex: 1,
+          },
+          {
+            id: "allowlist",
+            needs: "no-hitl",
+            ancestors: ["compat", "no-hitl"],
+            stageIndex: 2,
+          },
+        ],
+        roots: ["compat"],
+        childrenOf: { compat: ["no-hitl"], "no-hitl": ["allowlist"] },
+      },
+    });
+    expect(snapshot.gate_kinds?.compat).toBeUndefined();
+    expect(snapshot.gate_kinds?.["no-hitl"]).toEqual([]);
+    expect(snapshot.gate_kinds?.allowlist).toEqual(["confirm"]);
+  });
+
   it("freeze stamps definition_id to catalog id; YAML resolution omits it", async () => {
     const loaded = await loadPipeline(
       path.join(fixtures, "pipelines/linear-explicit.pipeline.yaml"),

@@ -16,6 +16,7 @@ export const BODY_KEYS = new Set([
   "gate_kinds",
   "clone_input_schema",
   "clone_actions",
+  "timeout_ms",
   "skill",
 ]);
 

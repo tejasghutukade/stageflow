@@ -9,7 +9,7 @@ export function buildPipelineDagSnapshotFromLoaded(
   const gate_kinds: Record<string, StageGateKind[]> = {};
   const clone_input_schema: Record<string, unknown> = {};
   for (const stage of loaded.stages) {
-    if (stage.gate_kinds?.length) {
+    if (stage.gate_kinds !== undefined) {
       gate_kinds[stage.id] = stage.gate_kinds;
     }
     if (stage.clone_input_schema !== undefined) {
@@ -73,10 +73,19 @@ export function instancesOfDefinition(
 
 export function appendCloneInstances(
   snapshot: RunPipelineDagSnapshot,
-  input: { catalogId: string; predecessorId: string; count: number },
+  input: { catalogId: string; predecessorId: string; count: number; startAt?: number },
 ): { snapshot: RunPipelineDagSnapshot; instanceIds: string[] } {
-  const { catalogId, predecessorId, count } = input;
-  if (!snapshot.stage_ids.includes(catalogId)) {
+  const { catalogId, predecessorId, count, startAt } = input;
+  // A catalog id that's already been fanned out once is no longer present as
+  // its own stage_ids entry — it was replaced by its instances. Minting
+  // *more* instances for it (a retried fanout requesting a larger clone
+  // count) is still valid as long as those instances exist.
+  const existingInstanceIdxs = snapshot.stage_ids
+    .map((id, i) => [id, i] as const)
+    .filter(([id]) => id !== catalogId && id.startsWith(`${catalogId}~`))
+    .map(([, i]) => i);
+  const catalogIdx = snapshot.stage_ids.indexOf(catalogId);
+  if (catalogIdx === -1 && existingInstanceIdxs.length === 0) {
     throw new Error(
       `catalog stage "${catalogId}" is not in the run DAG snapshot`,
     );
@@ -87,7 +96,7 @@ export function appendCloneInstances(
       `predecessor "${predecessorId}" is not in the run DAG snapshot`,
     );
   }
-  const instanceIds = mintCloneInstanceIds(catalogId, count);
+  const instanceIds = mintCloneInstanceIds(catalogId, count, startAt);
   for (const id of instanceIds) {
     if (
       snapshot.stage_ids.includes(id) ||
@@ -99,17 +108,20 @@ export function appendCloneInstances(
     }
   }
   const catalogNode = snapshot.nodes.find((n) => n.id === catalogId);
-  if (!catalogNode) {
+  const templateNode =
+    catalogNode ?? snapshot.nodes.find((n) => n.definition_id === catalogId);
+  if (!templateNode) {
     throw new Error(
       `catalog stage "${catalogId}" is not in the run DAG snapshot`,
     );
   }
 
-  const catalogIdx = snapshot.stage_ids.indexOf(catalogId);
+  const insertAt = catalogIdx !== -1 ? catalogIdx : Math.max(...existingInstanceIdxs) + 1;
+  const removeAt = catalogIdx !== -1 ? catalogIdx + 1 : insertAt;
   const stage_ids = [
-    ...snapshot.stage_ids.slice(0, catalogIdx),
+    ...snapshot.stage_ids.slice(0, insertAt),
     ...instanceIds,
-    ...snapshot.stage_ids.slice(catalogIdx + 1),
+    ...snapshot.stage_ids.slice(removeAt),
   ];
 
   const instanceNodes: ResolvedPipelineStageNode[] = instanceIds.map((id) => ({
@@ -118,12 +130,12 @@ export function appendCloneInstances(
     needs: predecessorId,
     ancestors: [...predNode.ancestors, predecessorId],
     stageIndex: 0,
-    ...(catalogNode.fork !== undefined ? { fork: catalogNode.fork } : {}),
-    ...(catalogNode.completion !== undefined
-      ? { completion: catalogNode.completion }
+    ...(templateNode.fork !== undefined ? { fork: templateNode.fork } : {}),
+    ...(templateNode.completion !== undefined
+      ? { completion: templateNode.completion }
       : {}),
-    ...(catalogNode.recovery !== undefined
-      ? { recovery: catalogNode.recovery }
+    ...(templateNode.recovery !== undefined
+      ? { recovery: templateNode.recovery }
       : {}),
   }));
 
@@ -157,7 +169,7 @@ export function appendCloneInstances(
           ...predChildren.slice(predIdx + 1),
         ];
 
-  const definitionParent = catalogNode.needs;
+  const definitionParent = catalogNode?.needs;
   if (definitionParent && definitionParent !== predecessorId) {
     const parentChildren = childrenOf[definitionParent] ?? [];
     childrenOf[definitionParent] = parentChildren.filter((id) => id !== catalogId);

@@ -19,5 +19,7 @@ export type StageConfig = {
   gate_kinds?: StageGateKind[];
   clone_input_schema?: unknown;
   clone_actions?: CloneAction[];
+  /** Optional stage wall-clock timeout in milliseconds (default 15 minutes). */
+  timeout_ms?: number;
   skill?: string;
 };

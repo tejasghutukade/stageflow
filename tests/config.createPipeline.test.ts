@@ -152,6 +152,54 @@ describe("pipelineConfigToYaml", () => {
     );
   });
 
+  it("writes empty inline gate_kinds as [] and omits the key when undefined (KTD1)", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "no-hitl",
+          stages: [
+            {
+              id: "implement",
+              inline: {
+                system_prompt: "Implement only.",
+                model: "anthropic/claude-sonnet-4-5",
+                gate_kinds: [],
+              },
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: no-hitl",
+        "stages:",
+        "  - id: implement",
+        "    gate_kinds: []",
+        "    system_prompt: Implement only.",
+        "    model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+    );
+
+    const omitted = pipelineConfigToYaml(
+      {
+        id: "compat",
+        stages: [
+          {
+            id: "clarify",
+            inline: {
+              system_prompt: "Ask if needed.",
+              model: "anthropic/claude-sonnet-4-5",
+            },
+          },
+        ],
+      },
+      { format: "dag" },
+    );
+    expect(omitted).not.toMatch(/gate_kinds/);
+  });
+
   it("writes object-form DAG YAML with per-stage needs", () => {
     expect(
       pipelineConfigToYaml(

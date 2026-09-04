@@ -48,6 +48,8 @@ type SchedulerPreparedPipeline = {
 
 export type { SchedulerPreparedPipeline };
 
+const EMPTY_RETRY_DOWNSTREAM: ReadonlySet<string> = new Set();
+
 type RetryContext = {
   retryRoots: Map<string, number>;
 };
@@ -759,7 +761,10 @@ export async function runPipelineDag(
   };
 
   const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
-    const conflict = cloneFanoutConflict(dag, envelope);
+    const retryDownstreamIds = retryContext
+      ? cloneRetryDownstream(dag, [...retryContext.retryRoots.keys()])
+      : EMPTY_RETRY_DOWNSTREAM;
+    const conflict = cloneFanoutConflict(dag, envelope, states, retryDownstreamIds);
     if (conflict !== undefined) {
       await store.appendStageEvent(run.runId, stageId, {
         event: "failed",

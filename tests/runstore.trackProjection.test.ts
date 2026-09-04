@@ -253,6 +253,32 @@ describe("buildPipelineTrack", () => {
     ]);
   });
 
+  it("projects empty gate_kinds instead of dropping them (KTD1)", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["no-hitl"],
+      roots: ["no-hitl"],
+      childrenOf: {},
+      nodes: [
+        {
+          id: "no-hitl",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          definition_id: "no-hitl",
+        },
+      ],
+      gate_kinds: { "no-hitl": [] },
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "no-hitl")?.gate_kinds).toEqual(
+      [],
+    );
+  });
+
   it("resolves gate_kinds for a clone instance via definition_id", () => {
     const dag: RunPipelineDagSnapshot = {
       stage_ids: ["detect", "author-diagrams~1", "collect"],

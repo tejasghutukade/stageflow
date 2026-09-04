@@ -59,7 +59,7 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`.
 
-**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`, `clone_input_schema`, `clone_actions`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors).
+**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 900000 / 15 minutes when omitted).
 
 `uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
 
@@ -297,7 +297,7 @@ Stage YAML (referenced via `uses:`) requires:
 | `system_prompt` | Agent instructions |
 | `model` | Provider/model string |
 
-Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `payload_schema`, `clone_input_schema`, `clone_actions` — see [Envelopes](envelopes.md#payload-schema). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout.
+Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 15 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 

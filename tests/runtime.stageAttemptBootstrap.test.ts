@@ -127,6 +127,31 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.skillFilePath).toBe(filePath);
   });
 
+  it("forwards stage.timeout_ms as timeoutMs to openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-timeout-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("approve"), timeout_ms: 3600000 },
+      task,
+      dag: rootDag("approve"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.timeoutMs).toBe(3600000);
+  });
+
   it("fails closed without openStage when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-miss-"));
     const store = createRunStore({ rootDir: root });

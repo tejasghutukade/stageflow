@@ -25,6 +25,7 @@ import {
   DuplicateRetryRootError,
   RetryRootWaitTimeoutError,
   RunRetryCoordinator,
+  succeededStageRetryBlocker,
   type RetryTrackingPort,
 } from "../src/runtime/runRetryCoordinator.js";
 import { loadRunContext } from "../src/runtime/resumeReconstruct.js";
@@ -156,6 +157,8 @@ function eligibilityDetail(opts: {
   stageId?: string;
   stageStatus?: StageSnapshot["status"];
   missingStage?: boolean;
+  definitionId?: string;
+  envelope?: StageEnvelope | null;
 }): RunDetail {
   return {
     run_id: "run-1",
@@ -168,9 +171,12 @@ function eligibilityDetail(opts: {
       : [
           {
             stage_id: opts.stageId ?? "design-doc",
+            ...(opts.definitionId !== undefined
+              ? { definition_id: opts.definitionId }
+              : {}),
             status: opts.stageStatus ?? "failed",
             events: [],
-            envelope: null,
+            envelope: opts.envelope ?? null,
             artifacts: [],
             attempt_count: 1,
           },
@@ -309,29 +315,173 @@ describe("assertStageRetryEligible", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("rejects a succeeded run even when recoveryActive is true", () => {
+  it("rejects a run that is neither failed, succeeded, nor recovering", () => {
     const result = assertStageRetryEligible(
-      eligibilityDetail({ runStatus: "succeeded", stageStatus: "failed" }),
+      eligibilityDetail({ runStatus: "created", stageStatus: "failed" }),
       "design-doc",
       { recoveryActive: true },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(409);
-      expect(result.reason).toMatch(/run is not failed/i);
+      expect(result.reason).toMatch(/run is not failed or succeeded/i);
     }
   });
 
-  it("rejects a not-failed stage", () => {
+  it("rejects a stage that is neither failed nor succeeded", () => {
     const result = assertStageRetryEligible(
-      eligibilityDetail({ runStatus: "failed", stageStatus: "succeeded" }),
+      eligibilityDetail({ runStatus: "failed", stageStatus: "pending" }),
       "design-doc",
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.status).toBe(409);
-      expect(result.reason).toMatch(/stage is not failed/i);
+      expect(result.reason).toMatch(/stage is not failed or succeeded/i);
     }
+  });
+
+  it("allows a succeeded run with a plain succeeded stage", () => {
+    const result = assertStageRetryEligible(
+      eligibilityDetail({ runStatus: "succeeded", stageStatus: "succeeded" }),
+      "design-doc",
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("rejects a succeeded stage that is a clone instance", () => {
+    const result = assertStageRetryEligible(
+      eligibilityDetail({
+        runStatus: "succeeded",
+        stageStatus: "succeeded",
+        stageId: "design-doc#1",
+        definitionId: "design-doc",
+      }),
+      "design-doc#1",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(409);
+      expect(result.reason).toMatch(/clone instance/i);
+    }
+  });
+
+  it("rejects a succeeded clonable-fanout stage with declared clone_forks", () => {
+    const result = assertStageRetryEligible(
+      eligibilityDetail({
+        runStatus: "succeeded",
+        stageStatus: "succeeded",
+        envelope: {
+          status: "success",
+          summary: "fanout",
+          artifacts: [],
+          clone_forks: [{ successor_id: "next", action: "skip" }],
+        },
+      }),
+      "design-doc",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(409);
+      expect(result.reason).toMatch(/clonable-fanout/i);
+    }
+  });
+
+  it("rejects a succeeded fork stage with a recorded fork_choice", () => {
+    const result = assertStageRetryEligible(
+      eligibilityDetail({
+        runStatus: "succeeded",
+        stageStatus: "succeeded",
+        envelope: {
+          status: "success",
+          summary: "fork",
+          artifacts: [],
+          fork_choice: ["branch-a"],
+        },
+      }),
+      "design-doc",
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(409);
+      expect(result.reason).toMatch(/fork_choice/i);
+    }
+  });
+});
+
+describe("succeededStageRetryBlocker", () => {
+  function stageSnap(
+    overrides: Partial<StageSnapshot> = {},
+  ): StageSnapshot {
+    return {
+      stage_id: "design-doc",
+      status: "succeeded",
+      events: [],
+      envelope: null,
+      artifacts: [],
+      attempt_count: 1,
+      ...overrides,
+    };
+  }
+
+  it("blocks a clone-instance stage snapshot", () => {
+    const reason = succeededStageRetryBlocker(
+      stageSnap({ stage_id: "design-doc#1", definition_id: "design-doc" }),
+    );
+    expect(reason).toMatch(/clone instance/i);
+  });
+
+  it("blocks a clonable-fanout parent with non-empty clone_forks", () => {
+    const reason = succeededStageRetryBlocker(
+      stageSnap({
+        envelope: {
+          status: "success",
+          summary: "fanout",
+          artifacts: [],
+          clone_forks: [{ successor_id: "next", action: "skip" }],
+        },
+      }),
+    );
+    expect(reason).toMatch(/clonable-fanout/i);
+  });
+
+  it("blocks a fork stage with a recorded fork_choice", () => {
+    const reason = succeededStageRetryBlocker(
+      stageSnap({
+        envelope: {
+          status: "success",
+          summary: "fork",
+          artifacts: [],
+          fork_choice: ["branch-a"],
+        },
+      }),
+    );
+    expect(reason).toMatch(/fork_choice/i);
+  });
+
+  it("allows a plain succeeded stage", () => {
+    const reason = succeededStageRetryBlocker(stageSnap());
+    expect(reason).toBeUndefined();
+  });
+
+  it("does not block a stage with the same definition_id as its own stage_id", () => {
+    const reason = succeededStageRetryBlocker(
+      stageSnap({ stage_id: "design-doc", definition_id: "design-doc" }),
+    );
+    expect(reason).toBeUndefined();
+  });
+
+  it("does not block an empty clone_forks array", () => {
+    const reason = succeededStageRetryBlocker(
+      stageSnap({
+        envelope: {
+          status: "success",
+          summary: "fanout",
+          artifacts: [],
+          clone_forks: [],
+        },
+      }),
+    );
+    expect(reason).toBeUndefined();
   });
 });
 
@@ -422,6 +572,70 @@ describe("runtime stage retry", () => {
     const design = detail.stages.find((s) => s.stage_id === "design-doc");
     expect(design?.status).toBe("succeeded");
     expect(design?.attempt_count).toBe(2);
+  });
+
+  it("retries an already-succeeded stage and re-settles the run to succeeded", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-succeeded-stage-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = scriptedFakeAgent([
+      { type: "emit", envelope: okEnvelope("clarify-ok") },
+      { type: "emit", envelope: okEnvelope("design-ok") },
+      { type: "emit", envelope: okEnvelope("plan-ok") },
+      { type: "emit", envelope: okEnvelope("design-ok-retry") },
+      { type: "emit", envelope: okEnvelope("plan-ok-retry") },
+    ]);
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const beforeDetail = await store.readRun(started.runId);
+    const designBefore = beforeDetail.stages.find(
+      (s) => s.stage_id === "design-doc",
+    );
+    expect(designBefore?.status).toBe("succeeded");
+    expect(designBefore?.attempt_count).toBe(1);
+
+    const updateRunStatusSpy = vi.spyOn(store, "updateRunStatus");
+
+    const retry = await manager.retryStage(started.runId, "design-doc");
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.runId).toBe(started.runId);
+    expect(retry.attemptIndex).toBe(2);
+
+    expect(
+      updateRunStatusSpy.mock.calls.some(
+        ([, status]) => status === "running",
+      ),
+    ).toBe(true);
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    const design = detail.stages.find((s) => s.stage_id === "design-doc");
+    expect(design?.status).toBe("succeeded");
+    expect(design?.attempt_count).toBe(2);
+    const plan = detail.stages.find(
+      (s) => s.stage_id === "implementation-plan",
+    );
+    expect(plan?.status).toBe("succeeded");
+    expect(plan?.attempt_count).toBe(2);
+
+    updateRunStatusSpy.mockRestore();
   });
 
   it("AE4: retry fails again records attempt 2 and run failed", async () => {
@@ -551,13 +765,15 @@ describe("runtime stage retry", () => {
     expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
-  it("rejects non-failed stage with 409", async () => {
+  it("allows retrying a succeeded stage once the run has settled", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-elig-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([
       { type: "emit", envelope: okEnvelope("ok") },
       { type: "emit", envelope: okEnvelope("ok") },
       { type: "emit", envelope: okEnvelope("ok") },
+      { type: "emit", envelope: okEnvelope("ok-retry") },
+      { type: "emit", envelope: okEnvelope("ok-retry") },
     ]);
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -574,9 +790,71 @@ describe("runtime stage retry", () => {
     });
 
     const retry = await manager.retryStage(started.runId, "design-doc");
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.attemptIndex).toBe(2);
+  });
+
+  it("rejects retrying a succeeded stage while the run is still running", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-elig-running-"));
+    const store = createRunStore({ rootDir: root });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const agent = {
+      openStage(input: StageRunInput) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => {
+            if (input.stage.id === "design-doc") {
+              await gate;
+            }
+            return {
+              ok: true as const,
+              envelope: okEnvelope(input.stage.id),
+            };
+          },
+        });
+      },
+      async runStage(input: StageRunInput) {
+        const handle = this.openStage(input);
+        const event = await handle.next();
+        await handle.close();
+        if (event.status === "waiting_for_input") {
+          return { ok: false, reason: "wait" };
+        }
+        return event.result;
+      },
+    };
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      const design = detail.stages.find((s) => s.stage_id === "design-doc");
+      return design?.status === "running";
+    });
+
+    const retry = await manager.retryStage(started.runId, "clarify");
     expect(retry.ok).toBe(false);
-    if (retry.ok) return;
-    expect(retry.status).toBe(409);
+    if (!retry.ok) {
+      expect(retry.status).toBe(409);
+      expect(retry.reason).toMatch(/run is not failed or succeeded/i);
+    }
+
+    release();
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
   });
 
   it("rejects concurrent retry on same stage", async () => {
