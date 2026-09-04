@@ -124,7 +124,7 @@ After fan-out, workspace paths and `--stage` keys use the instance id (`{catalog
 
 ### payload_schema {#payload-schema}
 
-When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only).
+When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. Unknown keywords are ignored.
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 

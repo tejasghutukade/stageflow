@@ -15,5 +15,7 @@ export type StageConfig = {
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */
   gate_kinds?: StageGateKind[];
+  /** Optional stage wall-clock timeout in milliseconds (default 15 minutes). */
+  timeout_ms?: number;
   skill?: string;
 };

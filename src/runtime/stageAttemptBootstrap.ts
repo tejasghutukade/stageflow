@@ -225,6 +225,9 @@ export async function openStageAttempt(
       cloneEmitContext,
       ...(completionContract !== undefined ? { completionContract } : {}),
       ...(repairContext !== undefined ? { repairContext } : {}),
+      ...(input.stage.timeout_ms !== undefined
+        ? { timeoutMs: input.stage.timeout_ms }
+        : {}),
     },
     input.operatorCatalog,
   );

@@ -131,29 +131,60 @@ const multiQuestionItemSchema = Type.Object({
   id: Type.Optional(Type.String()),
 });
 
+const freeTextParamsSchema = Type.Object({
+  kind: Type.Literal("free_text"),
+  message: Type.String({ minLength: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const confirmParamsSchema = Type.Object({
+  kind: Type.Literal("confirm"),
+  message: Type.String({ minLength: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const multiQuestionParamsSchema = Type.Object({
+  kind: Type.Literal("multi_question"),
+  questions: Type.Array(multiQuestionItemSchema, { minItems: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const artifactBackedParamsSchema = Type.Object({
+  kind: Type.Literal("artifact_backed"),
+  message: Type.String({ minLength: 1 }),
+  artifacts: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+  id: Type.Optional(Type.String()),
+});
+
+const KIND_PARAM_SCHEMAS = {
+  free_text: freeTextParamsSchema,
+  confirm: confirmParamsSchema,
+  multi_question: multiQuestionParamsSchema,
+  artifact_backed: artifactBackedParamsSchema,
+} as const;
+
 export const askOperatorParamsSchema = Type.Union([
-  Type.Object({
-    kind: Type.Literal("free_text"),
-    message: Type.String({ minLength: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("confirm"),
-    message: Type.String({ minLength: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("multi_question"),
-    questions: Type.Array(multiQuestionItemSchema, { minItems: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    kind: Type.Literal("artifact_backed"),
-    message: Type.String({ minLength: 1 }),
-    artifacts: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-    id: Type.Optional(Type.String()),
-  }),
+  freeTextParamsSchema,
+  confirmParamsSchema,
+  multiQuestionParamsSchema,
+  artifactBackedParamsSchema,
 ]);
+
+/**
+ * Narrows the ask_operator params schema to only the declared gate kinds
+ * (stage `gate_kinds` allowlist). Omitted/empty falls back to the full
+ * union so back-compat stages keep accepting every kind.
+ */
+export function askOperatorParamsSchemaFor(
+  allowedKinds?: readonly AskOperatorKind[],
+) {
+  if (!allowedKinds || allowedKinds.length === 0) {
+    return askOperatorParamsSchema;
+  }
+  const schemas = allowedKinds.map((kind) => KIND_PARAM_SCHEMAS[kind]);
+  if (schemas.length === 1) return schemas[0];
+  return Type.Union(schemas as [typeof schemas[0], typeof schemas[0], ...typeof schemas]);
+}
 
 const decisionSchema = Type.Union([
   Type.Literal("accept"),
@@ -547,7 +578,9 @@ export type AskOperatorWaitBridge = {
   requestWait: (prompt: AskOperatorPrompt) => Promise<unknown>;
 };
 
-export type AskOperatorToolOptions = AskOperatorWaitBridge;
+export type AskOperatorToolOptions = AskOperatorWaitBridge & {
+  allowedKinds?: readonly AskOperatorKind[];
+};
 
 export type AskOperatorToolDetails = {
   prompt: AskOperatorPrompt | null;
@@ -581,18 +614,30 @@ function summarizeAnswer(answer: AskOperatorAnswer): string {
 }
 
 export function createAskOperatorTool(options: AskOperatorToolOptions) {
-  const { requestWait } = options;
+  const { requestWait, allowedKinds } = options;
+  const allowed =
+    allowedKinds && allowedKinds.length > 0
+      ? new Set<AskOperatorKind>(allowedKinds)
+      : null;
+  const kindList = allowed
+    ? [...allowed].join(", ")
+    : ASK_OPERATOR_KINDS.join(", ");
 
   return {
     name: "ask_operator",
     label: "Ask operator",
     description:
-      "Ask the operator a question and wait for their answer. Supports free_text, confirm, multi_question, and artifact_backed prompts. Does not complete the stage — call emit_stage_envelope when finished.",
-    parameters: askOperatorParamsSchema,
+      `Ask the operator a question and wait for their answer. Supports ${kindList} prompts. Does not complete the stage — call emit_stage_envelope when finished.`,
+    parameters: askOperatorParamsSchemaFor(allowedKinds),
     execute: async (_toolCallId: string, params: unknown) => {
       let prompt: AskOperatorPrompt;
       try {
         const parsed = parseAskOperatorParams(params);
+        if (allowed && !allowed.has(parsed.kind)) {
+          throw new AskOperatorError(
+            `unsupported prompt kind "${parsed.kind}" (allowed: ${kindList})`,
+          );
+        }
         prompt = normalizePromptIds(parsed);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

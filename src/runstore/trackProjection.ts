@@ -129,7 +129,7 @@ export function buildPipelineTrack(
     };
     if (blocked_by?.length) trackNode.blocked_by = blocked_by;
     const gateKinds = dag.gate_kinds?.[definitionId] ?? dag.gate_kinds?.[stageId];
-    if (gateKinds?.length) trackNode.gate_kinds = gateKinds;
+    if (gateKinds !== undefined) trackNode.gate_kinds = gateKinds;
     return trackNode;
   });
 
