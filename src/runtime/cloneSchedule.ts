@@ -6,7 +6,7 @@ import {
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
-import { collectDownstreamClosure, collectDownstreamStageIds } from "./dagTraversal.js";
+import { collectDownstreamStageIds } from "./dagTraversal.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
 function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
@@ -149,21 +149,55 @@ function joinAndDownstreamIds(
   return ids;
 }
 
+/**
+ * A fresh clone_forks fanout targeting a catalog id that already has
+ * instances is only safe when every existing instance was put back to
+ * `pending` by the current retry cascade (`retryDownstreamIds`) — that means
+ * an ancestor was legitimately retried and this parent re-emitted the same
+ * fanout for reactivation. Instances that are still active/terminal, or
+ * merely `pending` without having gone through a retry reset (e.g. an
+ * envelope processed twice in one live run), are rejected as before.
+ */
 export function cloneFanoutConflict(
   dag: ResolvedPipelineDag,
   envelope: StageEnvelope,
+  states: Map<string, StageScheduleState>,
+  retryDownstreamIds: ReadonlySet<string>,
 ): string | undefined {
   const snapshot = asDagSnapshot(dag);
   for (const item of envelope.clone_forks ?? []) {
     if (item.action !== "fanout") continue;
-    if (definitionInstances(dag, item.successor_id).some((id) => id !== item.successor_id)) {
-      return `clone fan-out for "${item.successor_id}" is already instanced`;
+    const existing = definitionInstances(dag, item.successor_id).filter(
+      (id) => id !== item.successor_id,
+    );
+    if (existing.length > 0) {
+      const reactivatable = existing.every(
+        (id) => states.get(id) === "pending" && retryDownstreamIds.has(id),
+      );
+      if (!reactivatable) {
+        return `clone fan-out for "${item.successor_id}" is already instanced`;
+      }
+      continue;
     }
     if (!snapshot.stage_ids.includes(item.successor_id)) {
       return `clone fan-out for "${item.successor_id}" is already instanced`;
     }
   }
   return undefined;
+}
+
+function nextFreeCloneSuffix(
+  snapshot: RunPipelineDagSnapshot,
+  catalogId: string,
+): number {
+  const prefix = `${catalogId}~`;
+  let max = 0;
+  for (const id of snapshot.stage_ids) {
+    if (!id.startsWith(prefix)) continue;
+    const n = Number(id.slice(prefix.length));
+    if (Number.isInteger(n) && n > max) max = n;
+  }
+  return max + 1;
 }
 
 export function protectedClonableChildIds(
@@ -182,18 +216,35 @@ export function protectedClonableChildIds(
   return ids;
 }
 
+/**
+ * Downstream closure for a retry, resolved through clone-instance ids.
+ * Catalog-level children (e.g. a join stage) are registered in `childrenOf`
+ * under the *definition* id, not per clone instance, so a plain childrenOf
+ * walk starting above a fanout dead-ends at the instance ids it discovers
+ * transitively (only the initially-given root ids' own definition-id
+ * children were resolved before). Resolving at every step, not just the
+ * roots, means retrying an ancestor several hops above a clone-fanout parent
+ * still reaches the join and everything after it.
+ */
 export function cloneRetryDownstream(
   dag: ResolvedPipelineDag,
   stageIds: string[],
 ): Set<string> {
-  const downstream = collectDownstreamClosure(dag, stageIds);
-  for (const id of stageIds) {
-    const defId = definitionIdForInstance(asDagSnapshot(dag), id);
-    for (const child of dag.childrenOf[defId] ?? []) {
+  const snapshot = asDagSnapshot(dag);
+  const downstream = new Set<string>();
+  const seeds = new Set(stageIds);
+  const queue = [...stageIds];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    const defId = definitionIdForInstance(snapshot, id);
+    const children = new Set<string>([
+      ...(dag.childrenOf[id] ?? []),
+      ...(defId !== id ? dag.childrenOf[defId] ?? [] : []),
+    ]);
+    for (const child of children) {
+      if (downstream.has(child) || seeds.has(child)) continue;
       downstream.add(child);
-      for (const desc of collectDownstreamStageIds(dag, child)) {
-        downstream.add(desc);
-      }
+      queue.push(child);
     }
   }
   return downstream;
@@ -253,7 +304,15 @@ export function cloneScheduleAllowsRun(
   if (instances.length <= 1) {
     const parentId = instances[0] ?? node.needs;
     if (states.get(parentId) !== "succeeded") return false;
-  } else if (!instances.every((id) => states.get(id) === "succeeded")) {
+  } else if (
+    // A retried fanout that shrank the clone count marks the now-excess
+    // instances "skipped" rather than dangling (see applyCloneForksToSchedule)
+    // — a join downstream of the cohort should still proceed once the
+    // instances that are actually running have succeeded.
+    !instances.every(
+      (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
+    )
+  ) {
     return false;
   }
   return !sequentialPreviousUnsatisfied(
@@ -293,8 +352,38 @@ export function applyCloneForksToSchedule(
       continue;
     }
     if (item.action !== "fanout") continue;
-    const existing = definitionInstances(current, item.successor_id);
-    if (existing.some((id) => id !== item.successor_id)) {
+    const existing = definitionInstances(current, item.successor_id).filter(
+      (id) => id !== item.successor_id,
+    );
+    if (existing.length > 0) {
+      // Reactivating instances a retry cascade reset to `pending` (see
+      // cloneFanoutConflict), which only allows this fanout through when
+      // *every* existing instance is pending. Anything short of that —
+      // a normal resume re-apply of an already-processed fanout, or only
+      // one sibling out of a cohort being retried directly — must stay a
+      // no-op here: growing/shrinking the cohort in those cases would mint
+      // or skip instances no retry actually asked for.
+      const allPending = existing.every((id) => states.get(id) === "pending");
+      if (!allPending) continue;
+      const desired = item.clones.length;
+      for (const id of existing.slice(desired)) {
+        skipPending(id);
+        for (const desc of collectDownstreamStageIds(current, id)) {
+          skipPending(desc);
+        }
+      }
+      if (desired > existing.length) {
+        const { snapshot, instanceIds } = appendCloneInstances(current, {
+          catalogId: item.successor_id,
+          predecessorId,
+          count: desired - existing.length,
+          startAt: nextFreeCloneSuffix(current, item.successor_id),
+        });
+        current = snapshot;
+        for (const id of instanceIds) {
+          states.set(id, "pending");
+        }
+      }
       continue;
     }
     const { snapshot, instanceIds } = appendCloneInstances(current, {
