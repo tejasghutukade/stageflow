@@ -2,12 +2,61 @@ id: oss-quick-fix
 stages:
   - id: understand-issue
     uses: ./understand-issue.yaml
+    completion:
+      mode: all
+      checks:
+        - id: investigation
+          type: artifact
+          path: investigation.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: implement-fix
     uses: ./implement-fix.yaml
     needs: understand-issue
+    completion:
+      mode: all
+      checks:
+        - id: fix-report
+          type: artifact
+          path: fix-report.md
+          nonempty: true
+        - id: checkout-changed
+          type: checkout_changes
+          path_fields: [changed_files]
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: verify-fix
     uses: ./verify-fix.yaml
     needs: implement-fix
+    completion:
+      mode: all
+      checks:
+        - id: verification
+          type: artifact
+          path: verification.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: ship-fix
     uses: ./ship-fix.yaml
     needs: verify-fix
+    completion:
+      mode: all
+      checks:
+        - id: ship-report
+          type: artifact
+          path: ship-report.md
+          nonempty: true
+    recovery:
+      mode: manual
+      retry_safety: side_effecting

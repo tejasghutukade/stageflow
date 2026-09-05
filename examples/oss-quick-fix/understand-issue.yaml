@@ -1,7 +1,6 @@
 id: understand-issue
 gate_kinds: []
-required_artifacts:
-  - investigation.md
+timeout_ms: 7200000
 system_prompt: |
   Understand the reported issue well enough to fix it, then write
   investigation.md as the durable record downstream stages read instead of
@@ -34,7 +33,7 @@ system_prompt: |
   payload or artifact — if something is genuinely unknown, say what you'd
   need to find out and why you couldn't, and still record what you did
   verify.
-model: anthropic/claude-sonnet-4-5
+model: openrouter/minimax/minimax-m3:free
 payload_schema:
   type: object
   required: [root_cause, target_files, repro_confirmed, fix_approach]

@@ -69,7 +69,7 @@ system_prompt: |
   this stage's prohibitions or scope limits there — downstream stages receive
   the summary verbatim and will misread "do not edit the checkout" as an
   instruction to themselves.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [topic]

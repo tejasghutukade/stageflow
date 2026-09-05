@@ -103,7 +103,7 @@ system_prompt: |
   downstream consumers: readiness, review verdicts, which files changed, which
   tests passed, the publish target, and the PR URL if opened. Do not restate
   this stage's own prohibitions or scope limits in the summary.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [pr_title, pr_body_summary, tests, changed_files, publish_repo, commands_run, opened, pr_url]

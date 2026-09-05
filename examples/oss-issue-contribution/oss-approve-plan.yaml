@@ -69,7 +69,7 @@ system_prompt: |
   verbatim and can mistake it for its own instructions, so never put this
   stage's prohibitions or scope limits in it — in particular, no "no source
   edits" language, which applies here and not downstream.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [approved, scope_summary, planned_files, validation_commands, publication_blockers]

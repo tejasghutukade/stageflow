@@ -62,7 +62,7 @@ system_prompt: |
   explainer covers and where it lives. Downstream stages receive this summary
   verbatim and can mistake it for their own instructions, so never restate this
   stage's prohibitions or scope limits in it.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [topic]

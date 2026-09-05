@@ -1,0 +1,76 @@
+id: pi-8919
+goal: >
+  Deliver a verified minimal local fix for Pi issue #8919, fullscreen mode
+  reserving a blank line for a zero-row custom footer, applied as source and
+  test edits in the checkout working tree, plus an operator-approved pull
+  request opened against tejasghutukade/pi rather than earendil-works/pi.
+context: |
+  Issue: https://github.com/earendil-works/pi/issues/8919
+  Title: Fullscreen mode reserves a blank line for zero-row custom footers (footer minSize should be 0)
+  Upstream repo: https://github.com/earendil-works/pi
+  Fork (PR target after the run): https://github.com/tejasghutukade/pi
+  State: OPEN, unassigned at the time this task was written, though another
+  contributor has since commented intending to fix it. Pi's CONTRIBUTING.md
+  auto-closes issues/PRs from unproven contributors and requires a
+  maintainer `lgtm` before any PR against earendil-works/pi is permitted —
+  no such reply exists, so this run prepares a local change and a fork PR
+  only; the upstream PR is a separate, explicitly-authorized step.
+
+  This run's primary purpose is validating the migrated
+  oss-issue-contribution pipeline's Verified Stage Execution completion
+  contracts (artifact checks, checkout_changes checks, gate + pre_emit_checks
+  on the approval stages) against a real run, not a genuine race to land
+  this specific fix upstream.
+
+  Reported behavior: in fullscreen TUI mode, a custom footer
+  (`pi.ui.setFooter`) that renders zero rows still occupies one blank line;
+  inline mode collapses it correctly. Root cause per the reporter: the
+  fullscreen dock in
+  packages/coding-agent/src/modes/interactive/interactive-mode.ts reserves
+  the footer's row unconditionally via `{ component: this.footerContainer,
+  shrink: 1, minSize: 1 }` (around line 935). `allocateStackSizes` clamps to
+  `minSize` before distribution, so the slot gets at least 1 row even when
+  the footer component renders `[]`.
+
+  Reporter's proposed fix: change `minSize: 1` to `minSize: 0` on that one
+  dock entry. Reporter states this causes no visual change for the built-in
+  footer (with `basis` unset, size comes from intrinsic rows and
+  `FooterComponent` always renders at least 1 row; `minSize` is only a
+  shrink floor) — the only behavioral difference is that at extreme terminal
+  heights the footer can now shrink to 0 before the editor is squeezed,
+  which the reporter argues is preferable. Verify this reasoning independently
+  by reading `allocateStackSizes` and the footer rendering path rather than
+  taking the reporter's claim at face value.
+
+  Repro (from the issue): fullscreen mode
+  (`"tuiMode": "fullscreen"`) plus any extension registering an empty
+  footer, e.g. `pi.ui.setFooter(() => ({ invalidate() {}, render: () => [] }))`.
+
+  The full issue write-up is captured by the intake stage in
+  issue-intake.md; treat this context as a starting point, not a substitute
+  for reading the issue and the source directly.
+constraints: |
+  Respect pi's AGENTS.md, CONTRIBUTING.md, and any package-local test docs.
+  Before reporting or assuming an issue is core behavior, validate it is not
+  caused by an extension, matching pi's own contribution guidance.
+  Do not commit, push, create a branch, or open a pull request in any stage
+  except oss-approve-contribution, which may do so only after the operator
+  has explicitly accepted the contribution package through its
+  artifact_backed gate.
+  Do not target earendil-works/pi. The PR base is always tejasghutukade/pi
+  (gh pr create --repo tejasghutukade/pi).
+  Do not edit CHANGELOG.md.
+  Before opening the local PR, the checkout must pass `npm run check` and
+  `./test.sh` (or the package-scoped equivalent for packages/coding-agent) —
+  record their exact output as evidence, do not claim they passed without
+  running them.
+  Keep the change limited to the reported footer minSize issue and its
+  regression test; do not expand scope to unrelated layout behavior.
+  Do not treat the other contributor's stated intent to fix this as a
+  reason to skip local work — investigate, fix, and verify locally
+  regardless; publication policy lives only at the contribution gate.
+  Source and test edits belong in the checkout working tree and must never
+  be replaced by a Stageflow artifact or report describing the change.
+  In the explainer stages only (oss-explain-issue, oss-explain-fix), the
+  explainer HTML belongs in Stageflow artifacts, never in the checkout.
+checkout: /Users/tejasghutukade/Projects/pi

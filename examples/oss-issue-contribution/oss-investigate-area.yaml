@@ -86,7 +86,7 @@ system_prompt: |
 
   Do not attempt to coordinate edits with other clones; the later join stage
   will synthesize all investigations.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [area_id, verdict, findings, affected_paths, recommended_changes, risks, tests]

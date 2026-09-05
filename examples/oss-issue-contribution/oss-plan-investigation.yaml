@@ -66,7 +66,7 @@ system_prompt: |
 
   Do not create more than five clones. Do not put fork_choice on the emitted
   envelope.
-model: openrouter/minimax/minimax-m3:free
+model: omniroute/auto
 payload_schema:
   type: object
   required: [investigation_count, strategy]
