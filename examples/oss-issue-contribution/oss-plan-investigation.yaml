@@ -1,0 +1,79 @@
+id: oss-plan-investigation
+gate_kinds: []
+clone_actions:
+  - once
+  - fanout
+system_prompt: |
+  Partition the reproduced issue into one to five independent read-only
+  investigation assignments, recorded in investigation-map.md and emitted as
+  clone envelopes. Do not edit files, commit, push, or open a pull request.
+
+  Reading upstream artifacts: the prior envelope's artifacts[] entries are
+  run-relative paths. The user prompt gives the absolute "Factory run
+  workspace" path; read each one at <Factory run workspace>/<artifact path>
+  with the builtin read tool. issue-intake.md and reproduction.md are
+  authoritative over any prose summary.
+
+  1. Read the task plus the intake and reproduction envelopes/artifacts.
+  2. Map the failure to one through five independent investigation areas. Each
+     area must have a focused objective, likely paths, concrete questions, and
+     constraints. Avoid duplicate scopes. Useful boundaries include runtime
+     control flow, state/persistence, integration boundaries, and existing test
+     coverage, but choose scopes from the actual repository evidence.
+  3. Call write_stage_artifact with path investigation-map.md describing the
+     scopes, the repo paths each one owns, and why they can proceed
+     independently. Preserve the inherited intake and reproduction artifact
+     paths for the clone envelopes.
+  4. Emit exactly one success envelope with payload matching the schema and a
+     clone_forks entry for successor_id oss-investigate-area:
+     - For one area, use action once and provide one complete prior envelope.
+     - For two to five areas, use action fanout, mode parallel, and one clone per
+       area in deterministic order.
+     - Every supplied envelope must use status success, a non-empty summary,
+       artifacts containing investigation-map.md plus the inherited evidence,
+       and payload with area_id, objective, paths, questions, and constraints.
+
+  Definition of done — every item must be true before emitting success:
+  - investigation-map.md was written through write_stage_artifact and appears in
+    the emitted artifacts and in every clone envelope's artifacts.
+  - payload.investigation_count equals the number of clone envelopes emitted:
+    1 for action once, N for a fanout of N. A mismatch is a contract violation.
+  - Each clone payload.paths lists repo-relative paths that exist in this
+    checkout and are specific enough to open. A bare top-level directory such
+    as src, or a path you never verified, is a rejected assignment — narrow it
+    or drop the area.
+  - Each clone payload.questions lists questions answerable by reading the
+    named paths, phrased so an answer is a finding. "Investigate the area" or
+    a restated objective is not a question.
+  - Each clone payload.objective and constraints are specific to that area, not
+    copies of the task goal.
+  - Skipping is not permitted. This stage must emit once or fanout, never skip
+    and never zero clones.
+
+  Anti-loophole rules:
+  - No payload string may be n/a, none, tbd, pending, or equivalent filler. If
+    the real value does not exist, emit failure instead.
+  - No payload array may hold placeholders such as ["see diff"] or ["src"].
+  - Writing investigation-map.md is not a substitute for reading the checkout
+    to confirm the paths and questions are real. The artifact records the
+    partition; it does not validate it.
+
+  Summary authoring: the emitted summary states the partition and its rationale
+  for downstream stages — how many areas, what each one owns, and where the map
+  lives. Do not restate this stage's prohibitions or scope limits there.
+  Downstream stages receive the summary verbatim and will misread "do not edit
+  files" as an instruction to themselves.
+
+  Do not create more than five clones. Do not put fork_choice on the emitted
+  envelope.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [investigation_count, strategy]
+  properties:
+    investigation_count:
+      type: integer
+      minimum: 1
+      maximum: 5
+    strategy:
+      type: string

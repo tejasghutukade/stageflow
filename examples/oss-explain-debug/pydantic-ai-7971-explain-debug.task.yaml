@@ -1,0 +1,67 @@
+id: pydantic-ai-7971-explain-debug
+goal: >
+  Debug reproduce of the oss-explain-issue explainer only. Investigate and
+  prepare a minimal local fix for Pydantic AI issue #7971, Carry a durable
+  unit's emitted events and enqueued messages in its recorded output,
+  targeting a pull request on the fork tejasghutukade/pydantic-ai rather
+  than pydantic/pydantic-ai.
+context: |
+  This is a debug reproduce of the explainer only (intake + oss-explain-issue).
+  It is not the full contribution pipeline.
+
+  Issue: https://github.com/pydantic/pydantic-ai/issues/7971
+  Title: Carry a durable unit's emitted events and enqueued messages in its recorded output
+  Upstream repo: https://github.com/pydantic/pydantic-ai
+  Fork (PR target after the run): https://github.com/tejasghutukade/pydantic-ai
+  Author: DouweM. Milestone: 2026-09. State: OPEN. No assignee. No labels.
+
+  Reported behavior:
+  Under durable execution, ctx.emit() and ctx.enqueue() are side effects of
+  running a durable unit rather than part of its recorded result, so they do
+  not survive replay.
+  - Prefect / DBOS: emit is delivered while the unit runs. On a flow retry, a
+    cache hit, or DBOS recovery the recorded result is replayed without
+    re-running the body, so the event is never re-emitted. Pinned by
+    test_prefect_task_wrapped_tool_emit_is_not_replayed.
+  - Temporal: emit from a tool or event stream handler raises, because the
+    activity's rebuilt RunContext has no path back to the run's event stream.
+  - ctx.enqueue() is rejected on all three engines by EnqueueGuard /
+    deserialize_run_context, because enqueued messages would be dropped on
+    replay.
+
+  Consequence that matters: a capability cannot emit from its own tools under
+  durable execution. FileSystem emitting a FileReadEvent from its read tool —
+  the pattern RepoContext subscribes to — is lossy on Prefect/DBOS and a hard
+  UserError on Temporal.
+
+  Expected behavior (proposal on the issue):
+  Carry a durable unit's emitted events and enqueued messages back in its
+  recorded output, and replay them container-side (workflow / flow / workflow
+  code) when the unit's result is replayed. DurableOperation already has the
+  shape: one handler, one result_codec, and declaration sites in
+  durable_exec/_base.py.
+  1. Worker-side, install capture sinks on the unit's RunContext so emit and
+     enqueue append instead of raising or reaching the live buffer.
+  2. Return them alongside the operation's value, in an envelope over ResultT.
+  3. Container-side, re-emit the captured events and extend pending_messages
+     before handing the value back.
+  Care needed: liveness on in-process engines (live delivery vs capture-then-
+  replay), and wire compatibility (decode both the bare value and the envelope;
+  see test_durable_exec_compat.py).
+
+  Related: #6258 (ctx.emit()), #6696 (@durable_operation), #7176 (capability
+  hooks committing once), #7955 (tool-level durable declarations).
+
+  Maintainer status verified 2026-09-02: issue is open and unassigned. Pydantic
+  contributing guidance asks for assignment before an upstream PR. This run
+  prepares a local change for a pull request on the fork only.
+constraints: |
+  Respect pydantic-ai AGENTS.md, CONTRIBUTING.md, and test docs.
+  Do not commit, push, create a branch, or open a pull request during the run.
+  Do not target pydantic/pydantic-ai. If a later operator publishes, the PR
+  base is tejasghutukade/pydantic-ai (gh pr create --repo tejasghutukade/pydantic-ai).
+  Keep the change limited to the reproduced issue and its regression test.
+  Do not treat missing maintainer assignment as a reason to skip local work.
+  Explainer HTML belongs in Stageflow artifacts, never in the checkout.
+  Debug reproduce; do not commit/push/PR; do not touch other worktrees.
+checkout: /Users/tejasghutukade/Projects/software-factory/.scratch/pydantic-ai-explain-debug

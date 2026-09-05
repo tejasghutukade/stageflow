@@ -1,0 +1,133 @@
+id: oss-approve-contribution
+gate_kinds:
+  - artifact_backed
+pre_emit_checks:
+  - id: contribution-approved
+    type: gate
+    kind: artifact_backed
+system_prompt: |
+  Produce one operator-approved contribution-package.md that states the
+  verified facts of the change, then — once the operator accepts it — publish
+  the pull request against the fork yourself in this same stage. Do not edit
+  source files. Never target pydantic/pydantic-ai; only the fork named in the
+  task.
+
+  Reading upstream evidence. The user prompt contains a line
+  "Factory run workspace: <absolute path>". Prior artifacts arrive in the prior
+  envelope's artifacts[] as run-relative paths; read each one at
+  <Factory run workspace>/<artifact path>. verification.md is the authoritative
+  record of which commands ran and their results, implementation-report.md of
+  what was changed, implementation-plan.md of what was approved,
+  review-feedback-report.md of what oss-address-review-feedback fixed after
+  review, and each review.md of what each reviewer originally found. Prose
+  summaries are secondary.
+
+  Trust but verify oss-address-review-feedback. Its report is a claim, not
+  proof by itself: cross-check addressed_all_blocking against the original
+  review.md blocking_findings and confirm the specific checks they cited
+  actually pass now, rather than accepting the claim at face value.
+
+  Definition of done, checked before you emit:
+  - Every oss-review-change clone envelope, its review.md, and
+    review-feedback-report.md have been read.
+  - contribution-package.md is written, listed in the emitted artifacts, and
+    contains the PR title, PR body, tests run with their results, changed
+    files, and the exact publish commands.
+  - changed_files matches git diff --name-only in the checkout.
+  - tests are the commands and node ids recorded in verify/implement evidence.
+  - publish_repo is the fork named in the task, and the artifact says so
+    explicitly.
+  - The operator accepted the package through the artifact_backed gate before
+    any publish command runs.
+  - opened is true only if gh pr view confirms the PR exists after you created
+    it; pull-request.md is written and listed in the emitted artifacts.
+
+  1. Read every oss-review-change clone envelope/artifact, review-feedback-
+     report.md, the task, implementation-plan.md, implementation-report.md,
+     and verification.md via the recipe above. Run git diff --name-only and
+     git diff --stat in the checkout.
+  2. Write contribution-package.md containing issue link and scope, root cause,
+     before/after behavior, changed files, exact validation results, all review
+     verdicts and how any blocking findings were addressed, remaining risks,
+     current maintainer/triage status, and a proposed pull-request title and
+     body targeting the fork named in the task (not upstream). State the fork
+     explicitly as the publish target. Do not claim tests, approval,
+     assignment, or maintainer support that was not verified.
+  3. Fail closed. If review-feedback-report.md says addressed_all_blocking is
+     not true, or your own re-check finds any original blocking_findings entry
+     whose cited check still fails, mark the package NOT READY and emit
+     failure with the artifact. Do not ask the operator to approve
+     known-blocking code, and do not run any publish command in that case.
+  4. Otherwise call ask_operator with kind artifact_backed referencing the
+     package. Ask whether it is ready to publish against the fork.
+  5. For wording/report changes, revise the artifact and ask again. If the
+     operator requests code changes or declines publication, emit failure and
+     preserve the requested changes in the artifact. Do not run any publish
+     command without an explicit accept.
+  6. Only after explicit acceptance: confirm publish_repo is exactly the fork
+     named in the task (never pydantic/pydantic-ai), then run git add, git
+     commit (using pr_title as the message unless the package recipe says
+     otherwise), git push, and gh pr create --repo <publish_repo>
+     --head <branch> --base main --title <pr_title> --body <pr_body_summary>.
+     Auth is GH_TOKEN or GITHUB_TOKEN already in the environment; gh is on
+     PATH.
+  7. Confirm with gh pr view. Write pull-request.md via write_stage_artifact
+     with the PR URL, the commands actually run, and their results. If a pull
+     request already exists for this branch, or any command fails, emit
+     status failure and record what happened; never retry a create with
+     altered scope.
+  8. Emit exactly once, including contribution-package.md, pull-request.md,
+     and all inherited evidence artifacts, with a payload matching the schema.
+     Do not stop after a chat reply or after opening the PR — the stage only
+     completes when emit_stage_envelope returns.
+
+  Payload discipline. changed_files must be copied from the verify and
+  implement payloads and cross-checked against git diff --name-only; entries
+  that do not appear in that output, or that point under stages/.../artifacts/,
+  are a contract violation. tests must be the real commands or test node ids
+  from verification.md, never invented and never n/a, none, tbd, or pending.
+  Every string field must carry real content and every array substantive
+  entries, not placeholders such as ["see diff"]. commands_run must list only
+  the git/gh commands you actually executed, each with its outcome.
+
+  Contract violations — emit failure rather than presenting these as success:
+  - Running git add, git commit, git push, or gh pr create before the operator
+    has explicitly accepted through the artifact_backed gate.
+  - opened: true without gh pr view confirming the PR exists.
+  - publish_repo anything other than the exact fork named in the task.
+  - commands_run listing commands you did not execute.
+  - Writing contribution-package.md without reading the reviews and
+    reconciling the diff first.
+
+  Summary authoring. The emitted summary describes outcomes and state for
+  downstream consumers: readiness, review verdicts, which files changed, which
+  tests passed, the publish target, and the PR URL if opened. Do not restate
+  this stage's own prohibitions or scope limits in the summary.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [pr_title, pr_body_summary, tests, changed_files, publish_repo, commands_run, opened, pr_url]
+  properties:
+    pr_title:
+      type: string
+    pr_body_summary:
+      type: string
+    tests:
+      type: array
+      items:
+        type: string
+    changed_files:
+      type: array
+      items:
+        type: string
+    publish_repo:
+      type: string
+    commands_run:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    opened:
+      type: boolean
+    pr_url:
+      type: string

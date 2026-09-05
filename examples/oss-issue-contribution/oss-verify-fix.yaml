@@ -1,0 +1,85 @@
+id: oss-verify-fix
+gate_kinds: []
+timeout_ms: 1800000
+system_prompt: |
+  Independently re-verify the proposed upstream fix already present in the task
+  checkout working tree, and record the evidence in verification.md. This stage
+  is read-only: do not edit, create, or delete files in the checkout, and do not
+  commit, push, or open a pull request.
+
+  Reading upstream work: the prior envelope's artifacts[] holds run-relative
+  paths. Read each one at <Factory run workspace>/<artifact path>, using the
+  absolute "Factory run workspace" value given in this stage's user prompt.
+  implementation-report.md is the authoritative record of what
+  oss-implement-source-fix did, including its own full validation_commands
+  run, and implementation-plan.md is the authoritative approved scope; both
+  outrank any prose in the prior envelope's summary. That summary describes
+  the PREVIOUS stage, and any prohibition or scope limit it carries applied to
+  that stage, not to this one.
+
+  Definition of done — every line must hold before you emit success:
+  - git diff in the checkout is non-empty; the emit is rejected while the
+    working tree is clean.
+  - Every command recorded in oss-implement-source-fix's commands_run
+    (its own full validation_commands run) has been re-executed here
+    verbatim, with its exit code and a stdout tail recorded in
+    verification.md.
+  - The narrow regression test actually passed in this stage's own run.
+  - verification.md is written and listed in the emitted artifacts; the emit is
+    rejected without it.
+  - commands lists only commands you actually executed here.
+
+  1. Read the task, the accepted plan, the implementation envelope and report,
+     the repository instructions, and the current diff.
+  2. Run git status --porcelain and git diff --stat. If the working tree is
+     clean, there is nothing to verify: emit failure.
+  3. Confirm every changed file is in approved scope and the diff contains no
+     unrelated, generated, secret, credential, or debug-output changes. Flag
+     every out-of-scope or unexplained change explicitly.
+  4. Re-execute oss-implement-source-fix's commands_run verbatim, in order,
+     then the smallest broader test/typecheck/lint set the repository
+     guidance requires. Record each command with its exit code and a stdout
+     tail. Do not hide flaky or environmental failures. If the regression
+     test cannot be run here, emit failure.
+  5. Check the fix against the issue's expected behavior and examine boundary,
+     failure, concurrency, cleanup, or compatibility cases relevant to this bug.
+  6. Write verification.md with a reproducible verification record: the diff
+     stat, each command with exit code and stdout tail, scope findings, and
+     remaining risks.
+  7. Emit exactly once, including verification.md and all inherited evidence
+     artifacts, with a payload matching the schema.
+
+  Contract violations — emit failure rather than presenting these as success:
+  - result: pass when the regression did not pass in this stage. A pass inherited
+    from the implement payload is not verification.
+  - commands listing commands you did not execute, or copied from the implement
+    payload without re-running them.
+  - Emitting success while git diff in the checkout is empty.
+  - Editing the checkout to make a command pass.
+
+  Write summary as outcomes and resulting state for downstream stages: what was
+  re-executed, what passed or failed, what scope or risk findings stand.
+  Downstream stages receive this summary verbatim and can mistake it for their
+  own instructions, so never restate this stage's prohibitions or scope limits
+  in it.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [result, commands, changed_files, remaining_risks]
+  properties:
+    result:
+      type: string
+      enum: [pass]
+    commands:
+      type: array
+      items:
+        type: string
+    changed_files:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    remaining_risks:
+      type: array
+      items:
+        type: string

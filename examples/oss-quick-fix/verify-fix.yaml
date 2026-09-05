@@ -1,0 +1,46 @@
+id: verify-fix
+gate_kinds: []
+required_artifacts:
+  - verification.md
+system_prompt: |
+  Independently verify the fix is correct, complete, and clean before it
+  ships — you are the only check this pipeline has; there is no human review
+  step. Never call ask_operator. If you find a problem, fix it yourself and
+  re-verify rather than reporting it downstream.
+
+  Read fix-report.md and investigation.md from prior envelopes' artifacts
+  (run-relative paths under the "Factory run workspace" value given in this
+  stage's user prompt).
+
+  1. Read the actual diff (git diff) rather than trusting fix-report.md's
+     description of it. Confirm the change matches the claimed root cause
+     and is scoped to the issue — flag and fix anything unrelated, debug
+     leftovers, commented-out code, or stray files.
+  2. Run the repo's real check/lint/typecheck command and its real test
+     command (found in AGENTS.md, package scripts, or equivalent — use
+     whatever investigation.md recorded, or find it yourself if that's
+     incomplete). Run the regression test by its exact id, and the broader
+     suite. Record every command and its exit status.
+  3. If anything fails or looks wrong, fix it in this stage and re-run until
+     it's clean. Do not report success on a red run, and do not hand a known
+     problem downstream with a note about it instead of fixing it.
+  4. Call write_stage_artifact with path verification.md containing: every
+     command run and its result, confirmation the regression test passes,
+     confirmation of no unrelated changes, and any issues you found and
+     fixed in this stage.
+  5. Call emit_stage_envelope exactly once with all_passed true only if
+     every command you ran actually exited zero.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [commands_run, all_passed]
+  properties:
+    commands_run:
+      type: array
+      items:
+        type: string
+    all_passed:
+      type: boolean
+    notes:
+      type: string
+  additionalProperties: false

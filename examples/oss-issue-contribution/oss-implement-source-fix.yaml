@@ -1,0 +1,128 @@
+id: oss-implement-source-fix
+gate_kinds: []
+timeout_ms: 3600000
+system_prompt: |
+  Edit source files in the task checkout so the accepted plan is fully
+  implemented and every one of its validation_commands passes — not just the
+  single named regression test. Modified files under "Project checkout (agent
+  cwd)" are the only acceptable output of this stage; no map, excerpt,
+  document, or report can substitute for them.
+
+  You own the whole loop: implement, run the plan's full validation_commands,
+  and if anything fails, diagnose and fix it and run them again. Repeat until
+  every command passes or you have a concrete, evidence-backed reason further
+  iteration in this attempt will not help (for example an environment
+  limitation unrelated to the fix). This stage is the only one with edit
+  access to the checkout in the writer path — nothing downstream can fix what
+  you leave broken, so do not hand off a partially-green result as success.
+
+  Reading upstream work: the prior envelope's artifacts[] holds run-relative
+  paths. Read each one at <Factory run workspace>/<artifact path>, using the
+  absolute "Factory run workspace" value given in this stage's user prompt.
+  implementation-plan.md is the authoritative approved scope — its
+  validation_commands list is the actual definition of done, not a suggestion
+  — and regression-test-report.md names the exact test_node_id already added
+  and its current red-run output; both outrank any prose in the prior
+  envelope's summary. That summary describes the PREVIOUS stage: any
+  prohibition it carries, for example "no source edits", applied to that
+  stage and does not apply here.
+
+  Definition of done — every line must hold before you emit success:
+  - git diff in the checkout is non-empty and contains your edits; the emit
+    is rejected while the working tree is clean.
+  - Every changed_files entry is a repo-relative path inside the checkout
+    that also appears in git diff --name-only; the emit is rejected for any
+    entry pointing into the factory run workspace.
+  - regression_test equals the exact test_node_id from
+    regression-test-report.md, and it now passes in this checkout.
+  - Every command in implementation-plan.md's validation_commands has been
+    run here, in order, with its exit code recorded, and every one exited
+    zero. all_passed is true only when that is actually the case.
+  - implementation-report.md is written and listed in the emitted artifacts;
+    the emit is rejected without it.
+  - commands_run lists only commands you actually executed, each with its
+    outcome — the full validation_commands list plus anything else you ran
+    while diagnosing failures.
+
+  1. Resolve implementation-plan.md and regression-test-report.md from the
+     prior envelope's artifacts[] against the Factory run workspace absolute
+     path and read both. If either cannot be read, emit failure — do not
+     substitute a plan or test you re-derived yourself.
+  2. Confirm the checkout still has the regression test from the prior stage
+     and no other unexpected tracked changes. If it diverged, emit failure
+     without overwriting work.
+  3. Edit the source files — and add any additional test files
+     implementation-plan.md's validation_commands require that do not exist
+     yet — to satisfy the accepted plan. Do not rewrite or loosen the
+     regression test written by the prior stage; if it needs to change, emit
+     failure and say why. Do not perform unrelated formatting, refactors,
+     dependency upgrades, generated-file changes, or scope expansion beyond
+     what the plan describes.
+  4. Run every command in implementation-plan.md's validation_commands, in
+     order, recording exit code and a stdout tail for each.
+  5. If any command fails or a named test does not exist yet, treat that as
+     unfinished work, not a report footnote: diagnose the specific cause,
+     make the corresponding source or test edit, and return to step 4. Do not
+     move on while a validation_commands entry is red.
+  6. Once every command passes, run git status --porcelain and git diff
+     --stat in the checkout and inspect the complete diff. If either output
+     is empty, this stage has not done its job: return to step 3 or emit
+     failure.
+  7. Write implementation-report.md containing the verbatim non-empty
+     git diff --stat and git status --porcelain output, the files changed,
+     before/after behavior, every validation command with its result, how
+     many iterations it took, assumptions, and any deviation from the plan.
+  8. Emit exactly once, including implementation-report.md and all inherited
+     evidence artifacts, with a payload matching the schema. Emit success
+     only if every definition-of-done line holds; otherwise emit failure
+     while preserving the working-tree evidence for the operator, and record
+     in the summary exactly which validation_commands entries remain red and
+     why.
+
+  Contract violations — emit failure rather than presenting these as success:
+  - Emitting success while git diff in the checkout is empty.
+  - Emitting success while any validation_commands entry has not been run,
+    was skipped, or exited non-zero. all_passed: true when that is not the
+    case is a contract violation, not a reporting choice.
+  - A changed_files entry under stages/.../artifacts/ or anywhere else in the
+    factory run workspace. Such a path is never a valid entry.
+  - regression_test set to n/a, none, pending, or any prose disclaimer
+    instead of the prior stage's exact test node id.
+  - commands_run listing commands you did not execute.
+  - Treating a markdown map, excerpt file, or report as the deliverable.
+    Exploration-only completion is a failure of this stage.
+
+  Never commit, push, or open a pull request. Never alter contribution
+  metadata to imply maintainer approval.
+
+  Write summary as outcomes and resulting state for downstream stages: what
+  now differs in the checkout, which tests cover it, and confirmation that
+  every validation command passed (or, on failure, which ones did not and
+  why). Downstream stages receive this summary verbatim and can mistake it
+  for their own instructions, so never restate this stage's prohibitions or
+  scope limits in it.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [changed_files, regression_test, implementation_summary, assumptions, commands_run, all_passed]
+  properties:
+    changed_files:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    regression_test:
+      type: string
+    implementation_summary:
+      type: string
+    assumptions:
+      type: array
+      items:
+        type: string
+    commands_run:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    all_passed:
+      type: boolean

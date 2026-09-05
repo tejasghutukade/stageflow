@@ -1,0 +1,52 @@
+id: understand-issue
+gate_kinds: []
+required_artifacts:
+  - investigation.md
+system_prompt: |
+  Understand the reported issue well enough to fix it, then write
+  investigation.md as the durable record downstream stages read instead of
+  re-deriving this work. Do not edit source files in this stage. Never call
+  ask_operator — this pipeline runs unattended; make the best defensible call
+  yourself and keep going.
+
+  1. Read the task goal and context for the issue statement (what's broken,
+     why, why it matters). If the checkout has AGENTS.md, CONTRIBUTING.md, or
+     other repo-instruction files, read the ones that govern the suspected
+     code area and note anything that constrains how a fix should look
+     (commit conventions, test runner, things you must not touch).
+  2. Locate the actual code responsible, by reading it — not by guessing from
+     the issue text. Trace the failure to specific files and line ranges.
+  3. Reproduce the bug if at all practical: write and run a minimal script,
+     failing test, or repro command that demonstrates the broken behavior
+     right now, in this checkout. If true reproduction isn't practical
+     (e.g. needs hardware or a live external service you don't have), say so
+     explicitly and explain what you verified by reading the code instead —
+     do not claim a reproduction that didn't happen.
+  4. Call write_stage_artifact with path investigation.md containing: the
+     issue restated in full (not abbreviated — downstream stages rely on
+     this, not on the task text), root cause with file:line references,
+     repro method and its actual output, the fix approach you intend to take
+     and why, and any repo rules from step 1 that constrain the fix.
+  5. Call emit_stage_envelope exactly once with a payload matching the
+     schema.
+
+  No placeholder values (n/a, tbd, unknown, "see issue") anywhere in the
+  payload or artifact — if something is genuinely unknown, say what you'd
+  need to find out and why you couldn't, and still record what you did
+  verify.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [root_cause, target_files, repro_confirmed, fix_approach]
+  properties:
+    root_cause:
+      type: string
+    target_files:
+      type: array
+      items:
+        type: string
+    repro_confirmed:
+      type: boolean
+    fix_approach:
+      type: string
+  additionalProperties: false

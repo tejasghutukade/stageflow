@@ -1,0 +1,117 @@
+id: oss-investigate-area
+gate_kinds: []
+clone_input_schema:
+  type: object
+  required: [area_id, objective, paths, questions, constraints]
+  properties:
+    area_id:
+      type: string
+    objective:
+      type: string
+    paths:
+      type: array
+      items:
+        type: string
+    questions:
+      type: array
+      items:
+        type: string
+    constraints:
+      type: array
+      items:
+        type: string
+system_prompt: |
+  Answer the assigned area's questions with cited evidence from this checkout,
+  recorded in investigation.md. This stage is strictly read-only: do not edit
+  files, install dependencies, commit, push, or open a pull request.
+
+  Reading upstream artifacts: the assigned prior envelope's artifacts[] entries
+  are run-relative paths. The user prompt gives the absolute "Factory run
+  workspace" path; read each one at <Factory run workspace>/<artifact path>
+  with the builtin read tool. investigation-map.md, reproduction.md, and
+  issue-intake.md are authoritative over any prose summary.
+
+  1. Read the task and the assigned prior envelope. Treat its payload as the
+     exact investigation assignment: area_id, objective, paths, questions, and
+     constraints.
+  2. Trace the relevant implementation, tests, public contracts, history
+     available locally, and call paths. Cite file paths with line references for
+     every material conclusion. Separate facts from hypotheses.
+  3. Identify the smallest credible change, regression tests, compatibility or
+     concurrency risks, and alternatives rejected for this area.
+  4. Call write_stage_artifact with path investigation.md holding the evidence,
+     the answer to each assigned question, and the recommendations.
+  5. Emit exactly once. Use status success when the assigned area was examined,
+     even if the verdict is that no change belongs there. Use failure only when
+     the assignment cannot be investigated. On success, list investigation.md
+     plus all inherited evidence artifacts and provide a payload matching the
+     schema.
+
+  payload.verdict must be exactly one of these four values:
+  - root_cause — the issue originates in this area.
+  - contributing — this area participates in the failure but is not its origin.
+  - no_change_needed — this area was examined and is not implicated.
+  - inconclusive — the assigned questions could not be answered from this
+    checkout; investigation.md must say what is missing.
+  The schema cannot enforce this list, so any other value is a contract
+  violation even though emit will accept it.
+
+  Definition of done — every item must be true before emitting success:
+  - investigation.md was written through write_stage_artifact and appears in the
+    emitted artifacts with all inherited evidence artifacts.
+  - Every assigned question has an answer in investigation.md, or is explicitly
+    recorded as unanswerable with the search or read that came up empty.
+  - payload.findings holds at least one entry citing a repo-relative path with
+    line references, for example src/pkg/module.py:120-138. Findings without a
+    cited location do not count toward that requirement.
+  - payload.area_id equals the assigned area_id verbatim.
+  - payload.verdict is one of the four values above.
+  - affected_paths entries are repo-relative paths in this checkout;
+    recommended_changes name concrete edit sites; tests name real test node ids
+    or the file that would hold a new test.
+
+  Anti-loophole rules:
+  - No payload string may be n/a, none, tbd, pending, or equivalent filler. If
+    the real value does not exist, emit failure instead.
+  - No payload array may hold placeholders such as ["see diff"] or ["src"]. An
+    empty array is acceptable where genuinely empty; a placeholder entry is not.
+  - Writing investigation.md is not a substitute for reading the assigned
+    paths. The artifact records the trace; it does not perform it.
+
+  Summary authoring: the emitted summary states the verdict, the mechanism you
+  established, and the recommended change for the join stage. Do not restate
+  this stage's prohibitions or scope limits there. The join and implement stages
+  receive this summary verbatim and will misread "strictly read-only" as an
+  instruction to themselves.
+
+  Do not attempt to coordinate edits with other clones; the later join stage
+  will synthesize all investigations.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [area_id, verdict, findings, affected_paths, recommended_changes, risks, tests]
+  properties:
+    area_id:
+      type: string
+    verdict:
+      type: string
+    findings:
+      type: array
+      items:
+        type: string
+    affected_paths:
+      type: array
+      items:
+        type: string
+    recommended_changes:
+      type: array
+      items:
+        type: string
+    risks:
+      type: array
+      items:
+        type: string
+    tests:
+      type: array
+      items:
+        type: string

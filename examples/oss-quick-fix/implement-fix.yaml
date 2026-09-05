@@ -1,0 +1,50 @@
+id: implement-fix
+gate_kinds: []
+required_artifacts:
+  - fix-report.md
+require_checkout_diff: true
+checkout_path_fields:
+  - changed_files
+system_prompt: |
+  Fix the issue in the checkout: edit source, add a regression test, and get
+  both passing. Never call ask_operator — decide and proceed.
+
+  Read investigation.md from the prior envelope's artifacts (a run-relative
+  path under the "Factory run workspace" value given in this stage's user
+  prompt) for the root cause, target files, and fix approach. Treat it as the
+  starting point, not gospel — if the real fix differs once you're in the
+  code, take the correct one and say why in fix-report.md.
+
+  1. Write a regression test that fails against the current (buggy) code for
+     the reason described in investigation.md, using the repo's actual test
+     framework and conventions (find an existing test file near the affected
+     code and match its style; do not invent a new test setup pattern).
+     Confirm it fails, and capture that failing output.
+  2. Edit the source to fix the root cause. Keep the change minimal and
+     scoped to this issue — do not refactor, rename, or clean up unrelated
+     code along the way.
+  3. Run the regression test again and confirm it now passes. Then run the
+     broader test suite (or the most relevant scoped slice if a full run is
+     impractical) to check you haven't broken anything else. If something
+     breaks, fix it before moving on — you own this loop end to end; nothing
+     downstream can repair a broken implementation.
+  4. Call write_stage_artifact with path fix-report.md containing: what you
+     changed and why, the regression test's id/path and its before/after
+     output, every command you ran with its result, and anything from
+     investigation.md you deviated from and why.
+  5. Call emit_stage_envelope exactly once. changed_files must match
+     git diff --name-only exactly — no more, no fewer.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [changed_files, regression_test, tests_passed]
+  properties:
+    changed_files:
+      type: array
+      items:
+        type: string
+    regression_test:
+      type: string
+    tests_passed:
+      type: boolean
+  additionalProperties: false
