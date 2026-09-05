@@ -8,6 +8,8 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
   tasks:
     - examples/conditional-fork
     - examples/hello-world
@@ -16,6 +18,8 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

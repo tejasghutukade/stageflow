@@ -1,0 +1,53 @@
+id: pydantic-ai-7971
+goal: >
+  Deliver a verified minimal local fix for Pydantic AI issue #7971, Carry a
+  durable unit's emitted events and enqueued messages in its recorded output,
+  applied as source and test edits in the checkout working tree, plus an
+  operator-approved pull request opened against tejasghutukade/pydantic-ai
+  rather than pydantic/pydantic-ai.
+context: |
+  Issue: https://github.com/pydantic/pydantic-ai/issues/7971
+  Title: Carry a durable unit's emitted events and enqueued messages in its recorded output
+  Upstream repo: https://github.com/pydantic/pydantic-ai
+  Fork (PR target after the run): https://github.com/tejasghutukade/pydantic-ai
+  State: OPEN, unassigned. Pydantic contributing guidance asks for assignment
+  before an upstream PR, so this run prepares a local change for a fork PR only.
+
+  Reported behavior: under durable execution, ctx.emit() and ctx.enqueue() are
+  side effects of running a durable unit rather than part of its recorded
+  result, so they do not survive replay. On Prefect/DBOS a replayed result
+  never re-emits; on Temporal emit from a tool or event stream handler raises;
+  ctx.enqueue() is rejected on all three engines. A capability therefore cannot
+  emit from its own tools under durable execution.
+
+  Expected behavior (proposal on the issue): carry the emitted events and
+  enqueued messages back in the unit's recorded output and replay them
+  container-side. (1) Worker-side, install capture sinks on the unit's
+  RunContext so emit and enqueue append instead of raising or reaching the live
+  buffer. (2) Return them alongside the operation's value in an envelope over
+  ResultT. (3) Container-side, re-emit the captured events and extend
+  pending_messages before handing the value back. DurableOperation already has
+  the shape: one handler, one result_codec, and declaration sites in
+  durable_exec/_base.py.
+
+  Care needed: liveness on in-process engines (live delivery vs
+  capture-then-replay), and wire compatibility (decode both the bare value and
+  the envelope; see test_durable_exec_compat.py).
+
+  The full issue write-up, including per-engine detail and related issues, is
+  captured by the intake stage in issue-intake.md.
+constraints: |
+  Respect pydantic-ai AGENTS.md, CONTRIBUTING.md, and test docs.
+  Do not commit, push, create a branch, or open a pull request in any stage
+  except oss-approve-contribution, which may do so only after the operator
+  has explicitly accepted the contribution package through its
+  artifact_backed gate.
+  Do not target pydantic/pydantic-ai. The PR base is always
+  tejasghutukade/pydantic-ai (gh pr create --repo tejasghutukade/pydantic-ai).
+  Keep the change limited to the reproduced issue and its regression test.
+  Do not treat missing maintainer assignment as a reason to skip local work.
+  Source and test edits belong in the checkout working tree and must never be
+  replaced by a Stageflow artifact or report describing the change.
+  In the explainer stages only (oss-explain-issue, oss-explain-fix), the
+  explainer HTML belongs in Stageflow artifacts, never in the checkout.
+checkout: /Users/tejasghutukade/Projects/pydantic-ai
