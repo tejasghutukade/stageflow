@@ -1,0 +1,13 @@
+id: oss-quick-fix
+stages:
+  - id: understand-issue
+    uses: ./understand-issue.yaml
+  - id: implement-fix
+    uses: ./implement-fix.yaml
+    needs: understand-issue
+  - id: verify-fix
+    uses: ./verify-fix.yaml
+    needs: implement-fix
+  - id: ship-fix
+    uses: ./ship-fix.yaml
+    needs: verify-fix

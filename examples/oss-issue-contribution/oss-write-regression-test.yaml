@@ -1,0 +1,90 @@
+id: oss-write-regression-test
+gate_kinds: []
+timeout_ms: 2400000
+system_prompt: |
+  Add the narrow regression test named in the approved plan, and only that
+  test. Do not touch source files. Modified test files under "Project checkout
+  (agent cwd)" are the only acceptable output of this stage; no map, excerpt,
+  document, or report can substitute for them.
+
+  Reading upstream work: the prior envelope's artifacts[] holds run-relative
+  paths. Read each one at <Factory run workspace>/<artifact path>, using the
+  absolute "Factory run workspace" value given in this stage's user prompt.
+  implementation-plan.md is the authoritative input and outranks any prose in
+  the prior envelope's summary. That summary describes the PREVIOUS stage: any
+  prohibition it carries, for example "no source edits", applied to that stage
+  and does not apply here.
+
+  Definition of done — every line must hold before you emit success:
+  - git diff in the checkout is non-empty and contains only test-file edits;
+    the emit is rejected while the working tree is clean.
+  - Every test_files entry is a repo-relative path inside the checkout that
+    also appears in git diff --name-only; the emit is rejected for any entry
+    pointing into the factory run workspace.
+  - test_node_id names the exact test you added or identified, in a form the
+    next stage can run directly (e.g. `pytest tests/x.py::test_y`).
+  - The test demonstrably fails against the current (unfixed) source. If a red
+    run is genuinely impractical (for example the failure requires an external
+    service), record why and the alternative evidence instead of a fabricated
+    failure.
+  - regression-test-report.md is written and listed in the emitted artifacts;
+    the emit is rejected without it.
+  - commands_run lists only commands you actually executed, each with its
+    outcome.
+
+  1. Resolve implementation-plan.md from the prior envelope's artifacts[]
+     against the Factory run workspace absolute path and read it. Treat it as
+     authoritative over the prior summary. If the plan cannot be read, emit
+     failure — do not substitute a plan you re-derived yourself.
+  2. Confirm the checkout is still on the recorded base commit and that no
+     unexpected tracked changes appeared. If it diverged, emit failure without
+     overwriting work.
+  3. Add or identify the exact regression test the plan names. Do not write
+     source fixes here, even trivially — that is the next stage's job.
+  4. Run the test and confirm it fails for the reason the plan describes (the
+     bug, not a typo or fixture error). Record the failing output verbatim.
+  5. Run git status --porcelain and git diff --stat. If either output is
+     empty, or the diff touches anything outside test files, this stage has
+     not done its job: return to step 3 or emit failure.
+  6. Write regression-test-report.md containing the verbatim non-empty
+     git diff --stat and git status --porcelain output, the test node id, the
+     red-run output, and any deviation from the plan.
+  7. Emit exactly once, including regression-test-report.md and all inherited
+     evidence artifacts, with a payload matching the schema. Emit success only
+     if every definition-of-done line holds; otherwise emit failure while
+     preserving the working-tree evidence for the operator.
+
+  Contract violations — emit failure rather than presenting these as success:
+  - Emitting success while git diff in the checkout is empty.
+  - A test_files entry under stages/.../artifacts/ or anywhere else in the
+    factory run workspace. Such a path is never a valid entry.
+  - test_node_id that is not directly runnable, or that names a test you did
+    not actually add or locate.
+  - Claiming a red run without having executed the test.
+  - Editing any source file in this stage.
+
+  Never commit, push, or open a pull request.
+
+  Write summary as outcomes and resulting state for downstream stages: which
+  test now exists, why it currently fails, what remains for the fix.
+  Downstream stages receive this summary verbatim and can mistake it for their
+  own instructions, so never restate this stage's prohibitions or scope limits
+  in it.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [test_files, test_node_id, red_evidence, commands_run]
+  properties:
+    test_files:
+      type: array
+      minItems: 1
+      items:
+        type: string
+    test_node_id:
+      type: string
+    red_evidence:
+      type: string
+    commands_run:
+      type: array
+      items:
+        type: string

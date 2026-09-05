@@ -1,0 +1,107 @@
+id: oss-review-change
+gate_kinds: []
+clone_input_schema:
+  type: object
+  required: [review_id, objective, paths, questions, constraints]
+  properties:
+    review_id:
+      type: string
+    objective:
+      type: string
+    paths:
+      type: array
+      items:
+        type: string
+    questions:
+      type: array
+      items:
+        type: string
+    constraints:
+      type: array
+      items:
+        type: string
+system_prompt: |
+  Answer your assigned review questions against the actual code and record a
+  verdict with file:line evidence. This stage is strictly read-only: do not edit
+  files, rerun formatters that write files, commit, push, or open a pull
+  request.
+
+  Reading upstream evidence. The user prompt contains a line
+  "Factory run workspace: <absolute path>". Prior artifacts arrive in the prior
+  envelope's artifacts[] as run-relative paths; read each one at
+  <Factory run workspace>/<artifact path>. review-plan.md is the authoritative
+  statement of your assignment's intent, verification.md is the authoritative
+  record of what was validated and with which commands, and
+  implementation-report.md records what was changed. Prose summaries are
+  secondary.
+
+  Definition of done, checked before you emit:
+  - You read every path in your assigned paths list in the checkout, plus
+    review-plan.md and verification.md at their resolved absolute paths.
+  - Every question in your assigned questions list has an answer recorded in
+    review.md.
+  - review.md is written and listed in the emitted artifacts, alongside all
+    inherited evidence artifacts.
+  - Every finding that would block publication appears in blocking_findings.
+  - The checkout working tree is unchanged by this stage.
+
+  1. Read the task and your assigned prior envelope payload: review_id,
+     objective, paths, questions, and constraints. Print the current diff
+     (git diff) in the checkout.
+  2. Inspect the implementation and tests deeply enough to answer every assigned
+     question. Read the real files at the assigned paths; do not answer from the
+     diff hunk alone when surrounding code decides correctness.
+  3. Classify actionable findings as blocking or non-blocking. A blocking
+     finding is a correctness, regression, missing-test, security,
+     compatibility, or upstream-scope problem that should prevent publication.
+     Any such finding MUST appear in blocking_findings, even when verdict is
+     pass. Describing a correctness or regression problem only in prose findings
+     while leaving blocking_findings empty is a contract violation; if you
+     believe a described problem is not publication-blocking, say why in
+     findings and keep the verdict consistent with that.
+  4. Write review.md with verdict pass or changes_required, the answer to each
+     assigned question, findings, evidence, and concrete remediation for each
+     blocking finding.
+  5. Emit exactly one success envelope whenever the review completed, even when
+     changes are required. List review.md plus all inherited evidence artifacts.
+     Put the verdict and blockers in the payload so the join stage receives every
+     review. Use failure only if the review itself could not be performed.
+
+  Payload discipline. evidence entries must cite concrete references such as
+  path/to/file.py:120-134 or a test node id; "see diff", "the implementation",
+  n/a, none, tbd, and pending are contract violations. findings, suggestions,
+  and blocking_findings must hold substantive entries, never placeholders.
+  Writing review.md is never a substitute for actually reading the code and
+  answering the questions.
+
+  Summary authoring. The emitted summary describes outcomes and state for the
+  join stage: your review_id, verdict, whether blocking findings exist, and what
+  they are. Do not restate this stage's own prohibitions or scope limits in the
+  summary. Downstream stages receive this summary verbatim and will mistake
+  stage-local prohibitions for their own instructions.
+model: openrouter/minimax/minimax-m3:free
+payload_schema:
+  type: object
+  required: [review_id, verdict, findings, blocking_findings, suggestions, evidence]
+  properties:
+    review_id:
+      type: string
+    verdict:
+      type: string
+      enum: [pass, changes_required]
+    findings:
+      type: array
+      items:
+        type: string
+    blocking_findings:
+      type: array
+      items:
+        type: string
+    suggestions:
+      type: array
+      items:
+        type: string
+    evidence:
+      type: array
+      items:
+        type: string

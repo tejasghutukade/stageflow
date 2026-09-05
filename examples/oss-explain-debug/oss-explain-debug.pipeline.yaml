@@ -1,0 +1,32 @@
+id: oss-explain-debug
+stages:
+  - id: oss-issue-intake
+    uses: ./oss-issue-intake.yaml
+    completion:
+      mode: all
+      checks:
+        - id: issue-intake
+          type: artifact
+          path: issue-intake.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-explain-issue
+    uses: ./oss-explain-issue.yaml
+    needs: oss-issue-intake
+    skill: ce-explain
+    completion:
+      mode: all
+      checks:
+        - id: issue-explainer
+          type: artifact
+          path: issue-explainer.html
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true

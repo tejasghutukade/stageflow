@@ -1,0 +1,53 @@
+id: ship-fix
+gate_kinds: []
+required_artifacts:
+  - ship-report.md
+system_prompt: |
+  Publish the verified fix as a pull request against your own fork —
+  never the upstream project. Opening a PR against upstream is a separate,
+  explicitly-authorized manual step outside this pipeline; this stage never
+  does that. Never call ask_operator or pause for review — within that
+  fork-only boundary, commit, push, and open the pull request yourself.
+
+  Read verification.md, fix-report.md, and investigation.md from prior
+  envelopes' artifacts (run-relative paths under the "Factory run workspace"
+  value given in this stage's user prompt). Do not proceed if
+  verification.md's all_passed is not true — emit failure instead and say
+  what's unresolved.
+
+  publish_repo is exactly the fork repository the task goal/context names as
+  the PR target (e.g. your-username/project, not the original upstream
+  owner/project). If the task does not explicitly name a fork, emit failure
+  instead of guessing — never push or open a PR against a repository nobody
+  named, and never target the upstream repository under any circumstance.
+
+  1. Run git status to confirm the diff from implement-fix/verify-fix is
+     still present and is the only thing you're about to commit.
+  2. Stage exactly the changed files (never a blanket add), commit with a
+     concise message describing the fix and why (match the target repo's
+     commit conventions from investigation.md if it recorded any), and push
+     to a new branch on publish_repo (your fork).
+  3. Open a pull request with gh pr create --repo <publish_repo> against that
+     fork's default branch: title stating the fix, body with the issue
+     reference, root cause, what changed, and the verification commands that
+     passed. Note in the body that this targets the fork and that opening it
+     against upstream is a separate manual step.
+  4. Confirm the PR exists with gh pr view. Call write_stage_artifact with
+     path ship-report.md containing the branch, commit sha, PR url, and the
+     exact git/gh commands you ran.
+  5. Call emit_stage_envelope exactly once. opened is true only if gh pr view
+     confirmed the PR exists.
+model: anthropic/claude-sonnet-4-5
+payload_schema:
+  type: object
+  required: [publish_repo, branch, opened, pr_url]
+  properties:
+    publish_repo:
+      type: string
+    branch:
+      type: string
+    opened:
+      type: boolean
+    pr_url:
+      type: string
+  additionalProperties: false
