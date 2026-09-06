@@ -559,7 +559,7 @@ function buildUserPrompt(
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
     formatPriorEnvelope(input.priorEnvelope, input.priorEnvelopes),
     input.feedbackLoopContext !== undefined
-      ? formatFeedbackLoopContext(input.feedbackLoopContext)
+      ? formatFeedbackLoopContext(input.feedbackLoopContext, input.sessionMode)
       : "",
     "",
     artifactGuidance,
@@ -594,7 +594,10 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
   return [
     "Continue this stage after feedback-loop send-back.",
     "Incorporate the operator/source feedback below, then complete the stage (emit an envelope when done).",
-    formatFeedbackLoopContext(input.feedbackLoopContext),
+    formatFeedbackLoopContext(
+      input.feedbackLoopContext,
+      input.sessionMode ?? "feedback_resume",
+    ),
   ].join("\n\n");
 }
 

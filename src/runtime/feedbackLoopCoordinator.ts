@@ -71,6 +71,19 @@ function toStageSessionMode(
   return replaySession === "resume" ? "feedback_resume" : "new_session";
 }
 
+export async function terminalizeCurrentFeedbackReplay(
+  store: RunStore,
+  runId: string,
+  loop: FeedbackLoopRecord,
+  status: Extract<
+    FeedbackReplayRecord["status"],
+    "completed" | "failed" | "waiting_for_human"
+  >,
+): Promise<void> {
+  if (loop.current_replay_id === undefined) return;
+  await store.updateFeedbackReplay(runId, loop.current_replay_id, { status });
+}
+
 async function resolveResumeSessionAttempt(
   store: RunStore,
   runId: string,
@@ -79,7 +92,6 @@ async function resolveResumeSessionAttempt(
   fallbackAttempt?: number,
 ): Promise<number | undefined> {
   const replays = await store.listFeedbackReplays(runId, loopId);
-  let minPassAttempt: number | undefined;
   for (const replay of replays) {
     const passes = await store.listFeedbackReplayStagePasses(
       runId,
@@ -87,16 +99,10 @@ async function resolveResumeSessionAttempt(
     );
     for (const pass of passes) {
       if (pass.stage_id !== stageId) continue;
-      if (
-        minPassAttempt === undefined ||
-        pass.stage_attempt < minPassAttempt
-      ) {
-        minPassAttempt = pass.stage_attempt;
+      if (pass.session_origin_attempt !== undefined) {
+        return pass.session_origin_attempt;
       }
     }
-  }
-  if (minPassAttempt !== undefined && minPassAttempt > 1) {
-    return minPassAttempt - 1;
   }
   return fallbackAttempt;
 }
@@ -188,13 +194,14 @@ async function rebuildLaunchMaps(
   for (const pass of passes) {
     const prior =
       replay.replay_session === "resume"
-        ? await resolveResumeSessionAttempt(
+        ? (pass.session_origin_attempt ??
+          (await resolveResumeSessionAttempt(
             store,
             runId,
             loop.loop_id,
             pass.stage_id,
             pass.stage_attempt > 1 ? pass.stage_attempt - 1 : undefined,
-          )
+          )))
         : pass.stage_attempt > 1
           ? pass.stage_attempt - 1
           : undefined;
@@ -314,6 +321,12 @@ export async function acceptFeedbackSendBack(options: {
         feedback_envelope: envelope,
         source_attempt: sourceAttempt,
       };
+      await terminalizeCurrentFeedbackReplay(
+        store,
+        runId,
+        loop,
+        "waiting_for_human",
+      );
       await store.updateFeedbackLoop(runId, loop.loop_id, {
         state: "waiting_for_human",
         deferred_send_back: deferred,
@@ -327,6 +340,10 @@ export async function acceptFeedbackSendBack(options: {
         sourceAttempt,
       };
     }
+    await terminalizeCurrentFeedbackReplay(store, runId, loop, "failed");
+    await store.updateFeedbackLoop(runId, loop.loop_id, {
+      state: "completed",
+    });
     return {
       kind: "rejected",
       reason: `feedback loop exceeded max_replays (${policy.max_replays}); require_continue`,
@@ -402,6 +419,9 @@ export async function acceptFeedbackSendBack(options: {
       replay_id: replayId,
       stage_id: stageId,
       stage_attempt: nextExecution.attempt,
+      ...(policy.replay_session === "resume" && priorAttempt !== undefined
+        ? { session_origin_attempt: priorAttempt }
+        : {}),
       session_mode: policy.replay_session,
       status: "pending",
     });
@@ -479,10 +499,8 @@ export async function markFeedbackLoopContinued(options: {
         },
       );
     }
-    await store.updateFeedbackReplay(runId, loop.current_replay_id, {
-      status: "completed",
-    });
   }
+  await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
 
   await store.updateFeedbackLoop(runId, loop.loop_id, {
     state: "continued",
@@ -646,13 +664,14 @@ export async function loadActiveFeedbackLoopContext(
       : undefined;
   const priorAttempt =
     replay.replay_session === "resume"
-      ? await resolveResumeSessionAttempt(
+      ? (pass?.session_origin_attempt ??
+        (await resolveResumeSessionAttempt(
           store,
           runId,
           active.loop_id,
           stageId,
           fallbackPrior,
-        )
+        )))
       : fallbackPrior;
 
   const ctx = buildContext({

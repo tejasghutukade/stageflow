@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS feedback_replay_stage_passes (
   replay_id TEXT NOT NULL,
   stage_id TEXT NOT NULL,
   stage_attempt INTEGER NOT NULL,
+  session_origin_attempt INTEGER,
   session_mode TEXT NOT NULL,
   status TEXT NOT NULL,
   started_at TEXT,

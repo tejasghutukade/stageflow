@@ -17,6 +17,7 @@ import {
   markFeedbackRouteStageRunning,
   markFeedbackRouteStageSucceeded,
   rebindFeedbackRoutePassAttempts,
+  terminalizeCurrentFeedbackReplay,
 } from "./feedbackLoopCoordinator.js";
 import { postSourceStageIds } from "./feedbackLoopRoute.js";
 import {
@@ -27,6 +28,7 @@ import {
   type FeedbackScheduleState,
 } from "./feedbackLoopSchedule.js";
 
+export { terminalizeCurrentFeedbackReplay };
 type StageScheduleState =
   | "pending"
   | "active"
@@ -239,6 +241,7 @@ export async function applySendBack(options: {
       accepted.sourceStageId,
       accepted.loop.loop_id,
     );
+    options.schedule.feedback.activeReplayId = undefined;
     return {
       kind: "waiting_for_human",
       loop: accepted.loop,

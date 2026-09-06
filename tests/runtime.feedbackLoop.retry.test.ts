@@ -235,7 +235,11 @@ describe("feedback-aware stage retry", () => {
     const replayOpen = agent.feedbackContexts.get("review")?.[0];
     expect(replayOpen?.replay_number).toBe(1);
     expect(replayOpen?.replay_id).toBe(replayBefore.replay_id);
+    expect(replayOpen?.prior_stage_attempt).toBe(1);
     expect(agent.sessionModes.get("review")?.[1]).toBe("feedback_resume");
+
+    const reviewPassAttemptBefore = reviewPassBefore?.stage_attempt;
+    expect(reviewPassBefore?.session_origin_attempt).toBe(1);
 
     const retry = await manager.retryStage(started.runId, "review");
     expect(retry.ok).toBe(true);
@@ -252,6 +256,7 @@ describe("feedback-aware stage retry", () => {
     expect(retryOpen?.replay_number).toBe(1);
     expect(retryOpen?.replay_id).toBe(replayBefore.replay_id);
     expect(retryOpen?.is_final_replay).toBe(replayOpen?.is_final_replay);
+    expect(retryOpen?.prior_stage_attempt).toBe(1);
 
     const after = await store.readRun(started.runId);
     expect(after.feedback_loops).toHaveLength(1);
@@ -260,7 +265,101 @@ describe("feedback-aware stage retry", () => {
     expect(historyAfter.replays[0]!.replay.replay_id).toBe(
       replayBefore.replay_id,
     );
+    const reviewPassAfter = historyAfter.replays[0]!.stage_passes.find(
+      (p) => p.stage_id === "review",
+    );
+    expect(reviewPassAfter?.session_origin_attempt).toBe(1);
+    expect(reviewPassAfter?.stage_attempt).toBeGreaterThan(
+      reviewPassAttemptBefore ?? 0,
+    );
     expect(historyAfter.loop.state).toBe("continued");
     expect(agent.openCounts.get("submit")).toBe(1);
+  });
+
+  it("first-route fail + retry keeps session origin after rebind/hydrate", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fb-retry-origin-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "throw", message: "implement-replay-boom" },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        {
+          type: "emit",
+          envelope: okEnvelope("send-back", {
+            feedback_loop: { action: "send_back", target: "implement" },
+          }),
+        },
+        {
+          type: "emit",
+          envelope: okEnvelope("continue", {
+            feedback_loop: { action: "continue" },
+          }),
+        },
+      ],
+      submit: [{ type: "emit", envelope: okEnvelope("submit-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("feedback-loop"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "failed";
+    });
+
+    const beforeRetry = await store.readRun(started.runId);
+    const historyBefore = beforeRetry.feedback_loops![0]!;
+    const implementPassBefore = historyBefore.replays[0]!.stage_passes.find(
+      (p) => p.stage_id === "implement",
+    );
+    expect(implementPassBefore?.status).toBe("failed");
+    expect(implementPassBefore?.session_origin_attempt).toBe(1);
+    expect(implementPassBefore?.stage_attempt).toBe(2);
+
+    const replayOpen = agent.feedbackContexts.get("implement")?.[0];
+    expect(replayOpen?.prior_stage_attempt).toBe(1);
+
+    const loaded = await loadPipeline(pipelinePath("feedback-loop"), {
+      cwd: fixtures,
+    });
+    const feedbackBefore = createFeedbackScheduleState();
+    const hydratedBefore = await hydrateActiveFeedbackScheduleFromStore(
+      store,
+      started.runId,
+      loaded.dag,
+      feedbackBefore,
+    );
+    expect(hydratedBefore).toBeDefined();
+    expect(feedbackBefore.priorAttemptByStageId.get("implement")).toBe(1);
+
+    const retry = await manager.retryStage(started.runId, "implement");
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const retryOpen = agent.feedbackContexts.get("implement")?.[1];
+    expect(retryOpen?.prior_stage_attempt).toBe(1);
+    expect(agent.sessionModes.get("implement")?.[2]).toBe("feedback_resume");
+
+    const after = await store.readRun(started.runId);
+    const implementPassAfter = after.feedback_loops![0]!.replays[0]!.stage_passes.find(
+      (p) => p.stage_id === "implement",
+    );
+    expect(implementPassAfter?.session_origin_attempt).toBe(1);
+    expect(implementPassAfter?.stage_attempt).toBeGreaterThan(2);
+    expect(after.feedback_loops![0]!.loop.state).toBe("continued");
   });
 });

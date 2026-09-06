@@ -22,6 +22,7 @@ export type StageProjection = {
     payload?: Record<string, unknown>;
     fork_choice?: string[];
     clone_forks?: CloneForkItem[];
+    feedback_loop?: StageEnvelope["feedback_loop"];
   } | null;
   artifacts: string[];
   last_at?: string;
@@ -116,6 +117,9 @@ export function projectRun(detail: RunDetail): RunProjection {
               : {}),
             ...(stage.envelope.clone_forks !== undefined
               ? { clone_forks: stage.envelope.clone_forks }
+              : {}),
+            ...(stage.envelope.feedback_loop !== undefined
+              ? { feedback_loop: stage.envelope.feedback_loop }
               : {}),
           }
         : null,

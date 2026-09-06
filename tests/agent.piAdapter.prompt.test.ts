@@ -129,10 +129,15 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
   it("feedbackLoopContext present → labelled Feedback Loop Context section", () => {
     const ctx = makeFeedbackLoopContext({ is_final_replay: true, remaining_replays: 0 });
     const prompt = composeStageUserPrompt(
-      { ...baseInput(), feedbackLoopContext: ctx },
+      {
+        ...baseInput(),
+        sessionMode: "feedback_resume",
+        feedbackLoopContext: ctx,
+      },
       "emit_stage_envelope",
     );
     expect(prompt).toContain("Feedback Loop Context");
+    expect(prompt).toContain("Session mode: feedback_resume (continuing the prior agent session)");
     expect(prompt).toContain("loop-1");
     expect(prompt).toContain("replay-1");
     expect(prompt).toContain('"is_final_replay": true');
@@ -143,6 +148,19 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
     expect(priorIdx).toBeGreaterThanOrEqual(0);
     expect(feedbackIdx).toBeGreaterThan(priorIdx);
     expect(artifactIdx).toBeGreaterThan(feedbackIdx);
+  });
+
+  it("feedbackLoopContext with new_session names session mode", () => {
+    const ctx = makeFeedbackLoopContext({ replay_session: "new_session" });
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        sessionMode: "new_session",
+        feedbackLoopContext: ctx,
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("Session mode: new_session (starting a fresh agent session)");
   });
 
   it("feedbackLoopContext absent → no Feedback Loop Context heading", () => {
@@ -171,10 +189,12 @@ describe("composeFeedbackResumePrompt", () => {
     const ctx = makeFeedbackLoopContext();
     const prompt = composeFeedbackResumePrompt({
       ...baseInput(),
+      sessionMode: "feedback_resume",
       feedbackLoopContext: ctx,
     });
     expect(prompt).toContain("Continue this stage after feedback-loop send-back");
     expect(prompt).toContain("Feedback Loop Context");
+    expect(prompt).toContain("Session mode: feedback_resume (continuing the prior agent session)");
     expect(prompt).toContain("loop-1");
     expect(prompt).toContain("Please tighten the acceptance criteria");
   });

@@ -154,10 +154,12 @@ describe("runstore feedback loops (sqlite)", () => {
       replay_id: "replay-1",
       stage_id: "plan",
       stage_attempt: 2,
+      session_origin_attempt: 1,
       session_mode: "resume",
       emitted_envelope: emitted,
     });
     expect(pass.status).toBe("pending");
+    expect(pass.session_origin_attempt).toBe(1);
     expect(pass.emitted_envelope).toEqual(emitted);
 
     await store.updateFeedbackReplayStagePass(run.runId, "replay-1", "plan", {
@@ -189,6 +191,7 @@ describe("runstore feedback loops (sqlite)", () => {
       "replay-1",
     );
     expect(rebound[0]?.stage_attempt).toBe(5);
+    expect(rebound[0]?.session_origin_attempt).toBe(1);
     expect(rebound[0]?.status).toBe("pending");
     expect(rebound[0]?.started_at).toBeUndefined();
     expect(rebound[0]?.finished_at).toBeUndefined();
@@ -389,5 +392,40 @@ describe("runstore feedback loops (sqlite)", () => {
     expect(detail.feedback_loops[0]?.replays[0]?.replay.status).toBe(
       "waiting_for_human",
     );
+  });
+
+  it("updateFeedbackLoop CAS only succeeds when expectedState matches", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-fb-cas-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "feedback-loop",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.createFeedbackLoop(run.runId, {
+      loop_id: "loop-1",
+      source_stage_id: "review",
+      source_attempt: 1,
+      policy,
+      state: "waiting_for_human",
+    });
+
+    const first = await store.updateFeedbackLoop(
+      run.runId,
+      "loop-1",
+      { state: "continued" },
+      { expectedState: "waiting_for_human" },
+    );
+    expect(first).toBe(true);
+
+    const second = await store.updateFeedbackLoop(
+      run.runId,
+      "loop-1",
+      { state: "abandoned" },
+      { expectedState: "waiting_for_human" },
+    );
+    expect(second).toBe(false);
+
+    const loop = await store.getFeedbackLoop(run.runId, "loop-1");
+    expect(loop.state).toBe("continued");
   });
 });

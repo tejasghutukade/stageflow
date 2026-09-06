@@ -90,4 +90,46 @@ describe("projectRun feedback loop fields", () => {
     expect(projected).not.toHaveProperty("active_feedback_loop");
     expect(projected.feedback_loops).toEqual([]);
   });
+
+  it("projects stage envelope feedback_loop when present", () => {
+    const projected = projectRun(
+      detail({
+        stages: [
+          stage({
+            stage_id: "review",
+            status: "succeeded",
+            envelope: {
+              status: "success",
+              summary: "needs another pass",
+              artifacts: [],
+              feedback_loop: { action: "send_back", target: "implement" },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(projected.stages[0]?.envelope?.feedback_loop).toEqual({
+      action: "send_back",
+      target: "implement",
+    });
+  });
+
+  it("omits stage envelope feedback_loop when absent", () => {
+    const projected = projectRun(
+      detail({
+        stages: [
+          stage({
+            stage_id: "review",
+            status: "succeeded",
+            envelope: {
+              status: "success",
+              summary: "ok",
+              artifacts: [],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(projected.stages[0]?.envelope).not.toHaveProperty("feedback_loop");
+  });
 });

@@ -141,6 +141,9 @@ describe("runtime feedback-loop wait_for_human", () => {
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("waiting_for_input");
     expect(detail.feedback_loops?.[0]?.replays).toHaveLength(1);
+    expect(detail.feedback_loops?.[0]?.replays[0]?.replay.status).toBe(
+      "waiting_for_human",
+    );
   });
 
   it("extend raises max by one, schedules another replay, then continue succeeds", async () => {
@@ -234,6 +237,7 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(history.loop.state).toBe("continued");
     expect(history.loop.deferred_send_back?.target).toBe("implement");
     expect(history.replays).toHaveLength(1);
+    expect(history.replays[0]?.replay.status).toBe("completed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("succeeded");
   });
@@ -279,6 +283,7 @@ describe("runtime feedback-loop wait_for_human", () => {
     const detail = await prepared.store.readRun(prepared.run.runId);
     expect(detail.status).toBe("failed");
     expect(detail.feedback_loops![0]!.loop.state).toBe("abandoned");
+    expect(detail.feedback_loops![0]!.replays[0]?.replay.status).toBe("failed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("failed");
   });
@@ -315,6 +320,82 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(result.outcome).toBe("failed");
     expect(result.reason).toMatch(/max_replays/);
     expect(agent.openCounts.get("submit") ?? 0).toBe(0);
+
+    const detail = await prepared.store.readRun(prepared.run.runId);
+    expect(detail.active_feedback_loop).toBeUndefined();
+    expect(detail.feedback_loops![0]!.loop.state).toBe("completed");
+    expect(detail.feedback_loops![0]!.replays[0]?.replay.status).toBe("failed");
+  });
+
+  it("continue vs extend CAS: second decide loses", async () => {
+    const prepared = await prepareWaitForHumanRun();
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [{ type: "throw", message: "submit must not run" }],
+    });
+
+    const waiting = await runPipelineDag({
+      prepared: {
+        ...prepared,
+        agent,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+    expect(waiting.outcome).toBe("waiting");
+
+    const parked = await prepared.store.readRun(prepared.run.runId);
+    const loopId = parked.active_feedback_loop?.loop_id;
+    expect(loopId).toBeTruthy();
+
+    const storeA = prepared.store;
+    const storeB = createRunStore({ rootDir: prepared.root });
+
+    const [first, second] = await Promise.all([
+      resolveFeedbackLoopDecision({
+        store: storeA,
+        runId: prepared.run.runId,
+        loopId,
+        decision: "continue",
+      }),
+      resolveFeedbackLoopDecision({
+        store: storeB,
+        runId: prepared.run.runId,
+        loopId,
+        decision: "extend",
+      }),
+    ]);
+
+    const outcomes = [first, second];
+    expect(outcomes.filter((r) => r.ok).length).toBe(1);
+    const loser = outcomes.find((r) => !r.ok);
+    expect(loser).toBeDefined();
+    if (loser !== undefined && !loser.ok) {
+      expect(loser.reason).toMatch(
+        /conflict|no longer waiting|not waiting_for_human/i,
+      );
+    }
+
+    const detail = await storeB.readRun(prepared.run.runId);
+    const loopState = detail.feedback_loops![0]!.loop.state;
+    if (first.ok && first.effect === "continued") {
+      expect(loopState).toBe("continued");
+      expect(detail.active_feedback_loop).toBeUndefined();
+    } else {
+      expect(second.ok).toBe(true);
+      if (second.ok) expect(second.effect).toBe("extended");
+      expect(loopState).toBe("active");
+      expect(detail.active_feedback_loop?.state).toBe("active");
+    }
   });
 
   it("resolveFeedbackLoopDecision continue works after scheduler exits waiting", async () => {

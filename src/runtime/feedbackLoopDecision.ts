@@ -8,6 +8,7 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
+import { terminalizeCurrentFeedbackReplay } from "./feedbackLoopCoordinator.js";
 import type { FeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import { createFeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import {
@@ -58,6 +59,9 @@ export type ResolveFeedbackLoopDecisionResult =
       reason: string;
     }
   | { ok: false; reason: string };
+
+const DECISION_CONFLICT =
+  "feedback loop decision conflict: no longer waiting_for_human";
 
 async function clearSourceWaiting(
   store: RunStore,
@@ -184,10 +188,21 @@ export async function resolveFeedbackLoopDecision(options: {
       ...loop.policy,
       max_replays: loop.policy.max_replays + 1,
     };
-    await store.updateFeedbackLoop(runId, loop.loop_id, {
-      policy: bumpedPolicy,
-      state: "active",
-    });
+    const casOk = await store.updateFeedbackLoop(
+      runId,
+      loop.loop_id,
+      {
+        policy: bumpedPolicy,
+        state: "active",
+      },
+      { expectedState: "waiting_for_human" },
+    );
+    if (!casOk) {
+      return {
+        ok: false,
+        reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
+      };
+    }
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
 
     if (schedule === undefined) {
@@ -257,9 +272,19 @@ export async function resolveFeedbackLoopDecision(options: {
 
   if (decision === "continue") {
     const deferred = loop.deferred_send_back;
-    await store.updateFeedbackLoop(runId, loop.loop_id, {
-      state: "continued",
-    });
+    const casOk = await store.updateFeedbackLoop(
+      runId,
+      loop.loop_id,
+      { state: "continued" },
+      { expectedState: "waiting_for_human" },
+    );
+    if (!casOk) {
+      return {
+        ok: false,
+        reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
+      };
+    }
+    await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
     if (schedule !== undefined) {
       schedule.states.set(loop.source_stage_id, "succeeded");
@@ -281,9 +306,19 @@ export async function resolveFeedbackLoopDecision(options: {
   const abandonReason =
     options.reason?.trim() ||
     `feedback loop abandoned after max_replays (${loop.policy.max_replays})`;
-  await store.updateFeedbackLoop(runId, loop.loop_id, {
-    state: "abandoned",
-  });
+  const casOk = await store.updateFeedbackLoop(
+    runId,
+    loop.loop_id,
+    { state: "abandoned" },
+    { expectedState: "waiting_for_human" },
+  );
+  if (!casOk) {
+    return {
+      ok: false,
+      reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
+    };
+  }
+  await terminalizeCurrentFeedbackReplay(store, runId, loop, "failed");
   await clearSourceWaiting(
     store,
     runId,
@@ -304,4 +339,3 @@ export async function resolveFeedbackLoopDecision(options: {
     reason: abandonReason,
   };
 }
-

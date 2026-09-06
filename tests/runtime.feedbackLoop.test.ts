@@ -252,6 +252,11 @@ describe("runtime feedback-loop scheduler", () => {
     const detail = await prepared.store.readRun(prepared.run.runId);
     const history = detail.feedback_loops![0]!;
     expect(history.replays).toHaveLength(2);
+    expect(detail.active_feedback_loop).toBeUndefined();
+    expect(history.loop.state).toBe("completed");
+    expect(history.replays[history.replays.length - 1]?.replay.status).toBe(
+      "failed",
+    );
   });
 
   it("duplicate send_back for the same source pass is idempotent", async () => {
@@ -325,6 +330,13 @@ describe("runtime feedback-loop scheduler", () => {
     if (first.kind !== "accepted") return;
     expect(first.launch.priorAttemptByStageId.get("implement")).toBe(1);
     expect(first.launch.launchAttemptByStageId.get("implement")).toBe(2);
+    const firstPasses = await prepared.store.listFeedbackReplayStagePasses(
+      prepared.run.runId,
+      first.replay.replay_id,
+    );
+    expect(
+      firstPasses.find((p) => p.stage_id === "implement")?.session_origin_attempt,
+    ).toBe(1);
 
     const second = await acceptFeedbackSendBack({
       store: prepared.store,
@@ -338,6 +350,14 @@ describe("runtime feedback-loop scheduler", () => {
     if (second.kind !== "accepted") return;
     expect(second.launch.priorAttemptByStageId.get("implement")).toBe(1);
     expect(second.launch.launchAttemptByStageId.get("implement")).toBe(3);
+    const secondPasses = await prepared.store.listFeedbackReplayStagePasses(
+      prepared.run.runId,
+      second.replay.replay_id,
+    );
+    expect(
+      secondPasses.find((p) => p.stage_id === "implement")
+        ?.session_origin_attempt,
+    ).toBe(1);
 
     const ctx = await loadActiveFeedbackLoopContext(
       prepared.store,

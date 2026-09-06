@@ -16,6 +16,7 @@ import {
   type FeedbackLoopHistory,
   type FeedbackLoopPatch,
   type FeedbackLoopRecord,
+  type FeedbackLoopState,
   type FeedbackReplayPatch,
   type FeedbackReplayRecord,
   type FeedbackReplayStagePassPatch,
@@ -142,6 +143,7 @@ type FeedbackReplayStagePassRow = {
   replay_id: string;
   stage_id: string;
   stage_attempt: number;
+  session_origin_attempt: number | null;
   session_mode: string;
   status: string;
   started_at: string | null;
@@ -320,6 +322,20 @@ function ensureFeedbackReplayStagePassEnvelopeColumn(db: Database.Database): voi
   }
 }
 
+function ensureFeedbackReplayStagePassSessionOriginColumn(
+  db: Database.Database,
+): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
+    .all() as { name: string }[];
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === "session_origin_attempt")) {
+    db.exec(
+      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN session_origin_attempt INTEGER`,
+    );
+  }
+}
+
 function ensureFeedbackLoopDeferredSendBackColumn(db: Database.Database): void {
   const cols = db
     .prepare(`PRAGMA table_info(feedback_loops)`)
@@ -418,6 +434,9 @@ function feedbackReplayStagePassFromRow(
     replay_id: row.replay_id,
     stage_id: row.stage_id,
     stage_attempt: row.stage_attempt,
+    ...(row.session_origin_attempt != null
+      ? { session_origin_attempt: row.session_origin_attempt }
+      : {}),
     session_mode: row.session_mode as FeedbackReplayStagePassRecord["session_mode"],
     status: row.status as FeedbackReplayStagePassRecord["status"],
     ...(row.started_at != null ? { started_at: row.started_at } : {}),
@@ -465,6 +484,7 @@ export class SqliteRunStore implements RunStore {
     ensureStageEventsAttemptColumn(this.db);
     ensureVerificationCheckResultsTable(this.db);
     ensureFeedbackReplayStagePassEnvelopeColumn(this.db);
+    ensureFeedbackReplayStagePassSessionOriginColumn(this.db);
     ensureFeedbackLoopDeferredSendBackColumn(this.db);
     backfillVerificationOutcomes(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
@@ -1085,7 +1105,8 @@ export class SqliteRunStore implements RunStore {
     runId: string,
     loopId: string,
     patch: FeedbackLoopPatch,
-  ): Promise<void> {
+    options?: { expectedState?: FeedbackLoopState },
+  ): Promise<boolean> {
     await this.ready();
     const sets: string[] = ["updated_at = @updated_at"];
     const params: Record<string, unknown> = {
@@ -1116,15 +1137,32 @@ export class SqliteRunStore implements RunStore {
           ? null
           : JSON.stringify(patch.deferred_send_back);
     }
+    const whereParts = ["run_id = @run_id", "loop_id = @loop_id"];
+    if (options?.expectedState !== undefined) {
+      whereParts.push("state = @expected_state");
+      params.expected_state = options.expectedState;
+    }
     const result = this.db
       .prepare(
         `UPDATE feedback_loops SET ${sets.join(", ")}
-         WHERE run_id = @run_id AND loop_id = @loop_id`,
+         WHERE ${whereParts.join(" AND ")}`,
       )
       .run(params);
     if (result.changes === 0) {
+      if (options?.expectedState !== undefined) {
+        const exists = this.db
+          .prepare(
+            `SELECT 1 AS ok FROM feedback_loops WHERE run_id = ? AND loop_id = ?`,
+          )
+          .get(runId, loopId) as { ok: number } | undefined;
+        if (exists === undefined) {
+          throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+        }
+        return false;
+      }
       throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
     }
+    return true;
   }
 
   async createFeedbackReplay(
@@ -1240,17 +1278,18 @@ export class SqliteRunStore implements RunStore {
     this.db
       .prepare(
         `INSERT INTO feedback_replay_stage_passes
-          (run_id, replay_id, stage_id, stage_attempt, session_mode, status,
-           started_at, finished_at, emitted_envelope_json)
+          (run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+           session_mode, status, started_at, finished_at, emitted_envelope_json)
          VALUES
-          (@run_id, @replay_id, @stage_id, @stage_attempt, @session_mode, @status,
-           @started_at, @finished_at, @emitted_envelope_json)`,
+          (@run_id, @replay_id, @stage_id, @stage_attempt, @session_origin_attempt,
+           @session_mode, @status, @started_at, @finished_at, @emitted_envelope_json)`,
       )
       .run({
         run_id: runId,
         replay_id: input.replay_id,
         stage_id: input.stage_id,
         stage_attempt: input.stage_attempt,
+        session_origin_attempt: input.session_origin_attempt ?? null,
         session_mode: input.session_mode,
         status,
         started_at: input.started_at ?? null,
@@ -1262,8 +1301,8 @@ export class SqliteRunStore implements RunStore {
       });
     const row = this.db
       .prepare(
-        `SELECT run_id, replay_id, stage_id, stage_attempt, session_mode, status,
-                started_at, finished_at, emitted_envelope_json
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+                session_mode, status, started_at, finished_at, emitted_envelope_json
          FROM feedback_replay_stage_passes
          WHERE run_id = ? AND replay_id = ? AND stage_id = ?`,
       )
@@ -1279,8 +1318,8 @@ export class SqliteRunStore implements RunStore {
     await this.getFeedbackReplay(runId, replayId);
     const rows = this.db
       .prepare(
-        `SELECT run_id, replay_id, stage_id, stage_attempt, session_mode, status,
-                started_at, finished_at, emitted_envelope_json
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_origin_attempt,
+                session_mode, status, started_at, finished_at, emitted_envelope_json
          FROM feedback_replay_stage_passes
          WHERE run_id = ? AND replay_id = ?
          ORDER BY stage_id ASC`,

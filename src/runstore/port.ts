@@ -228,6 +228,8 @@ export type FeedbackReplayStagePassRecord = {
   stage_id: string;
   /** Execution attempt whose session this pass resumes or newly creates. */
   stage_attempt: number;
+  /** Immutable attempt whose Pi session resume targets; never rebound. */
+  session_origin_attempt?: number;
   session_mode: FeedbackLoopConfig["replay_session"];
   status: FeedbackReplayStagePassStatus;
   started_at?: string;
@@ -459,11 +461,17 @@ export interface RunStore {
   ): Promise<FeedbackLoopRecord>;
   getFeedbackLoop(runId: string, loopId: string): Promise<FeedbackLoopRecord>;
   listFeedbackLoops(runId: string): Promise<FeedbackLoopRecord[]>;
+  /**
+   * Patch a feedback loop. When `expectedState` is set, the update is conditional
+   * (CAS): returns false if the row exists but state does not match.
+   * Throws if the loop is missing.
+   */
   updateFeedbackLoop(
     runId: string,
     loopId: string,
     patch: FeedbackLoopPatch,
-  ): Promise<void>;
+    options?: { expectedState?: FeedbackLoopState },
+  ): Promise<boolean>;
   createFeedbackReplay(
     runId: string,
     input: CreateFeedbackReplayInput,

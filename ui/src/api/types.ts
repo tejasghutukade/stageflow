@@ -134,6 +134,7 @@ export type FeedbackReplayStagePassRecord = {
   replay_id: string;
   stage_id: string;
   stage_attempt: number;
+  session_origin_attempt?: number;
   session_mode: FeedbackLoopConfig["replay_session"];
   status: FeedbackReplayStagePassStatus;
   started_at?: string;
@@ -205,6 +206,9 @@ export type StageEnvelopeView = {
   stage_id?: string;
   fork_choice?: string[];
   clone_forks?: unknown[];
+  feedback_loop?:
+    | { action: "continue" }
+    | { action: "send_back"; target: string };
 };
 
 export type Decision = "accept" | "reject";
