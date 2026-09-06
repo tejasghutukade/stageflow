@@ -15,6 +15,7 @@ import {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "../envelope/check.js";
+import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
 import { assertCloneForks } from "../envelope/cloneForks.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import {
@@ -26,6 +27,7 @@ import {
   type PreEmitCheckOptions,
 } from "../envelope/preEmitChecks.js";
 import type { StageEnvelope } from "../types/envelope.js";
+import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import {
   CLONE_ACTIONS,
   type CloneAction,
@@ -62,6 +64,22 @@ function stageEnvelopeSchema(payloadSchema?: TSchema) {
         : Type.Record(Type.String(), Type.Unknown()),
     ),
   });
+}
+
+function feedbackLoopActionSchema(context: FeedbackLoopConfig): TSchema {
+  return Type.Union([
+    Type.Object(
+      { action: Type.Literal("continue") },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        action: Type.Literal("send_back"),
+        target: stringLiteralsSchema([context.target]),
+      },
+      { additionalProperties: false },
+    ),
+  ]);
 }
 
 function cloneForksItemSchema(cloneEmitContext: CloneEmitContext): TSchema {
@@ -153,6 +171,7 @@ export function createEmitStageEnvelopeTool(
   forkEmitContext?: ForkEmitContext,
   cloneEmitContext?: CloneEmitContext,
   preEmitCheckOptions?: PreEmitCheckOptions,
+  feedbackLoopEmitContext?: FeedbackLoopConfig,
 ) {
   const compiledPayload =
     payloadSchema !== undefined
@@ -174,12 +193,22 @@ export function createEmitStageEnvelopeTool(
           : Type.Record(Type.String(), Type.Unknown()),
       ),
       fork_choice:
-        forkEmitContext !== undefined
+        forkEmitContext !== undefined && feedbackLoopEmitContext === undefined
           ? Type.Array(Type.String())
           : Type.Optional(Type.Array(Type.String())),
       ...(cloneEmitContext !== undefined
         ? {
-            clone_forks: Type.Array(cloneForksItemSchema(cloneEmitContext)),
+            clone_forks:
+              feedbackLoopEmitContext === undefined
+                ? Type.Array(cloneForksItemSchema(cloneEmitContext))
+                : Type.Optional(Type.Array(cloneForksItemSchema(cloneEmitContext))),
+          }
+        : {}),
+      ...(feedbackLoopEmitContext !== undefined
+        ? {
+            feedback_loop: Type.Optional(
+              feedbackLoopActionSchema(feedbackLoopEmitContext),
+            ),
           }
         : {}),
       checklist_attestations: Type.Optional(
@@ -202,18 +231,27 @@ export function createEmitStageEnvelopeTool(
         );
       }
       try {
-        const record = params as Record<string, unknown>;
-        if (record.status !== "failure" && forkEmitContext !== undefined) {
+        const envelope = assertRequiredEnvelope(params);
+        assertFeedbackLoopAction(envelope, feedbackLoopEmitContext);
+        const isSendBack = envelope.feedback_loop?.action === "send_back";
+        if (
+          envelope.status !== "failure" &&
+          !isSendBack &&
+          forkEmitContext !== undefined
+        ) {
           normalizeForkChoice(
-            record.fork_choice as string[] | undefined,
+            envelope.fork_choice,
             "emit",
             forkEmitContext,
           );
         }
-        if (record.status !== "failure" && cloneEmitContext !== undefined) {
-          assertCloneForks(params, cloneEmitContext);
+        if (
+          envelope.status !== "failure" &&
+          !isSendBack &&
+          cloneEmitContext !== undefined
+        ) {
+          assertCloneForks(envelope, cloneEmitContext);
         }
-        const envelope = assertRequiredEnvelope(params);
         assertEnvelopePayload(envelope, payloadSchema);
         if (envelope.status !== "failure") {
           await assertPreEmitChecks(envelope, preEmitCheckOptions);

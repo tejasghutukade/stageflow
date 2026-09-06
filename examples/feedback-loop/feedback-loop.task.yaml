@@ -1,0 +1,4 @@
+id: feedback-loop
+goal: Draft a short brief, revise it until a review stage continues, then submit
+context: Domain-neutral feedback-loop walkthrough — plan → implement → review → submit
+constraints: Docs only; no implementation code. Prefer one send_back then continue.

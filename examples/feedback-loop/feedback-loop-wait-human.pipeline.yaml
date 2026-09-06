@@ -1,0 +1,19 @@
+id: feedback-loop-wait-human
+stages:
+  - id: plan
+    uses: ./plan.yaml
+  - id: implement
+    uses: ./implement.yaml
+    needs: plan
+  - id: review
+    uses: ./review.yaml
+    needs: implement
+    feedback_loop:
+      target: implement
+      max_replays: 1
+      on_max_replays: wait_for_human
+      replay_session: resume
+  - id: submit
+    uses: ./submit.yaml
+    needs: review
+    replay_safe: false

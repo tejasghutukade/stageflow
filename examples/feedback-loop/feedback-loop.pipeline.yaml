@@ -1,0 +1,19 @@
+id: feedback-loop
+stages:
+  - id: plan
+    uses: ./plan.yaml
+  - id: implement
+    uses: ./implement.yaml
+    needs: plan
+  - id: review
+    uses: ./review.yaml
+    needs: implement
+    feedback_loop:
+      target: implement
+      max_replays: 2
+      on_max_replays: require_continue
+      replay_session: resume
+  - id: submit
+    uses: ./submit.yaml
+    needs: review
+    replay_safe: false

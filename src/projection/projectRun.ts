@@ -1,4 +1,9 @@
-import type { RunDetail, StageSnapshot } from "../runstore/port.js";
+import type {
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
+  RunDetail,
+  StageSnapshot,
+} from "../runstore/port.js";
 import type {
   PipelineTrackProjection,
   RunSummary,
@@ -44,6 +49,8 @@ export type RunProjection = {
   waiting_questions?: RunSummary["waiting_questions"];
   failed_stage_id?: RunSummary["failed_stage_id"];
   failed_reason?: RunSummary["failed_reason"];
+  active_feedback_loop?: FeedbackLoopRecord;
+  feedback_loops: FeedbackLoopHistory[];
 };
 
 export function projectRun(detail: RunDetail): RunProjection {
@@ -89,6 +96,10 @@ export function projectRun(detail: RunDetail): RunProjection {
     ...(detail.failed_reason !== undefined
       ? { failed_reason: detail.failed_reason }
       : {}),
+    ...(detail.active_feedback_loop !== undefined
+      ? { active_feedback_loop: detail.active_feedback_loop }
+      : {}),
+    feedback_loops: detail.feedback_loops ?? [],
     stages: detail.stages.map((stage) => ({
       stage_id: stage.stage_id,
       status: stage.status,

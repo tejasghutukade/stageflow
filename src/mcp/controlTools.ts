@@ -60,6 +60,39 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
+    "decide_feedback_loop",
+    {
+      description:
+        "Resolve a feedback-loop wait_for_human decision (extend, continue, or abandon). Same semantics as POST /api/runs/:id/stages/:stageId/feedback-decision.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+        decision: z.enum(["extend", "continue", "abandon"]),
+        loopId: z.string().optional(),
+        reason: z.string().optional(),
+      }),
+    },
+    async ({ runId, stageId, decision, loopId, reason }) => {
+      const result = await manager.decideFeedbackLoop(runId, stageId, {
+        decision,
+        ...(loopId !== undefined ? { loopId } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+      });
+      if (!result.ok) {
+        return textResult(
+          { error: result.reason, status: result.status },
+          true,
+        );
+      }
+      return textResult({
+        ok: true,
+        effect: result.effect,
+        loopId: result.loopId,
+      });
+    },
+  );
+
+  server.registerTool(
     "list_stage_events",
     {
       description:

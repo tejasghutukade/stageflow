@@ -2,12 +2,26 @@ import Database from "better-sqlite3";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
+import type { FeedbackLoopConfig } from "../../types/pipeline.js";
 import type { StageLogLine } from "../../agent/activity.js";
 import { derivePendingPrompt } from "../../hitl/qaTrail.js";
 import {
   stageStatusFromEvents,
+  type CreateFeedbackLoopInput,
+  type CreateFeedbackReplayInput,
+  type CreateFeedbackReplayStagePassInput,
+  type CreateForkGenerationInput,
   type CreateRunInput,
   type CreatedRun,
+  type FeedbackLoopHistory,
+  type FeedbackLoopPatch,
+  type FeedbackLoopRecord,
+  type FeedbackReplayPatch,
+  type FeedbackReplayRecord,
+  type FeedbackReplayStagePassPatch,
+  type FeedbackReplayStagePassRecord,
+  type ForkGenerationPatch,
+  type ForkGenerationRecord,
   type ListRunsFilter,
   type RunDetail,
   type RunMeta,
@@ -90,6 +104,61 @@ type VerificationCheckResultRow = {
   started_at: string | null;
   finished_at: string | null;
   evidence_json: string | null;
+};
+
+type FeedbackLoopRow = {
+  run_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  policy_json: string;
+  state: string;
+  current_replay_id: string | null;
+  current_replay_number: number | null;
+  deferred_send_back_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeedbackReplayRow = {
+  run_id: string;
+  replay_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  target_stage_id: string;
+  replay_number: number;
+  max_replays: number;
+  replay_session: string;
+  route_stage_ids_json: string;
+  feedback_envelope_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type FeedbackReplayStagePassRow = {
+  run_id: string;
+  replay_id: string;
+  stage_id: string;
+  stage_attempt: number;
+  session_mode: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  emitted_envelope_json: string | null;
+};
+
+type ForkGenerationRow = {
+  run_id: string;
+  generation_id: string;
+  replay_id: string | null;
+  fork_parent_stage_id: string;
+  generation_number: number;
+  clone_stage_ids_json: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
 };
 
 const ensuredStageDirs = new Set<string>();
@@ -239,6 +308,30 @@ CREATE INDEX IF NOT EXISTS idx_verification_check_results_execution
 `);
 }
 
+function ensureFeedbackReplayStagePassEnvelopeColumn(db: Database.Database): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
+    .all() as { name: string }[];
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === "emitted_envelope_json")) {
+    db.exec(
+      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN emitted_envelope_json TEXT`,
+    );
+  }
+}
+
+function ensureFeedbackLoopDeferredSendBackColumn(db: Database.Database): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(feedback_loops)`)
+    .all() as { name: string }[];
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === "deferred_send_back_json")) {
+    db.exec(
+      `ALTER TABLE feedback_loops ADD COLUMN deferred_send_back_json TEXT`,
+    );
+  }
+}
+
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
     run_id: row.run_id,
@@ -272,6 +365,87 @@ function verificationCheckResultFromRow(
   };
 }
 
+function feedbackLoopFromRow(row: FeedbackLoopRow): FeedbackLoopRecord {
+  return {
+    run_id: row.run_id,
+    loop_id: row.loop_id,
+    source_stage_id: row.source_stage_id,
+    source_attempt: row.source_attempt,
+    policy: JSON.parse(row.policy_json) as FeedbackLoopConfig,
+    state: row.state as FeedbackLoopRecord["state"],
+    ...(row.current_replay_id != null
+      ? { current_replay_id: row.current_replay_id }
+      : {}),
+    ...(row.current_replay_number != null
+      ? { current_replay_number: row.current_replay_number }
+      : {}),
+    ...(row.deferred_send_back_json != null
+      ? {
+          deferred_send_back: JSON.parse(
+            row.deferred_send_back_json,
+          ) as FeedbackLoopRecord["deferred_send_back"],
+        }
+      : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function feedbackReplayFromRow(row: FeedbackReplayRow): FeedbackReplayRecord {
+  return {
+    run_id: row.run_id,
+    replay_id: row.replay_id,
+    loop_id: row.loop_id,
+    source_stage_id: row.source_stage_id,
+    source_attempt: row.source_attempt,
+    target_stage_id: row.target_stage_id,
+    replay_number: row.replay_number,
+    max_replays: row.max_replays,
+    replay_session: row.replay_session as FeedbackReplayRecord["replay_session"],
+    route_stage_ids: JSON.parse(row.route_stage_ids_json) as string[],
+    feedback_envelope: JSON.parse(row.feedback_envelope_json) as StageEnvelope,
+    status: row.status as FeedbackReplayRecord["status"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function feedbackReplayStagePassFromRow(
+  row: FeedbackReplayStagePassRow,
+): FeedbackReplayStagePassRecord {
+  return {
+    run_id: row.run_id,
+    replay_id: row.replay_id,
+    stage_id: row.stage_id,
+    stage_attempt: row.stage_attempt,
+    session_mode: row.session_mode as FeedbackReplayStagePassRecord["session_mode"],
+    status: row.status as FeedbackReplayStagePassRecord["status"],
+    ...(row.started_at != null ? { started_at: row.started_at } : {}),
+    ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+    ...(row.emitted_envelope_json != null
+      ? {
+          emitted_envelope: JSON.parse(
+            row.emitted_envelope_json,
+          ) as StageEnvelope,
+        }
+      : {}),
+  };
+}
+
+function forkGenerationFromRow(row: ForkGenerationRow): ForkGenerationRecord {
+  return {
+    run_id: row.run_id,
+    generation_id: row.generation_id,
+    ...(row.replay_id != null ? { replay_id: row.replay_id } : {}),
+    fork_parent_stage_id: row.fork_parent_stage_id,
+    generation_number: row.generation_number,
+    clone_stage_ids: JSON.parse(row.clone_stage_ids_json) as string[],
+    status: row.status as ForkGenerationRecord["status"],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
   private migratePromise: Promise<void>;
@@ -290,6 +464,8 @@ export class SqliteRunStore implements RunStore {
     ensureStageExecutionVerificationOutcomeColumn(this.db);
     ensureStageEventsAttemptColumn(this.db);
     ensureVerificationCheckResultsTable(this.db);
+    ensureFeedbackReplayStagePassEnvelopeColumn(this.db);
+    ensureFeedbackLoopDeferredSendBackColumn(this.db);
     backfillVerificationOutcomes(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }
@@ -817,7 +993,12 @@ export class SqliteRunStore implements RunStore {
     for (const row of rows) {
       const dagSnapshot = this.readPipelineDagSnapshotFromRow(row);
       const stages = await this.loadStageSnapshots(row.run_id, dagSnapshot?.stage_ids);
-      summaries.push(projectRunSummary(this.runMetaFromRow(row), stages));
+      const { active } = await this.loadFeedbackLoopHistory(row.run_id);
+      summaries.push(
+        projectRunSummary(this.runMetaFromRow(row), stages, {
+          active_feedback_loop: active,
+        }),
+      );
     }
     return summaries;
   }
@@ -827,12 +1008,476 @@ export class SqliteRunStore implements RunStore {
     const row = this.getRunRow(runId);
     const dagSnapshot = this.readPipelineDagSnapshotFromRow(row);
     const stages = await this.loadStageSnapshots(runId, dagSnapshot?.stage_ids);
+    const { history, active } = await this.loadFeedbackLoopHistory(runId);
     return projectRunDetail(
       this.runMetaFromRow(row),
       stages,
       row.task_yaml,
       dagSnapshot,
+      {
+        feedback_loops: history,
+        active_feedback_loop: active,
+      },
     );
+  }
+
+  async createFeedbackLoop(
+    runId: string,
+    input: CreateFeedbackLoopInput,
+  ): Promise<FeedbackLoopRecord> {
+    await this.ready();
+    this.getRunRow(runId);
+    const now = new Date().toISOString();
+    const state = input.state ?? "active";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_loops
+          (run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+           current_replay_id, current_replay_number, created_at, updated_at)
+         VALUES
+          (@run_id, @loop_id, @source_stage_id, @source_attempt, @policy_json, @state,
+           NULL, NULL, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        loop_id: input.loop_id,
+        source_stage_id: input.source_stage_id,
+        source_attempt: input.source_attempt,
+        policy_json: JSON.stringify(input.policy),
+        state,
+        created_at: now,
+        updated_at: now,
+      });
+    return this.getFeedbackLoop(runId, input.loop_id);
+  }
+
+  async getFeedbackLoop(runId: string, loopId: string): Promise<FeedbackLoopRecord> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+                current_replay_id, current_replay_number, deferred_send_back_json,
+                created_at, updated_at
+         FROM feedback_loops WHERE run_id = ? AND loop_id = ?`,
+      )
+      .get(runId, loopId) as FeedbackLoopRow | undefined;
+    if (!row) {
+      throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+    }
+    return feedbackLoopFromRow(row);
+  }
+
+  async listFeedbackLoops(runId: string): Promise<FeedbackLoopRecord[]> {
+    await this.ready();
+    this.getRunRow(runId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, loop_id, source_stage_id, source_attempt, policy_json, state,
+                current_replay_id, current_replay_number, deferred_send_back_json,
+                created_at, updated_at
+         FROM feedback_loops WHERE run_id = ? ORDER BY created_at ASC`,
+      )
+      .all(runId) as FeedbackLoopRow[];
+    return rows.map(feedbackLoopFromRow);
+  }
+
+  async updateFeedbackLoop(
+    runId: string,
+    loopId: string,
+    patch: FeedbackLoopPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      loop_id: loopId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.state !== undefined) {
+      sets.push("state = @state");
+      params.state = patch.state;
+    }
+    if (patch.current_replay_id !== undefined) {
+      sets.push("current_replay_id = @current_replay_id");
+      params.current_replay_id = patch.current_replay_id;
+    }
+    if (patch.current_replay_number !== undefined) {
+      sets.push("current_replay_number = @current_replay_number");
+      params.current_replay_number = patch.current_replay_number;
+    }
+    if (patch.policy !== undefined) {
+      sets.push("policy_json = @policy_json");
+      params.policy_json = JSON.stringify(patch.policy);
+    }
+    if (patch.deferred_send_back !== undefined) {
+      sets.push("deferred_send_back_json = @deferred_send_back_json");
+      params.deferred_send_back_json =
+        patch.deferred_send_back === null
+          ? null
+          : JSON.stringify(patch.deferred_send_back);
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_loops SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND loop_id = @loop_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Feedback loop not found: ${runId}/${loopId}`);
+    }
+  }
+
+  async createFeedbackReplay(
+    runId: string,
+    input: CreateFeedbackReplayInput,
+  ): Promise<FeedbackReplayRecord> {
+    await this.ready();
+    await this.getFeedbackLoop(runId, input.loop_id);
+    const now = new Date().toISOString();
+    const status = input.status ?? "scheduled";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_replays
+          (run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+           replay_number, max_replays, replay_session, route_stage_ids_json,
+           feedback_envelope_json, status, created_at, updated_at)
+         VALUES
+          (@run_id, @replay_id, @loop_id, @source_stage_id, @source_attempt, @target_stage_id,
+           @replay_number, @max_replays, @replay_session, @route_stage_ids_json,
+           @feedback_envelope_json, @status, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        replay_id: input.replay_id,
+        loop_id: input.loop_id,
+        source_stage_id: input.source_stage_id,
+        source_attempt: input.source_attempt,
+        target_stage_id: input.target_stage_id,
+        replay_number: input.replay_number,
+        max_replays: input.max_replays,
+        replay_session: input.replay_session,
+        route_stage_ids_json: JSON.stringify(input.route_stage_ids),
+        feedback_envelope_json: JSON.stringify(input.feedback_envelope),
+        status,
+        created_at: now,
+        updated_at: now,
+      });
+    return this.getFeedbackReplay(runId, input.replay_id);
+  }
+
+  async getFeedbackReplay(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayRecord> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+                replay_number, max_replays, replay_session, route_stage_ids_json,
+                feedback_envelope_json, status, created_at, updated_at
+         FROM feedback_replays WHERE run_id = ? AND replay_id = ?`,
+      )
+      .get(runId, replayId) as FeedbackReplayRow | undefined;
+    if (!row) {
+      throw new Error(`Feedback replay not found: ${runId}/${replayId}`);
+    }
+    return feedbackReplayFromRow(row);
+  }
+
+  async listFeedbackReplays(
+    runId: string,
+    loopId: string,
+  ): Promise<FeedbackReplayRecord[]> {
+    await this.ready();
+    await this.getFeedbackLoop(runId, loopId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, replay_id, loop_id, source_stage_id, source_attempt, target_stage_id,
+                replay_number, max_replays, replay_session, route_stage_ids_json,
+                feedback_envelope_json, status, created_at, updated_at
+         FROM feedback_replays
+         WHERE run_id = ? AND loop_id = ?
+         ORDER BY replay_number ASC`,
+      )
+      .all(runId, loopId) as FeedbackReplayRow[];
+    return rows.map(feedbackReplayFromRow);
+  }
+
+  async updateFeedbackReplay(
+    runId: string,
+    replayId: string,
+    patch: FeedbackReplayPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      replay_id: replayId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_replays SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND replay_id = @replay_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Feedback replay not found: ${runId}/${replayId}`);
+    }
+  }
+
+  async createFeedbackReplayStagePass(
+    runId: string,
+    input: CreateFeedbackReplayStagePassInput,
+  ): Promise<FeedbackReplayStagePassRecord> {
+    await this.ready();
+    await this.getFeedbackReplay(runId, input.replay_id);
+    const status = input.status ?? "pending";
+    this.db
+      .prepare(
+        `INSERT INTO feedback_replay_stage_passes
+          (run_id, replay_id, stage_id, stage_attempt, session_mode, status,
+           started_at, finished_at, emitted_envelope_json)
+         VALUES
+          (@run_id, @replay_id, @stage_id, @stage_attempt, @session_mode, @status,
+           @started_at, @finished_at, @emitted_envelope_json)`,
+      )
+      .run({
+        run_id: runId,
+        replay_id: input.replay_id,
+        stage_id: input.stage_id,
+        stage_attempt: input.stage_attempt,
+        session_mode: input.session_mode,
+        status,
+        started_at: input.started_at ?? null,
+        finished_at: input.finished_at ?? null,
+        emitted_envelope_json:
+          input.emitted_envelope !== undefined
+            ? JSON.stringify(input.emitted_envelope)
+            : null,
+      });
+    const row = this.db
+      .prepare(
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_mode, status,
+                started_at, finished_at, emitted_envelope_json
+         FROM feedback_replay_stage_passes
+         WHERE run_id = ? AND replay_id = ? AND stage_id = ?`,
+      )
+      .get(runId, input.replay_id, input.stage_id) as FeedbackReplayStagePassRow;
+    return feedbackReplayStagePassFromRow(row);
+  }
+
+  async listFeedbackReplayStagePasses(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayStagePassRecord[]> {
+    await this.ready();
+    await this.getFeedbackReplay(runId, replayId);
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, replay_id, stage_id, stage_attempt, session_mode, status,
+                started_at, finished_at, emitted_envelope_json
+         FROM feedback_replay_stage_passes
+         WHERE run_id = ? AND replay_id = ?
+         ORDER BY stage_id ASC`,
+      )
+      .all(runId, replayId) as FeedbackReplayStagePassRow[];
+    return rows.map(feedbackReplayStagePassFromRow);
+  }
+
+  async updateFeedbackReplayStagePass(
+    runId: string,
+    replayId: string,
+    stageId: string,
+    patch: FeedbackReplayStagePassPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = [];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      replay_id: replayId,
+      stage_id: stageId,
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    if (patch.stage_attempt !== undefined) {
+      sets.push("stage_attempt = @stage_attempt");
+      params.stage_attempt = patch.stage_attempt;
+    }
+    if (patch.started_at !== undefined) {
+      sets.push("started_at = @started_at");
+      params.started_at = patch.started_at;
+    }
+    if (patch.finished_at !== undefined) {
+      sets.push("finished_at = @finished_at");
+      params.finished_at = patch.finished_at;
+    }
+    if (patch.emitted_envelope !== undefined) {
+      sets.push("emitted_envelope_json = @emitted_envelope_json");
+      params.emitted_envelope_json =
+        patch.emitted_envelope === null
+          ? null
+          : JSON.stringify(patch.emitted_envelope);
+    }
+    if (sets.length === 0) return;
+    const result = this.db
+      .prepare(
+        `UPDATE feedback_replay_stage_passes SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND replay_id = @replay_id AND stage_id = @stage_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(
+        `Feedback replay stage pass not found: ${runId}/${replayId}/${stageId}`,
+      );
+    }
+  }
+
+  async createForkGeneration(
+    runId: string,
+    input: CreateForkGenerationInput,
+  ): Promise<ForkGenerationRecord> {
+    await this.ready();
+    this.getRunRow(runId);
+    if (input.replay_id !== undefined) {
+      await this.getFeedbackReplay(runId, input.replay_id);
+    }
+    const now = new Date().toISOString();
+    const status = input.status ?? "active";
+    this.db
+      .prepare(
+        `INSERT INTO fork_generations
+          (run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+           clone_stage_ids_json, status, created_at, updated_at)
+         VALUES
+          (@run_id, @generation_id, @replay_id, @fork_parent_stage_id, @generation_number,
+           @clone_stage_ids_json, @status, @created_at, @updated_at)`,
+      )
+      .run({
+        run_id: runId,
+        generation_id: input.generation_id,
+        replay_id: input.replay_id ?? null,
+        fork_parent_stage_id: input.fork_parent_stage_id,
+        generation_number: input.generation_number,
+        clone_stage_ids_json: JSON.stringify(input.clone_stage_ids),
+        status,
+        created_at: now,
+        updated_at: now,
+      });
+    const row = this.db
+      .prepare(
+        `SELECT run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+                clone_stage_ids_json, status, created_at, updated_at
+         FROM fork_generations WHERE run_id = ? AND generation_id = ?`,
+      )
+      .get(runId, input.generation_id) as ForkGenerationRow;
+    return forkGenerationFromRow(row);
+  }
+
+  async listForkGenerations(
+    runId: string,
+    options?: { replayId?: string; forkParentStageId?: string },
+  ): Promise<ForkGenerationRecord[]> {
+    await this.ready();
+    this.getRunRow(runId);
+    const clauses = ["run_id = ?"];
+    const params: unknown[] = [runId];
+    if (options?.replayId !== undefined) {
+      clauses.push("replay_id = ?");
+      params.push(options.replayId);
+    }
+    if (options?.forkParentStageId !== undefined) {
+      clauses.push("fork_parent_stage_id = ?");
+      params.push(options.forkParentStageId);
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT run_id, generation_id, replay_id, fork_parent_stage_id, generation_number,
+                clone_stage_ids_json, status, created_at, updated_at
+         FROM fork_generations
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY created_at ASC`,
+      )
+      .all(...params) as ForkGenerationRow[];
+    return rows.map(forkGenerationFromRow);
+  }
+
+  async updateForkGeneration(
+    runId: string,
+    generationId: string,
+    patch: ForkGenerationPatch,
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      generation_id: generationId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.status !== undefined) {
+      sets.push("status = @status");
+      params.status = patch.status;
+    }
+    const result = this.db
+      .prepare(
+        `UPDATE fork_generations SET ${sets.join(", ")}
+         WHERE run_id = @run_id AND generation_id = @generation_id`,
+      )
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Fork generation not found: ${runId}/${generationId}`);
+    }
+  }
+
+  private async loadFeedbackLoopHistory(runId: string): Promise<{
+    history: FeedbackLoopHistory[];
+    active?: FeedbackLoopRecord;
+  }> {
+    const loops = await this.listFeedbackLoops(runId);
+    const allForkGens = await this.listForkGenerations(runId);
+    const nullReplayGens = allForkGens.filter((g) => g.replay_id == null);
+    const history: FeedbackLoopHistory[] = [];
+    for (const loop of loops) {
+      const replays = await this.listFeedbackReplays(runId, loop.loop_id);
+      const replayEntries = [];
+      for (const replay of replays) {
+        const stage_passes = await this.listFeedbackReplayStagePasses(
+          runId,
+          replay.replay_id,
+        );
+        const fork_generations = allForkGens.filter(
+          (g) => g.replay_id === replay.replay_id,
+        );
+        replayEntries.push({ replay, stage_passes, fork_generations });
+      }
+      history.push({
+        loop,
+        replays: replayEntries,
+        fork_generations: nullReplayGens,
+      });
+    }
+
+    const activeCandidates = loops.filter(
+      (l) => l.state === "active" || l.state === "waiting_for_human",
+    );
+    let active: FeedbackLoopRecord | undefined;
+    if (activeCandidates.length > 0) {
+      active = [...activeCandidates].sort((a, b) => {
+        const byUpdated = b.updated_at.localeCompare(a.updated_at);
+        if (byUpdated !== 0) return byUpdated;
+        return b.created_at.localeCompare(a.created_at);
+      })[0];
+    }
+    return {
+      history,
+      ...(active !== undefined ? { active } : {}),
+    };
   }
 
   private readPipelineDagSnapshotFromRow(row: RunRow) {

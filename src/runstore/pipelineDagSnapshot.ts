@@ -137,6 +137,12 @@ export function appendCloneInstances(
     ...(templateNode.recovery !== undefined
       ? { recovery: templateNode.recovery }
       : {}),
+    ...(templateNode.feedback_loop !== undefined
+      ? { feedback_loop: templateNode.feedback_loop }
+      : {}),
+    ...(templateNode.replay_safe !== undefined
+      ? { replay_safe: templateNode.replay_safe }
+      : {}),
   }));
 
   const remaining = new Map(

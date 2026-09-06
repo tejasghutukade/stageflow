@@ -34,6 +34,8 @@ function waitingKindCopy(run: RunSummary): string {
       return `Stage ${stage} asked a multi_question prompt. All answers go back in one reply.`;
     case "free_text":
       return `Stage ${stage} asked a free_text prompt.`;
+    case "feedback_loop_decision":
+      return "Feedback loop limit — decide extend, continue, or abandon";
     default:
       return `Stage ${stage} is waiting for input.`;
   }
@@ -154,8 +156,9 @@ function WaitingCard({
   onOpenArtifact: (runId: string, path: string) => void;
 }) {
   const kind = run.waiting_kind;
+  const isFeedbackDecide = kind === "feedback_loop_decision";
   const pending =
-    run.waiting_prompt_id && kind
+    !isFeedbackDecide && run.waiting_prompt_id && kind
       ? { promptId: run.waiting_prompt_id, kind }
       : null;
   const { locked, error, submitIntent } = useOperatorAnswer(
@@ -163,10 +166,12 @@ function WaitingCard({
     run.waiting_stage_id,
     pending,
   );
-  const canAccept = isAcceptEligible({
-    promptId: run.waiting_prompt_id,
-    kind,
-  });
+  const canAccept =
+    !isFeedbackDecide &&
+    isAcceptEligible({
+      promptId: run.waiting_prompt_id,
+      kind: isFeedbackDecide ? null : kind,
+    });
   const artifact = run.waiting_artifacts?.[0];
   const peek = peekName(run);
   const questionCount = run.waiting_questions?.length ?? 0;
@@ -187,6 +192,11 @@ function WaitingCard({
         <p className="block__sub">{waitingKindCopy(run)}</p>
         {error ? <p style={{color:'var(--color-text-red)',fontSize:'var(--font-size-sm)'}}>Could not accept: {error}</p> : null}
         <div className="block__actions">
+          {isFeedbackDecide ? (
+            <button className="btn btn--primary" onClick={() => onOpen(run.run_id)}>
+              Decide on run
+            </button>
+          ) : null}
           {canAccept ? <button className="btn btn--accept" disabled={locked} onClick={() => void submitIntent({ type: "decision", decision: "accept" })}>Accept</button> : null}
           {(kind === "confirm" || kind === "artifact_backed") ? <button className="btn btn--reject" onClick={() => onOpen(run.run_id)}>Reject with note</button> : null}
           {kind === "multi_question" ? (
