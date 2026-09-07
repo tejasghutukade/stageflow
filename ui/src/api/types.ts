@@ -46,6 +46,7 @@ export type PipelineTrackNode = {
   gate_kinds?: StageGateKind[];
   attempt_count?: number;
   definition_id?: string;
+  feedback_loop?: { target: string };
 };
 
 export type PipelineTrackEdge = {
@@ -58,6 +59,120 @@ export type PipelineTrackProjection = {
   nodes: PipelineTrackNode[];
   edges: PipelineTrackEdge[];
 };
+
+export type FeedbackLoopConfig = {
+  target: string;
+  max_replays: number;
+  on_max_replays: "require_continue" | "wait_for_human";
+  replay_session: "resume" | "new_session";
+};
+
+export type FeedbackLoopState =
+  | "active"
+  | "waiting_for_human"
+  | "continued"
+  | "abandoned"
+  | "completed";
+
+export type FeedbackReplayStatus =
+  | "scheduled"
+  | "active"
+  | "waiting_for_human"
+  | "completed"
+  | "failed"
+  | "superseded";
+
+export type FeedbackReplayStagePassStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "superseded";
+
+export type ForkGenerationStatus = "active" | "completed" | "superseded";
+
+export type DeferredFeedbackSendBack = {
+  target: string;
+  feedback_envelope: StageEnvelopeView;
+  source_attempt: number;
+};
+
+export type FeedbackLoopRecord = {
+  run_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  policy: FeedbackLoopConfig;
+  state: FeedbackLoopState;
+  current_replay_id?: string;
+  current_replay_number?: number;
+  deferred_send_back?: DeferredFeedbackSendBack;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayRecord = {
+  run_id: string;
+  replay_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  target_stage_id: string;
+  replay_number: number;
+  max_replays: number;
+  replay_session: FeedbackLoopConfig["replay_session"];
+  route_stage_ids: string[];
+  feedback_envelope: StageEnvelopeView;
+  status: FeedbackReplayStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayStagePassRecord = {
+  run_id: string;
+  replay_id: string;
+  stage_id: string;
+  stage_attempt: number;
+  session_origin_attempt?: number;
+  session_mode: FeedbackLoopConfig["replay_session"];
+  status: FeedbackReplayStagePassStatus;
+  started_at?: string;
+  finished_at?: string;
+  emitted_envelope?: StageEnvelopeView;
+};
+
+export type ForkGenerationRecord = {
+  run_id: string;
+  generation_id: string;
+  replay_id?: string;
+  fork_parent_stage_id: string;
+  generation_number: number;
+  clone_stage_ids: string[];
+  status: ForkGenerationStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackLoopHistory = {
+  loop: FeedbackLoopRecord;
+  replays: Array<{
+    replay: FeedbackReplayRecord;
+    stage_passes: FeedbackReplayStagePassRecord[];
+    fork_generations: ForkGenerationRecord[];
+  }>;
+  fork_generations: ForkGenerationRecord[];
+};
+
+export type FeedbackLoopDecisionKind = "extend" | "continue" | "abandon";
+
+export type FeedbackDecisionResult =
+  | {
+      ok: true;
+      effect: "extended" | "continued" | "abandoned";
+      loopId: string;
+    }
+  | { ok: false; error: string; status?: number };
 
 export type RunSummary = {
   run_id: string;
@@ -73,12 +188,13 @@ export type RunSummary = {
   waiting_stage_id?: string;
   waiting_stage_ids?: string[];
   waiting_summary?: string;
-  waiting_kind?: PendingPrompt["kind"];
+  waiting_kind?: PendingPrompt["kind"] | "feedback_loop_decision";
   waiting_prompt_id?: string;
   waiting_artifacts?: string[];
   waiting_questions?: string[];
   failed_stage_id?: string;
   failed_reason?: string;
+  active_feedback_loop?: FeedbackLoopRecord;
 };
 
 export type StageEnvelopeView = {
@@ -90,6 +206,9 @@ export type StageEnvelopeView = {
   stage_id?: string;
   fork_choice?: string[];
   clone_forks?: unknown[];
+  feedback_loop?:
+    | { action: "continue" }
+    | { action: "send_back"; target: string };
 };
 
 export type Decision = "accept" | "reject";
@@ -208,6 +327,7 @@ export type RunDetail = Omit<RunSummary, "stages"> & {
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
+  feedback_loops: FeedbackLoopHistory[];
 };
 
 export type TaskListing = {

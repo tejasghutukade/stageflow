@@ -660,4 +660,41 @@ describe("buildPipelineTrack", () => {
       { from: "beta", to: "gamma" },
     ]);
   });
+
+  it("projects feedback_loop target onto track nodes", () => {
+    const dag: RunPipelineDagSnapshot = {
+      stage_ids: ["implement", "review"],
+      roots: ["implement"],
+      childrenOf: { implement: ["review"] },
+      nodes: [
+        { id: "implement", needs: null, ancestors: [], stageIndex: 0 },
+        {
+          id: "review",
+          needs: "implement",
+          ancestors: ["implement"],
+          stageIndex: 1,
+          feedback_loop: {
+            target: "implement",
+            max_replays: 2,
+            on_max_replays: "wait_for_human",
+            replay_session: "resume",
+          },
+        },
+      ],
+    };
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [
+        snap("implement", "pending"),
+        snap("review", "pending"),
+      ]),
+      runStatus: "running",
+    });
+    expect(track.nodes.find((n) => n.stage_id === "review")?.feedback_loop).toEqual({
+      target: "implement",
+    });
+    expect(
+      track.nodes.find((n) => n.stage_id === "implement")?.feedback_loop,
+    ).toBeUndefined();
+  });
 });

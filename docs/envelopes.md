@@ -21,9 +21,14 @@ type StageEnvelope = {
   payload?: Record<string, unknown>;
   fork_choice?: string[];
   clone_forks?: CloneForkItem[];
+  feedback_loop?: FeedbackLoopAction;
   stage_id?: string;
   notes?: string;
 };
+
+type FeedbackLoopAction =
+  | { action: "continue" }
+  | { action: "send_back"; target: string };
 ```
 
 | Field | Required | Description |
@@ -34,10 +39,13 @@ type StageEnvelope = {
 | `payload` | no | Structured data for downstream stages; required on success when the stage declares `payload_schema` |
 | `fork_choice` | no* | Non-clonable immediate successor ids to run; required on success when the stage has a `fork` field and at least one non-clonable child |
 | `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
+| `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares `feedback_loop` policy |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
 \* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On failure, neither field is required or validated. Extra `clone_forks` is ignored only when the emitting stage has no clonable children; if any clonable child exists, `clone_forks` must cover every clonable successor exactly once (extra `successor_id`s are rejected).
+
+† Required on success for stages with a configured `feedback_loop` policy. Forbidden on failure and on stages without that policy. See [Feedback loops](#feedback-loops).
 
 ## Emitting an envelope
 
@@ -125,6 +133,40 @@ Sequential vs parallel join: in **parallel**, sibling clones still finish after 
 A clone may skip / once / fan-out its next stage only when that successor is clonable. Extra `clone_forks` is ignored only when the emitting stage has no clonable children (for example a nested clone whose successor is a non-clonable join). If any clonable child exists, `clone_forks` must list every clonable successor exactly once; extra `successor_id`s are rejected. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). Two clones fanning out the same successor is unsupported in v1 because instance ids are `{catalogId}~{n}`. Dual-parent nested fan-out is fail-closed at apply.
 
 After fan-out, workspace paths and `--stage` keys use the instance id (`{catalogId}~{n}`); run-once keeps the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+
+### Feedback loops {#feedback-loops}
+
+When the emitting stage's pipeline entry declares `feedback_loop` (see [YAML catalog](yaml-catalog.md#feedback-loops)), a **successful** emit **must** include `feedback_loop`:
+
+```json
+{ "action": "continue" }
+```
+
+or
+
+```json
+{ "action": "send_back", "target": "implement" }
+```
+
+| Action | Effect |
+|--------|--------|
+| `continue` | Accept the stage and schedule normal successors (exit the loop / advance past the source). |
+| `send_back` | Replay from `target` through the source. `target` must equal the policy's `target`. |
+
+Rules:
+
+- `feedback_loop` is **required** on success for a configured source; omitting it rejects the emit.
+- `feedback_loop` is **not allowed** when `status` is `failure`.
+- `feedback_loop` is **not allowed** on stages that do not declare a feedback-loop policy.
+- `send_back` **cannot** be combined with `fork_choice` or `clone_forks` on the same envelope.
+- `continue` may still carry `fork_choice` / `clone_forks` when those fields are otherwise required for the stage.
+- Nested clone-assignment envelopes must not include `feedback_loop`.
+
+On replay, agents see a **Feedback Loop Context** section (JSON) with loop/replay ids, the source's send-back envelope (summary, artifacts, payload), remaining replays, route stage ids, and optional prior-attempt / active fork-generation hints. Use that context — not scraped transcripts — to address the feedback.
+
+After `max_replays`, behavior follows `on_max_replays` (`require_continue` or `wait_for_human`). Human decisions: [CLI](cli-reference.md#sf-runs-feedback-decide), [MCP `decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
+
+Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
 
 ### payload_schema {#payload-schema}
 

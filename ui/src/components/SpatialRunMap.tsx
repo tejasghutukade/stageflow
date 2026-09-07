@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { StageGateKind, StageSnapshot } from "../api";
 import {
+  SPATIAL_COL_W,
   SPATIAL_NODE_H,
   type SpatialNodeBox,
   type SpatialTrackLayout,
@@ -18,7 +19,10 @@ import {
   statusCopy,
 } from "../status/runStatus";
 import { canAbandon, canRetry, isStageActionBusy } from "../stageAction";
-import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
+import type {
+  FeedbackOverlay,
+  SpatialNodeChrome,
+} from "../workspace/resolveRunWorkspace";
 import { AttemptCountBadge } from "./AttemptCountBadge";
 
 export const PAN_CLICK_THRESHOLD_PX = 4;
@@ -26,6 +30,8 @@ export const SPATIAL_ZOOM_MIN = 0.25;
 export const SPATIAL_ZOOM_MAX = 1.8;
 export const SPATIAL_FIT_PAD = 24;
 export const SPATIAL_FIT_TOOL_INSET = 56;
+export const FEEDBACK_OVERLAY_CLEAR = 48;
+export const FEEDBACK_LANE_STAGGER = 12;
 
 export type SpatialBox = {
   x: number;
@@ -33,6 +39,112 @@ export type SpatialBox = {
   width: number;
   height: number;
 };
+
+type FeedbackBox = Pick<SpatialNodeBox, "x" | "y" | "width" | "height">;
+
+function sameSpatialRow(a: FeedbackBox, b: FeedbackBox): boolean {
+  return Math.abs(a.y + a.height / 2 - (b.y + b.height / 2)) < a.height * 0.75;
+}
+
+/** Longer horizontal spans get a deeper clearance lane so shared-source elbows stay readable. */
+export function feedbackOverlayLaneExtra(fromBox: FeedbackBox, toBox: FeedbackBox): number {
+  const x1 = fromBox.x + fromBox.width / 2;
+  const x2 = toBox.x + toBox.width / 2;
+  const spanSteps = Math.max(0, Math.round(Math.abs(x2 - x1) / SPATIAL_COL_W) - 1);
+  return spanSteps * FEEDBACK_LANE_STAGGER;
+}
+
+function orthogonalFeedbackPath(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  laneY: number,
+): string {
+  return `M${x1} ${y1} V${laneY} H${x2} V${y2}`;
+}
+
+export function feedbackOverlayPath(fromBox: FeedbackBox, toBox: FeedbackBox): string {
+  const fromMidY = fromBox.y + fromBox.height / 2;
+  const toMidY = toBox.y + toBox.height / 2;
+  const laneExtra = feedbackOverlayLaneExtra(fromBox, toBox);
+
+  if (sameSpatialRow(fromBox, toBox)) {
+    const x1 = fromBox.x + fromBox.width / 2;
+    const y1 = fromBox.y + fromBox.height;
+    const x2 = toBox.x + toBox.width / 2;
+    const y2 = toBox.y + toBox.height;
+    const laneY = Math.max(y1, y2) + FEEDBACK_OVERLAY_CLEAR + laneExtra;
+    return orthogonalFeedbackPath(x1, y1, x2, y2, laneY);
+  }
+
+  if (toMidY >= fromMidY) {
+    const x1 = fromBox.x + fromBox.width / 2;
+    const y1 = fromBox.y + fromBox.height;
+    const x2 = toBox.x + toBox.width / 2;
+    const y2 = toBox.y;
+    const gap = y2 - y1;
+    const laneY =
+      gap >= FEEDBACK_OVERLAY_CLEAR
+        ? y1 + gap / 2
+        : Math.max(y1, y2) + FEEDBACK_OVERLAY_CLEAR + laneExtra;
+    return orthogonalFeedbackPath(x1, y1, x2, y2, laneY);
+  }
+
+  const x1 = fromBox.x + fromBox.width / 2;
+  const y1 = fromBox.y;
+  const x2 = toBox.x + toBox.width / 2;
+  const y2 = toBox.y;
+  const laneY = Math.min(y1, y2) - FEEDBACK_OVERLAY_CLEAR - laneExtra;
+  return orthogonalFeedbackPath(x1, y1, x2, y2, laneY);
+}
+
+export function feedbackPathPoints(d: string): Array<{ x: number; y: number }> {
+  const tokens = d.match(/[MLHVmlhv]|-?\d*\.?\d+/g);
+  if (!tokens) return [];
+  const points: Array<{ x: number; y: number }> = [];
+  let x = 0;
+  let y = 0;
+  let i = 0;
+  while (i < tokens.length) {
+    const cmd = tokens[i++]!.toUpperCase();
+    if (cmd === "M" || cmd === "L") {
+      x = Number(tokens[i++]);
+      y = Number(tokens[i++]);
+      points.push({ x, y });
+    } else if (cmd === "H") {
+      x = Number(tokens[i++]);
+      points.push({ x, y });
+    } else if (cmd === "V") {
+      y = Number(tokens[i++]);
+      points.push({ x, y });
+    }
+  }
+  return points;
+}
+
+export function feedbackOverlayExtent(
+  fromBox: FeedbackBox,
+  toBox: FeedbackBox,
+): SpatialBox {
+  const d = feedbackOverlayPath(fromBox, toBox);
+  const points = feedbackPathPoints(d);
+  if (points.length === 0) {
+    return {
+      x: Math.min(fromBox.x, toBox.x),
+      y: Math.min(fromBox.y, toBox.y),
+      width: Math.abs(toBox.x - fromBox.x) + Math.max(fromBox.width, toBox.width),
+      height: Math.abs(toBox.y - fromBox.y) + Math.max(fromBox.height, toBox.height),
+    };
+  }
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
 
 export function isPanGesture(
   dx: number,
@@ -168,6 +280,7 @@ export type SpatialRunMapProps = {
   onAbandonStage?: (stageId: string) => void;
   runId?: string;
   showHint?: boolean;
+  feedbackOverlays?: FeedbackOverlay[];
 };
 
 export function SpatialRunMap({
@@ -183,6 +296,7 @@ export function SpatialRunMap({
   onAbandonStage,
   runId,
   showHint,
+  feedbackOverlays = [],
 }: SpatialRunMapProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const fittedRef = useRef(false);
@@ -223,10 +337,23 @@ export function SpatialRunMap({
     lastFitViewportRef.current = { width: 0, height: 0 };
   }, [runId]);
 
+  const contentBounds = () => {
+    const boxes: Array<Pick<SpatialNodeBox, "x" | "y" | "width" | "height">> = [
+      ...layout.nodes,
+    ];
+    for (const overlay of feedbackOverlays) {
+      const from = layout.nodes.find((n) => n.stageId === overlay.from);
+      const to = layout.nodes.find((n) => n.stageId === overlay.to);
+      if (!from || !to) continue;
+      boxes.push(feedbackOverlayExtent(from, to));
+    }
+    return spatialFitBounds(boxes);
+  };
+
   useLayoutEffect(() => {
     if (layout.nodes.length === 0 || viewport.width === 0 || viewport.height === 0) return;
     if (!fittedRef.current) {
-      const next = fitTransform(spatialFitBounds(layout.nodes), viewport);
+      const next = fitTransform(contentBounds(), viewport);
       setPan({ x: next.panX, y: next.panY });
       setZoom(next.zoom);
       fittedRef.current = true;
@@ -239,10 +366,10 @@ export function SpatialRunMap({
     if (!viewportChanged) return;
     lastFitViewportRef.current = { width: viewport.width, height: viewport.height };
     if (!shouldRefitOnViewportChange(true, userMovedRef.current)) return;
-    const next = fitTransform(spatialFitBounds(layout.nodes), viewport);
+    const next = fitTransform(contentBounds(), viewport);
     setPan({ x: next.panX, y: next.panY });
     setZoom(next.zoom);
-  }, [layout.nodes, viewport.height, viewport.width]);
+  }, [feedbackOverlays, layout.nodes, viewport.height, viewport.width]);
 
   const applyZoom = (factor: number, origin?: { x: number; y: number }) => {
     const point = origin ?? { x: viewport.width / 2, y: viewport.height / 2 };
@@ -258,7 +385,7 @@ export function SpatialRunMap({
     const el = stageRef.current;
     if (!el || layout.nodes.length === 0) return;
     const rect = el.getBoundingClientRect();
-    const next = fitTransform(spatialFitBounds(layout.nodes), {
+    const next = fitTransform(contentBounds(), {
       width: rect.width,
       height: rect.height,
     });
@@ -344,6 +471,9 @@ export function SpatialRunMap({
             <marker id="spatial-arrow-active" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
               <path d="M0,0 L7,3 L0,6 Z" fill="var(--color-accent)" />
             </marker>
+            <marker id="spatial-arrow-feedback" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="var(--color-warning)" />
+            </marker>
           </defs>
           <g
             className="world"
@@ -370,6 +500,25 @@ export function SpatialRunMap({
                     }
                   />
                 </g>
+              );
+            })}
+            {feedbackOverlays.map((overlay) => {
+              const from = layout.nodes.find((n) => n.stageId === overlay.from);
+              const to = layout.nodes.find((n) => n.stageId === overlay.to);
+              if (!from || !to) return null;
+              return (
+                <path
+                  key={`feedback:${overlay.kind}:${overlay.from}->${overlay.to}`}
+                  className={
+                    overlay.kind === "deferred"
+                      ? "edge feedback feedback--deferred"
+                      : overlay.kind === "policy"
+                        ? "edge feedback feedback--policy"
+                        : "edge feedback"
+                  }
+                  d={feedbackOverlayPath(from, to)}
+                  markerEnd="url(#spatial-arrow-feedback)"
+                />
               );
             })}
             {layout.nodes.map((node) => {
@@ -463,10 +612,18 @@ function SpatialNode({
   const showRetry = action === "retry" && canRetry(status) && onRetryStage;
   const showAbandon = action === "abandon" && canAbandon(status) && onAbandonStage;
   const chromeStatus = nodeChromeStatus(status, abandoned);
+  const feedbackClass = [
+    chrome?.isFeedbackSource ? "feedback-source" : "",
+    chrome?.isFeedbackTarget ? "feedback-target" : "",
+    chrome?.isSuperseded ? "superseded" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const statusLabel = abandoned ? abandonedDisplayCopy() : statusCopy(status);
   const title = chrome?.title ?? node.stageId;
   const kicker = chrome ? spatialNodeKicker(chrome.kicker, chrome.title) : null;
   const metaParts = [statusLabel];
+  if (chrome?.isSuperseded) metaParts.push("superseded");
   if (chrome?.readinessLine && status === "pending") metaParts.push(chrome.readinessLine);
   if (status === "waiting_for_input") {
     if (chrome?.gateKinds?.length) metaParts.push(chrome.gateKinds.map(gateLabel).join(" · "));
@@ -482,9 +639,12 @@ function SpatialNode({
 
   return (
     <g
-      className={`gnode ${chromeStatus}${selected ? " selected" : ""}`}
+      className={`gnode ${chromeStatus}${selected ? " selected" : ""}${feedbackClass ? ` ${feedbackClass}` : ""}`}
       data-id={node.stageId}
       data-waiting={chrome?.isWaitingAttention ? "true" : undefined}
+      data-feedback-source={chrome?.isFeedbackSource ? "true" : undefined}
+      data-feedback-target={chrome?.isFeedbackTarget ? "true" : undefined}
+      data-superseded={chrome?.isSuperseded ? "true" : undefined}
       transform={`translate(${node.x},${node.y})`}
     >
       <rect className="node-box" x={0} y={0} width={node.width} height={SPATIAL_NODE_H} rx={12} ry={12} />

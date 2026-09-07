@@ -7,6 +7,8 @@ export const WIRING_KEYS = new Set([
   "clone_cap",
   "completion",
   "recovery",
+  "feedback_loop",
+  "replay_safe",
 ]);
 
 export const BODY_KEYS = new Set([

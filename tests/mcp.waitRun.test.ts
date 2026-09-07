@@ -46,6 +46,7 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
     task_yaml: "id: t\ngoal: g\n",
     stages: [stage({ stage_id: "clarify", status: "running" })],
     pipeline_track: { nodes: [], edges: [] },
+    feedback_loops: [],
     ...overrides,
   };
 }

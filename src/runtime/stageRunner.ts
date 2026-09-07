@@ -1,4 +1,10 @@
-import type { AgentPort, StageHandle, StageRunResult } from "../agent/port.js";
+import type {
+  AgentPort,
+  FeedbackLoopContext,
+  StageHandle,
+  StageRunResult,
+  StageSessionMode,
+} from "../agent/port.js";
 import type { StageLogLine } from "../agent/activity.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageConfig } from "../types/stage.js";
@@ -62,6 +68,9 @@ export type RunStageOptions = {
   completedEnvelopes?: Map<string, StageEnvelope>;
   skipGates?: boolean;
   stageId?: string;
+  sessionMode?: StageSessionMode;
+  feedbackLoopContext?: FeedbackLoopContext;
+  resumeToken?: string;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -227,6 +236,9 @@ export async function runStage(
     operatorCatalog,
     completedEnvelopes,
     skipGates,
+    sessionMode,
+    feedbackLoopContext,
+    resumeToken,
   } = options;
   const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
@@ -298,6 +310,9 @@ export async function runStage(
       operatorCatalog,
       roots,
       completedEnvelopes,
+      ...(sessionMode !== undefined ? { sessionMode } : {}),
+      ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+      ...(resumeToken !== undefined ? { resumeToken } : {}),
       onActivity: (event) => {
         enqueueActivity(event);
       },

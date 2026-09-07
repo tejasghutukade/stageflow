@@ -117,6 +117,7 @@ sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--
 sf runs waiting [--run <runId>] [--json]
 sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
 sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
+sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
 sf runs retry --run <runId> --stage <stageId> [--json]
 sf runs abandon --run <runId> --stage <stageId> [--json]
 sf runs rerun --run <runId> [--json]
@@ -131,6 +132,7 @@ sf runs rerun --run <runId> [--json]
 | `waiting` | Waiting gates with `pending_prompt` |
 | `wait` | Block until waiting, terminal, or timeout |
 | `answer` | Submit an `AskOperatorAnswer` for a parked stage |
+| `feedback-decide` | Resolve a feedback-loop `wait_for_human` decision (`extend` / `continue` / `abandon`) |
 | `retry` | Retry a failed stage; process waits until waiting or terminal |
 | `abandon` | Mark a running stage abandoned |
 | `rerun` | Start a new run from a stored run; process waits until waiting or terminal |
@@ -142,7 +144,7 @@ sf runs rerun --run <runId> [--json]
 | Kind | Verbs | Host up |
 |------|-------|---------|
 | Read | `list`, `show`, `verify`, `waiting`, `wait` | Allowed |
-| Mutate | `answer`, `retry`, `recover`, `abandon`, `rerun` | Refused |
+| Mutate | `answer`, `feedback-decide`, `retry`, `recover`, `abandon`, `rerun` | Refused |
 
 Mutating verbs probe `GET http://127.0.0.1:3847/api/health` (1500 ms). HTTP 200 with parseable JSON → exit `1` without opening a mutating writer. This is not a single-writer lock: a host on another port (`sf ui --port 4000`) and a live blocking `sf run` are undetected second writers. Reads still work while a host is up.
 
@@ -165,6 +167,7 @@ A HITL park keeps store status `running`. `--status waiting` is not a valid `lis
 | `waiting` | `{ "waiting": [ … ] }` | `0` success, `1` error |
 | `wait` | waitRun result: `ok`, `reason`, `elapsed_ms`, `until`, nested `run` | `0` for `waiting` / `terminal` / `already` / `timeout`; **130** (or platform abort) with `{ "error", "code": "aborted" }` |
 | `answer` | `{ "ok": true }` | `0` on success even if the run parks again; `1` on error |
+| `feedback-decide` | `{ "ok": true, "effect": "extended"\|"continued"\|"abandoned", "loopId" }` | `0` on success; `1` on error |
 
 Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `waiting` for the next state. Do not reuse `sf run` exit `2` for a completed `wait` that woke on waiting.
 
@@ -193,6 +196,8 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--json` | Pretty-printed `projectRun` |
 
 Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`. `--json` is the `projectRun` object, including `pipeline_track` (diamond joins show both inbound edges). `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
+
+When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
 
 ### `sf runs verify`
 
@@ -227,6 +232,8 @@ in this run.
 | `--run` | Limit to one run (omit to scan all) |
 | `--json` | Pretty-printed `{ "waiting": [ … ] }` (MCP `list_waiting` fields, including `pending_prompt`) |
 
+For `waiting_kind: "feedback_loop_decision"`, entries also carry `feedback_loop_id` and `deferred_target` (exhausted `wait_for_human` loop). Resolve with [`sf runs feedback-decide`](#sf-runs-feedback-decide).
+
 ### `sf runs wait`
 
 | Flag | Description |
@@ -260,6 +267,33 @@ sf runs waiting → sf runs answer → sf runs wait --until any
 If `--answer` is omitted, read stdin JSON only when stdin is not a TTY. On a TTY or empty stdin, exit `1` with a missing-answer error.
 
 Answer kinds match [HITL](hitl.md) (`free_text`, `confirm`, `artifact_backed`, `multi_question`).
+
+### `sf runs feedback-decide` {#sf-runs-feedback-decide}
+
+Resolve a feedback-loop park when the source policy uses `on_max_replays: wait_for_human` and the loop is `waiting_for_human`.
+
+```bash
+sf runs feedback-decide \
+  --run <runId> \
+  --stage <sourceStageId> \
+  [--loop <loopId>] \
+  --decision extend|continue|abandon \
+  [--reason <text>] \
+  [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--stage` | Feedback-loop **source** stage id (required) |
+| `--loop` | Optional loop id when more than one loop could match |
+| `--decision` | `extend` — bump `max_replays` by one and accept the deferred `send_back`. `continue` — treat the source as succeeded and advance downstream. `abandon` — fail the source (and typically the run) |
+| `--reason` | Optional text recorded on `abandon` |
+| `--json` | `{ "ok": true, "effect": "extended"\|"continued"\|"abandoned", "loopId" }` |
+
+Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and `POST /api/runs/:runId/stages/:stageId/feedback-decision`. Host-down mutate rules apply (refused while `sf ui` / `sf mcp` health responds on the default port).
+
+Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback_loops`) and `sf runs waiting` (`waiting_kind: "feedback_loop_decision"`).
 
 ### `sf runs retry` / `abandon` / `rerun`
 

@@ -57,7 +57,7 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`.
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
 
 **Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 900000 / 15 minutes when omitted).
 
@@ -313,6 +313,62 @@ Fixtures:
 Walkthrough: [`examples/clonable-fanout/`](../examples/clonable-fanout/).
 
 Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; that example remains a single `author-diagrams` session until a later change.
+
+### Feedback loops {#feedback-loops}
+
+A stage may declare a **source-owned** `feedback_loop` policy so that, on success, it can either advance downstream (`continue`) or send work back to an earlier ancestor (`send_back`). Feedback loops do **not** add reverse `needs` edges — the catalog DAG stays forward-only; replay is a runtime schedule over the existing route.
+
+```yaml
+id: feedback-loop
+stages:
+  - id: plan
+    uses: ./plan.yaml
+  - id: implement
+    uses: ./implement.yaml
+    needs: plan
+  - id: review
+    uses: ./review.yaml
+    needs: implement
+    feedback_loop:
+      target: implement
+      max_replays: 2
+      on_max_replays: require_continue
+      replay_session: resume
+  - id: submit
+    uses: ./submit.yaml
+    needs: review
+    replay_safe: false
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `target` | yes | Stage id of an earlier ancestor of the source (via `needs`). |
+| `max_replays` | yes | Positive integer — how many accepted `send_back` replays the source may take before the max-replays policy applies. |
+| `on_max_replays` | yes | `require_continue` — a further `send_back` is rejected (emit fails with exceeded `max_replays`); the source must emit `continue` instead. `wait_for_human` — park for an operator decision (`extend` / `continue` / `abandon`). |
+| `replay_session` | yes | `resume` — reopen the prior agent session (`feedback_resume`). `new_session` — start a fresh session for the replayed stage. |
+
+Optional on any stage entry: `replay_safe` (boolean). **Omitted means safe** — the stage may appear on a feedback replay route. Set `replay_safe: false` on stages that must not be replayed (for example a one-shot submit). Catalog validation rejects a loop whose target→source route includes any `replay_safe: false` stage.
+
+**Validation rules**
+
+- The policy lives on the **source** stage (the one that emits `feedback_loop` in its envelope). The target must already be declared and must be an ancestor — not the source itself, not a sibling, not a descendant.
+- Neither the source nor the target may be `clonable: true`.
+- Unknown `feedback_loop` keys are rejected.
+- Persistent fork parents are valid targets (send-back can re-enter a fork parent). Clonable successors are not.
+
+**Runtime behavior (session, forks, artifacts)**
+
+- On `send_back`, Stageflow replays the inclusive route from the target through the source (forward order). Downstream of the source stays held until the loop continues or is abandoned.
+- Replayed stages receive a **Feedback Loop Context** block in the agent prompt (`loop_id`, `replay_id`, source envelope, remaining replays, route ids, optional prior attempt / active fork generation). See [Envelopes — Feedback loops](envelopes.md#feedback-loops).
+- `replay_session: resume` maps to session mode `feedback_resume` (resume token from the prior attempt). `new_session` maps to `new_session`.
+- When the replay route re-fans out a clonable successor, the prior clone cohort is **superseded** and a new fork generation mints fresh instance ids (`{catalogId}~{n}`). Prior clone artifacts remain under their attempt paths; the active generation is the one named in Feedback Loop Context.
+- Artifacts stay attempt-scoped. Downstream stages still consume the latest accepted envelopes on the active route; the send-back feedback itself is the source envelope carried in Feedback Loop Context.
+
+Operator / host-down decisions when `on_max_replays: wait_for_human`: [CLI `sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide), MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
+
+Fixtures: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml), [`feedback-loop-wait-human.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-wait-human.pipeline.yaml), [`feedback-loop-clone-fanout.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-clone-fanout.pipeline.yaml).
+
+Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/).
 
 ### Skill binding {#skill-binding}
 

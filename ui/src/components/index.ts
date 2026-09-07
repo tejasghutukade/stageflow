@@ -14,6 +14,12 @@ export type { ArtifactReaderProps } from "./ArtifactReader";
 export { ArtifactDecideColumn, DecidePanel } from "./DecidePanel";
 export type { DecidePanelProps } from "./DecidePanel";
 
+export { FeedbackDecidePanel } from "./FeedbackDecidePanel";
+export type { FeedbackDecidePanelProps } from "./FeedbackDecidePanel";
+
+export { FeedbackLoopPanel } from "./FeedbackLoopPanel";
+export type { FeedbackLoopPanelProps } from "./FeedbackLoopPanel";
+
 export { EnvelopeDrawer } from "./EnvelopeDrawer";
 export type { EnvelopeDrawerProps } from "./EnvelopeDrawer";
 

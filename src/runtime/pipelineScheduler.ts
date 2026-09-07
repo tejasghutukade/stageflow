@@ -28,13 +28,42 @@ import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
 } from "./envelopeRouting.js";
+import type {
+  FeedbackLoopDecisionInput,
+  ResolveFeedbackLoopDecisionResult,
+} from "./feedbackLoopDecision.js";
+import {
+  activeCohortFromCloneIds,
+  forkChoicePreservesReplaySource,
+  forkParentForNeedsStage,
+  mintCohortForFanout,
+} from "./forkGeneration.js";
+import {
+  activeReplayId,
+  activeSourceStageId,
+  applySendBack,
+  cohortOverrideMap,
+  createReplaySchedule,
+  hydrateFromStore,
+  isHeld,
+  launchAttemptFor,
+  launchFor,
+  noteActiveCohort,
+  onContinued,
+  onRouteStageFailed,
+  onRouteStageRunning,
+  onRouteStageSucceeded,
+  rebindRouteAttempts,
+  resolveDecision,
+  type ReplayScheduleHandle,
+} from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import { runStage, isRunStageWaiting } from "./stageRunner.js";
 import type { StageHitlController } from "./stageHitl.js";
-import { attemptContext } from "./stageAttemptContext.js";
+import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 
 type SchedulerPreparedPipeline = {
@@ -339,6 +368,18 @@ export type RunPipelineDagOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  /**
+   * In-process park for feedback-loop exhausted-limit decisions. When omitted,
+   * the scheduler exits with outcome "waiting" and callers use
+   * resolveFeedbackLoopDecision + resume separately (Phase 6 surfaces).
+   */
+  onFeedbackLoopWaiting?: (ctx: {
+    loopId: string;
+    sourceStageId: string;
+    resolve: (
+      decision: FeedbackLoopDecisionInput,
+    ) => Promise<ResolveFeedbackLoopDecisionResult>;
+  }) => Promise<void>;
 };
 
 export type RetryRunOptions = {
@@ -525,11 +566,25 @@ function isRunnable(
   states: Map<string, StageScheduleState>,
   schedulingHalted: boolean,
   completedEnvelopes: Map<string, StageEnvelope>,
+  feedback?: ReplayScheduleHandle,
 ): boolean {
   if (schedulingHalted) return false;
+  if (feedback !== undefined && isHeld(feedback, stageId)) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
+  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes, {
+    activeCohortForNeeds: (needsId) => {
+      const override = feedback !== undefined ? cohortOverrideMap(feedback) : undefined;
+      if (override === undefined || override.size === 0) {
+        return { kind: "untracked" };
+      }
+      const forkParentId = forkParentForNeedsStage(dag, needsId);
+      if (forkParentId === null) return { kind: "untracked" };
+      const tracked = override.get(forkParentId);
+      if (tracked === undefined) return { kind: "untracked" };
+      return activeCohortFromCloneIds(tracked);
+    },
+  });
 }
 
 export function hydratedScheduleHasRunnableWork(
@@ -589,8 +644,41 @@ export async function runPipelineDag(
   const stageById = buildStageConfigById(loaded);
 
   const retryContext = options.retryContext;
+  const feedbackSchedule = createReplaySchedule();
+  await hydrateFromStore(feedbackSchedule, store, run.runId, dag);
+  if (
+    retryContext !== undefined &&
+    activeReplayId(feedbackSchedule) !== undefined
+  ) {
+    const routeIds = new Set(
+      feedbackSchedule.feedback.contextsByStageId.keys(),
+    );
+    const cascade = cloneRetryDownstream(dag, [
+      ...retryContext.retryRoots.keys(),
+    ]);
+    const overrides = new Map<string, number>();
+    for (const [stageId, attempt] of retryContext.retryRoots) {
+      if (routeIds.has(stageId)) overrides.set(stageId, attempt);
+    }
+    for (const stageId of cascade) {
+      if (!routeIds.has(stageId)) continue;
+      if (overrides.has(stageId)) continue;
+      const exec = await store.createStageExecution(run.runId, stageId);
+      overrides.set(stageId, exec.attempt);
+    }
+    await rebindRouteAttempts(
+      feedbackSchedule,
+      store,
+      run.runId,
+      overrides,
+    );
+  }
 
   const resolveLaunchAttempt = async (stageId: string): Promise<number> => {
+    const feedbackAttempt = launchAttemptFor(feedbackSchedule, stageId);
+    if (feedbackAttempt !== undefined) {
+      return feedbackAttempt;
+    }
     if (retryContext) {
       const preCreatedAttempt = retryContext.retryRoots.get(stageId);
       if (preCreatedAttempt !== undefined) {
@@ -775,6 +863,14 @@ export async function runPipelineDag(
     if (retryContext !== undefined) {
       retryContext.retryRoots.set(stageId, nextAttempt.attempt);
     }
+    if (activeReplayId(feedbackSchedule) !== undefined) {
+      await rebindRouteAttempts(
+        feedbackSchedule,
+        store,
+        run.runId,
+        new Map([[stageId, nextAttempt.attempt]]),
+      );
+    }
     states.set(stageId, "pending");
     completedEnvelopes.delete(stageId);
     return true;
@@ -786,6 +882,14 @@ export async function runPipelineDag(
     envelope?: StageEnvelope,
   ) => {
     if (await scheduleAutomaticRepair(stageId)) return;
+    if (activeReplayId(feedbackSchedule) !== undefined) {
+      await onRouteStageFailed({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+      });
+    }
     states.set(stageId, "failed");
     notifyRetryRootTerminal(stageId, "failed");
     await recordCloneFailureEnvelope(stageId, reason, envelope);
@@ -835,7 +939,14 @@ export async function runPipelineDag(
     const retryDownstreamIds = retryContext
       ? cloneRetryDownstream(dag, [...retryContext.retryRoots.keys()])
       : EMPTY_RETRY_DOWNSTREAM;
-    const conflict = cloneFanoutConflict(dag, envelope, states, retryDownstreamIds);
+    const forceFreshCloneIds = activeReplayId(feedbackSchedule) !== undefined;
+    const conflict = cloneFanoutConflict(
+      dag,
+      envelope,
+      states,
+      retryDownstreamIds,
+      { forceFreshCloneIds },
+    );
     if (conflict !== undefined) {
       await store.appendStageEvent(run.runId, stageId, {
         event: "failed",
@@ -847,10 +958,134 @@ export async function runPipelineDag(
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
+
+    const feedbackAction = envelope.feedback_loop;
+    if (feedbackAction?.action === "send_back") {
+      const node = dag.nodes.find((n) => n.id === stageId);
+      if (node === undefined || node.feedback_loop === undefined) {
+        await handlePostSuccessError(
+          stageId,
+          `feedback_loop send_back from stage "${stageId}" without feedback_loop policy`,
+        );
+        return;
+      }
+      const latest = await store.getLatestStageExecution(run.runId, stageId);
+      const sourceAttempt = latest?.attempt ?? 1;
+      const applied = await applySendBack({
+        store,
+        runId: run.runId,
+        sourceNode: node,
+        sourceAttempt,
+        envelope,
+        schedule: feedbackSchedule,
+        projection: {
+          dag,
+          states,
+          completedEnvelopes,
+        },
+      });
+      if (applied.kind === "rejected") {
+        await handlePostSuccessError(stageId, applied.reason);
+        return;
+      }
+      if (applied.kind === "waiting_for_human") {
+        const waitAttempt = sourceAttempt;
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "waiting_for_input" },
+          { attempt: waitAttempt },
+        );
+        try {
+          await store.updateStageExecution(run.runId, stageId, waitAttempt, {
+            status: "waiting_for_input",
+          });
+        } catch {
+          // execution row may be absent in unusual harnesses
+        }
+        states.set(stageId, "waiting");
+
+        if (options.onFeedbackLoopWaiting !== undefined) {
+          let decisionResult: ResolveFeedbackLoopDecisionResult | undefined;
+          await options.onFeedbackLoopWaiting({
+            loopId: applied.loop.loop_id,
+            sourceStageId: stageId,
+            resolve: async (decision) => {
+              decisionResult = await resolveDecision({
+                store,
+                runId: run.runId,
+                decision: decision.decision,
+                loopId: applied.loop.loop_id,
+                reason: decision.reason,
+                schedule: feedbackSchedule,
+                projection: {
+                  dag,
+                  states,
+                  completedEnvelopes,
+                },
+                sourceNode: node,
+              });
+              return decisionResult;
+            },
+          });
+          if (decisionResult === undefined) {
+            return;
+          }
+          if (!decisionResult.ok) {
+            await handlePostSuccessError(stageId, decisionResult.reason);
+            return;
+          }
+          if (decisionResult.effect === "abandoned") {
+            schedulingHalted = true;
+            if (firstFailureReason === undefined) {
+              firstFailureReason = decisionResult.reason;
+            }
+            return;
+          }
+          return;
+        }
+        return;
+      }
+      for (const id of applied.retiredSkippedStageIds) {
+        await store.appendStageEvent(run.runId, id, { event: "skipped" });
+      }
+      return;
+    }
+
+    if (feedbackAction?.action === "continue") {
+      await onContinued({
+        store,
+        runId: run.runId,
+        sourceStageId: stageId,
+        envelope,
+        schedule: feedbackSchedule,
+      });
+    } else if (activeReplayId(feedbackSchedule) !== undefined) {
+      await onRouteStageSucceeded({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+        envelope,
+      });
+    }
+
     const node = dag.nodes.find((n) => n.id === stageId);
     const protectedIds = protectedClonableChildIds(dag, stageId, envelope);
     if (node?.fork) {
       const chosen = normalizeForkChoice(envelope.fork_choice, "stored");
+      const sourceId = activeSourceStageId(feedbackSchedule);
+      if (
+        activeReplayId(feedbackSchedule) !== undefined &&
+        sourceId !== undefined &&
+        !forkChoicePreservesReplaySource(dag, new Set(chosen), sourceId)
+      ) {
+        await handlePostSuccessError(
+          stageId,
+          `fork_choice during feedback replay must preserve a path to source "${sourceId}"`,
+        );
+        return;
+      }
       const skippedIds: string[] = [];
       applyForkChoiceToSchedule(dag, stageId, chosen, states, {
         protectedIds,
@@ -863,7 +1098,9 @@ export async function runPipelineDag(
         await store.appendStageEvent(run.runId, id, { event: "skipped" });
       }
     }
-    const applied = applyCloneForksToSchedule(dag, stageId, envelope, states);
+    const applied = applyCloneForksToSchedule(dag, stageId, envelope, states, {
+      forceFreshCloneIds,
+    });
     const dagChanged = applied.dag !== dag;
     dag = applied.dag;
     if (dagChanged) {
@@ -872,6 +1109,20 @@ export async function runPipelineDag(
     for (const id of applied.skippedIds) {
       notifyRetryRootTerminal(id, "skipped");
       await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+    if (applied.mintedBySuccessor !== undefined) {
+      for (const [, cloneStageIds] of applied.mintedBySuccessor) {
+        if (cloneStageIds.length === 0) continue;
+        const replayId = activeReplayId(feedbackSchedule);
+        await mintCohortForFanout({
+          store,
+          runId: run.runId,
+          ...(replayId !== undefined ? { replayId } : {}),
+          forkParent: stageId,
+          cloneStageIds,
+        });
+        noteActiveCohort(feedbackSchedule, stageId, cloneStageIds);
+      }
     }
   };
 
@@ -896,6 +1147,26 @@ export async function runPipelineDag(
 
     const attempt = await resolveLaunchAttempt(stageId);
     const attemptCtx = attemptContext(attempt);
+    const prep = launchFor(feedbackSchedule, stageId);
+    const feedbackLoopContext = prep?.feedbackLoopContext;
+    const sessionMode = prep?.sessionMode;
+    const priorAttempt = prep?.priorAttempt;
+    const resumeToken =
+      sessionMode === "feedback_resume" && priorAttempt !== undefined
+        ? resumeSessionFilePath(run.workspaceDir, stageId, priorAttempt)
+        : undefined;
+
+    if (
+      activeReplayId(feedbackSchedule) !== undefined &&
+      feedbackLoopContext !== undefined
+    ) {
+      await onRouteStageRunning({
+        store,
+        runId: run.runId,
+        schedule: feedbackSchedule,
+        stageId,
+      });
+    }
 
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
@@ -908,6 +1179,17 @@ export async function runPipelineDag(
         stageId,
         rootDir: factoryCwd,
         attempt,
+        ...(sessionMode !== undefined
+          ? {
+              mode:
+                sessionMode === "feedback_resume"
+                  ? "feedback_resume"
+                  : sessionMode === "new_session"
+                    ? "new_session"
+                    : "run",
+            }
+          : {}),
+        ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
         ...(prepared.operatorCatalog !== undefined
           ? { operatorCatalog: prepared.operatorCatalog }
           : {}),
@@ -947,6 +1229,9 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      ...(sessionMode !== undefined ? { sessionMode } : {}),
+      ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+      ...(resumeToken !== undefined ? { resumeToken } : {}),
     });
 
     if (isRunStageWaiting(result)) {
@@ -990,7 +1275,16 @@ export async function runPipelineDag(
   const pickRunnable = (): string[] => {
     const ids: string[] = [];
     for (const node of dag.nodes) {
-      if (isRunnable(dag, node.id, states, schedulingHalted, completedEnvelopes)) {
+      if (
+        isRunnable(
+          dag,
+          node.id,
+          states,
+          schedulingHalted,
+          completedEnvelopes,
+          feedbackSchedule,
+        )
+      ) {
         ids.push(node.id);
       }
     }

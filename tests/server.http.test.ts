@@ -1330,6 +1330,146 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("POST feedback-decision continue resumes after wait_for_human (202)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-fb-dec-"));
+    const sendBack: StageEnvelope = {
+      status: "success",
+      summary: "send-back",
+      artifacts: [],
+      feedback_loop: { action: "send_back", target: "implement" },
+    };
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [{ type: "emit", envelope: okEnvelope("submit-ok") }],
+    });
+    const { server, base, store } = await withServer(root, agent);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("feedback-loop-wait-human"),
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.active_feedback_loop?.state === "waiting_for_human";
+      });
+      await waitUntilIdleHealth(base);
+
+      const waitingDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(waitingDetail.status).toBe(200);
+      expect(waitingDetail.body.waiting_kind).toBe("feedback_loop_decision");
+      expect(waitingDetail.body.active_feedback_loop?.state).toBe(
+        "waiting_for_human",
+      );
+      const loopId = waitingDetail.body.active_feedback_loop.loop_id as string;
+
+      const decided = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}/stages/review/feedback-decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision: "continue" }),
+        },
+      );
+      expect(decided.status).toBe(202);
+      expect(decided.body).toEqual({
+        ok: true,
+        effect: "continued",
+        loopId,
+      });
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("POST feedback-decision abandon fails the run (202)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-fb-aban-"));
+    const sendBack: StageEnvelope = {
+      status: "success",
+      summary: "send-back",
+      artifacts: [],
+      feedback_loop: { action: "send_back", target: "implement" },
+    };
+    const agent = stageKeyedAgent({
+      plan: [{ type: "emit", envelope: okEnvelope("plan-ok") }],
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [{ type: "throw", message: "submit must not run" }],
+    });
+    const { server, base, store } = await withServer(root, agent);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task: "tasks/sample.task.yaml",
+          pipeline: pipelinePath("feedback-loop-wait-human"),
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.active_feedback_loop?.state === "waiting_for_human";
+      });
+      await waitUntilIdleHealth(base);
+
+      const decided = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}/stages/review/feedback-decision`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            decision: "abandon",
+            reason: "operator abandoned",
+          }),
+        },
+      );
+      expect(decided.status).toBe(202);
+      expect(decided.body.ok).toBe(true);
+      expect(decided.body.effect).toBe("abandoned");
+
+      const after = await store.readRun(runId);
+      expect(after.status).toBe("failed");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("POST answer returns 400 for malformed or mismatched T2 body", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-400-"));
     const agent = scriptedFakeAgent([

@@ -23,6 +23,47 @@ const ctx = (pipelineId: string, relPath = "pipelines/test.pipeline.yaml") => ({
 });
 
 describe("resolvePipelineDag", () => {
+  it("treats feedback-loop and replay-safety policy changes as inequivalent", () => {
+    const { dag: baseline } = resolvePipelineDag(
+      [
+        { id: "plan" },
+        { id: "implement", needs: "plan" },
+        {
+          id: "review",
+          needs: "implement",
+          feedback_loop: {
+            target: "implement",
+            max_replays: 2,
+            on_max_replays: "require_continue",
+            replay_session: "resume",
+          },
+        },
+        { id: "submit", needs: "review" },
+      ],
+      ctx("feedback-equivalence-baseline"),
+    );
+    const { dag: changedPolicy } = resolvePipelineDag(
+      [
+        { id: "plan" },
+        { id: "implement", needs: "plan" },
+        {
+          id: "review",
+          needs: "implement",
+          feedback_loop: {
+            target: "plan",
+            max_replays: 3,
+            on_max_replays: "wait_for_human",
+            replay_session: "new_session",
+          },
+        },
+        { id: "submit", needs: "review", replay_safe: false },
+      ],
+      ctx("feedback-equivalence-changed"),
+    );
+
+    expect(areResolvedDagsEquivalent(baseline, changedPolicy)).toBe(false);
+  });
+
   it("builds explicit linear chain", () => {
     const { stages, dag } = resolvePipelineDag(
       [

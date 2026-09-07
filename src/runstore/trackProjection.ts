@@ -176,6 +176,10 @@ export function buildPipelineTrack(
     if (blocked_by?.length) trackNode.blocked_by = blocked_by;
     const gateKinds = dag.gate_kinds?.[definitionId] ?? dag.gate_kinds?.[stageId];
     if (gateKinds !== undefined) trackNode.gate_kinds = gateKinds;
+    const feedbackTarget = node?.feedback_loop?.target;
+    if (feedbackTarget !== undefined && feedbackTarget.trim() !== "") {
+      trackNode.feedback_loop = { target: feedbackTarget };
+    }
     return trackNode;
   });
 

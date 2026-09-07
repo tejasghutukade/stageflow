@@ -43,6 +43,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { isAdvancingEnvelope } from "../envelope/check.js";
+import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
@@ -74,6 +75,7 @@ import type {
   StageHandleEvent,
   StageRunInput,
   StageRunResult,
+  StageSessionMode,
 } from "./port.js";
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 import type { StageGateKind } from "../types/stage.js";
@@ -516,6 +518,12 @@ function buildUserPrompt(
     emitHint += `\nAllowed clone actions: ${allowedActions.join(", ")}`;
   }
 
+  if (input.feedbackLoopEmitContext !== undefined) {
+    emitHint += `\nFeedback-loop decision: this stage is a feedback-loop source. On status=success, feedback_loop is required. Emit either {"action":"continue"} to proceed downstream or {"action":"send_back","target":"…"} to request another pass.`;
+    emitHint += `\nAllowed send_back target: ${input.feedbackLoopEmitContext.target}.`;
+    emitHint += `\nA send_back decision cannot be combined with fork_choice or clone_forks.`;
+  }
+
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
   const skillBaseDir =
@@ -554,6 +562,9 @@ function buildUserPrompt(
       input.priorEnvelopes,
       input.priorEnvelopesByStage,
     ),
+    input.feedbackLoopContext !== undefined
+      ? formatFeedbackLoopContext(input.feedbackLoopContext, input.sessionMode)
+      : "",
     "",
     artifactGuidance,
     emitHint,
@@ -578,6 +589,20 @@ export function composeStageUserPrompt(
     return `/skill:${input.stage.skill} ${body}`;
   }
   return body;
+}
+
+export function composeFeedbackResumePrompt(input: StageRunInput): string {
+  if (input.feedbackLoopContext === undefined) {
+    throw new Error("feedback_resume requires feedbackLoopContext");
+  }
+  return [
+    "Continue this stage after feedback-loop send-back.",
+    "Incorporate the operator/source feedback below, then complete the stage (emit an envelope when done).",
+    formatFeedbackLoopContext(
+      input.feedbackLoopContext,
+      input.sessionMode ?? "feedback_resume",
+    ),
+  ].join("\n\n");
 }
 
 /**
@@ -970,6 +995,7 @@ async function prepareStageSessionWiring(
       checks: input.stage.pre_emit_checks,
       readQaTrail: input.readQaTrail,
     },
+    input.feedbackLoopEmitContext,
   );
   const emitTool = defineTool(emitDef);
 
@@ -1257,11 +1283,26 @@ export class PiAgentAdapter implements AgentPort {
     const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
     const askWaitChannel = new AskOperatorWaitChannel();
     const sessionFile = resolveStageSessionFile(input);
+    const sessionMode: StageSessionMode = input.sessionMode ?? "fresh";
 
     let sessionManager: SessionManager | undefined;
     let resumeWaiting = false;
+    let feedbackResume = false;
+    let forceNewSession = sessionMode === "new_session";
 
-    if (existsSync(sessionFile)) {
+    if (sessionMode === "feedback_resume") {
+      if (input.feedbackLoopContext === undefined) {
+        throw new StageSessionReconstructError(
+          `feedback_resume requires feedbackLoopContext: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
+      if (!existsSync(sessionFile)) {
+        throw new StageSessionReconstructError(
+          `stage session file missing for feedback_resume: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
       try {
         sessionManager = SessionManager.open(
           sessionFile,
@@ -1270,7 +1311,7 @@ export class PiAgentAdapter implements AgentPort {
         );
       } catch (err) {
         throw new StageSessionReconstructError(
-          `stage session file corrupt or unreadable for resume: ${sessionFile}`,
+          `stage session file corrupt or unreadable for feedback_resume: ${sessionFile}`,
           {
             stageId: runtimeStageId(input),
             sessionFile,
@@ -1279,13 +1320,41 @@ export class PiAgentAdapter implements AgentPort {
         );
       }
       ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
-      if (!findOpenToolCall(sessionManager)) {
-        throw new StageSessionReconstructError(
-          `stage session has no open tool call for resume: ${sessionFile}`,
-          { stageId: runtimeStageId(input), sessionFile },
-        );
+      feedbackResume = true;
+    } else if (sessionMode !== "new_session") {
+      if (sessionMode === "waiting_resume" || existsSync(sessionFile)) {
+        if (existsSync(sessionFile)) {
+          try {
+            sessionManager = SessionManager.open(
+              sessionFile,
+              path.dirname(sessionFile),
+              input.roots.cwd,
+            );
+          } catch (err) {
+            throw new StageSessionReconstructError(
+              `stage session file corrupt or unreadable for resume: ${sessionFile}`,
+              {
+                stageId: runtimeStageId(input),
+                sessionFile,
+                cause: err,
+              },
+            );
+          }
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+          if (!findOpenToolCall(sessionManager)) {
+            throw new StageSessionReconstructError(
+              `stage session has no open tool call for resume: ${sessionFile}`,
+              { stageId: runtimeStageId(input), sessionFile },
+            );
+          }
+          resumeWaiting = true;
+        } else {
+          throw new StageSessionReconstructError(
+            `stage session file missing for resume: ${sessionFile}`,
+            { stageId: runtimeStageId(input), sessionFile },
+          );
+        }
       }
-      resumeWaiting = true;
     }
 
     let session: AgentSession | undefined;
@@ -1294,6 +1363,11 @@ export class PiAgentAdapter implements AgentPort {
     let prepareError: StageRunResult | undefined;
 
     const preparePromise = (async () => {
+      if (forceNewSession) {
+        await mkdir(path.dirname(sessionFile), { recursive: true });
+        await writeFile(sessionFile, "");
+        sessionManager = undefined;
+      }
       if (!sessionManager) {
         sessionManager = await createStageSessionManager(
           input.roots,
@@ -1366,6 +1440,11 @@ export class PiAgentAdapter implements AgentPort {
       },
       run: async () => {
         return runWithTimeout(async () => {
+          if (feedbackResume) {
+            syncAgentMessagesFromSession(session!, sessionManager!);
+            await session!.prompt(composeFeedbackResumePrompt(input));
+            return;
+          }
           const userPrompt = composeStageUserPrompt(
             input,
             wiring!.emitDefName,

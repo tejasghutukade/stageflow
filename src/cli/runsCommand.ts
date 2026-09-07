@@ -27,6 +27,7 @@ export const RUNS_USAGE = `Usage:
   sf runs waiting [--run <runId>] [--json]
   sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
+  sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
   sf runs retry --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--json]`;
@@ -88,6 +89,16 @@ const ANSWER_FLAGS = new Set([
   "--help",
   "-h",
 ]);
+const FEEDBACK_DECIDE_FLAGS = new Set([
+  "--run",
+  "--stage",
+  "--loop",
+  "--decision",
+  "--reason",
+  "--json",
+  "--help",
+  "-h",
+]);
 const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const RERUN_FLAGS = new Set(["--run", "--json", "--help", "-h"]);
@@ -102,6 +113,10 @@ const VALUE_FLAGS = new Set([
   "--timeout-ms",
   "--stage",
   "--answer",
+  "--loop",
+  "--decision",
+  "--reason",
+  "--guidance",
 ]);
 
 type ParsedRunsArgs = {
@@ -119,6 +134,9 @@ type ParsedRunsArgs = {
   answer?: string;
   guidance?: string;
   stop?: boolean;
+  loopId?: string;
+  decision?: string;
+  reason?: string;
 };
 
 function flagsFor(subcommand: string): Set<string> | undefined {
@@ -137,6 +155,8 @@ function flagsFor(subcommand: string): Set<string> | undefined {
       return WAIT_FLAGS;
     case "answer":
       return ANSWER_FLAGS;
+    case "feedback-decide":
+      return FEEDBACK_DECIDE_FLAGS;
     case "retry":
       return RETRY_FLAGS;
     case "abandon":
@@ -175,6 +195,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let answer: string | undefined;
   let guidance: string | undefined;
   let stop = false;
+  let loopId: string | undefined;
+  let decision: string | undefined;
+  let reason: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -203,6 +226,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
       else if (arg === "--stage") stageId = value;
       else if (arg === "--answer") answer = value;
       else if (arg === "--guidance") guidance = value;
+      else if (arg === "--loop") loopId = value;
+      else if (arg === "--decision") decision = value;
+      else if (arg === "--reason") reason = value;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else {
@@ -225,6 +251,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     answer,
     guidance,
     stop,
+    loopId,
+    decision,
+    reason,
   };
 }
 
@@ -624,6 +653,64 @@ export async function runRunsCommand(
         printJson(out, { ok: true });
       } else {
         out.log("ok");
+      }
+      return 0;
+    }
+
+    case "feedback-decide": {
+      const blocked = await guardHost();
+      if (blocked !== undefined) return blocked;
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      if (!parsed.stageId) {
+        return usageError(out, "Missing --stage");
+      }
+      if (!parsed.decision) {
+        return usageError(out, "Missing --decision");
+      }
+      if (
+        parsed.decision !== "extend" &&
+        parsed.decision !== "continue" &&
+        parsed.decision !== "abandon"
+      ) {
+        const message =
+          "--decision must be extend, continue, or abandon";
+        if (parsed.json) {
+          printJson(out, { error: message, status: 400 });
+        } else {
+          out.error(message);
+        }
+        return 1;
+      }
+      const manager = buildManager();
+      const result = await manager.decideFeedbackLoop(
+        parsed.runId,
+        parsed.stageId,
+        {
+          decision: parsed.decision,
+          ...(parsed.loopId !== undefined ? { loopId: parsed.loopId } : {}),
+          ...(parsed.reason !== undefined ? { reason: parsed.reason } : {}),
+        },
+      );
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          effect: result.effect,
+          loopId: result.loopId,
+        });
+      } else {
+        out.log(`ok\t${result.effect}\t${result.loopId}`);
       }
       return 0;
     }

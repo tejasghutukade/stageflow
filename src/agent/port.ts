@@ -2,6 +2,7 @@ import type { StageEnvelope, TerminalEnvelope } from "../types/envelope.js";
 import type { CompletionContract } from "../types/completion.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { StageConfig } from "../types/stage.js";
+import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
@@ -9,6 +10,12 @@ import type { QaExchange } from "../hitl/qaTrail.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
+
+export type StageSessionMode =
+  | "fresh"
+  | "waiting_resume"
+  | "feedback_resume"
+  | "new_session";
 
 export type StageRepairContext = {
   prior_attempt: number;
@@ -19,6 +26,29 @@ export type StageRepairContext = {
     type: string;
     evidence_preview?: string;
   }>;
+};
+
+export type FeedbackLoopContext = {
+  loop_id: string;
+  replay_id: string;
+  source_stage_id: string;
+  target_stage_id: string;
+  /** Original send-back envelope from the source (feedback + artifacts). */
+  feedback_envelope: StageEnvelope;
+  /** One-based replay number for this send-back. */
+  replay_number: number;
+  max_replays: number;
+  remaining_replays: number;
+  is_final_replay: boolean;
+  replay_session: "resume" | "new_session";
+  /** Persistent stages on the active target→source route, forward order. */
+  route_stage_ids: string[];
+  /** Prior pass/session identity for THIS stage when resuming, if any. */
+  prior_stage_attempt?: number;
+  prior_pass_status?: string;
+  /** Active fork generation for this stage's parent fan-out, if any. */
+  active_fork_generation_id?: string;
+  active_fork_clone_stage_ids?: string[];
 };
 
 export type StageRunInput = {
@@ -32,11 +62,17 @@ export type StageRunInput = {
   priorEnvelopesByStage?: Record<string, TerminalEnvelope | TerminalEnvelope[]>;
   timeoutMs?: number;
   resumeToken?: StageResumeToken;
+  /** Launch/session mode; omitted is treated as `"fresh"`. */
+  sessionMode?: StageSessionMode;
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
   skillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
+  /** Declared source policy; successful emits must continue or send work back. */
+  feedbackLoopEmitContext?: FeedbackLoopConfig;
+  /** Replay context for stages being replayed (and typically the source on send-back). */
+  feedbackLoopContext?: FeedbackLoopContext;
   /** Frozen pipeline-owned checks that must pass before Stageflow advances. */
   completionContract?: CompletionContract;
   /** Compact evidence from the failed verification that triggered this repair. */

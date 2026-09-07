@@ -320,6 +320,179 @@ describe("Pi HITL ask_operator wait channel ↔ StageHandle (U1)", () => {
     ).toThrow(StageSessionReconstructError);
   });
 
+  it("feedback_resume opens a completed session without arming HITL resume", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "clarify");
+    const sm = await createStageSessionManager(roots, "clarify");
+    sm.appendMessage({
+      role: "user",
+      content: "prior completed turn",
+      timestamp: Date.now(),
+    });
+    sm.appendMessage({
+      role: "assistant",
+      content: "done without open wait",
+      timestamp: Date.now(),
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+    });
+
+    const feedbackLoopContext = {
+      loop_id: "loop-1",
+      replay_id: "replay-1",
+      source_stage_id: "review",
+      target_stage_id: "clarify",
+      feedback_envelope: {
+        status: "success" as const,
+        summary: "revise",
+        artifacts: [],
+        feedback_loop: { action: "send_back" as const, target: "clarify" },
+      },
+      replay_number: 1,
+      max_replays: 2,
+      remaining_replays: 1,
+      is_final_replay: false,
+      replay_session: "resume" as const,
+      route_stage_ids: ["clarify", "review"],
+    };
+
+    const agent = new PiAgentAdapter();
+    const handle = agent.openStage({
+      roots,
+      stage: {
+        id: "clarify",
+        system_prompt: "clarify",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      task: { id: "t1", goal: "goal" },
+      priorEnvelope: null,
+      sessionMode: "feedback_resume",
+      feedbackLoopContext,
+    });
+    expect(handle.stageId).toBe("clarify");
+    handle.deliverAnswer({ ignored: true });
+    await handle.close();
+  });
+
+  it("feedback_resume fails closed without feedbackLoopContext", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "clarify");
+    const sm = await createStageSessionManager(roots, "clarify");
+    sm.appendMessage({
+      role: "user",
+      content: "prior completed turn",
+      timestamp: Date.now(),
+    });
+
+    const agent = new PiAgentAdapter();
+    expect(() =>
+      agent.openStage({
+        roots,
+        stage: {
+          id: "clarify",
+          system_prompt: "clarify",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        task: { id: "t1", goal: "goal" },
+        priorEnvelope: null,
+        sessionMode: "feedback_resume",
+      }),
+    ).toThrow(/feedback_resume requires feedbackLoopContext/);
+  });
+
+  it("feedback_resume fails closed when session file is missing", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "clarify");
+    const agent = new PiAgentAdapter();
+    expect(() =>
+      agent.openStage({
+        roots,
+        stage: {
+          id: "clarify",
+          system_prompt: "clarify",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        task: { id: "t1", goal: "goal" },
+        priorEnvelope: null,
+        sessionMode: "feedback_resume",
+        feedbackLoopContext: {
+          loop_id: "loop-1",
+          replay_id: "replay-1",
+          source_stage_id: "review",
+          target_stage_id: "clarify",
+          feedback_envelope: {
+            status: "success",
+            summary: "revise",
+            artifacts: [],
+          },
+          replay_number: 1,
+          max_replays: 2,
+          remaining_replays: 1,
+          is_final_replay: false,
+          replay_session: "resume",
+          route_stage_ids: ["clarify", "review"],
+        },
+      }),
+    ).toThrow(StageSessionReconstructError);
+  });
+
+  it("feedback_resume fails closed when session file is corrupt", async () => {
+    const runWs = await makeTempDir();
+    const roots = buildStageRoots(runWs, "clarify");
+    const sessionFile = path.join(
+      runWs,
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "pi-session.jsonl",
+    );
+    await mkdir(path.dirname(sessionFile), { recursive: true });
+    await writeFile(sessionFile, "{not-valid-json\n");
+
+    const agent = new PiAgentAdapter();
+    expect(() =>
+      agent.openStage({
+        roots,
+        stage: {
+          id: "clarify",
+          system_prompt: "clarify",
+          model: "anthropic/claude-sonnet-4-5",
+        },
+        task: { id: "t1", goal: "goal" },
+        priorEnvelope: null,
+        sessionMode: "feedback_resume",
+        feedbackLoopContext: {
+          loop_id: "loop-1",
+          replay_id: "replay-1",
+          source_stage_id: "review",
+          target_stage_id: "clarify",
+          feedback_envelope: {
+            status: "success",
+            summary: "revise",
+            artifacts: [],
+          },
+          replay_number: 1,
+          max_replays: 2,
+          remaining_replays: 1,
+          is_final_replay: false,
+          replay_session: "resume",
+          route_stage_ids: ["clarify", "review"],
+        },
+      }),
+    ).toThrow(StageSessionReconstructError);
+  });
+
   it("repairPrematureAskOperatorClosure removes erroneous closed toolResult", async () => {
     const runWs = await makeTempDir();
     const roots = buildStageRoots(runWs, "clarify");

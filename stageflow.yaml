@@ -9,6 +9,7 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/feedback-loop
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
   tasks:
@@ -20,6 +21,7 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/feedback-loop
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
   patterns:

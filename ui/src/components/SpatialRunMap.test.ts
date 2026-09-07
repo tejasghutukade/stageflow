@@ -9,7 +9,13 @@ import {
 import {
   PAN_CLICK_THRESHOLD_PX,
   SPATIAL_FIT_TOOL_INSET,
+  FEEDBACK_LANE_STAGGER,
+  FEEDBACK_OVERLAY_CLEAR,
   envelopeEdgeEnabled,
+  feedbackOverlayExtent,
+  feedbackOverlayLaneExtra,
+  feedbackOverlayPath,
+  feedbackPathPoints,
   fitTransform,
   isPanGesture,
   selectableSpatialStageIds,
@@ -162,5 +168,64 @@ describe("spatialNodeAction", () => {
   it("exposes Abandon on running and Retry on ordinary failed", () => {
     expect(spatialNodeAction("running", false)).toBe("abandon");
     expect(spatialNodeAction("failed", false)).toBe("retry");
+  });
+});
+
+describe("feedbackOverlayPath", () => {
+  it("routes same-row reverse review→implement as an orthogonal U-lane below the band", () => {
+    const implement = box("implement", SPATIAL_COL_W, 0);
+    const review = box("review", SPATIAL_COL_W * 2, 0);
+    const path = feedbackOverlayPath(review, implement);
+    const bandBottom = Math.max(review.y + review.height, implement.y + implement.height);
+    const points = feedbackPathPoints(path);
+    expect(path).toMatch(/^M[\d.]+ [\d.]+ V[\d.]+ H[\d.]+ V[\d.]+$/);
+    expect(path.includes("C")).toBe(false);
+    expect(points).toHaveLength(4);
+    const laneY = points[1]!.y;
+    expect(laneY).toBe(bandBottom + FEEDBACK_OVERLAY_CLEAR + feedbackOverlayLaneExtra(review, implement));
+    expect(points[1]!.x).toBe(points[0]!.x);
+    expect(points[2]!.y).toBe(laneY);
+    expect(points[2]!.x).toBe(points[3]!.x);
+    expect(points[3]!.x).toBe(implement.x + implement.width / 2);
+    expect(points[3]!.y).toBe(implement.y + implement.height);
+    for (const p of points) {
+      expect(p.y).toBeGreaterThanOrEqual(bandBottom);
+    }
+  });
+
+  it("clears the implement band on skip-column review→plan with a deeper lane", () => {
+    const plan = box("plan", 0, 0);
+    const implement = box("implement", SPATIAL_COL_W, 0);
+    const review = box("review", SPATIAL_COL_W * 2, 0);
+    const toImplement = feedbackOverlayPath(review, implement);
+    const toPlan = feedbackOverlayPath(review, plan);
+    const bandBottom = implement.y + implement.height;
+    const planPoints = feedbackPathPoints(toPlan);
+    const implPoints = feedbackPathPoints(toImplement);
+    expect(toPlan).toMatch(/^M[\d.]+ [\d.]+ V[\d.]+ H[\d.]+ V[\d.]+$/);
+    const planLaneY = planPoints[1]!.y;
+    const implLaneY = implPoints[1]!.y;
+    expect(planLaneY).toBeGreaterThan(implLaneY);
+    expect(planLaneY - implLaneY).toBe(FEEDBACK_LANE_STAGGER);
+    expect(planLaneY).toBeGreaterThanOrEqual(bandBottom + FEEDBACK_OVERLAY_CLEAR);
+    expect(planPoints[1]!.y).toBe(planPoints[2]!.y);
+    const laneMinX = Math.min(planPoints[1]!.x, planPoints[2]!.x);
+    const laneMaxX = Math.max(planPoints[1]!.x, planPoints[2]!.x);
+    expect(laneMinX).toBeLessThanOrEqual(implement.x);
+    expect(laneMaxX).toBeGreaterThanOrEqual(implement.x + implement.width);
+    expect(planLaneY).toBeGreaterThanOrEqual(bandBottom);
+  });
+
+  it("includes the orthogonal U-lane in feedback overlay extent for fit bounds", () => {
+    const implement = box("implement", SPATIAL_COL_W, 0);
+    const review = box("review", SPATIAL_COL_W * 2, 0);
+    const extent = feedbackOverlayExtent(review, implement);
+    expect(extent.y + extent.height).toBeGreaterThanOrEqual(
+      review.y + review.height + FEEDBACK_OVERLAY_CLEAR,
+    );
+    const fitted = spatialFitBounds([implement, review, extent]);
+    expect(fitted.y + fitted.height).toBeGreaterThan(
+      spatialFitBounds([implement, review]).y + spatialFitBounds([implement, review]).height,
+    );
   });
 });

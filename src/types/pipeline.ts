@@ -23,6 +23,14 @@ export type PipelineNeedItem = string | { id: string; on?: NeedTerminalState[] }
 
 export type PipelineNeeds = string | PipelineNeedEdge[];
 
+/** Runtime feedback-loop policy declared by the stage that can send work back. */
+export type FeedbackLoopConfig = {
+  target: string;
+  max_replays: number;
+  on_max_replays: "require_continue" | "wait_for_human";
+  replay_session: "resume" | "new_session";
+};
+
 export type PipelineStageRef = {
   id: string;
   needs?: string | PipelineNeedItem[];
@@ -31,6 +39,9 @@ export type PipelineStageRef = {
   clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
+  feedback_loop?: FeedbackLoopConfig;
+  /** Omitted means this stage is safe to include in a feedback replay. */
+  replay_safe?: boolean;
 };
 
 export type PipelineStageYamlEntry = PipelineStageRef & {
@@ -61,6 +72,8 @@ export type NormalizedPipelineStageEntry = {
   clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
+  feedback_loop?: FeedbackLoopConfig;
+  replay_safe?: boolean;
   skill?: string;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
@@ -84,6 +97,8 @@ export type ResolvedPipelineStageNode = {
   definition_id?: string;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
+  feedback_loop?: FeedbackLoopConfig;
+  replay_safe?: boolean;
 };
 
 export type ResolvedPipelineDag = {

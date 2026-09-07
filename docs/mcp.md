@@ -85,7 +85,11 @@ start_run → wait_run (until waiting/any) → answer_gate → wait_run (until t
 ```
 
 ```
-start_run → resources/subscribe(stageflow://runs/{runId}) → on updated, get_run / answer_gate
+start_run → wait_run (until waiting/any) → decide_feedback_loop → wait_run (until terminal)
+```
+
+```
+start_run → resources/subscribe(stageflow://runs/{runId}) → on updated, get_run / answer_gate / decide_feedback_loop
 ```
 
 ## Tools
@@ -172,7 +176,9 @@ List stages currently in `waiting_for_input`.
 
 **Input:** `{ "runId": "…" }` — `runId` optional; omit to scan all runs.
 
-**Output:** `{ "waiting": [ { "runId", "stageId", "waiting_kind?", "waiting_summary?", "waiting_prompt_id?", "pending_prompt?", "waiting_artifacts?", "waiting_questions?" } ] }`
+**Output:** `{ "waiting": [ { "runId", "stageId", "waiting_kind?", "waiting_summary?", "waiting_prompt_id?", "pending_prompt?", "waiting_artifacts?", "waiting_questions?", "feedback_loop_id?", "deferred_target?" } ] }`
+
+For `waiting_kind: "feedback_loop_decision"`, `feedback_loop_id` and `deferred_target` identify the exhausted loop.
 
 ### `answer_gate`
 
@@ -197,6 +203,45 @@ Deliver an operator answer for a waiting stage (same semantics as `POST /api/run
 **Success:** `{ "ok": true }`
 
 **Errors (`isError: true`):** `400` malformed/mismatched answer; `404` unknown run/stage; `409` stage not waiting.
+
+### `decide_feedback_loop` {#decide_feedback_loop}
+
+Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/runs/:runId/stages/:stageId/feedback-decision` and CLI `sf runs feedback-decide`).
+
+**Input:**
+
+```json
+{
+  "runId": "…",
+  "stageId": "review",
+  "decision": "continue",
+  "loopId": "…",
+  "reason": "optional abandon reason"
+}
+```
+
+`decision` is `extend`, `continue`, or `abandon`. `loopId` and `reason` are optional. `stageId` is the feedback-loop **source** stage.
+
+| Decision | Effect |
+|----------|--------|
+| `extend` | Increase `max_replays` by one and accept the deferred `send_back` |
+| `continue` | Mark the source succeeded and release the loop hold so successors can run |
+| `abandon` | Fail the source (run typically fails); optional `reason` |
+
+**Success:** `{ "ok": true, "effect": "extended"|"continued"|"abandoned", "loopId": "…" }`
+
+**Errors (`isError: true`):** `404` unknown run/stage/loop; `409` no waiting feedback loop / wrong stage.
+
+**Compose with `wait_run`**
+
+```
+start_run → wait_run (until waiting/any)
+         → if waiting_kind is feedback_loop_decision: decide_feedback_loop
+         → else: answer_gate
+         → wait_run (until terminal)
+```
+
+Use `list_waiting` / nested `get_run` fields (`waiting_kind`, `feedback_loop_id`, `deferred_target`, `active_feedback_loop`) to distinguish HITL gates from exhausted feedback loops.
 
 ### `get_health`
 
@@ -269,7 +314,7 @@ Poll run status without loading the full event stream.
 
 **Input:** `{ "runId": "…" }`
 
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`.
+**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes).
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
@@ -335,7 +380,15 @@ start_run → wait_run (until waiting/any)
          → wait_run (until terminal)
 ```
 
-Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream. A coding-agent host may present the pending prompt on its native question UI; the submit path is still `answer_gate`.
+**Compose with feedback-loop decisions**
+
+```
+start_run → wait_run (until waiting/any)
+         → decide_feedback_loop   # when waiting_kind is feedback_loop_decision
+         → wait_run (until terminal)
+```
+
+Prefer `wait_run` over chatty `get_run` loops when waiting for the next interaction point. Prefer resource subscribe when the client already holds a session GET listen stream. A coding-agent host may present the pending prompt on its native question UI; the submit path is still `answer_gate` (HITL) or `decide_feedback_loop` (exhausted feedback loop).
 
 **Errors (`isError: true`):** `404` unknown run; `400` invalid `timeout_ms`; `code: "aborted"` when the client aborts the wait.
 
@@ -527,6 +580,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / retry / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`

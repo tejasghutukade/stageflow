@@ -2,6 +2,8 @@ import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import { deriveStatusFromStages, findUnhandledFailedStage } from "./port.js";
 import type {
   CompactStage,
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
   RunDetail,
   RunMeta,
   RunPipelineDagSnapshot,
@@ -14,6 +16,11 @@ import { syntheticPendingSnapshot } from "./syntheticStageSnapshot.js";
 import { buildPipelineTrack } from "./trackProjection.js";
 
 export { syntheticPendingSnapshot } from "./syntheticStageSnapshot.js";
+
+export type FeedbackProjectionInput = {
+  feedback_loops?: FeedbackLoopHistory[];
+  active_feedback_loop?: FeedbackLoopRecord;
+};
 
 export function overlayPlannedStages(
   stageIds: string[],
@@ -131,8 +138,21 @@ function resolveListedStatus(
 export function projectRunSummary(
   meta: RunMeta,
   stages: StageSnapshot[],
+  feedback?: Pick<FeedbackProjectionInput, "active_feedback_loop">,
 ): RunSummary {
   const dag = meta.pipeline_dag;
+  const waiting = waitingFieldsFromStages(stages);
+  if (
+    feedback?.active_feedback_loop?.state === "waiting_for_human" &&
+    waiting.waiting_stage_id !== undefined &&
+    waiting.waiting_kind === undefined
+  ) {
+    waiting.waiting_kind = "feedback_loop_decision";
+    if (waiting.waiting_summary === undefined || waiting.waiting_summary === "Waiting for input") {
+      waiting.waiting_summary =
+        "Feedback loop limit reached — extend, continue, or abandon";
+    }
+  }
   return {
     run_id: meta.run_id,
     pipeline_id: meta.pipeline_id,
@@ -144,8 +164,11 @@ export function projectRunSummary(
     created_at: meta.created_at,
     updated_at: meta.updated_at,
     stages: compactStages(stages),
-    ...waitingFieldsFromStages(stages),
+    ...waiting,
     ...failedFieldsFromStages(stages, dag),
+    ...(feedback?.active_feedback_loop !== undefined
+      ? { active_feedback_loop: feedback.active_feedback_loop }
+      : {}),
   };
 }
 
@@ -154,6 +177,7 @@ export function projectRunDetail(
   stages: StageSnapshot[],
   task_yaml: string,
   dagSnapshot?: RunPipelineDagSnapshot | null,
+  feedback?: FeedbackProjectionInput,
 ): RunDetail {
   const dag = dagSnapshot ?? meta.pipeline_dag ?? null;
   const ordered = dag
@@ -162,6 +186,7 @@ export function projectRunDetail(
   const summary = projectRunSummary(
     dag ? { ...meta, pipeline_dag: dag } : meta,
     ordered,
+    { active_feedback_loop: feedback?.active_feedback_loop },
   );
   const snapshot = dag ?? linearCompatDagSnapshot(ordered.map((s) => s.stage_id));
   const pipeline_track = buildPipelineTrack({
@@ -174,5 +199,6 @@ export function projectRunDetail(
     task_yaml,
     stages: ordered,
     pipeline_track,
+    feedback_loops: feedback?.feedback_loops ?? [],
   };
 }

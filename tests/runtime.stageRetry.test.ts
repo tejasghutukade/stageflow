@@ -182,6 +182,7 @@ function eligibilityDetail(opts: {
           },
         ],
     pipeline_track: { nodes: [], edges: [] },
+    feedback_loops: [],
   };
 }
 
