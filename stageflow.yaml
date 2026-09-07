@@ -8,7 +8,9 @@ catalog:
     - examples/github-release
     - examples/ci-validate
     - examples/archify-on-pr
-    - examples/clonable-fanout    
+    - examples/clonable-fanout
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
   tasks:
     - examples/generic-fan-in
     - examples/conditional-fork
@@ -18,6 +20,8 @@ catalog:
     - examples/ci-validate
     - examples/archify-on-pr
     - examples/clonable-fanout
+    - examples/oss-issue-contribution
+    - examples/oss-quick-fix
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

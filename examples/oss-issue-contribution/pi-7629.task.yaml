@@ -1,0 +1,79 @@
+id: pi-7629
+goal: >
+  Deliver a verified minimal local fix for Pi issue #7629, tui.select.pageUp
+  and tui.select.pageDown are not handled in all select lists, applied as
+  source and test edits in the checkout working tree, plus an
+  operator-approved pull request opened against tejasghutukade/pi rather than
+  earendil-works/pi.
+context: |
+  Issue: https://github.com/earendil-works/pi/issues/7629
+  Title: tui.select.pageUp and tui.select.pageDown are not handled in all select lists
+  Upstream repo: https://github.com/earendil-works/pi
+  Fork (PR target after the run): https://github.com/tejasghutukade/pi
+  State: OPEN, unassigned, labeled bug, zero human comments — unclaimed.
+
+  Pi's CONTRIBUTING.md auto-closes issues and PRs from new/unproven
+  contributors by default and requires a maintainer to reply `lgtm` (not
+  `lgtmi`, which only exempts future issues) before any PR against
+  earendil-works/pi is permitted. No such reply exists yet, so this run
+  prepares a local change and a fork PR only; the upstream PR is a separate,
+  explicitly-authorized step after `lgtm` lands.
+
+  Reported behavior: the reporter remapped the configurable keybindings
+  tui.select.pageUp / tui.select.pageDown (default Page Up / Page Down) to
+  other keys (ctrl+v / alt+v, Emacs-style) in settings. The remap is honored
+  in some select-list UI (works in at least one place) but not others,
+  specifically:
+    - file-path autocompletion in the editor
+    - the /settings menu
+    - the model selector
+  In the broken locations, paging does not scroll the list at all when the
+  remapped key is pressed. Expected behavior: every select-list surface pages
+  one page down/up on tui.select.pageDown / tui.select.pageUp regardless of
+  what physical key(s) they are bound to.
+
+  Reporter's repro: bind tui.select.pageDown to ctrl+v, open the "/" command
+  menu (works), then try file-path autocomplete, /settings, or the model
+  selector (Page Up/Down and the remapped key both fail to scroll).
+  Reporter attached a standalone extension-based workaround (select-page-keys)
+  they had an LLM write, which is evidence they understand the shape of the
+  problem but not proof of the actual root cause.
+
+  Suspected root cause (to verify during investigation, not assumed): pi
+  likely has more than one TUI "select list" component implementation, and
+  only one of them resolves paging through the shared configurable-keybinding
+  lookup (tui.select.pageUp/pageDown); the others either hardcode literal
+  PageUp/PageDown key handling or omit paging entirely. The fix is to make
+  every select-list surface read paging from the same keybinding resolution
+  path as the one that already works, not to hand-wire the reporter's
+  specific remap.
+
+  The full issue write-up is captured by the intake stage in
+  issue-intake.md; treat this context as a starting point, not a substitute
+  for reading the issue and the source directly.
+constraints: |
+  Respect pi's AGENTS.md, CONTRIBUTING.md, and any package-local test docs
+  (e.g. under packages/*/docs). Before reporting or assuming an issue is core
+  behavior, validate it is not caused by an extension, matching pi's own
+  contribution guidance.
+  Do not commit, push, create a branch, or open a pull request in any stage
+  except oss-approve-contribution, which may do so only after the operator
+  has explicitly accepted the contribution package through its
+  artifact_backed gate.
+  Do not target earendil-works/pi. The PR base is always tejasghutukade/pi
+  (gh pr create --repo tejasghutukade/pi).
+  Do not edit CHANGELOG.md; pi's maintainers add changelog entries themselves.
+  Before opening the local PR, the checkout must pass `npm run check` and
+  `./test.sh` (or the package-scoped equivalents for the touched package) —
+  record their exact output as evidence, do not claim they passed without
+  running them.
+  Keep the change limited to the reported paging inconsistency and its
+  regression test; do not expand scope to unrelated keybinding behavior.
+  Do not treat missing maintainer lgtm or assignment as a reason to skip
+  local work — investigate, fix, and verify locally regardless; publication
+  policy lives only at the contribution gate.
+  Source and test edits belong in the checkout working tree and must never be
+  replaced by a Stageflow artifact or report describing the change.
+  In the explainer stages only (oss-explain-issue, oss-explain-fix), the
+  explainer HTML belongs in Stageflow artifacts, never in the checkout.
+checkout: /Users/tejasghutukade/Projects/pi

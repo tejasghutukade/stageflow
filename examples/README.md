@@ -25,6 +25,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [conditional-fork](conditional-fork/) | Exclusive fork; operator chooses branch | `sf ui`, then `sf run` |
 | [clonable-fanout](clonable-fanout/) | Dummy clonable skip / once / parallel / sequential / mix | `sf ui`, then `sf run` |
 | [generic-fan-in](generic-fan-in/) | Dummy diamond join; inspect keyed parent envelopes | `sf ui`, then `sf run` |
+| [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
 | [archify-on-pr](archify-on-pr/) | **Featured** — PR diagrams via conditional fork + Archify handoff | [README](archify-on-pr/README.md), archify-pr-diagrams workflow |
 | [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |
