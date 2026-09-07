@@ -15,6 +15,10 @@ type JsonSchemaNode = {
   enum?: unknown;
   minimum?: unknown;
   maximum?: unknown;
+  pattern?: unknown;
+  minLength?: unknown;
+  maxLength?: unknown;
+  nullable?: unknown;
 };
 
 function readEnum(
@@ -58,6 +62,59 @@ function readBound(
   return value;
 }
 
+function readPattern(schema: JsonSchemaNode, path: string): string | undefined {
+  if (schema.pattern === undefined) {
+    return undefined;
+  }
+  if (typeof schema.pattern !== "string") {
+    throw new Error(`${path}: pattern must be a string when present`);
+  }
+  try {
+    new RegExp(schema.pattern);
+  } catch {
+    throw new Error(`${path}: pattern must be a valid regular expression`);
+  }
+  return schema.pattern;
+}
+
+function readStringBound(
+  schema: JsonSchemaNode,
+  path: string,
+  keyword: "minLength" | "maxLength",
+): number | undefined {
+  const value = keyword === "minLength" ? schema.minLength : schema.maxLength;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    value < 0
+  ) {
+    throw new Error(
+      `${path}: ${keyword} must be a non-negative integer when present`,
+    );
+  }
+  return value;
+}
+
+function stringOptions(
+  schema: JsonSchemaNode,
+  path: string,
+): { pattern?: string; minLength?: number; maxLength?: number } | undefined {
+  const pattern = readPattern(schema, path);
+  const minLength = readStringBound(schema, path, "minLength");
+  const maxLength = readStringBound(schema, path, "maxLength");
+  if (pattern === undefined && minLength === undefined && maxLength === undefined) {
+    return undefined;
+  }
+  return {
+    ...(pattern !== undefined ? { pattern } : {}),
+    ...(minLength !== undefined ? { minLength } : {}),
+    ...(maxLength !== undefined ? { maxLength } : {}),
+  };
+}
+
 function numericOptions(
   schema: JsonSchemaNode,
   path: string,
@@ -83,27 +140,39 @@ function compileNode(node: unknown, path: string): TSchema {
     throw new Error(`${path}: type is required`);
   }
 
+  let compiled: TSchema;
   switch (schema.type) {
     case "string": {
+      const options = stringOptions(schema, path);
       const enumerated = readEnum(schema, path, "string");
-      return enumerated !== undefined
-        ? Type.Enum(enumerated as string[])
-        : Type.String();
+      if (enumerated !== undefined) {
+        compiled = Type.Enum(enumerated as string[]);
+        break;
+      }
+      compiled =
+        options !== undefined ? Type.String(options) : Type.String();
+      break;
     }
     case "number": {
       const options = numericOptions(schema, path);
-      return options !== undefined ? Type.Number(options) : Type.Number();
+      compiled =
+        options !== undefined ? Type.Number(options) : Type.Number();
+      break;
     }
     case "integer": {
       const enumerated = readEnum(schema, path, "integer");
       const options = numericOptions(schema, path);
       if (enumerated !== undefined) {
-        return Type.Enum(enumerated as number[], options);
+        compiled = Type.Enum(enumerated as number[], options);
+      } else {
+        compiled =
+          options !== undefined ? Type.Integer(options) : Type.Integer();
       }
-      return options !== undefined ? Type.Integer(options) : Type.Integer();
+      break;
     }
     case "boolean":
-      return Type.Boolean();
+      compiled = Type.Boolean();
+      break;
     case "array": {
       if (schema.items === undefined) {
         throw new Error(`${path}: array requires items`);
@@ -119,9 +188,11 @@ function compileNode(node: unknown, path: string): TSchema {
         );
       }
       const items = compileNode(schema.items, `${path}.items`);
-      return schema.minItems !== undefined
-        ? Type.Array(items, { minItems: schema.minItems })
-        : Type.Array(items);
+      compiled =
+        schema.minItems !== undefined
+          ? Type.Array(items, { minItems: schema.minItems })
+          : Type.Array(items);
+      break;
     }
     case "object": {
       const properties = schema.properties ?? {};
@@ -167,20 +238,31 @@ function compileNode(node: unknown, path: string): TSchema {
         schema.additionalProperties === false
           ? { additionalProperties: false as const }
           : undefined;
-      return Type.Object(compiledProps, options);
+      compiled = Type.Object(compiledProps, options);
+      break;
     }
     default:
       throw new Error(
         `${path}: unsupported type "${schema.type}" (supported: object, string, number, integer, boolean, array)`,
       );
   }
+
+  if (schema.nullable !== undefined && typeof schema.nullable !== "boolean") {
+    throw new Error(`${path}: nullable must be a boolean when present`);
+  }
+  if (schema.nullable === true) {
+    return Type.Union([compiled, Type.Null()]);
+  }
+  return compiled;
 }
 
 /**
  * Compile a JSON Schema subset used for stage payload_schema.
  * Supported: type object/string/number/integer/boolean/array,
  * properties, required, items, additionalProperties (boolean),
- * minItems, enum, minimum, maximum. Unknown keywords are ignored.
+ * minItems, enum, minimum, maximum, pattern (string),
+ * minLength/maxLength (string, non-negative integers),
+ * nullable (boolean, any node). Unknown keywords are ignored.
  */
 export function compilePayloadSchema(raw: unknown): CompiledPayloadSchema {
   const compiled = compileNode(raw, "payload_schema");
