@@ -1,4 +1,4 @@
-import { PiAgentAdapter } from "../agent/piAdapter.js";
+import { resolveGlobalOnlyAgentPort } from "../agent/resolveAgentPort.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
@@ -171,7 +171,7 @@ function defaultStartRun(
   return async (input) => {
     const store = createRunStore({ rootDir: projectRoot });
     const manager = new RunManager({
-      agent: new PiAgentAdapter(),
+      agent: await resolveGlobalOnlyAgentPort(projectRoot),
       store,
       cwd,
       projectRoot,

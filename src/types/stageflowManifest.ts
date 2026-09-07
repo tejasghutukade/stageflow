@@ -13,6 +13,8 @@ export type StageflowManifestCatalog = {
 export type StageflowManifest = {
   version: StageflowManifestVersion;
   catalog: StageflowManifestCatalog;
+  /** Default AgentPort backend for every pipeline/stage that doesn't override it. */
+  agent?: string;
 };
 
 export type LoadedManifest = {

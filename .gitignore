@@ -41,6 +41,8 @@ docs/*
 !docs/providers/
 docs/providers/*
 !docs/providers/*.md
+!docs/adr/
+!docs/adr/*.md
 CONTEXT.md
 .cursor/
 .pi/

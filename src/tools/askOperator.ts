@@ -600,7 +600,7 @@ function toolResult(
   };
 }
 
-function summarizeAnswer(answer: AskOperatorAnswer): string {
+export function summarizeAnswer(answer: AskOperatorAnswer): string {
   if (answer.kind === "free_text") {
     return `Operator answered: ${answer.text}`;
   }
