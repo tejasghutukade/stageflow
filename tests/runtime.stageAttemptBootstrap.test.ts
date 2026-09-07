@@ -158,6 +158,50 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.timeoutMs).toBe(3600000);
   });
 
+  it("forwards sessionMode into openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-session-mode-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      sessionMode: "feedback_resume",
+      feedbackLoopContext: {
+        loop_id: "loop-1",
+        replay_id: "replay-1",
+        source_stage_id: "review",
+        target_stage_id: "clarify",
+        feedback_envelope: {
+          status: "success",
+          summary: "revise",
+          artifacts: [],
+        },
+        replay_number: 1,
+        max_replays: 2,
+        remaining_replays: 1,
+        is_final_replay: false,
+        replay_session: "resume",
+        route_stage_ids: ["clarify", "review"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.sessionMode).toBe("feedback_resume");
+    expect(opened[0]?.feedbackLoopContext?.loop_id).toBe("loop-1");
+  });
+
   it("fails closed without openStage when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-miss-"));
     const store = createRunStore({ rootDir: root });
@@ -345,6 +389,96 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.resumeToken).toMatch(
       /stages\/work~2\/attempts\/1\/pi-session\.jsonl$/,
     );
+    expect(opened[0]?.feedbackLoopEmitContext).toBeUndefined();
+  });
+
+  it("does not expose feedback-loop decisions to dynamic clone instances", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-feedback-clone-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "review~1",
+          definition_id: "review",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          feedback_loop: {
+            target: "implement",
+            max_replays: 1,
+            on_max_replays: "require_continue",
+            replay_session: "resume",
+          },
+        },
+      ],
+      roots: ["review~1"],
+      childrenOf: {},
+    };
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("review"),
+      stageId: "review~1",
+      task,
+      dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.feedbackLoopEmitContext).toBeUndefined();
+  });
+
+  it("keeps feedback-loop decisions available to persistent fork parents", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-feedback-fork-parent-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const feedback_loop = {
+      target: "implement",
+      max_replays: 1,
+      on_max_replays: "require_continue" as const,
+      replay_session: "resume" as const,
+    };
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "review-work",
+          definition_id: "review-work",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "subset", allow_none: false },
+          feedback_loop,
+        },
+      ],
+      roots: ["review-work"],
+      childrenOf: { "review-work": [] },
+    };
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("review-work"),
+      task,
+      dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.feedbackLoopEmitContext).toEqual(feedback_loop);
   });
 
   it("passes a live attempt-scoped QA trail reader into openStage", async () => {

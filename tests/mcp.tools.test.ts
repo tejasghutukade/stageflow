@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { createCompletedOnlyStageHandle } from "../src/agent/port.js";
+import {
+  createCompletedOnlyStageHandle,
+  type AgentPort,
+  type StageRunInput,
+} from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
@@ -12,6 +16,7 @@ import { projectRunForMcp } from "../src/mcp/projectRun.js";
 import { readRunArtifact } from "../src/mcp/readArtifact.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import type { StageEnvelope } from "../src/types/envelope.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -638,6 +643,36 @@ async function withMcpServer(
   };
 }
 
+type FeedbackFakeBehavior =
+  | { type: "emit"; envelope: StageEnvelope }
+  | { type: "never_emit" }
+  | { type: "throw"; message: string };
+
+function feedbackStageKeyedAgent(
+  behaviorsByStage: Record<string, FeedbackFakeBehavior[]>,
+): AgentPort {
+  const stageIndex = new Map<string, number>();
+  return {
+    openStage(input: StageRunInput) {
+      const stageId = input.stage.id;
+      const index = stageIndex.get(stageId) ?? 0;
+      stageIndex.set(stageId, index + 1);
+      const behaviors = behaviorsByStage[stageId] ?? [];
+      const behavior = behaviors[index] ?? { type: "never_emit" as const };
+      return scriptedFakeAgent([behavior]).openStage(input);
+    },
+    async runStage(input) {
+      const handle = this.openStage(input);
+      const event = await handle.next();
+      await handle.close();
+      if (event.status === "waiting_for_input") {
+        return { ok: false, reason: "unexpected wait" };
+      }
+      return event.result;
+    },
+  };
+}
+
 describe("MCP Tier 1 operator parity", () => {
   const freeTextPrompt = {
     kind: "free_text" as const,
@@ -703,6 +738,100 @@ describe("MCP Tier 1 operator parity", () => {
       });
       expect(answered.isError).toBe(false);
       expect(answered.payload).toEqual({ ok: true });
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.status === "succeeded";
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("list_waiting surfaces feedback_loop_decision; decide_feedback_loop continue succeeds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-fb-dec-"));
+    const sendBack: StageEnvelope = {
+      status: "success",
+      summary: "send-back",
+      artifacts: [],
+      feedback_loop: { action: "send_back", target: "implement" },
+    };
+    const agent = feedbackStageKeyedAgent({
+      plan: [
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "plan-ok", artifacts: [] },
+        },
+      ],
+      implement: [
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "implement-1", artifacts: [] },
+        },
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "implement-2", artifacts: [] },
+        },
+      ],
+      review: [
+        { type: "emit", envelope: sendBack },
+        { type: "emit", envelope: sendBack },
+      ],
+      submit: [
+        {
+          type: "emit",
+          envelope: { status: "success", summary: "submit-ok", artifacts: [] },
+        },
+      ],
+    });
+    const { server, base, store } = await withMcpServer(root, agent);
+
+    try {
+      const started = await mcpCall(base, "start_run", {
+        pipeline: pipelinePath("feedback-loop-wait-human"),
+        task: { id: "t", goal: "g" },
+      });
+      expect(started.isError).toBe(false);
+      const runId = started.payload.runId as string;
+
+      await waitFor(async () => {
+        const detail = await store.readRun(runId);
+        return detail.active_feedback_loop?.state === "waiting_for_human";
+      });
+
+      const listed = await mcpCall(base, "list_waiting", { runId });
+      expect(listed.isError).toBe(false);
+      expect(listed.payload.waiting).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId,
+            stageId: "review",
+            waiting_kind: "feedback_loop_decision",
+            deferred_target: "implement",
+          }),
+        ]),
+      );
+      const gates = listed.payload.waiting as Array<{
+        stageId?: string;
+        feedback_loop_id?: string;
+      }>;
+      const loopId = gates.find((g) => g.stageId === "review")?.feedback_loop_id;
+      expect(loopId).toBeTruthy();
+
+      const decided = await mcpCall(base, "decide_feedback_loop", {
+        runId,
+        stageId: "review",
+        decision: "continue",
+        loopId,
+      });
+      expect(decided.isError).toBe(false);
+      expect(decided.payload).toEqual({
+        ok: true,
+        effect: "continued",
+        loopId,
+      });
 
       await waitFor(async () => {
         const detail = await store.readRun(runId);

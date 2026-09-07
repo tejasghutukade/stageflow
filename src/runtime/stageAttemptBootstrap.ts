@@ -1,8 +1,10 @@
 import type {
   AgentPort,
+  FeedbackLoopContext,
   StageHandle,
   StageRepairContext,
   StageRunInput,
+  StageSessionMode,
 } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
@@ -48,9 +50,11 @@ export type StageAttemptOpenInput = {
   onActivity?: StageRunInput["onActivity"];
   roots?: StageRoots;
   resumeToken?: string;
+  sessionMode?: StageSessionMode;
   workerRoots?: boolean;
   completedEnvelopes?: Map<string, StageEnvelope>;
   stageId?: string;
+  feedbackLoopContext?: FeedbackLoopContext;
 };
 
 export type StageAttemptOpenResult =
@@ -215,6 +219,14 @@ export async function openStageAttempt(
   const completionContract = input.dag.nodes.find(
     (node) => node.id === stageId,
   )?.completion;
+  const runtimeNode = input.dag.nodes.find((node) => node.id === stageId);
+  const isDynamicCloneInstance =
+    runtimeNode?.definition_id !== undefined &&
+    runtimeNode.definition_id !== runtimeNode.id;
+  const feedbackLoopEmitContext =
+    isDynamicCloneInstance || runtimeNode?.clonable === true
+      ? undefined
+      : runtimeNode?.feedback_loop;
   const repairContext = await repairContextForAttempt(input, stageId, attempt);
   const readQaTrail = createAttemptQaTrailReader(
     input.store,
@@ -235,9 +247,14 @@ export async function openStageAttempt(
         ? { priorEnvelopes: priorResult.joinPriors }
         : {}),
       resumeToken,
+      ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: input.onActivity,
       forkEmitContext,
       cloneEmitContext,
+      ...(feedbackLoopEmitContext !== undefined ? { feedbackLoopEmitContext } : {}),
+      ...(input.feedbackLoopContext !== undefined
+        ? { feedbackLoopContext: input.feedbackLoopContext }
+        : {}),
       ...(completionContract !== undefined ? { completionContract } : {}),
       ...(repairContext !== undefined ? { repairContext } : {}),
       readQaTrail,

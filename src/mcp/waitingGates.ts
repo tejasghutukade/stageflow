@@ -22,8 +22,9 @@ export function projectWaitingGate(opts: {
   stageId: string;
   stage: StageSnapshot;
   summary: WaitingSummarySource;
+  activeFeedbackLoop?: RunDetail["active_feedback_loop"];
 }): Record<string, unknown> {
-  const { runId, stageId, stage, summary } = opts;
+  const { runId, stageId, stage, summary, activeFeedbackLoop } = opts;
   const prompt = stage.pending_prompt;
   const item: Record<string, unknown> = {
     runId,
@@ -58,6 +59,23 @@ export function projectWaitingGate(opts: {
       item.waiting_questions = summary.waiting_questions;
     }
   }
+  if (
+    (item.waiting_kind === "feedback_loop_decision" ||
+      activeFeedbackLoop?.state === "waiting_for_human") &&
+    activeFeedbackLoop !== undefined
+  ) {
+    item.feedback_loop_id = activeFeedbackLoop.loop_id;
+    if (activeFeedbackLoop.deferred_send_back?.target !== undefined) {
+      item.deferred_target = activeFeedbackLoop.deferred_send_back.target;
+    }
+    if (item.waiting_kind === undefined) {
+      item.waiting_kind = "feedback_loop_decision";
+    }
+    if (item.waiting_summary === undefined) {
+      item.waiting_summary =
+        "Feedback loop limit reached — extend, continue, or abandon";
+    }
+  }
   return item;
 }
 
@@ -78,6 +96,7 @@ function projectGatesForRun(
         stageId,
         stage,
         summary,
+        activeFeedbackLoop: detail.active_feedback_loop,
       }),
     );
   }

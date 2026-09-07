@@ -1,6 +1,9 @@
 import type {
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
   PendingPrompt,
   PipelineTrackNode,
+  PipelineTrackProjection,
   RunDetail,
   StageEnvelopeView,
   StageGateKind,
@@ -64,6 +67,24 @@ export type SpatialNodeChrome = {
   promptSummary?: string;
   meta?: string;
   isWaitingAttention: boolean;
+  isFeedbackSource?: boolean;
+  isFeedbackTarget?: boolean;
+  isSuperseded?: boolean;
+};
+
+export type FeedbackOverlay = {
+  from: string;
+  to: string;
+  kind: "replay" | "deferred" | "policy";
+};
+
+export type FeedbackDecideState = {
+  loopId: string;
+  sourceStageId: string;
+  deferredTarget?: string;
+  replayNumber?: number;
+  maxReplays?: number;
+  summary?: string;
 };
 
 const ENVELOPE_ASIDE_PREFIX = "stageflow:envelope:";
@@ -87,6 +108,9 @@ export type RunWorkspace = {
   composer: ComposerState;
   showDecide: boolean;
   decidePrompt: ArtifactBackedPrompt | undefined;
+  showFeedbackDecide: boolean;
+  feedbackDecide?: FeedbackDecideState;
+  feedbackOverlays: FeedbackOverlay[];
   artifactReadOnly: boolean;
   selectedPath: string | undefined;
   trackStages: WorkspaceTrackStage[];
@@ -104,6 +128,136 @@ export type RunWorkspace = {
   waitingArtifact: boolean;
   syncStreamRoute: boolean;
 };
+
+function overlayRouteKey(from: string, to: string): string {
+  return `${from}->${to}`;
+}
+
+const OVERLAY_KIND_PRIORITY: Record<FeedbackOverlay["kind"], number> = {
+  deferred: 3,
+  replay: 2,
+  policy: 1,
+};
+
+const LIVE_REPLAY_STATUSES = new Set<string>([
+  "scheduled",
+  "active",
+  "waiting_for_human",
+]);
+
+export function buildFeedbackOverlays(
+  active: FeedbackLoopRecord | undefined,
+  history: FeedbackLoopHistory[] | undefined,
+  track?: PipelineTrackProjection | null,
+): FeedbackOverlay[] {
+  const byRoute = new Map<string, FeedbackOverlay>();
+  const add = (overlay: FeedbackOverlay) => {
+    const key = overlayRouteKey(overlay.from, overlay.to);
+    const existing = byRoute.get(key);
+    if (
+      !existing ||
+      OVERLAY_KIND_PRIORITY[overlay.kind] > OVERLAY_KIND_PRIORITY[existing.kind]
+    ) {
+      byRoute.set(key, overlay);
+    }
+  };
+
+  for (const node of track?.nodes ?? []) {
+    const target = node.feedback_loop?.target;
+    if (!target) continue;
+    add({ from: node.stage_id, to: target, kind: "policy" });
+  }
+
+  if (active?.deferred_send_back?.target) {
+    add({
+      from: active.source_stage_id,
+      to: active.deferred_send_back.target,
+      kind: "deferred",
+    });
+  }
+
+  const hadDeferred = Boolean(active?.deferred_send_back?.target);
+
+  const addMatching = (include: (status: string) => boolean) => {
+    for (const entry of history ?? []) {
+      for (const { replay } of entry.replays) {
+        if (replay.status === "superseded" || replay.status === "failed") {
+          continue;
+        }
+        if (!include(replay.status)) continue;
+        add({
+          from: replay.source_stage_id,
+          to: replay.target_stage_id,
+          kind: "replay",
+        });
+      }
+    }
+  };
+
+  addMatching((status) => LIVE_REPLAY_STATUSES.has(status));
+  const hasLiveReplay = [...byRoute.values()].some((o) => o.kind === "replay");
+  if (!hasLiveReplay && !hadDeferred) {
+    addMatching((status) => status === "completed");
+  }
+
+  if (active) {
+    add({
+      from: active.source_stage_id,
+      to: active.policy.target,
+      kind: "policy",
+    });
+  }
+
+  return [...byRoute.values()];
+}
+
+export function collectSupersededStageIds(
+  history: FeedbackLoopHistory[] | undefined,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of history ?? []) {
+    for (const gen of entry.fork_generations) {
+      if (gen.status === "superseded") {
+        for (const id of gen.clone_stage_ids) ids.add(id);
+      }
+    }
+    for (const { stage_passes, fork_generations } of entry.replays) {
+      for (const pass of stage_passes) {
+        if (pass.status === "superseded") ids.add(pass.stage_id);
+      }
+      for (const gen of fork_generations) {
+        if (gen.status === "superseded") {
+          for (const id of gen.clone_stage_ids) ids.add(id);
+        }
+      }
+    }
+  }
+  return ids;
+}
+
+export function resolveFeedbackDecide(
+  run: Pick<
+    RunDetail,
+    "waiting_kind" | "waiting_summary" | "active_feedback_loop"
+  >,
+): FeedbackDecideState | undefined {
+  const loop = run.active_feedback_loop;
+  if (
+    run.waiting_kind !== "feedback_loop_decision" ||
+    !loop ||
+    loop.state !== "waiting_for_human"
+  ) {
+    return undefined;
+  }
+  return {
+    loopId: loop.loop_id,
+    sourceStageId: loop.source_stage_id,
+    deferredTarget: loop.deferred_send_back?.target,
+    replayNumber: loop.current_replay_number,
+    maxReplays: loop.policy.max_replays,
+    summary: run.waiting_summary,
+  };
+}
 
 function stageExists(run: RunDetail, stageId: string): boolean {
   return run.stages.some((s) => s.stage_id === stageId);
@@ -316,6 +470,9 @@ function nodeChromeFromTrack(
   run: RunDetail,
   nodes: PipelineTrackNode[],
   snapshots: Map<string, StageSnapshot>,
+  feedbackSourceIds: Set<string>,
+  feedbackTargetIds: Set<string>,
+  supersededIds: Set<string>,
 ): SpatialNodeChrome[] {
   return detailListOrder(nodes).map((node) => {
     const snapshot = snapshots.get(node.stage_id);
@@ -338,6 +495,9 @@ function nodeChromeFromTrack(
           ? promptSummary(snapshot?.pending_prompt)
           : undefined,
       isWaitingAttention: isWaitingAttention(run, node.stage_id, status),
+      isFeedbackSource: feedbackSourceIds.has(node.stage_id) || undefined,
+      isFeedbackTarget: feedbackTargetIds.has(node.stage_id) || undefined,
+      isSuperseded: supersededIds.has(node.stage_id) || undefined,
     };
   });
 }
@@ -346,6 +506,9 @@ function nodeChromeFromStages(
   run: RunDetail,
   trackStages: WorkspaceTrackStage[],
   snapshots: Map<string, StageSnapshot>,
+  feedbackSourceIds: Set<string>,
+  feedbackTargetIds: Set<string>,
+  supersededIds: Set<string>,
 ): SpatialNodeChrome[] {
   return trackStages.map((ts) => {
     const snapshot = snapshots.get(ts.id);
@@ -362,6 +525,9 @@ function nodeChromeFromStages(
           ? promptSummary(snapshot?.pending_prompt)
           : undefined,
       isWaitingAttention: isWaitingAttention(run, ts.id, status),
+      isFeedbackSource: feedbackSourceIds.has(ts.id) || undefined,
+      isFeedbackTarget: feedbackTargetIds.has(ts.id) || undefined,
+      isSuperseded: supersededIds.has(ts.id) || undefined,
     };
   });
 }
@@ -370,6 +536,8 @@ function buildRunGraph(
   run: RunDetail,
   selectedStageId: string | null,
   plannedStageIds: string[] | undefined,
+  feedbackOverlays: FeedbackOverlay[],
+  supersededIds: Set<string>,
 ): {
   spatialLayout: SpatialTrackLayout;
   nodeChrome: SpatialNodeChrome[];
@@ -381,12 +549,21 @@ function buildRunGraph(
     plannedStageIds,
   });
   const track = run.pipeline_track;
+  const feedbackSourceIds = new Set(feedbackOverlays.map((o) => o.from));
+  const feedbackTargetIds = new Set(feedbackOverlays.map((o) => o.to));
 
   if (!track.nodes.length) {
     const trackStages = toTrackStages(run.stages, selectedStageId, plannedStageIds);
     return {
       spatialLayout,
-      nodeChrome: nodeChromeFromStages(run, trackStages, snapshots),
+      nodeChrome: nodeChromeFromStages(
+        run,
+        trackStages,
+        snapshots,
+        feedbackSourceIds,
+        feedbackTargetIds,
+        supersededIds,
+      ),
       trackStages,
     };
   }
@@ -397,7 +574,14 @@ function buildRunGraph(
   );
   return {
     spatialLayout,
-    nodeChrome: nodeChromeFromTrack(run, nodes, snapshots),
+    nodeChrome: nodeChromeFromTrack(
+      run,
+      nodes,
+      snapshots,
+      feedbackSourceIds,
+      feedbackTargetIds,
+      supersededIds,
+    ),
     trackStages,
   };
 }
@@ -572,6 +756,14 @@ export function resolveRunWorkspace(
   const decidePrompt = showDecide
     ? artifactBackedPrompt(selectedStage?.pending_prompt)
     : undefined;
+  const feedbackDecide = resolveFeedbackDecide(run);
+  const showFeedbackDecide = Boolean(feedbackDecide);
+  const feedbackOverlays = buildFeedbackOverlays(
+    run.active_feedback_loop,
+    run.feedback_loops,
+    run.pipeline_track,
+  );
+  const supersededIds = collectSupersededStageIds(run.feedback_loops);
   const envelopeStageId = view.kind === "envelope" ? view.stageId : null;
   const envelopeStage = envelopeStageId
     ? (run.stages.find((s) => s.stage_id === envelopeStageId) ?? null)
@@ -602,6 +794,8 @@ export function resolveRunWorkspace(
     run,
     selectedStageId,
     plannedStageIds,
+    feedbackOverlays,
+    supersededIds,
   );
 
   return {
@@ -611,6 +805,9 @@ export function resolveRunWorkspace(
     composer: composerState(kind, selectedStage?.status, selectedStage?.pending_prompt),
     showDecide,
     decidePrompt,
+    showFeedbackDecide,
+    feedbackDecide,
+    feedbackOverlays,
     artifactReadOnly: !showDecide,
     selectedPath:
       kind === "artifact" && view.kind === "artifact"

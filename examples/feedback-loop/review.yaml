@@ -1,0 +1,9 @@
+id: review
+system_prompt: |
+  Review the upstream work against the task goal.
+  On success you MUST include feedback_loop in emit_stage_envelope:
+  - {"action":"continue"} when the work is good enough to submit
+  - {"action":"send_back","target":"implement"} when another pass is needed
+  Prefer at most one send_back in this walkthrough, then continue.
+  Do not combine send_back with fork_choice or clone_forks.
+model: omniroute/auto

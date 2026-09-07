@@ -4,6 +4,7 @@ import {
   assertRequiredEnvelope,
   isAdvancingEnvelope,
 } from "../envelope/check.js";
+import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { assertCloneForks } from "../envelope/cloneForks.js";
 import { assertForkEnvelope } from "../envelope/forkChoice.js";
@@ -22,7 +23,11 @@ import type {
   StageRunInput,
   StageRunResult,
 } from "./port.js";
-import { runtimeStageId, runStageViaOpen } from "./port.js";
+import {
+  runtimeStageId,
+  runStageViaOpen,
+  createCompletedOnlyStageHandle,
+} from "./port.js";
 
 function opaqueEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
@@ -126,6 +131,19 @@ export class FakeAgent implements AgentPort {
     let answerPromise: Promise<OpaqueAnswer> | undefined;
     let started = false;
     let resumeCorrupt = false;
+    const sessionMode = input.sessionMode ?? "fresh";
+    const skipHitlPark =
+      sessionMode === "feedback_resume" || sessionMode === "new_session";
+
+    if (sessionMode === "feedback_resume" && input.feedbackLoopContext === undefined) {
+      return createCompletedOnlyStageHandle({
+        stageId: runtimeStageId(input),
+        run: async () => ({
+          ok: false,
+          reason: "feedback_resume requires feedbackLoopContext",
+        }),
+      });
+    }
 
     const armWait = () => {
       waiting = true;
@@ -143,7 +161,7 @@ export class FakeAgent implements AgentPort {
       return answer;
     };
 
-    if (behavior.type === "wait_then_emit") {
+    if (behavior.type === "wait_then_emit" && !skipHitlPark) {
       const loaded = loadFakeHitlResume(input.roots, runtimeStageId(input));
       if (loaded === "corrupt") {
         resumeCorrupt = true;
@@ -157,6 +175,13 @@ export class FakeAgent implements AgentPort {
         waitIndex = loaded.waitIndex;
         armWait();
       }
+    }
+
+    if (sessionMode === "feedback_resume" && behavior.type === "wait_then_emit") {
+      behavior = {
+        type: "emit",
+        envelope: behavior.envelope,
+      };
     }
 
     const emitStartActivity = () => {
@@ -200,10 +225,12 @@ export class FakeAgent implements AgentPort {
 
       try {
         const envelope = assertRequiredEnvelope(envelopeValue);
-        if (input.forkEmitContext !== undefined) {
+        assertFeedbackLoopAction(envelope, input.feedbackLoopEmitContext);
+        const isFeedbackSendBack = envelope.feedback_loop?.action === "send_back";
+        if (!isFeedbackSendBack && input.forkEmitContext !== undefined) {
           assertForkEnvelope(envelope, input.forkEmitContext);
         }
-        if (input.cloneEmitContext !== undefined) {
+        if (!isFeedbackSendBack && input.cloneEmitContext !== undefined) {
           assertCloneForks(envelope, input.cloneEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);

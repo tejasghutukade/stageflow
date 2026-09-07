@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { PendingPrompt, PipelineTrackNode, RunDetail, StageSnapshot } from "../api";
+import type {
+  FeedbackLoopHistory,
+  FeedbackLoopRecord,
+  PendingPrompt,
+  PipelineTrackNode,
+  RunDetail,
+  StageSnapshot,
+} from "../api";
 import type { DetailView } from "../routes";
 import { statusCopy } from "../status/runStatus";
 import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
 import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
+  buildFeedbackOverlays,
+  collectSupersededStageIds,
   envelopeAsidePath,
   formatCloneLabel,
   parseEnvelopeAsidePath,
+  resolveFeedbackDecide,
   resolveRunWorkspace,
   runDetailShouldPoll,
   stageCloneLabel,
@@ -43,6 +53,7 @@ function detail(
     task_yaml: "goal: test",
     stages,
     pipeline_track: { nodes: [], edges: [] },
+    feedback_loops: [],
     ...overrides,
   };
 }
@@ -1483,5 +1494,578 @@ describe("runDetailShouldPoll", () => {
     expect(runDetailShouldPoll(run, { retrying: true, abandoning: false })).toBe(
       true,
     );
+  });
+});
+
+const feedbackEnvelope = {
+  status: "needs_revision",
+  summary: "send back",
+  artifacts: [],
+};
+
+function feedbackLoop(
+  overrides: Partial<FeedbackLoopRecord> = {},
+): FeedbackLoopRecord {
+  return {
+    run_id: "run-1",
+    loop_id: "loop-1",
+    source_stage_id: "review",
+    source_attempt: 1,
+    policy: {
+      target: "implement",
+      max_replays: 2,
+      on_max_replays: "wait_for_human",
+      replay_session: "resume",
+    },
+    state: "active",
+    created_at: "2026-08-18T00:00:00.000Z",
+    updated_at: "2026-08-18T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("feedback loop workspace", () => {
+  it("builds a deferred overlay from the active loop", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    expect(buildFeedbackOverlays(active, [])).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+  });
+
+  it("prefers deferred overlay over historical replay overlays", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: active,
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(active, history)).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+  });
+
+  it("builds replay overlays from history and marks superseded clones", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 1 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [
+              {
+                run_id: "run-1",
+                replay_id: "replay-1",
+                stage_id: "implement~old",
+                stage_attempt: 1,
+                session_mode: "resume",
+                status: "superseded",
+              },
+            ],
+            fork_generations: [
+              {
+                run_id: "run-1",
+                generation_id: "gen-1",
+                fork_parent_stage_id: "fork",
+                generation_number: 1,
+                clone_stage_ids: ["work~1"],
+                status: "superseded",
+                created_at: "2026-08-18T00:00:00.000Z",
+                updated_at: "2026-08-18T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(feedbackLoop(), history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+    expect([...collectSupersededStageIds(history)].sort()).toEqual([
+      "implement~old",
+      "work~1",
+    ]);
+  });
+
+  it("shows completed replay overlays when no live replays remain", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({
+          state: "continued",
+          current_replay_number: 1,
+          policy: {
+            target: "implement",
+            max_replays: 2,
+            on_max_replays: "require_continue",
+            replay_session: "resume",
+          },
+        }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+  });
+
+  it("prefers live replay overlays over completed history", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 2 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "completed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-2",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 2,
+              target_stage_id: "implement",
+              replay_number: 2,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:01:00.000Z",
+              updated_at: "2026-08-18T00:01:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(feedbackLoop({ current_replay_number: 2 }), history)).toEqual([
+      { from: "review", to: "implement", kind: "replay" },
+    ]);
+  });
+
+  it("skips superseded and failed replays for overlays", () => {
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-failed",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "failed",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-superseded",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "implement",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "superseded",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history)).toEqual([]);
+  });
+
+  it("shows feedback decide when waiting_kind is feedback_loop_decision", () => {
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+    });
+    const run = detail(
+      [
+        stage({ stage_id: "implement", status: "succeeded" }),
+        stage({ stage_id: "review", status: "waiting_for_input" }),
+      ],
+      {
+        waiting_stage_id: "review",
+        waiting_kind: "feedback_loop_decision",
+        waiting_summary: "Feedback loop limit reached",
+        active_feedback_loop: active,
+        feedback_loops: [
+          {
+            loop: active,
+            replays: [],
+            fork_generations: [],
+          },
+        ],
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "implement",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "waiting_for_input",
+              readiness: "waiting",
+              layer: 1,
+              layer_order: 0,
+            },
+          ],
+          edges: [{ from: "implement", to: "review" }],
+        },
+      },
+    );
+    expect(resolveFeedbackDecide(run)).toEqual({
+      loopId: "loop-1",
+      sourceStageId: "review",
+      deferredTarget: "implement",
+      replayNumber: 2,
+      maxReplays: 2,
+      summary: "Feedback loop limit reached",
+    });
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.showFeedbackDecide).toBe(true);
+    expect(workspace.feedbackOverlays).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+    const review = workspace.nodeChrome.find((n) => n.stageId === "review");
+    const implement = workspace.nodeChrome.find((n) => n.stageId === "implement");
+    expect(review?.isFeedbackSource).toBe(true);
+    expect(implement?.isFeedbackTarget).toBe(true);
+  });
+
+  it("does not change pipeline_track edge layout when overlays are present", () => {
+    const active = feedbackLoop({
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 1,
+      },
+    });
+    const run = detail(
+      [
+        stage({ stage_id: "implement", status: "succeeded" }),
+        stage({ stage_id: "review", status: "succeeded" }),
+      ],
+      {
+        active_feedback_loop: active,
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "implement",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "succeeded",
+              readiness: "succeeded",
+              layer: 1,
+              layer_order: 0,
+            },
+          ],
+          edges: [{ from: "implement", to: "review" }],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "implement", to: "review" },
+    ]);
+    expect(workspace.feedbackOverlays).toHaveLength(1);
+  });
+
+  it("emits policy overlays from pipeline_track when no live history exists", () => {
+    const track = {
+      nodes: [
+        {
+          stage_id: "implement",
+          status: "pending" as const,
+          readiness: "ready" as const,
+          layer: 0,
+          layer_order: 0,
+        },
+        {
+          stage_id: "review",
+          status: "pending" as const,
+          readiness: "blocked" as const,
+          layer: 1,
+          layer_order: 0,
+          feedback_loop: { target: "implement" },
+        },
+        {
+          stage_id: "plan",
+          status: "pending" as const,
+          readiness: "ready" as const,
+          layer: 0,
+          layer_order: 1,
+        },
+      ],
+      edges: [
+        { from: "plan", to: "implement" },
+        { from: "implement", to: "review" },
+      ],
+    };
+    expect(buildFeedbackOverlays(undefined, [], track)).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+    ]);
+  });
+
+  it("prefers deferred and replay overlays over policy stubs for the same route", () => {
+    const track = {
+      nodes: [
+        {
+          stage_id: "implement",
+          status: "succeeded" as const,
+          readiness: "succeeded" as const,
+          layer: 0,
+          layer_order: 0,
+        },
+        {
+          stage_id: "review",
+          status: "waiting_for_input" as const,
+          readiness: "waiting" as const,
+          layer: 1,
+          layer_order: 0,
+          feedback_loop: { target: "implement" },
+        },
+        {
+          stage_id: "plan",
+          status: "succeeded" as const,
+          readiness: "succeeded" as const,
+          layer: 0,
+          layer_order: 1,
+        },
+      ],
+      edges: [],
+    };
+    const active = feedbackLoop({
+      state: "waiting_for_human",
+      current_replay_number: 2,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: feedbackEnvelope,
+        source_attempt: 2,
+      },
+      policy: {
+        target: "implement",
+        max_replays: 2,
+        on_max_replays: "wait_for_human",
+        replay_session: "resume",
+      },
+    });
+    expect(buildFeedbackOverlays(active, [], track)).toEqual([
+      { from: "review", to: "implement", kind: "deferred" },
+    ]);
+
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop({ current_replay_number: 1 }),
+        replays: [
+          {
+            replay: {
+              run_id: "run-1",
+              replay_id: "replay-1",
+              loop_id: "loop-1",
+              source_stage_id: "review",
+              source_attempt: 1,
+              target_stage_id: "plan",
+              replay_number: 1,
+              max_replays: 2,
+              replay_session: "resume",
+              route_stage_ids: ["plan", "implement", "review"],
+              feedback_envelope: feedbackEnvelope,
+              status: "active",
+              created_at: "2026-08-18T00:00:00.000Z",
+              updated_at: "2026-08-18T00:00:00.000Z",
+            },
+            stage_passes: [],
+            fork_generations: [],
+          },
+        ],
+        fork_generations: [],
+      },
+    ];
+    expect(buildFeedbackOverlays(undefined, history, track)).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+      { from: "review", to: "plan", kind: "replay" },
+    ]);
+  });
+
+  it("shows policy overlays on a fresh run via resolveRunWorkspace", () => {
+    const run = detail(
+      [
+        stage({ stage_id: "plan", status: "pending" }),
+        stage({ stage_id: "implement", status: "pending" }),
+        stage({ stage_id: "review", status: "pending" }),
+      ],
+      {
+        pipeline_track: {
+          nodes: [
+            {
+              stage_id: "plan",
+              status: "pending",
+              readiness: "ready",
+              layer: 0,
+              layer_order: 0,
+            },
+            {
+              stage_id: "implement",
+              status: "pending",
+              readiness: "blocked",
+              layer: 1,
+              layer_order: 0,
+            },
+            {
+              stage_id: "review",
+              status: "pending",
+              readiness: "blocked",
+              layer: 2,
+              layer_order: 0,
+              feedback_loop: { target: "implement" },
+            },
+          ],
+          edges: [
+            { from: "plan", to: "implement" },
+            { from: "implement", to: "review" },
+          ],
+        },
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.feedbackOverlays).toEqual([
+      { from: "review", to: "implement", kind: "policy" },
+    ]);
+    expect(
+      workspace.nodeChrome.find((n) => n.stageId === "review")?.isFeedbackSource,
+    ).toBe(true);
+    expect(
+      workspace.nodeChrome.find((n) => n.stageId === "implement")?.isFeedbackTarget,
+    ).toBe(true);
   });
 });

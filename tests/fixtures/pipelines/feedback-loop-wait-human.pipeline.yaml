@@ -1,0 +1,23 @@
+id: feedback-loop-wait-human
+stages:
+  - id: plan
+    system_prompt: Create the plan.
+    model: test/model
+  - id: implement
+    needs: plan
+    system_prompt: Implement the approved plan.
+    model: test/model
+  - id: review
+    needs: implement
+    feedback_loop:
+      target: implement
+      max_replays: 1
+      on_max_replays: wait_for_human
+      replay_session: resume
+    system_prompt: Review the work and explicitly continue or send it back.
+    model: test/model
+  - id: submit
+    needs: review
+    replay_safe: false
+    system_prompt: Submit approved work.
+    model: test/model

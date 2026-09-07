@@ -44,10 +44,16 @@ function parseCloneForkItem(raw: unknown, index: number): ParsedCloneForkItem {
   };
 
   if (record.envelope !== undefined) {
-    item.envelope = assertRequiredEnvelope(
+    const envelope = assertRequiredEnvelope(
       record.envelope,
       `clone_forks[${index}].envelope`,
     );
+    if (envelope.feedback_loop !== undefined) {
+      throw new EnvelopeError(
+        `clone_forks[${index}].envelope.feedback_loop is not allowed in clone assignment envelopes`,
+      );
+    }
+    item.envelope = envelope;
   }
 
   if (record.mode !== undefined) {
@@ -75,12 +81,16 @@ function parseCloneForkItem(raw: unknown, index: number): ParsedCloneForkItem {
           `clone_forks[${index}].clones[${cloneIndex}].envelope is required`,
         );
       }
-      return {
-        envelope: assertRequiredEnvelope(
+      const envelope = assertRequiredEnvelope(
           cloneRecord.envelope,
           `clone_forks[${index}].clones[${cloneIndex}].envelope`,
-        ),
-      };
+        );
+      if (envelope.feedback_loop !== undefined) {
+        throw new EnvelopeError(
+          `clone_forks[${index}].clones[${cloneIndex}].envelope.feedback_loop is not allowed in clone assignment envelopes`,
+        );
+      }
+      return { envelope };
     });
   }
 
@@ -163,6 +173,52 @@ export function assertRequiredEnvelope(
 
   if (record.clone_forks !== undefined) {
     envelope.clone_forks = parseCloneForks(record.clone_forks);
+  }
+
+  if (record.feedback_loop !== undefined) {
+    if (
+      record.feedback_loop === null ||
+      typeof record.feedback_loop !== "object" ||
+      Array.isArray(record.feedback_loop)
+    ) {
+      throw new EnvelopeError(
+        qualifyEnvelopeMessage(pathPrefix, "feedback_loop must be an object"),
+      );
+    }
+    const feedbackLoop = record.feedback_loop as Record<string, unknown>;
+    if (feedbackLoop.action === "continue") {
+      for (const key of Object.keys(feedbackLoop)) {
+        if (key !== "action" && key !== "target") {
+          throw new EnvelopeError(
+            qualifyEnvelopeMessage(pathPrefix, `feedback_loop: unknown key "${key}"`),
+          );
+        }
+      }
+      if (feedbackLoop.target !== undefined) {
+        throw new EnvelopeError(
+          qualifyEnvelopeMessage(pathPrefix, "feedback_loop.target is not allowed for action continue"),
+        );
+      }
+      envelope.feedback_loop = { action: "continue" };
+    } else if (feedbackLoop.action === "send_back") {
+      for (const key of Object.keys(feedbackLoop)) {
+        if (key !== "action" && key !== "target") {
+          throw new EnvelopeError(
+            qualifyEnvelopeMessage(pathPrefix, `feedback_loop: unknown key "${key}"`),
+          );
+        }
+      }
+      if (typeof feedbackLoop.target !== "string" || feedbackLoop.target.trim() === "") {
+        throw new EnvelopeError(
+          qualifyEnvelopeMessage(pathPrefix, "feedback_loop.target must be a non-empty string for action send_back"),
+        );
+      }
+      envelope.feedback_loop = { action: "send_back", target: feedbackLoop.target };
+    } else {
+      throw new EnvelopeError(
+        qualifyEnvelopeMessage(pathPrefix, 'feedback_loop.action must be "continue" or "send_back"'),
+      );
+    }
   }
 
   if (record.checklist_attestations !== undefined) {

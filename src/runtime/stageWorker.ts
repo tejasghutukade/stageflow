@@ -14,6 +14,7 @@ import {
 } from "./stageRunner.js";
 import { openStageAttempt } from "./stageAttemptBootstrap.js";
 import { attemptContext } from "./stageAttemptContext.js";
+import { loadActiveFeedbackLoopContext } from "./feedbackLoopCoordinator.js";
 import {
   outcomeToWorkerResult,
   STAGE_WORKER_EXIT,
@@ -80,6 +81,7 @@ export async function runStageWorker(
         operatorCatalog: input.operatorCatalog,
         roots,
         resumeToken: input.sessionFilePath,
+        sessionMode: "waiting_resume",
         onActivity: (event) => {
           void store.appendStageEvent(
             input.runId,
@@ -113,6 +115,73 @@ export async function runStageWorker(
         skipGates: input.skipGates,
       });
       return outcome;
+    }
+
+    if (mode === "feedback_resume" || mode === "new_session") {
+      const feedbackLoopContext = await loadActiveFeedbackLoopContext(
+        store,
+        input.runId,
+        input.stageId,
+      );
+      if (mode === "feedback_resume" && feedbackLoopContext === undefined) {
+        return {
+          ok: false,
+          reason: "feedback_resume requires an active feedback-loop context",
+        };
+      }
+      const priorAttempt = feedbackLoopContext?.prior_stage_attempt;
+      const resumeToken =
+        input.sessionFilePath ??
+        (mode === "feedback_resume" && priorAttempt !== undefined
+          ? attemptContext(priorAttempt).sessionPath(workspaceDir, input.stageId)
+          : undefined);
+      const opened = await openStageAttempt({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        factoryCwd: input.rootDir,
+        attemptCtx,
+        operatorCatalog: input.operatorCatalog,
+        roots,
+        ...(resumeToken !== undefined ? { resumeToken } : {}),
+        sessionMode: mode,
+        ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+        onActivity: (event) => {
+          void store.appendStageEvent(
+            input.runId,
+            input.stageId,
+            event,
+            eventOptions,
+          );
+        },
+      });
+      if (!opened.ok) {
+        return { ok: false, reason: opened.reason };
+      }
+      return runStage({
+        agent,
+        store,
+        runId: input.runId,
+        stage,
+        stageId: input.stageId,
+        task,
+        dag,
+        checkoutRoot,
+        workspaceDir,
+        existingHandle: opened.handle,
+        workerMode: true,
+        roots,
+        attemptCtx,
+        factoryCwd: input.rootDir,
+        operatorCatalog: input.operatorCatalog,
+        skipGates: input.skipGates,
+      });
     }
 
     return runStage({
