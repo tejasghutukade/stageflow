@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-07
+
+### Added
+
+- Claude Agent SDK backend as an alternative to Pi for stage execution, selected via `agent: claude` in `stageflow.yml` at global, pipeline, or gated stage scope
+- HITL parity for the Claude backend: non-blocking `ask_operator` handling with session-marker-based resume, matching Pi's wait/answer lifecycle
+- Parameterized `AgentPort` contract tests covering both backends
+
 ## [0.9.0] - 2026-09-02
 
 ### Added
@@ -139,7 +147,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/tejasghutukade/stageflow/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tejasghutukade/stageflow/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/tejasghutukade/stageflow/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/tejasghutukade/stageflow/compare/v0.6.0...v0.7.0
