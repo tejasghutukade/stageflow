@@ -334,6 +334,7 @@ export class ClaudeAgentAdapter implements AgentPort {
           const pre = preflight(input);
           if (!pre.ok) {
             waiting = undefined;
+            await clearClaudeSessionMarker(markerPath);
             return { status: "completed", result: { ok: false, reason: pre.reason } };
           }
           const outcome = await runTurn(

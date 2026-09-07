@@ -1,8 +1,10 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
+import { claudeSessionMarkerPath } from "../src/agent/claudeSession.js";
 import type { StageRunInput } from "../src/agent/port.js";
 
 type MockToolDef = {
@@ -519,6 +521,48 @@ describe("ClaudeAgentAdapter — never-let-it-go-dangling regression guard", () 
 
       expect(queryMock.mock.calls.length).toBe(callsBefore + 1);
       expect(lastInterruptSpy?.mock.calls.length ?? 0).toBe(interruptCallsAtWait);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears the session marker when preflight fails on resume, not just on an invalid answer", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-claude-adapter-guard-"));
+    try {
+      queryImpl = async function* (options) {
+        yield initMessage("session-preflight-fail");
+        const askTool = findTool(options, "ask_operator");
+        const result = await askTool.handler(
+          { kind: "confirm", message: "Proceed?", id: "q1" },
+          undefined,
+        );
+        yield userToolResultMessage("c1", result.content);
+      };
+      const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+      const adapter = new ClaudeAgentAdapter();
+      const input: StageRunInput = {
+        ...baseInput({ gate_kinds: undefined }),
+        roots: buildStageRoots(dir, "review"),
+      };
+      const markerPath = claudeSessionMarkerPath(input);
+
+      const handle = adapter.openStage(input);
+      const waitEvent = await handle.next();
+      expect(waitEvent.status).toBe("waiting_for_input");
+      expect(existsSync(markerPath)).toBe(true);
+
+      // Simulate preflight becoming invalid between the wait and the resume
+      // (today only reachable this way — model/skill are otherwise static
+      // across a handle's lifetime).
+      input.stage.model = "openai/gpt-5";
+
+      handle.deliverAnswer({ promptId: "q1", kind: "confirm", decision: "accept" });
+      const doneEvent = await handle.next();
+      expect(doneEvent.status).toBe("completed");
+      if (doneEvent.status === "completed") {
+        expect(doneEvent.result.ok).toBe(false);
+      }
+      expect(existsSync(markerPath)).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
