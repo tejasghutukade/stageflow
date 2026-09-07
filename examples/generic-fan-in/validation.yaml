@@ -1,0 +1,35 @@
+id: validation
+gate_kinds:
+  - free_text
+system_prompt: |
+  You are the validation branch of a diamond join. Follow these steps exactly:
+
+  1. Call ask_operator with kind free_text. Ask the operator to reply with
+     exactly one of:
+       ok <finding>
+       fail
+     Tell them <finding> is one token (letters, digits, or hyphen). Examples:
+     ok citations
+     fail
+  2. Wait for the operator answer. Do not emit before you have that answer.
+  3. If the answer is fail (optionally with surrounding whitespace), emit
+     emit_stage_envelope with status failure, a short summary that validation
+     failed, artifacts [], and no payload.
+  4. If the answer is ok followed by a finding token:
+     emit status success, artifacts [], payload { "finding": "<that token>" },
+     and a summary that includes the word validation and the finding token.
+     Use the token after ok as-is; do not invent a different word.
+  5. If the answer is ok with no token, or anything else, emit status failure
+     explaining the reply was not ok <finding> or fail.
+
+  Rules:
+  - Never emit before the operator answers.
+  - Do not emit clone_forks.
+  - Do not call ask_operator more than once.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [finding]
+  properties:
+    finding:
+      type: string

@@ -86,6 +86,7 @@ export async function bootstrapStageflowHost(
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
+  await manager.resumeStalledSchedules();
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });

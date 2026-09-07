@@ -15,6 +15,7 @@ import type { StageEnvelope } from "../src/types/envelope.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -1034,6 +1035,59 @@ describe("localhost HTTP API", () => {
       await waitUntilIdleHealth(base);
     } finally {
       releaseImproves();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("GET run detail exposes diamond inbound edges and accepted-failure success", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-diamond-"));
+    const store = createRunStore({ rootDir: root });
+    const diamond = await seedDiamondRun(store, "diamond-fan-in", {
+      clarify: "succeeded",
+      research: "succeeded",
+      validation: "pending",
+      synthesize: "pending",
+    }, "running");
+    const accepted = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]), store);
+
+    try {
+      const trackDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(diamond.runId)}`,
+      );
+      expect(trackDetail.status).toBe(200);
+      expect(
+        trackDetail.body.pipeline_track.edges.filter(
+          (e: { to: string }) => e.to === "synthesize",
+        ),
+      ).toEqual([
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]);
+
+      const acceptedDetail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(accepted.runId)}`,
+      );
+      expect(acceptedDetail.status).toBe(200);
+      expect(acceptedDetail.body.status).toBe("succeeded");
+      expect(
+        acceptedDetail.body.stages.find(
+          (s: { stage_id: string }) => s.stage_id === "research",
+        )?.status,
+      ).toBe("failed");
+    } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

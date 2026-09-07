@@ -5,7 +5,11 @@ import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
-import type { RunStore } from "../runstore/port.js";
+import {
+  deriveStatusFromStages,
+  findUnhandledFailedStage,
+  type RunStore,
+} from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -13,13 +17,19 @@ import {
   startPipeline,
   type PipelineRunResult,
 } from "./pipelineRunner.js";
-import { resumeRun, runPipelineDag } from "./pipelineScheduler.js";
+import {
+  hydrateScheduleFromStore,
+  hydratedScheduleHasRunnableWork,
+  resumeRun,
+  runPipelineDag,
+} from "./pipelineScheduler.js";
 import {
   resolveFeedbackLoopDecision,
   type FeedbackLoopDecisionKind,
 } from "./feedbackLoopDecision.js";
 import {
   RunRetryCoordinator,
+  readRetryRootWaitTimeoutMs,
   type RetryStageResult,
   type RetryTrackingPort,
 } from "./runRetryCoordinator.js";
@@ -112,6 +122,7 @@ type ActiveEntry = {
   checkoutKey?: string;
   durableCheckoutRoot?: string;
   generation: number;
+  done?: Promise<unknown>;
 };
 
 const DEFAULT_MAX_CONCURRENT = 3;
@@ -145,6 +156,8 @@ export class RunManager {
   private readonly provisionalIds = new Set<string>();
   private readonly resumeInFlight = new Set<string>();
   private readonly retryInFlight = new Set<string>();
+  private readonly retryStartOwner = new Map<string, string>();
+  private readonly retryStartWaiters = new Map<string, Set<() => void>>();
   private trackingGeneration = 0;
   private maxConcurrent: number;
   private readonly maxActiveStagesPerRun: number;
@@ -164,6 +177,7 @@ export class RunManager {
     },
     onOrchestrationStarted: (runId, promise) => {
       this.registerResumeUntrack(runId, promise);
+      this.notifyRetryStartWaiters(runId);
     },
     rollbackStartTracking: async (runId, state) => {
       if (state.insertedForResume) {
@@ -438,6 +452,28 @@ export class RunManager {
     }
 
     return { reconciled };
+  }
+
+  async resumeStalledSchedules(): Promise<Array<{ runId: string }>> {
+    const resumed: Array<{ runId: string }> = [];
+    const runs = await this.options.store.listRuns();
+    for (const summary of runs) {
+      if (summary.status !== "running") continue;
+      const runId = summary.run_id;
+      if (this.active.has(runId)) continue;
+      try {
+        if (await this.tryResumeStalledSchedule(runId)) {
+          resumed.push({ runId });
+        }
+      } catch (err) {
+        console.error(
+          `resumeStalledSchedules: failed to resume ${runId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+    return resumed;
   }
 
   async abandonStage(
@@ -754,9 +790,52 @@ export class RunManager {
     }
 
     try {
-      const orchestrationConflict =
+      let orchestrationConflict =
         this.active.has(runId) &&
         !this.attachedWaiting.has(waitKey(runId, stageId));
+      if (!this.retryCoordinator.isActive(runId)) {
+        const entry = this.active.get(runId);
+        const pending = entry?.done;
+        const generation = entry?.generation;
+        if (
+          orchestrationConflict &&
+          pending !== undefined &&
+          (await this.isStartRunWindingDown(runId))
+        ) {
+          if (this.claimRetryStart(runId, stageId)) {
+            await this.awaitStartRunWindDown(runId, pending, generation);
+          } else {
+            await this.waitForRetryCoordinatorOrOwnerRelease(runId);
+          }
+        } else if (!this.claimRetryStart(runId, stageId)) {
+          await this.waitForRetryCoordinatorOrOwnerRelease(runId);
+        }
+        let detail;
+        try {
+          detail = await this.options.store.readRun(runId);
+          await this.options.store.readRunMeta(runId);
+        } catch {
+          this.retryInFlight.delete(retryKey);
+          return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+        }
+        orchestrationConflict =
+          this.active.has(runId) &&
+          !this.attachedWaiting.has(waitKey(runId, stageId)) &&
+          !this.retryCoordinator.isActive(runId);
+        if (
+          orchestrationConflict &&
+          !(await this.isStartRunWindingDown(runId))
+        ) {
+          const hasActiveStage = detail.stages.some(
+            (stage) =>
+              stage.status === "running" ||
+              stage.status === "waiting_for_input",
+          );
+          if (!hasActiveStage) {
+            orchestrationConflict = false;
+          }
+        }
+      }
       const result = await this.retryCoordinator.retryStage({
         runId,
         stageId,
@@ -782,6 +861,129 @@ export class RunManager {
     } catch (err) {
       this.retryInFlight.delete(retryKey);
       throw err;
+    } finally {
+      this.releaseRetryStart(runId, stageId);
+    }
+  }
+
+  private async isStartRunWindingDown(runId: string): Promise<boolean> {
+    try {
+      const detail = await this.options.store.readRun(runId);
+      const meta = await this.options.store.readRunMeta(runId);
+      let hasPending = false;
+      for (const stage of detail.stages) {
+        if (
+          stage.status === "running" ||
+          stage.status === "waiting_for_input"
+        ) {
+          return false;
+        }
+        if (stage.status === "pending") hasPending = true;
+      }
+      return (
+        findUnhandledFailedStage(detail.stages, meta.pipeline_dag) !==
+          undefined || !hasPending
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async awaitStartRunWindDown(
+    runId: string,
+    pending: Promise<unknown>,
+    generation: number | undefined,
+  ): Promise<void> {
+    let pendingError: unknown;
+    const settled = pending.then(
+      () => undefined,
+      (err: unknown) => {
+        pendingError = err;
+      },
+    );
+    const timedOut = await this.raceRetryRootTimeout(settled);
+    const after = this.active.get(runId);
+    const leftGeneration =
+      after === undefined || after.generation !== generation;
+    if (pendingError !== undefined && !leftGeneration) {
+      throw pendingError instanceof Error
+        ? pendingError
+        : new Error(String(pendingError));
+    }
+    if (timedOut && !leftGeneration) {
+      return;
+    }
+  }
+
+  private async raceRetryRootTimeout(
+    promise: Promise<void>,
+  ): Promise<boolean> {
+    const ms = readRetryRootWaitTimeoutMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), ms);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  private claimRetryStart(runId: string, stageId: string): boolean {
+    const owner = this.retryStartOwner.get(runId);
+    if (owner !== undefined && owner !== stageId) return false;
+    this.retryStartOwner.set(runId, stageId);
+    return true;
+  }
+
+  private releaseRetryStart(runId: string, stageId: string): void {
+    if (this.retryStartOwner.get(runId) !== stageId) return;
+    this.retryStartOwner.delete(runId);
+    this.notifyRetryStartWaiters(runId);
+  }
+
+  private notifyRetryStartWaiters(runId: string): void {
+    const waiters = this.retryStartWaiters.get(runId);
+    if (waiters === undefined) return;
+    this.retryStartWaiters.delete(runId);
+    for (const resolve of waiters) resolve();
+  }
+
+  private async waitForRetryCoordinatorOrOwnerRelease(
+    runId: string,
+  ): Promise<void> {
+    if (
+      this.retryCoordinator.isActive(runId) ||
+      !this.retryStartOwner.has(runId)
+    ) {
+      return;
+    }
+    let onReady: (() => void) | undefined;
+    const watched = new Promise<void>((resolve) => {
+      const list = this.retryStartWaiters.get(runId) ?? new Set();
+      onReady = () => resolve();
+      list.add(onReady);
+      this.retryStartWaiters.set(runId, list);
+      if (
+        this.retryCoordinator.isActive(runId) ||
+        !this.retryStartOwner.has(runId)
+      ) {
+        resolve();
+      }
+    });
+    try {
+      await this.raceRetryRootTimeout(watched);
+    } finally {
+      if (onReady !== undefined) {
+        const list = this.retryStartWaiters.get(runId);
+        if (list !== undefined) {
+          list.delete(onReady);
+          if (list.size === 0) this.retryStartWaiters.delete(runId);
+        }
+      }
     }
   }
 
@@ -1377,13 +1579,75 @@ export class RunManager {
     this.active.delete(provisionalId);
     this.provisionalIds.delete(provisionalId);
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation });
+    this.active.set(runId, { ...entry, generation, done });
     if (entry.checkoutKey !== undefined) {
       this.checkoutLeases.set(entry.checkoutKey, runId);
     }
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });
+  }
+
+  private async tryResumeStalledSchedule(runId: string): Promise<boolean> {
+    const detail = await this.options.store.readRun(runId);
+    const meta = await this.options.store.readRunMeta(runId);
+    if (
+      detail.stages.some(
+        (stage) =>
+          stage.status === "running" || stage.status === "waiting_for_input",
+      )
+    ) {
+      return false;
+    }
+    if (deriveStatusFromStages(detail.stages, meta.pipeline_dag) !== "running") {
+      return false;
+    }
+    const dag = meta.pipeline_dag;
+    if (dag === undefined) return false;
+
+    const hydrated = await hydrateScheduleFromStore(
+      this.options.store,
+      runId,
+      dag,
+      this.executionMode,
+    );
+    if (!hydratedScheduleHasRunnableWork(hydrated)) return false;
+
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      console.error(`resumeStalledSchedules: ${tracked.reason}`);
+      return false;
+    }
+
+    try {
+      const { meta: loadedMeta, task, loaded, workspaceDir } =
+        await loadRunContext(this.options.store, runId, this.cwd);
+      const promise = runPipelineDag({
+        prepared: {
+          task,
+          loaded,
+          run: { runId, workspaceDir },
+          agent: this.options.agent,
+          store: this.options.store,
+          cwd: this.cwd,
+          projectRoot: this.projectRoot,
+          checkoutRoot: loadedMeta.checkout_root,
+          hitl: this.hitl,
+          operatorCatalog: this.options.operatorCatalog,
+        },
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+        initialSchedule: hydrated,
+      }).finally(() => {
+        void syncRunStatusFromStages(this.options.store, runId).catch(() => {});
+      });
+      this.registerResumeUntrack(runId, promise);
+      return true;
+    } catch (err) {
+      this.removeActiveEntry(runId, false);
+      throw err;
+    }
   }
 
   /**
@@ -1444,7 +1708,7 @@ export class RunManager {
     const entry = this.active.get(runId);
     if (entry === undefined) return;
     const generation = ++this.trackingGeneration;
-    this.active.set(runId, { ...entry, generation });
+    this.active.set(runId, { ...entry, generation, done });
     void done.finally(() => {
       this.untrackIfGeneration(runId, generation);
     });

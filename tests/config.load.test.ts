@@ -32,6 +32,28 @@ describe("YAML loaders", () => {
     );
   });
 
+  it("loads the diamond fan-in fixture with two inbound synthesize edges", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), { cwd: fixtures });
+    expect(loaded.pipeline.stages).toEqual([
+      "clarify",
+      "research",
+      "validation",
+      "synthesize",
+    ]);
+    expect(loaded.dag.roots).toEqual(["clarify"]);
+    expect(loaded.dag.childrenOf.research).toEqual(["synthesize"]);
+    expect(loaded.dag.childrenOf.validation).toEqual(["synthesize"]);
+    const synthesize = loaded.dag.nodes.find((node) => node.id === "synthesize");
+    expect(synthesize).toMatchObject({
+      needs: null,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ],
+      ancestors: ["clarify", "research", "validation"],
+    });
+  });
+
   it("loads a structured task with goal and context", async () => {
     const task = await loadTask(SAMPLE_TASK);
     expect(task.goal).toMatch(/calendar/i);

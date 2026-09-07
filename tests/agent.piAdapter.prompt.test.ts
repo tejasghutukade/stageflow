@@ -116,6 +116,24 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
     expect(prompt).not.toContain("Clonable successors");
   });
 
+  it("priorEnvelopesByStage renders keyed aggregate instead of first-stage copy", () => {
+    const prompt = composeStageUserPrompt(
+      {
+        ...baseInput(),
+        priorEnvelopesByStage: {
+          research: { status: "success", summary: "from-research", artifacts: [] },
+          validation: { status: "success", summary: "from-validation", artifacts: [] },
+        },
+      },
+      "emit_stage_envelope",
+    );
+    expect(prompt).toContain("Prior envelopes by stage (declaration order):");
+    expect(prompt).toContain("from-research");
+    expect(prompt).toContain("from-validation");
+    expect(prompt).not.toContain("No prior envelope (first stage).");
+    expect(prompt).not.toContain("clones, clone-list order");
+  });
+
   it("feedback-loop sources are instructed to emit an action and their allowed targets", () => {
     const prompt = composeStageUserPrompt(
       { ...baseInput(), feedbackLoopEmitContext: feedbackLoopPolicy },

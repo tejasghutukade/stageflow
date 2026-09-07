@@ -50,7 +50,7 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
 | `2` | `waiting` | Stage blocked on HITL |
 
-Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`.
+Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A parent that failed in a state a [generic fan-in](yaml-catalog.md#generic-fan-in) join explicitly accepts does not independently fail the run.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md). The CI guest uses `sf run --json` / `--skip-gates` only — it does not wait or answer with `sf runs`. Outside CI, humans and agents can continue a parked run with [`sf runs`](cli-reference.md#sf-runs).
 
@@ -126,7 +126,7 @@ Optional `code` when the start failure reports one.
 
 ### Including stage projections {#including-stage-projections}
 
-Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. CLI completion JSON does **not** include `pipeline_track` (that field is on `sf export-run` and MCP `get_run`). `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`. `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
 
 ```bash
 sf run --task examples/hello-world/my-task.task.yaml \

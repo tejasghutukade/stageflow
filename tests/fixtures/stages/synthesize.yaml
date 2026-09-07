@@ -1,0 +1,3 @@
+id: synthesize
+system_prompt: Join research and validation into a synthesis.
+model: anthropic/claude-sonnet-4-5

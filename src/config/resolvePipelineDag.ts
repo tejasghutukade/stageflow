@@ -1,4 +1,5 @@
 import type {
+  PipelineNeedEdge,
   PipelineStageRef,
   PipelineStageYamlEntry,
   ResolvedPipelineDag,
@@ -8,12 +9,14 @@ import type {
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { parsePipelineNeeds, predecessorEdges, toNeedEdges } from "./pipelineNeeds.js";
 
 const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
 type NormalizedEdge = {
   id: string;
   needs: string | null;
+  needsEdges: PipelineNeedEdge[];
   stageIndex: number;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
@@ -204,24 +207,14 @@ export function parsePipelineStageEntries(
       continue;
     }
 
-    if (Array.isArray(entry.needs)) {
-      if (entry.needs.length > 1) {
-        throw new Error(
-          formatError(ctx, `stage "${entry.id}": fan-in not supported; needs must be a single stage id`),
-        );
-      }
-      throw new Error(
-        formatError(ctx, `stage "${entry.id}": needs must be a string, not an array`),
-      );
-    }
-
-    if (typeof entry.needs !== "string" || !entry.needs) {
-      throw new Error(formatError(ctx, `stage "${entry.id}": needs must be a non-empty string`));
+    const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
+    if (!parsedNeeds.ok) {
+      throw new Error(formatError(ctx, parsedNeeds.message));
     }
 
     entries.push({
       id: entry.id,
-      needs: entry.needs,
+      needs: parsedNeeds.value,
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...clonableFields,
       ...policyFields,
@@ -234,18 +227,22 @@ export function parsePipelineStageEntries(
 }
 
 function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
-  return entries.map((entry, index) => ({
-    id: entry.id,
-    needs: entry.needs ?? null,
-    stageIndex: index,
-    ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
-    ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
-    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
-    ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
-    ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
-    ...(entry.feedback_loop !== undefined ? { feedback_loop: entry.feedback_loop } : {}),
-    ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
-  }));
+  return entries.map((entry, index) => {
+    const needsEdges = toNeedEdges(entry.needs);
+    return {
+      id: entry.id,
+      needs: needsEdges.length === 1 ? needsEdges[0]!.id : null,
+      needsEdges,
+      stageIndex: index,
+      ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
+      ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
+      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+      ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
+      ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
+      ...(entry.feedback_loop !== undefined ? { feedback_loop: entry.feedback_loop } : {}),
+      ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
+    };
+  });
 }
 
 function detectDuplicateIds(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
@@ -261,8 +258,10 @@ function detectDuplicateIds(edges: NormalizedEdge[], ctx: ResolvePipelineDagCont
 function validateNeedsTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
   const declared = new Set(edges.map((edge) => edge.id));
   for (const edge of edges) {
-    if (edge.needs !== null && !declared.has(edge.needs)) {
-      throw new Error(formatError(ctx, `stage "${edge.id}" has unknown needs "${edge.needs}"`));
+    for (const parent of edge.needsEdges) {
+      if (!declared.has(parent.id)) {
+        throw new Error(formatError(ctx, `stage "${edge.id}" has unknown needs "${parent.id}"`));
+      }
     }
   }
 }
@@ -277,9 +276,10 @@ function detectCycle(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): v
   }
 
   for (const edge of edges) {
-    if (edge.needs === null) continue;
-    indegree.set(edge.id, (indegree.get(edge.id) ?? 0) + 1);
-    children.get(edge.needs)?.push(edge.id);
+    for (const parent of edge.needsEdges) {
+      indegree.set(edge.id, (indegree.get(edge.id) ?? 0) + 1);
+      children.get(parent.id)?.push(edge.id);
+    }
   }
 
   const queue: string[] = [];
@@ -304,21 +304,32 @@ function detectCycle(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): v
 }
 
 function computeAncestors(edges: NormalizedEdge[]): Map<string, string[]> {
-  const needsById = new Map(edges.map((edge) => [edge.id, edge.needs]));
+  const parentsById = new Map(edges.map((edge) => [edge.id, edge.needsEdges]));
   const ancestorsById = new Map<string, string[]>();
 
   function ancestorsFor(id: string): string[] {
     const cached = ancestorsById.get(id);
     if (cached) return cached;
 
-    const needs = needsById.get(id) ?? null;
-    if (needs === null) {
+    const parents = parentsById.get(id) ?? [];
+    if (parents.length === 0) {
       ancestorsById.set(id, []);
       return [];
     }
 
-    const parentAncestors = ancestorsFor(needs);
-    const ancestors = [...parentAncestors, needs];
+    const seen = new Set<string>();
+    const ancestors: string[] = [];
+    for (const parent of parents) {
+      for (const ancestor of ancestorsFor(parent.id)) {
+        if (seen.has(ancestor)) continue;
+        seen.add(ancestor);
+        ancestors.push(ancestor);
+      }
+      if (!seen.has(parent.id)) {
+        seen.add(parent.id);
+        ancestors.push(parent.id);
+      }
+    }
     ancestorsById.set(id, ancestors);
     return ancestors;
   }
@@ -341,9 +352,10 @@ function topologicalSort(edges: NormalizedEdge[]): NormalizedEdge[] {
   }
 
   for (const edge of edges) {
-    if (edge.needs === null) continue;
-    indegree.set(edge.id, (indegree.get(edge.id) ?? 0) + 1);
-    children.get(edge.needs)?.push(edge.id);
+    for (const parent of edge.needsEdges) {
+      indegree.set(edge.id, (indegree.get(edge.id) ?? 0) + 1);
+      children.get(parent.id)?.push(edge.id);
+    }
   }
 
   for (const [, childIds] of children) {
@@ -353,7 +365,7 @@ function topologicalSort(edges: NormalizedEdge[]): NormalizedEdge[] {
   }
 
   const roots = edges
-    .filter((edge) => edge.needs === null)
+    .filter((edge) => edge.needsEdges.length === 0)
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
 
@@ -384,8 +396,8 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     childrenOf[edge.id] = [];
   }
   for (const edge of edges) {
-    if (edge.needs !== null) {
-      childrenOf[edge.needs].push(edge.id);
+    for (const parent of edge.needsEdges) {
+      childrenOf[parent.id].push(edge.id);
     }
   }
   for (const id of Object.keys(childrenOf)) {
@@ -397,13 +409,14 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
   }
 
   const roots = edges
-    .filter((edge) => edge.needs === null)
+    .filter((edge) => edge.needsEdges.length === 0)
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
 
   const nodes: ResolvedPipelineStageNode[] = sortedEdges.map((edge) => ({
     id: edge.id,
     needs: edge.needs,
+    needsEdges: edge.needsEdges,
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
     ...(edge.fork !== undefined
@@ -564,6 +577,16 @@ export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPip
     const nodeA = byIdA.get(id)!;
     const nodeB = byIdB.get(id)!;
     if (nodeA.needs !== nodeB.needs) return false;
+    const edgesA = predecessorEdges(nodeA);
+    const edgesB = predecessorEdges(nodeB);
+    if (edgesA.length !== edgesB.length) return false;
+    for (let i = 0; i < edgesA.length; i++) {
+      if (edgesA[i]!.id !== edgesB[i]!.id) return false;
+      if (edgesA[i]!.on.length !== edgesB[i]!.on.length) return false;
+      for (let j = 0; j < edgesA[i]!.on.length; j++) {
+        if (edgesA[i]!.on[j] !== edgesB[i]!.on[j]) return false;
+      }
+    }
     if (nodeA.ancestors.length !== nodeB.ancestors.length) return false;
     for (let i = 0; i < nodeA.ancestors.length; i++) {
       if (nodeA.ancestors[i] !== nodeB.ancestors[i]) return false;
@@ -607,8 +630,8 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
     }
     if (typeof entry.id !== "string" || !entry.id) return null;
     if (entry.needs !== undefined) {
-      if (Array.isArray(entry.needs)) return null;
-      if (typeof entry.needs !== "string" || !entry.needs) return null;
+      const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
+      if (!parsedNeeds.ok) return null;
     }
     stageIds.push(entry.id);
   }

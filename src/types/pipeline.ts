@@ -14,6 +14,17 @@ export type PipelineForkConfig = {
   allow_none: boolean;
 };
 
+export type NeedTerminalState = "succeeded" | "failed" | "skipped";
+
+export type PipelineNeedEdge = {
+  id: string;
+  on: NeedTerminalState[];
+};
+
+export type PipelineNeedItem = string | { id: string; on?: NeedTerminalState[] };
+
+export type PipelineNeeds = string | PipelineNeedEdge[];
+
 /** Runtime feedback-loop policy declared by the stage that can send work back. */
 export type FeedbackLoopConfig = {
   target: string;
@@ -24,7 +35,7 @@ export type FeedbackLoopConfig = {
 
 export type PipelineStageRef = {
   id: string;
-  needs?: string;
+  needs?: string | PipelineNeedItem[];
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
@@ -57,7 +68,7 @@ export type PipelineFragmentConfig = {
 
 export type NormalizedPipelineStageEntry = {
   id: string;
-  needs?: string;
+  needs?: PipelineNeeds;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
@@ -79,6 +90,7 @@ export type PipelineStageSource =
 export type ResolvedPipelineStageNode = {
   id: string;
   needs: string | null;
+  needsEdges: PipelineNeedEdge[];
   ancestors: string[];
   stageIndex: number;
   fork?: PipelineForkConfig;

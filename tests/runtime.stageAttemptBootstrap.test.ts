@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,10 @@ import {
   appendOperatorPrompt,
 } from "../src/hitl/qaTrail.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import {
   buildCompletedEnvelopesFromRun,
   resolvePriorEnvelope,
@@ -310,6 +314,8 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.priorEnvelope).toEqual(routed.prior);
     expect(result.prior).toEqual(routed.prior);
     expect(opened[0]?.priorEnvelope?.summary).toBe("from-clarify");
+    expect(opened[0]?.priorEnvelopes).toBeUndefined();
+    expect(opened[0]?.priorEnvelopesByStage).toBeUndefined();
   });
 
   it("fails closed without openStage when the upstream envelope is missing", async () => {
@@ -601,5 +607,177 @@ describe("openStageAttempt", () => {
       ],
       allowedActions: ["once", "fanout"],
     });
+  });
+
+  it("clone join passes priorEnvelopes and omits priorEnvelopesByStage", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const base = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(base, {
+      catalogId: "design-doc",
+      predecessorId: "clarify",
+      count: 3,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-clone-join-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      ...catalogLocators("clone-fanout-join"),
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const completed = new Map<string, StageEnvelope>([
+      ["design-doc~1", { status: "success", summary: "d1", artifacts: [] }],
+      ["design-doc~2", { status: "success", summary: "d2", artifacts: [] }],
+      ["design-doc~3", { status: "success", summary: "d3", artifacts: [] }],
+    ]);
+    const { agent, opened } = recordingAgent();
+    const joinDoc = loaded.stages.find((s) => s.id === "join-doc");
+    expect(joinDoc).toBeDefined();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: joinDoc!,
+      task,
+      dag: snapshot,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      completedEnvelopes: completed,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.priorEnvelope).toBeNull();
+    expect(opened[0]?.priorEnvelopes?.map((e) => e.summary)).toEqual([
+      "d1",
+      "d2",
+      "d3",
+    ]);
+    expect(opened[0]?.priorEnvelopesByStage).toBeUndefined();
+  });
+
+  it("diamond synthesize passes priorEnvelopesByStage and omits priorEnvelopes", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+      cwd: fixtures,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-diamond-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      ...catalogLocators("diamond-fan-in"),
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const research: StageEnvelope = {
+      status: "success",
+      summary: "from-research",
+      artifacts: [],
+    };
+    const validation: StageEnvelope = {
+      status: "success",
+      summary: "from-validation",
+      artifacts: [],
+    };
+    for (const [stageId, envelope] of [
+      ["validation", validation],
+      ["research", research],
+    ] as const) {
+      await store.ensureStageWorkspace(run.runId, stageId);
+      await store.createStageExecution(run.runId, stageId);
+      await store.appendStageEvent(run.runId, stageId, { event: "started" });
+      await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
+      await store.writeEnvelope(run.runId, stageId, envelope);
+      await store.updateStageExecution(run.runId, stageId, 1, {
+        status: "succeeded",
+        envelope,
+      });
+    }
+    const { agent, opened } = recordingAgent();
+    const synthesize = loaded.stages.find((s) => s.id === "synthesize");
+    expect(synthesize).toBeDefined();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: synthesize!,
+      task,
+      dag: loaded.dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.priorEnvelope).toBeNull();
+    expect(opened[0]?.priorEnvelopes).toBeUndefined();
+    expect(Object.keys(opened[0]?.priorEnvelopesByStage ?? {})).toEqual([
+      "research",
+      "validation",
+    ]);
+    expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
+    expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
+    expect(result.prior).toBeNull();
+  });
+
+  it("diamond synthesize keys priors in reversed YAML declaration order", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-reversed"), {
+      cwd: fixtures,
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-diamond-rev-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      ...catalogLocators("diamond-fan-in-reversed"),
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const research: StageEnvelope = {
+      status: "success",
+      summary: "from-research",
+      artifacts: [],
+    };
+    const validation: StageEnvelope = {
+      status: "success",
+      summary: "from-validation",
+      artifacts: [],
+    };
+    for (const [stageId, envelope] of [
+      ["research", research],
+      ["validation", validation],
+    ] as const) {
+      await store.ensureStageWorkspace(run.runId, stageId);
+      await store.createStageExecution(run.runId, stageId);
+      await store.appendStageEvent(run.runId, stageId, { event: "started" });
+      await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
+      await store.writeEnvelope(run.runId, stageId, envelope);
+      await store.updateStageExecution(run.runId, stageId, 1, {
+        status: "succeeded",
+        envelope,
+      });
+    }
+    const { agent, opened } = recordingAgent();
+    const synthesize = loaded.stages.find((s) => s.id === "synthesize");
+    expect(synthesize).toBeDefined();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: synthesize!,
+      task,
+      dag: loaded.dag,
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.priorEnvelope).toBeNull();
+    expect(opened[0]?.priorEnvelopes).toBeUndefined();
+    expect(Object.keys(opened[0]?.priorEnvelopesByStage ?? {})).toEqual([
+      "validation",
+      "research",
+    ]);
+    expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
+    expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
+    expect(result.prior).toBeNull();
   });
 });

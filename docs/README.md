@@ -42,7 +42,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 **[Archify on PR](../examples/archify-on-pr/)** — pull-request diagram automation dogfooding Stageflow in GitHub Actions: conditional fork skip, pipeline skill binding, `sf envelope get --format handoff`, and deterministic Archify deliver outside the agent. See [CI: PR diagrams (Archify)](ci.md#pr-diagrams-archify) and [examples/archify-on-pr/README.md](../examples/archify-on-pr/README.md).
 
-For clonable fan-out (clone one successor N times at completion), see [`examples/clonable-fanout/`](../examples/clonable-fanout/) and [YAML catalog — Clonable successors](yaml-catalog.md#clonable-successors).
+For clonable fan-out (clone one successor N times at completion), see [`examples/clonable-fanout/`](../examples/clonable-fanout/) and [YAML catalog — Clonable successors](yaml-catalog.md#clonable-successors). For a diamond join (two named parents into one child, inspect keyed envelopes), see [`examples/generic-fan-in/`](../examples/generic-fan-in/) and [YAML catalog — Generic fan-in](yaml-catalog.md#generic-fan-in).
 
 For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedback-loop/`](../examples/feedback-loop/) and [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
 
@@ -56,7 +56,7 @@ For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedb
 
 Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of truth for valid catalog shapes:
 
-- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — linear, parallel fan-out, HITL, fork routing, clonable fan-out, feedback loops, validation edge cases (`*.pipeline.yaml`)
+- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — linear, parallel fan-out, diamond fan-in, HITL, fork routing, clonable fan-out, feedback loops, validation edge cases (`*.pipeline.yaml`)
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, payload schemas (referenced via `uses:`)
 - [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 

@@ -1,0 +1,15 @@
+id: diamond-fan-in-reversed
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: research
+    needs: clarify
+    uses: ../stages/research.yaml
+  - id: validation
+    needs: clarify
+    uses: ../stages/validation.yaml
+  - id: synthesize
+    needs:
+      - validation
+      - research
+    uses: ../stages/synthesize.yaml

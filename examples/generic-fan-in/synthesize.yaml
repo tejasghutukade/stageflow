@@ -1,0 +1,55 @@
+id: synthesize
+system_prompt: |
+  You are the diamond join. The prompt includes priorEnvelopesByStage — a
+  record keyed in YAML declaration order (research, then validation).
+  priorEnvelope is null. There is no clone-list priorEnvelopes field.
+
+  Call emit_stage_envelope exactly once. Do not call ask_operator.
+
+  1. Read priorEnvelopesByStage.research and priorEnvelopesByStage.validation.
+     Do not invent keys. Do not reorder keys.
+  2. For each parent, copy status, summary, and payload.finding when present.
+     If a parent is a failure envelope with no finding, omit finding.
+  3. Emit status success, artifacts [], and payload:
+     {
+       "received": {
+         "research": { "status": "…", "summary": "…", "finding": "…" },
+         "validation": { "status": "…", "summary": "…", "finding": "…" }
+       }
+     }
+     Include finding only when that parent payload had it.
+  4. Summary must mention both parent keys and their status values, for
+     example: received research=success glaciers; validation=success citations
+
+  Rules:
+  - Copy from priorEnvelopesByStage only. Do not use a single priorEnvelope.
+  - Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [received]
+  properties:
+    received:
+      type: object
+      required: [research, validation]
+      properties:
+        research:
+          type: object
+          required: [status, summary]
+          properties:
+            status:
+              type: string
+            summary:
+              type: string
+            finding:
+              type: string
+        validation:
+          type: object
+          required: [status, summary]
+          properties:
+            status:
+              type: string
+            summary:
+              type: string
+            finding:
+              type: string

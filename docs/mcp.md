@@ -314,7 +314,7 @@ Poll run status without loading the full event stream.
 
 **Input:** `{ "runId": "…" }`
 
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**). When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes).
+**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes).
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
@@ -496,6 +496,29 @@ Describe a pipeline DAG from a filesystem pipeline path (same locator style as `
   ]
 }
 ```
+
+Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items:
+
+```json
+{
+  "id": "diamond-fan-in",
+  "path": "…",
+  "stages": [
+    { "id": "clarify", "needs": null },
+    { "id": "research", "needs": "clarify" },
+    { "id": "validation", "needs": "clarify" },
+    {
+      "id": "synthesize",
+      "needs": [
+        { "id": "research", "on": ["succeeded"] },
+        { "id": "validation", "on": ["succeeded"] }
+      ]
+    }
+  ]
+}
+```
+
+See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). `sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
 
 ### `retry_stage`
 

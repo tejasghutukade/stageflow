@@ -101,6 +101,81 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.value[0]?.clone_cap).toBe(3);
   });
 
+  it("normalizes mixed needs arrays and keeps scalar needs as a string", () => {
+    const outcome = normalizePipelineStageEntries(
+      [
+        {
+          raw: { id: "research", system_prompt: "p", model: "m" },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+        {
+          raw: { id: "validation", system_prompt: "p", model: "m" },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+        {
+          raw: {
+            id: "synthesize",
+            needs: [
+              "research",
+              { id: "validation", on: ["succeeded", "failed"] },
+            ],
+            system_prompt: "p",
+            model: "m",
+          },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+        {
+          raw: {
+            id: "followup",
+            needs: "synthesize",
+            system_prompt: "p",
+            model: "m",
+          },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
+      ctx,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value[2]?.needs).toEqual([
+      { id: "research", on: ["succeeded"] },
+      { id: "validation", on: ["succeeded", "failed"] },
+    ]);
+    expect(outcome.value[3]?.needs).toBe("synthesize");
+    expect(toWiringRefs(outcome.value).map((ref) => ref.needs)).toEqual([
+      undefined,
+      undefined,
+      [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded", "failed"] },
+      ],
+      "synthesize",
+    ]);
+  });
+
+  it("rejects a one-element needs array", () => {
+    const outcome = normalizePipelineStageEntries(
+      [
+        {
+          raw: {
+            id: "design-doc",
+            needs: ["clarify"],
+            system_prompt: "p",
+            model: "m",
+          },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
+      ctx,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(
+      /needs array must contain at least two items/,
+    );
+  });
+
   it("toWiringRefs copies clonable and clone_cap when present", () => {
     const outcome = normalizePipelineStageEntries(
       [

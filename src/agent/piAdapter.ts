@@ -557,7 +557,11 @@ function buildUserPrompt(
     `Goal: ${input.task.goal}`,
     input.task.context ? `Context: ${input.task.context}` : "",
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
-    formatPriorEnvelope(input.priorEnvelope, input.priorEnvelopes),
+    formatPriorEnvelope(
+      input.priorEnvelope,
+      input.priorEnvelopes,
+      input.priorEnvelopesByStage,
+    ),
     input.feedbackLoopContext !== undefined
       ? formatFeedbackLoopContext(input.feedbackLoopContext, input.sessionMode)
       : "",

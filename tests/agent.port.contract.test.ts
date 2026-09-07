@@ -150,6 +150,36 @@ describe("AgentPort contract", () => {
     });
   });
 
+  it("priorEnvelopesByStage is accepted on StageRunInput", async () => {
+    const agent = new FakeAgent({
+      type: "emit",
+      envelope: { status: "success", summary: "ok", artifacts: [] },
+    });
+    await expect(
+      agent.runStage({
+        ...baseInput,
+        priorEnvelope: null,
+        priorEnvelopesByStage: {
+          research: { status: "success", summary: "r", artifacts: [] },
+          validation: { status: "success", summary: "v", artifacts: [] },
+        },
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
+  it("emit tool rejects status skipped", async () => {
+    const capture = {};
+    const tool = createEmitStageEnvelopeTool(capture);
+    const out = await tool.execute("1", {
+      status: "skipped",
+      summary: "nope",
+      artifacts: [],
+    });
+    expect(out.isError).toBe(true);
+    expect(out.content[0]?.text).toMatch(/status must be "success" or "failure"/);
+    expect(capture).not.toHaveProperty("envelope");
+  });
+
   it("FakeAgent parks and resumes via its HITL file, ignoring resumeToken", async () => {
     const runWs = await makeTempDir();
     const roots = buildStageRoots(runWs, "clarify");

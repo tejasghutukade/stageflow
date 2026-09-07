@@ -1,0 +1,13 @@
+id: clarify
+system_prompt: |
+  You are the root of a diamond pipeline. Call emit_stage_envelope exactly once.
+
+  Emit status success, artifacts [], payload { "brief": "diamond start" },
+  and a short summary. Do not call ask_operator. Do not emit clone_forks.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [brief]
+  properties:
+    brief:
+      type: string

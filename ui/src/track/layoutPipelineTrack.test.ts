@@ -270,6 +270,59 @@ describe("layoutSpatialTrack", () => {
     ]);
   });
 
+  it("keeps two inbound wires into a diamond join", () => {
+    const projection: PipelineTrackProjection = {
+      nodes: [
+        node({
+          stage_id: "clarify",
+          layer: 0,
+          layer_order: 0,
+          status: "succeeded",
+          readiness: "succeeded",
+        }),
+        node({
+          stage_id: "research",
+          layer: 1,
+          layer_order: 0,
+          status: "pending",
+          readiness: "ready",
+        }),
+        node({
+          stage_id: "validation",
+          layer: 1,
+          layer_order: 1,
+          status: "pending",
+          readiness: "ready",
+        }),
+        node({
+          stage_id: "synthesize",
+          layer: 2,
+          layer_order: 0,
+          status: "pending",
+          readiness: "blocked",
+          blocked_by: ["research", "validation"],
+        }),
+      ],
+      edges: [
+        { from: "clarify", to: "research" },
+        { from: "clarify", to: "validation" },
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ],
+    };
+    const layout = layoutSpatialTrack(projection);
+    expect(layout.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+    expect(layout.nodes.find((n) => n.stageId === "research")?.x).toBe(
+      layout.nodes.find((n) => n.stageId === "validation")?.x,
+    );
+    expect(layout.nodes.find((n) => n.stageId === "synthesize")?.x).toBe(
+      SPATIAL_COL_W * 2,
+    );
+  });
+
   it("falls back to a single row of planned ids when nodes are empty", () => {
     const layout = layoutSpatialTrack(
       { nodes: [], edges: [] },

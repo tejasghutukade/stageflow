@@ -246,6 +246,9 @@ export async function openStageAttempt(
       ...(priorResult.joinPriors !== undefined
         ? { priorEnvelopes: priorResult.joinPriors }
         : {}),
+      ...(priorResult.priorEnvelopesByStage !== undefined
+        ? { priorEnvelopesByStage: priorResult.priorEnvelopesByStage }
+        : {}),
       resumeToken,
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: input.onActivity,

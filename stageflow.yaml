@@ -1,6 +1,7 @@
 version: 1
 catalog:
   pipelines:
+    - examples/generic-fan-in
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review
@@ -12,6 +13,7 @@ catalog:
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
   tasks:
+    - examples/generic-fan-in
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review

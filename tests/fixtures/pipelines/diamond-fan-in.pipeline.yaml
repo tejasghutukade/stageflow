@@ -1,0 +1,15 @@
+id: diamond-fan-in
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: research
+    needs: clarify
+    uses: ../stages/research.yaml
+  - id: validation
+    needs: clarify
+    uses: ../stages/validation.yaml
+  - id: synthesize
+    needs:
+      - research
+      - validation
+    uses: ../stages/synthesize.yaml

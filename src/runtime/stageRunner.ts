@@ -298,7 +298,7 @@ export async function runStage(
       task,
       dag: dag ?? {
         nodes: [
-          { id: stageId, needs: null, ancestors: [], stageIndex: 0 },
+          { id: stageId, needs: null, needsEdges: [], ancestors: [], stageIndex: 0 },
         ],
         roots: [stageId],
         childrenOf: {},

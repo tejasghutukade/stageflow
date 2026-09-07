@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunDetail, RunMeta, RunSummary, StageSnapshot } from "../src/runstore/port.js";
+import { deriveStatusFromStages } from "../src/runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import {
   overlayPlannedStages,
@@ -13,6 +14,8 @@ import {
   projectRunSummary,
 } from "../src/runstore/runProjection.js";
 import { syncRunStatusFromStages } from "../src/runtime/stageRecovery.js";
+import { pipelinePath } from "./helpers/fixturePaths.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -367,6 +370,93 @@ describe("run projection", () => {
     expect(summary.pipeline_path).toBe(pipeline_path);
     expect(summary.task_path).toBe(task_path);
     expect(summary.project_root).toBe(project_root);
+  });
+
+  it("diamond projectRunDetail pipeline_track has both inbound synthesize edges", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "succeeded"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const detail = projectRunDetail(meta({ status: "running" }), stages, "id: t\n", dag);
+    expect(detail.pipeline_track.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+  });
+
+  it("accepted failed parent does not fail a resolved diamond run", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-accepted"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "failed", {
+        events: [{ event: "failed", reason: "research boom" }],
+      }),
+      snap("validation", "succeeded"),
+      snap("synthesize", "succeeded"),
+    ];
+    expect(deriveStatusFromStages(stages, dag)).toBe("succeeded");
+    const runMeta = meta({ status: "succeeded", pipeline_dag: dag });
+    const summary = projectRunSummary(runMeta, stages);
+    const detail = projectRunDetail(runMeta, stages, "id: t\n", dag);
+    expect(summary.status).toBe("succeeded");
+    expect(detail.status).toBe("succeeded");
+    expect(summary.failed_stage_id).toBeUndefined();
+    expect(detail.failed_stage_id).toBeUndefined();
+  });
+
+  it("unhandled parent failure still projects a failed diamond run", async () => {
+    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+      cwd: fixtures,
+    });
+    const dag = buildPipelineDagSnapshotFromLoaded(loaded);
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "failed", {
+        events: [{ event: "failed", reason: "research boom" }],
+      }),
+      snap("validation", "succeeded"),
+      snap("synthesize", "skipped"),
+    ];
+    expect(deriveStatusFromStages(stages, dag)).toBe("failed");
+    const runMeta = meta({ status: "failed", pipeline_dag: dag });
+    const summary = projectRunSummary(runMeta, stages);
+    const detail = projectRunDetail(runMeta, stages, "id: t\n", dag);
+    expect(summary.status).toBe("failed");
+    expect(detail.status).toBe("failed");
+    expect(summary.failed_stage_id).toBe("research");
+    expect(summary.failed_reason).toBe("research boom");
+  });
+
+  it("listRuns and readRun agree on accepted-failure succeeded status", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-proj-accepted-"));
+    const store = createRunStore({ rootDir: root });
+    const { runId } = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const summary = (await store.listRuns()).find((r) => r.run_id === runId);
+    const detail = await store.readRun(runId);
+    expect(summary?.status).toBe("succeeded");
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
+      "failed",
+    );
   });
 
   it("listRuns and readRun agree on triage fields for the same events", async () => {

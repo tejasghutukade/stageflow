@@ -1,10 +1,19 @@
+import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { RunStore, RunPipelineDagSnapshot, StageSnapshot } from "../runstore/port.js";
 import {
   instancesOfDefinition,
 } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
-import type { StageEnvelope } from "../types/envelope.js";
-import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
+import type {
+  StageEnvelope,
+  SyntheticSkippedEnvelope,
+  TerminalEnvelope,
+} from "../types/envelope.js";
+import type {
+  LoadedPipeline,
+  ResolvedPipelineDag,
+  ResolvedPipelineStageNode,
+} from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
 import {
   activeCohortFromCloneIds,
@@ -92,20 +101,165 @@ function dagNode(dag: ResolvedPipelineDag, stageId: string) {
   return dag.nodes.find((node) => node.id === stageId);
 }
 
+const SYNTHETIC_SKIPPED_TERMINAL: SyntheticSkippedEnvelope = {
+  status: "skipped",
+  summary: "stage was skipped",
+  artifacts: [],
+};
+
 export type ResolvePriorEnvelopeResult =
-  | { ok: true; prior: StageEnvelope | null; joinPriors?: StageEnvelope[] }
+  | {
+      ok: true;
+      prior: StageEnvelope | null;
+      joinPriors?: StageEnvelope[];
+      priorEnvelopesByStage?: Record<string, TerminalEnvelope | TerminalEnvelope[]>;
+    }
   | { ok: false; reason: string };
 
-export async function resolvePriorEnvelope(options: {
+type ResolvePriorEnvelopeOptions = {
   dag: ResolvedPipelineDag;
   stageId: string;
   completedEnvelopes: Map<string, StageEnvelope>;
   store?: RunStore;
   runId?: string;
+  stages?: StageSnapshot[];
   /** When set (including null), skips store lookup for active fork generation. */
   activeCloneIds?: Set<string> | null;
   scheduleOverride?: ReadonlyMap<string, ReadonlySet<string>>;
-}): Promise<ResolvePriorEnvelopeResult> {
+};
+
+function mintedCloneInstances(dag: ResolvedPipelineDag, parentId: string): string[] {
+  return definitionInstances(dag, parentId).filter((id) => id !== parentId);
+}
+
+function isClonableParent(dag: ResolvedPipelineDag, parentId: string): boolean {
+  const node = dagNode(dag, parentId);
+  return node?.clonable === true || mintedCloneInstances(dag, parentId).length > 0;
+}
+
+function failureReasonFromSnapshot(snap: StageSnapshot | undefined): string {
+  let reason = "stage failed";
+  if (snap === undefined) return reason;
+  for (const ev of snap.events) {
+    if (ev.event === "failed" && typeof ev.reason === "string" && ev.reason) {
+      reason = ev.reason;
+    }
+  }
+  return reason;
+}
+
+async function loadStageSnapshots(
+  options: ResolvePriorEnvelopeOptions,
+): Promise<StageSnapshot[]> {
+  if (options.stages !== undefined) return options.stages;
+  if (options.store !== undefined && options.runId !== undefined) {
+    return (await options.store.readRun(options.runId)).stages;
+  }
+  return [];
+}
+
+async function readCachedEnvelope(
+  options: ResolvePriorEnvelopeOptions,
+  snapshots: Map<string, StageSnapshot>,
+  stageId: string,
+): Promise<StageEnvelope | undefined> {
+  const fromMap = options.completedEnvelopes.get(stageId);
+  if (fromMap !== undefined) return structuredClone(fromMap);
+  const snap = snapshots.get(stageId);
+  if (snap?.envelope) return structuredClone(snap.envelope);
+  if (options.store !== undefined && options.runId !== undefined) {
+    try {
+      return structuredClone(await options.store.readEnvelope(options.runId, stageId));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+async function terminalForPersistedStage(
+  options: ResolvePriorEnvelopeOptions,
+  snapshots: Map<string, StageSnapshot>,
+  stageId: string,
+): Promise<{ ok: true; value: TerminalEnvelope } | { ok: false; reason: string }> {
+  const snap = snapshots.get(stageId);
+  if (snap?.status === "skipped") {
+    return { ok: true, value: { ...SYNTHETIC_SKIPPED_TERMINAL } };
+  }
+  if (snap?.status === "failed") {
+    const envelope = await readCachedEnvelope(options, snapshots, stageId);
+    if (envelope?.status === "failure") {
+      return { ok: true, value: envelope };
+    }
+    return {
+      ok: true,
+      value: {
+        status: "failure",
+        summary: failureReasonFromSnapshot(snap),
+        artifacts: [],
+      },
+    };
+  }
+  if (snap?.status === "succeeded") {
+    const envelope = await readCachedEnvelope(options, snapshots, stageId);
+    if (envelope === undefined) {
+      return {
+        ok: false,
+        reason: `missing envelope for upstream stage "${stageId}"`,
+      };
+    }
+    return { ok: true, value: envelope };
+  }
+  return {
+    ok: false,
+    reason: `missing envelope for upstream stage "${stageId}"`,
+  };
+}
+
+async function resolveGenericJoinPriors(
+  options: ResolvePriorEnvelopeOptions,
+  node: ResolvedPipelineStageNode,
+): Promise<ResolvePriorEnvelopeResult> {
+  const snapshots = new Map(
+    (await loadStageSnapshots(options)).map((snap) => [snap.stage_id, snap]),
+  );
+  const priorEnvelopesByStage: Record<string, TerminalEnvelope | TerminalEnvelope[]> = {};
+
+  for (const edge of predecessorEdges(node)) {
+    const parentId = edge.id;
+    if (isClonableParent(options.dag, parentId)) {
+      const minted = mintedCloneInstances(options.dag, parentId);
+      if (minted.length > 0) {
+        const list: TerminalEnvelope[] = [];
+        for (const id of minted) {
+          const terminal = await terminalForPersistedStage(options, snapshots, id);
+          if (!terminal.ok) return terminal;
+          list.push(terminal.value);
+        }
+        priorEnvelopesByStage[parentId] = list;
+        continue;
+      }
+      if (snapshots.get(parentId)?.status === "skipped") {
+        priorEnvelopesByStage[parentId] = [];
+        continue;
+      }
+      const once = await terminalForPersistedStage(options, snapshots, parentId);
+      if (!once.ok) return once;
+      priorEnvelopesByStage[parentId] = [once.value];
+      continue;
+    }
+
+    const terminal = await terminalForPersistedStage(options, snapshots, parentId);
+    if (!terminal.ok) return terminal;
+    priorEnvelopesByStage[parentId] = terminal.value;
+  }
+
+  return { ok: true, prior: null, priorEnvelopesByStage };
+}
+
+export async function resolvePriorEnvelope(
+  options: ResolvePriorEnvelopeOptions,
+): Promise<ResolvePriorEnvelopeResult> {
   const node = dagNode(options.dag, options.stageId);
   if (!node) {
     return {
@@ -113,15 +267,22 @@ export async function resolvePriorEnvelope(options: {
       reason: `stage "${options.stageId}" not in pipeline DAG`,
     };
   }
-  if (node.needs === null) {
+
+  const edges = predecessorEdges(node);
+  if (edges.length === 0) {
     return { ok: true, prior: null };
   }
+  if (edges.length >= 2) {
+    return resolveGenericJoinPriors(options, node);
+  }
 
-  const allJoinInstances = definitionInstances(options.dag, node.needs);
+  const parentId =
+    typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
+  const allJoinInstances = definitionInstances(options.dag, parentId);
   if (allJoinInstances.length > 1) {
     const cohort = await resolveActiveCohortForNeeds(
       options.dag,
-      node.needs,
+      parentId,
       options.store,
       options.runId,
       options.activeCloneIds,
@@ -155,7 +316,6 @@ export async function resolvePriorEnvelope(options: {
     return { ok: true, prior: null, joinPriors };
   }
 
-  const parentId = node.needs;
   const fromMap = options.completedEnvelopes.get(parentId);
   let parent: StageEnvelope | undefined = fromMap;
   if (parent === undefined && options.store !== undefined && options.runId !== undefined) {

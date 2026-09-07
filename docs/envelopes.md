@@ -33,7 +33,7 @@ type FeedbackLoopAction =
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage halts scheduling; a parallel clone failure lets sibling clones finish and skips the join and its descendants |
+| `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage skips successors whose `needs` do not accept `failed` (legacy scalar `needs` accepts `succeeded` only). A [generic fan-in](yaml-catalog.md#generic-fan-in) join that lists `failed` in that parent's `on` set continues. A parallel clone failure lets sibling clones finish and skips the clone-list join and its descendants |
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
 | `payload` | no | Structured data for downstream stages; required on success when the stage declares `payload_schema` |
@@ -65,7 +65,7 @@ Example success emit (conceptual):
 }
 ```
 
-On `status: "failure"`, the envelope is accepted. A named-stage failure halts scheduling. A parallel clone failure does not stop sibling clones; the join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
+On `status: "failure"`, the envelope is accepted. A named-stage failure skips paths whose dependency contract rejects `failed`. Independent siblings and [generic fan-in](yaml-catalog.md#generic-fan-in) joins that list `failed` in that parent's `on` set continue. A parallel clone failure does not stop sibling clones; the clone-list join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the clone-list join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
 
 If the stage declares `payload_schema` in YAML, `payload` is validated against that JSON Schema subset on success — see [payload_schema](#payload-schema).
 
@@ -248,7 +248,11 @@ Accepted envelopes persist in the SQLite run store (`SF_STORE=sqlite` only; see 
 
 Later stages receive prior envelope context through the stage bootstrap (task + upstream summaries/payloads). Exact prompt assembly is handled by the runtime; authors focus on meaningful `payload` and `summary` content.
 
-After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order (`priorEnvelopes`). The join stage only runs if every clone succeeded (parallel and sequential); those priors are success envelopes only (0.7). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
+Two join shapes — do not reuse one field for the other:
+
+1. **Keyed generic fan-in** — the stage `needs` array has length ≥ 2. Join input is `priorEnvelopesByStage`, a record keyed in YAML declaration order. A normal parent maps to one terminal envelope; a clonable parent maps to that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). `priorEnvelope` is `null`. `priorEnvelopes` is omitted. A failed parent uses its emitted failure envelope or a synthetic `{ status: "failure", summary, artifacts: [] }` from the persisted failure reason. A skipped parent uses a synthetic `{ status: "skipped", summary, artifacts: [] }` rebuilt from persisted lifecycle state — agents cannot emit `skipped`. See [YAML catalog — generic fan-in](yaml-catalog.md#generic-fan-in), [`examples/generic-fan-in/`](../examples/generic-fan-in/), and [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
+
+2. **Clone-list join** — still one catalog parent id. After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order (`priorEnvelopes`). The join stage only runs if every clone succeeded (parallel and sequential); those priors are success envelopes only (0.7). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
 
 Inspect envelopes in the operator console: run detail → stage → envelope view (`#/runs/<runId>/stages/<stageId>/envelope`).
 

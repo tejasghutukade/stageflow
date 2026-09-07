@@ -227,7 +227,10 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         );
         const stages = loaded.dag.nodes.map((node) => ({
           id: node.id,
-          needs: node.needs,
+          needs:
+            node.needsEdges.length > 1
+              ? node.needsEdges.map((edge) => ({ id: edge.id, on: [...edge.on] }))
+              : node.needs,
           ...(node.fork !== undefined ? { fork: node.fork } : {}),
           ...(node.clonable !== undefined ? { clonable: node.clonable } : {}),
           ...(node.clone_cap !== undefined ? { clone_cap: node.clone_cap } : {}),

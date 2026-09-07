@@ -1,5 +1,5 @@
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
-import { deriveStatusFromStages } from "./port.js";
+import { deriveStatusFromStages, findUnhandledFailedStage } from "./port.js";
 import type {
   CompactStage,
   FeedbackLoopHistory,
@@ -105,8 +105,9 @@ function waitingFieldsFromStages(
 
 function failedFieldsFromStages(
   stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): Pick<RunSummary, "failed_stage_id" | "failed_reason"> {
-  const failed = stages.find((s) => s.status === "failed");
+  const failed = findUnhandledFailedStage(stages, dag);
   if (!failed) return {};
   let failed_reason: string | undefined;
   for (const ev of failed.events) {
@@ -121,9 +122,10 @@ function failedFieldsFromStages(
 function resolveListedStatus(
   stages: StageSnapshot[],
   meta: RunMeta,
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): RunStatus {
   if (stages.length === 0) return meta.status ?? "created";
-  const derived = deriveStatusFromStages(stages);
+  const derived = deriveStatusFromStages(stages, dag);
   if (meta.status === "succeeded" && derived === "running") {
     const hasActiveStage = stages.some(
       (s) => s.status === "running" || s.status === "waiting_for_input",
@@ -138,6 +140,7 @@ export function projectRunSummary(
   stages: StageSnapshot[],
   feedback?: Pick<FeedbackProjectionInput, "active_feedback_loop">,
 ): RunSummary {
+  const dag = meta.pipeline_dag;
   const waiting = waitingFieldsFromStages(stages);
   if (
     feedback?.active_feedback_loop?.state === "waiting_for_human" &&
@@ -157,12 +160,12 @@ export function projectRunSummary(
     ...(meta.pipeline_path !== undefined ? { pipeline_path: meta.pipeline_path } : {}),
     ...(meta.task_path !== undefined ? { task_path: meta.task_path } : {}),
     ...(meta.project_root !== undefined ? { project_root: meta.project_root } : {}),
-    status: resolveListedStatus(stages, meta),
+    status: resolveListedStatus(stages, meta, dag),
     created_at: meta.created_at,
     updated_at: meta.updated_at,
     stages: compactStages(stages),
     ...waiting,
-    ...failedFieldsFromStages(stages),
+    ...failedFieldsFromStages(stages, dag),
     ...(feedback?.active_feedback_loop !== undefined
       ? { active_feedback_loop: feedback.active_feedback_loop }
       : {}),
@@ -176,15 +179,16 @@ export function projectRunDetail(
   dagSnapshot?: RunPipelineDagSnapshot | null,
   feedback?: FeedbackProjectionInput,
 ): RunDetail {
-  const ordered = dagSnapshot
-    ? overlayPlannedStages(dagSnapshot.stage_ids, stages, dagSnapshot)
+  const dag = dagSnapshot ?? meta.pipeline_dag ?? null;
+  const ordered = dag
+    ? overlayPlannedStages(dag.stage_ids, stages, dag)
     : stages;
-  const summary = projectRunSummary(meta, ordered, {
-    active_feedback_loop: feedback?.active_feedback_loop,
-  });
-  const snapshot =
-    dagSnapshot ??
-    linearCompatDagSnapshot(ordered.map((s) => s.stage_id));
+  const summary = projectRunSummary(
+    dag ? { ...meta, pipeline_dag: dag } : meta,
+    ordered,
+    { active_feedback_loop: feedback?.active_feedback_loop },
+  );
+  const snapshot = dag ?? linearCompatDagSnapshot(ordered.map((s) => s.stage_id));
   const pipeline_track = buildPipelineTrack({
     dagSnapshot: snapshot,
     stages: ordered,

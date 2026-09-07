@@ -1,7 +1,25 @@
 import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import type { RunPipelineDagSnapshot, StageSnapshot } from "../src/runstore/port.js";
+import {
+  appendCloneInstances,
+  buildPipelineDagSnapshotFromLoaded,
+} from "../src/runstore/pipelineDagSnapshot.js";
 import { overlayPlannedStages } from "../src/runstore/runProjection.js";
 import { buildPipelineTrack } from "../src/runstore/trackProjection.js";
+import { pipelinePath } from "./helpers/fixturePaths.js";
+
+const fixtures = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+);
+
+async function loadDiamondDag(stem: string): Promise<RunPipelineDagSnapshot> {
+  const loaded = await loadPipeline(pipelinePath(stem), { cwd: fixtures });
+  return buildPipelineDagSnapshotFromLoaded(loaded);
+}
 
 function snap(
   stage_id: string,
@@ -486,6 +504,143 @@ describe("buildPipelineTrack", () => {
       ]),
     );
     expect(track.edges.some((e) => e.from === "author-diagrams")).toBe(false);
+  });
+
+  it("diamond track has both inbound edges and synthesize after both parents", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    const byId = new Map(track.nodes.map((n) => [n.stage_id, n]));
+    expect(byId.get("clarify")?.layer).toBe(0);
+    expect(byId.get("research")?.layer).toBe(1);
+    expect(byId.get("validation")?.layer).toBe(1);
+    expect(byId.get("synthesize")?.layer).toBe(2);
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        { from: "clarify", to: "research" },
+        { from: "clarify", to: "validation" },
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]),
+    );
+    expect(track.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+  });
+
+  it("diamond synthesize blocked_by lists both pending parents", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "pending"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    const synthesize = track.nodes.find((n) => n.stage_id === "synthesize");
+    expect(synthesize?.readiness).toBe("blocked");
+    expect(synthesize?.blocked_by).toEqual(["research", "validation"]);
+  });
+
+  it("diamond synthesize blocked_by drops the succeeded parent", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in");
+    const stages = [
+      snap("clarify", "succeeded"),
+      snap("research", "succeeded"),
+      snap("validation", "pending"),
+      snap("synthesize", "pending"),
+    ];
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, stages, dag),
+      runStatus: "running",
+    });
+    const synthesize = track.nodes.find((n) => n.stage_id === "synthesize");
+    expect(synthesize?.readiness).toBe("blocked");
+    expect(synthesize?.blocked_by).toEqual(["validation"]);
+  });
+
+  it("accepted failed parent does not block or overlay-skip the join", async () => {
+    const dag = await loadDiamondDag("diamond-fan-in-accepted");
+    const blocked = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(
+        dag.stage_ids,
+        [
+          snap("clarify", "succeeded"),
+          snap("research", "failed"),
+          snap("validation", "pending"),
+          snap("synthesize", "pending"),
+        ],
+        dag,
+      ),
+      runStatus: "running",
+    });
+    const blockedJoin = blocked.nodes.find((n) => n.stage_id === "synthesize");
+    expect(blockedJoin?.readiness).toBe("blocked");
+    expect(blockedJoin?.blocked_by).toEqual(["validation"]);
+
+    const ready = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(
+        dag.stage_ids,
+        [
+          snap("clarify", "succeeded"),
+          snap("research", "failed"),
+          snap("validation", "succeeded"),
+          snap("synthesize", "pending"),
+        ],
+        dag,
+      ),
+      runStatus: "running",
+    });
+    const readyJoin = ready.nodes.find((n) => n.stage_id === "synthesize");
+    expect(readyJoin?.readiness).toBe("ready");
+    expect(readyJoin?.blocked_by).toBeUndefined();
+    expect(ready.nodes.find((n) => n.stage_id === "research")?.readiness).toBe(
+      "failed",
+    );
+  });
+
+  it("clone-parent diamond join edges come from clone instances", async () => {
+    const catalog = await loadDiamondDag("diamond-fan-in-clone");
+    const { snapshot: dag } = appendCloneInstances(catalog, {
+      catalogId: "research",
+      predecessorId: "clarify",
+      count: 2,
+    });
+    const track = buildPipelineTrack({
+      dagSnapshot: dag,
+      stages: overlayPlannedStages(dag.stage_ids, [], dag),
+      runStatus: "created",
+    });
+    expect(track.nodes.map((n) => n.stage_id)).toEqual([
+      "clarify",
+      "research~1",
+      "research~2",
+      "validation",
+      "synthesize",
+    ]);
+    expect(track.nodes.find((n) => n.stage_id === "synthesize")?.layer).toBe(2);
+    expect(track.edges).toEqual(
+      expect.arrayContaining([
+        { from: "research~1", to: "synthesize" },
+        { from: "research~2", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]),
+    );
+    expect(track.edges.some((e) => e.from === "research")).toBe(false);
+    expect(
+      track.nodes.find((n) => n.stage_id === "synthesize")?.blocked_by,
+    ).toEqual(["research~1", "research~2", "validation"]);
   });
 
   it("falls back to linear compat when dag snapshot is missing", () => {
