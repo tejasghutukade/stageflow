@@ -15,6 +15,14 @@ export type StageEnvelope = {
   notes?: string;
 };
 
+export type SyntheticSkippedEnvelope = {
+  status: "skipped";
+  summary: string;
+  artifacts: string[];
+};
+
+export type TerminalEnvelope = StageEnvelope | SyntheticSkippedEnvelope;
+
 export class EnvelopeError extends Error {
   constructor(message: string) {
     super(message);

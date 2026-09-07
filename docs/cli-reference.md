@@ -101,7 +101,7 @@ sf run --task examples/hello-world/my-task.task.yaml \
   --json --include stages > sf-run.json
 ```
 
-Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. CLI completion JSON does **not** include `pipeline_track` (that field is on `sf export-run` and MCP `get_run`).
+Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
 
@@ -192,7 +192,7 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--from` | Read `runId` from a prior `sf run --json` output file |
 | `--json` | Pretty-printed `projectRun` |
 
-Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`.
+Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`. `--json` is the `projectRun` object, including `pipeline_track` (diamond joins show both inbound edges). `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
 
 ### `sf runs verify`
 

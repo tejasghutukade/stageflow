@@ -1,5 +1,6 @@
 import type { LoadedPipeline, ResolvedPipelineStageNode } from "../types/pipeline.js";
 import type { StageGateKind } from "../types/stage.js";
+import { hydrateResolvedNeeds } from "../config/pipelineNeeds.js";
 import type { RunPipelineDagSnapshot } from "./port.js";
 import { mintCloneInstanceIds } from "./stageInstanceId.js";
 
@@ -35,6 +36,8 @@ export function linearCompatDagSnapshot(stageIds: string[]): RunPipelineDagSnaps
   const nodes: ResolvedPipelineStageNode[] = stageIds.map((id, index) => ({
     id,
     needs: index === 0 ? null : stageIds[index - 1]!,
+    needsEdges:
+      index === 0 ? [] : [{ id: stageIds[index - 1]!, on: ["succeeded"] }],
     ancestors: index === 0 ? [] : stageIds.slice(0, index),
     stageIndex: index,
     definition_id: id,
@@ -57,7 +60,13 @@ export function parsePipelineDagSnapshot(raw: unknown): RunPipelineDagSnapshot |
   if (!raw || typeof raw !== "object") return null;
   const value = raw as Record<string, unknown>;
   if (!Array.isArray(value.stage_ids) || !Array.isArray(value.nodes)) return null;
-  return raw as RunPipelineDagSnapshot;
+  const nodes = value.nodes.map((node) => {
+    if (!node || typeof node !== "object") return node;
+    const record = node as ResolvedPipelineStageNode;
+    const hydrated = hydrateResolvedNeeds(record);
+    return { ...record, ...hydrated };
+  });
+  return { ...(raw as RunPipelineDagSnapshot), nodes };
 }
 
 export function instancesOfDefinition(
@@ -128,6 +137,7 @@ export function appendCloneInstances(
     id,
     definition_id: catalogId,
     needs: predecessorId,
+    needsEdges: [{ id: predecessorId, on: ["succeeded"] }],
     ancestors: [...predNode.ancestors, predecessorId],
     stageIndex: 0,
     ...(templateNode.fork !== undefined ? { fork: templateNode.fork } : {}),

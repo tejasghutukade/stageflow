@@ -13,6 +13,7 @@ import { readRunArtifact } from "../src/mcp/readArtifact.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -1190,6 +1191,144 @@ describe("MCP Tier 1 operator parity", () => {
         expect(emptyDescribe.payload.error).toBe("pipeline is required");
         expect(emptyDescribe.payload.status).toBe(400);
       }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline exposes scalar needs and structured diamond join edges", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("diamond-fan-in"),
+      });
+      expect(described.isError).toBe(false);
+      expect(described.payload.id).toBe("diamond-fan-in");
+      const byId = Object.fromEntries(
+        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
+      );
+      expect(byId.clarify).toMatchObject({ id: "clarify", needs: null });
+      expect(byId.research).toMatchObject({ id: "research", needs: "clarify" });
+      expect(byId.validation).toMatchObject({ id: "validation", needs: "clarify" });
+      expect(byId.synthesize?.needs).toEqual([
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline preserves reversed YAML declaration order for diamond join", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-rev-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("diamond-fan-in-reversed"),
+      });
+      expect(described.isError).toBe(false);
+      expect(described.payload.id).toBe("diamond-fan-in-reversed");
+      const synthesize = (
+        described.payload.stages as Array<{ id: string; needs: unknown }>
+      ).find((s) => s.id === "synthesize");
+      expect(synthesize?.needs).toEqual([
+        { id: "validation", on: ["succeeded"] },
+        { id: "research", on: ["succeeded"] },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline exposes declared on sets for accepted-failure diamond", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-accepted-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("diamond-fan-in-accepted"),
+      });
+      expect(described.isError).toBe(false);
+      const synthesize = (
+        described.payload.stages as Array<{ id: string; needs: unknown }>
+      ).find((s) => s.id === "synthesize");
+      expect(synthesize?.needs).toEqual([
+        { id: "research", on: ["succeeded", "failed", "skipped"] },
+        { id: "validation", on: ["succeeded"] },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("get_run diamond pipeline_track has both inbound synthesize edges", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-get-diamond-"));
+    const store = createRunStore({ rootDir: root });
+    const { runId } = await seedDiamondRun(store, "diamond-fan-in", {
+      clarify: "succeeded",
+      research: "succeeded",
+      validation: "pending",
+      synthesize: "pending",
+    });
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const detail = await mcpCall(base, "get_run", { runId });
+      expect(detail.isError).toBe(false);
+      expect(detail.payload.pipeline_track.edges.filter((e: { to: string }) => e.to === "synthesize")).toEqual([
+        { from: "research", to: "synthesize" },
+        { from: "validation", to: "synthesize" },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("get_run accepted-failure success projects succeeded, not failed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-get-accepted-"));
+    const store = createRunStore({ rootDir: root });
+    const { runId } = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const detail = await mcpCall(base, "get_run", { runId });
+      expect(detail.isError).toBe(false);
+      expect(detail.payload.status).toBe("succeeded");
+      expect(
+        detail.payload.stages.find((s: { stage_id: string }) => s.stage_id === "research")
+          ?.status,
+      ).toBe("failed");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

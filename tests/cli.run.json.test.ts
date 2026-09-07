@@ -495,6 +495,13 @@ describe("sf run --json --include stages (U3)", () => {
     expect(parsed.stages[0]?.stage_id).toBe("clarify");
     expect(parsed.stages[0]?.status).toBe("succeeded");
     expect(cap.stderrText()).toBe("");
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["ok", "outcome", "runDir", "runId", "stages"].sort(),
+    );
+    expect(parsed).not.toHaveProperty("pipeline_track");
+    expect(parsed.stages[0]).not.toHaveProperty("priorEnvelopesByStage");
+    expect(parsed.stages[0]).not.toHaveProperty("needs");
+    expect(parsed.stages[0]).not.toHaveProperty("needsEdges");
   });
 
   it("--json --include stages failed run still includes stages with the failed stage", async () => {

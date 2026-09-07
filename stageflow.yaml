@@ -1,14 +1,16 @@
 version: 1
 catalog:
   pipelines:
+    - examples/generic-fan-in
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review
     - examples/github-release
     - examples/ci-validate
     - examples/archify-on-pr
-    - examples/clonable-fanout
+    - examples/clonable-fanout    
   tasks:
+    - examples/generic-fan-in
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review

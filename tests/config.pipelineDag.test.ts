@@ -42,13 +42,19 @@ describe("resolvePipelineDag", () => {
     ]);
 
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("clarify")).toMatchObject({ needs: null, ancestors: [] });
+    expect(byId.get("clarify")).toMatchObject({
+      needs: null,
+      needsEdges: [],
+      ancestors: [],
+    });
     expect(byId.get("design-doc")).toMatchObject({
       needs: "clarify",
+      needsEdges: [{ id: "clarify", on: ["succeeded"] }],
       ancestors: ["clarify"],
     });
     expect(byId.get("implementation-plan")).toMatchObject({
       needs: "design-doc",
+      needsEdges: [{ id: "design-doc", on: ["succeeded"] }],
       ancestors: ["clarify", "design-doc"],
     });
   });
@@ -113,22 +119,209 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/duplicate stage "clarify"/i);
   });
 
-  it("rejects fan-in needs arrays (R10)", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [{ id: "join", needs: ["clarify", "design-doc"] as unknown as string }],
-        ctx("fan-in"),
-      ),
-    ).toThrow(/fan-in not supported/i);
+  it("accepts mixed needs arrays and normalizes string items to succeeded", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "research" },
+        { id: "validation" },
+        {
+          id: "synthesize",
+          needs: [
+            "research",
+            { id: "validation", on: ["succeeded", "failed", "skipped"] },
+          ],
+        },
+      ],
+      ctx("mixed-needs"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("synthesize")).toMatchObject({
+      needs: null,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded", "failed", "skipped"] },
+      ],
+      ancestors: ["research", "validation"],
+    });
+    expect(dag.childrenOf.research).toEqual(["synthesize"]);
+    expect(dag.childrenOf.validation).toEqual(["synthesize"]);
   });
 
   it("rejects one-element needs arrays (AS3)", () => {
     expect(() =>
       resolvePipelineDag(
-        [{ id: "design-doc", needs: ["clarify"] as unknown as string }],
+        [{ id: "design-doc", needs: ["clarify"] }],
         ctx("needs-array"),
       ),
-    ).toThrow(/needs must be a string, not an array/i);
+    ).toThrow(/needs array must contain at least two items/i);
+  });
+
+  it("rejects empty needs arrays", () => {
+    expect(() =>
+      resolvePipelineDag([{ id: "design-doc", needs: [] }], ctx("empty-needs")),
+    ).toThrow(/needs array must contain at least two items/i);
+  });
+
+  it("rejects duplicate parent ids in needs arrays", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [{ id: "clarify" }, { id: "join", needs: ["clarify", "clarify"] }],
+        ctx("dup-needs"),
+      ),
+    ).toThrow(/duplicate id "clarify"/i);
+  });
+
+  it("rejects unknown keys on structured needs items", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "research" },
+          { id: "validation" },
+          {
+            id: "synthesize",
+            needs: [
+              "research",
+              { id: "validation", on: ["succeeded"], extra: true },
+            ],
+          },
+        ],
+        ctx("needs-unknown-key"),
+      ),
+    ).toThrow(/unknown key "extra"/i);
+  });
+
+  it("rejects empty or invalid needs on sets", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "research" },
+          { id: "validation" },
+          {
+            id: "synthesize",
+            needs: ["research", { id: "validation", on: [] }],
+          },
+        ],
+        ctx("empty-on"),
+      ),
+    ).toThrow(/on must be a non-empty unique subset/i);
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "research" },
+          { id: "validation" },
+          {
+            id: "synthesize",
+            needs: ["research", { id: "validation", on: ["running"] }],
+          },
+        ],
+        ctx("bad-on"),
+      ),
+    ).toThrow(/on must be a non-empty unique subset/i);
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "research" },
+          { id: "validation" },
+          {
+            id: "synthesize",
+            needs: [
+              "research",
+              { id: "validation", on: ["succeeded", "succeeded"] },
+            ],
+          },
+        ],
+        ctx("dup-on"),
+      ),
+    ).toThrow(/on must be a non-empty unique subset/i);
+  });
+
+  it("rejects unknown parents through multi-parent edges", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "research" },
+          { id: "synthesize", needs: ["research", "missing-stage"] },
+        ],
+        ctx("unknown-multi-needs"),
+      ),
+    ).toThrow(/unknown needs "missing-stage"/i);
+  });
+
+  it("rejects cycles through multi-parent edges", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          { id: "a", needs: "c" },
+          { id: "b" },
+          { id: "c", needs: ["a", "b"] },
+        ],
+        ctx("multi-parent-loop"),
+      ),
+    ).toThrow(/dependency cycle/i);
+  });
+
+  it("resolves a diamond DAG with two inbound edges into synthesize", () => {
+    const { stages, dag } = resolvePipelineDag(
+      [
+        { id: "clarify" },
+        { id: "research", needs: "clarify" },
+        { id: "validation", needs: "clarify" },
+        { id: "synthesize", needs: ["research", "validation"] },
+      ],
+      ctx("diamond"),
+    );
+
+    expect(stages).toEqual(["clarify", "research", "validation", "synthesize"]);
+    expect(dag.roots).toEqual(["clarify"]);
+    expect(dag.nodes.map((node) => node.id)).toEqual([
+      "clarify",
+      "research",
+      "validation",
+      "synthesize",
+    ]);
+    expect(dag.childrenOf.clarify).toEqual(["research", "validation"]);
+    expect(dag.childrenOf.research).toEqual(["synthesize"]);
+    expect(dag.childrenOf.validation).toEqual(["synthesize"]);
+    expect(dag.childrenOf.synthesize).toEqual([]);
+
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("synthesize")).toMatchObject({
+      needs: null,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ],
+      ancestors: ["clarify", "research", "validation"],
+    });
+  });
+
+  it("treats DAGs with matching multi-parent edges as equivalent", () => {
+    const diamond = [
+      { id: "clarify" },
+      { id: "research", needs: "clarify" },
+      { id: "validation", needs: "clarify" },
+      { id: "synthesize", needs: ["research", "validation"] },
+    ];
+    const { dag: a } = resolvePipelineDag(diamond, ctx("equiv-a"));
+    const { dag: b } = resolvePipelineDag(diamond, ctx("equiv-b"));
+    expect(areResolvedDagsEquivalent(a, b)).toBe(true);
+
+    const { dag: differentOn } = resolvePipelineDag(
+      [
+        { id: "clarify" },
+        { id: "research", needs: "clarify" },
+        { id: "validation", needs: "clarify" },
+        {
+          id: "synthesize",
+          needs: [
+            "research",
+            { id: "validation", on: ["succeeded", "failed"] },
+          ],
+        },
+      ],
+      ctx("equiv-on"),
+    );
+    expect(areResolvedDagsEquivalent(a, differentOn)).toBe(false);
   });
 
   it("rejects malformed stage entries", () => {
@@ -277,6 +470,49 @@ describe("resolvePipelineDag", () => {
     ).toEqual(["detect", "author", "collect"]);
   });
 
+  it("extractPipelineStageIds accepts multi-parent needs arrays", () => {
+    expect(
+      extractPipelineStageIds([
+        { id: "research" },
+        { id: "validation" },
+        { id: "synthesize", needs: ["research", "validation"] },
+      ]),
+    ).toEqual(["research", "validation", "synthesize"]);
+    expect(
+      extractPipelineStageIds([
+        { id: "design-doc", needs: ["clarify"] },
+      ]),
+    ).toBeNull();
+  });
+
+  it("parsePipelineStageEntries normalizes mixed needs arrays", () => {
+    const entries = parsePipelineStageEntries(
+      [
+        { id: "research" },
+        { id: "validation" },
+        {
+          id: "synthesize",
+          needs: [
+            "research",
+            { id: "validation", on: ["failed", "skipped"] },
+          ],
+        },
+      ],
+      ctx("parse-mixed-needs"),
+    );
+    expect(entries).toEqual([
+      { id: "research" },
+      { id: "validation" },
+      {
+        id: "synthesize",
+        needs: [
+          { id: "research", on: ["succeeded"] },
+          { id: "validation", on: ["failed", "skipped"] },
+        ],
+      },
+    ]);
+  });
+
   it("AE1: clonable without clone_cap defaults to 5; siblings omit fields", () => {
     const { dag } = resolvePipelineDag(
       [
@@ -414,6 +650,37 @@ describe("loadPipeline negative DAG fixtures", () => {
     await expect(loadPipeline(path.join(dir, "cycle.pipeline.yaml"))).rejects.toThrow(
       /cycle/i,
     );
+  });
+
+  it("loads mixed structured needs via pipeline-owned temp fixture", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-mixed-"));
+    await writeFile(
+      path.join(dir, "mixed.pipeline.yaml"),
+      [
+        "id: mixed",
+        "stages:",
+        "  - id: research",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: validation",
+        "    system_prompt: x",
+        "    model: m",
+        "  - id: synthesize",
+        "    needs:",
+        "      - research",
+        "      - id: validation",
+        "        on: [succeeded, failed, skipped]",
+        "    system_prompt: x",
+        "    model: m",
+        "",
+      ].join("\n"),
+    );
+    const { dag } = await loadPipeline(path.join(dir, "mixed.pipeline.yaml"));
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("synthesize")?.needsEdges).toEqual([
+      { id: "research", on: ["succeeded"] },
+      { id: "validation", on: ["succeeded", "failed", "skipped"] },
+    ]);
   });
 
   it("rejects unknown-needs via pipeline-owned temp fixture", async () => {

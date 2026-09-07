@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
-import type { NormalizedPipelineStageEntry } from "../types/pipeline.js";
+import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import {
   BODY_KEYS,
@@ -8,6 +8,7 @@ import {
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { parsePipelineNeeds } from "./pipelineNeeds.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -161,27 +162,20 @@ export function normalizePipelineStageEntries(
     const policyOutcome = parseExecutionPolicy(raw, id);
     if (!policyOutcome.ok) return policyOutcome;
 
+    let needs: PipelineNeeds | undefined;
     if (raw.needs !== undefined) {
-      if (Array.isArray(raw.needs)) {
+      const parsedNeeds = parsePipelineNeeds(raw.needs, id);
+      if (!parsedNeeds.ok) {
         return loadFailure([
           {
             code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": needs must be a string, not an array`,
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedNeeds.message}`,
             category: "pipeline",
             pipelineId: ctx.pipelineId,
           },
         ]);
       }
-      if (typeof raw.needs !== "string" || !raw.needs) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": needs must be a non-empty string`,
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
+      needs = parsedNeeds.value;
     }
 
     let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
@@ -211,7 +205,7 @@ export function normalizePipelineStageEntries(
       id,
       declaringPath,
       body,
-      ...(typeof raw.needs === "string" ? { needs: raw.needs } : {}),
+      ...(needs !== undefined ? { needs } : {}),
       ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
       ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
@@ -246,7 +240,7 @@ export function toWiringRefs(
   entries: NormalizedPipelineStageEntry[],
 ): Array<{
   id: string;
-  needs?: string;
+  needs?: PipelineNeeds;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;

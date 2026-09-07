@@ -1,3 +1,4 @@
+import { isNeedTerminalState, predecessorEdges } from "../config/pipelineNeeds.js";
 import type { RunPipelineDagSnapshot } from "../runstore/port.js";
 import {
   appendCloneInstances,
@@ -5,7 +6,12 @@ import {
 } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { ResolvedPipelineDag } from "../types/pipeline.js";
+import type {
+  NeedTerminalState,
+  PipelineNeedEdge,
+  ResolvedPipelineDag,
+  ResolvedPipelineStageNode,
+} from "../types/pipeline.js";
 import { collectDownstreamStageIds } from "./dagTraversal.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
@@ -127,11 +133,95 @@ export function sequentialLaterCloneIds(
   return instances.slice(i + 1);
 }
 
+function parentNeedEdge(
+  node: Pick<ResolvedPipelineStageNode, "needs" | "needsEdges">,
+  parentId: string,
+  parentDefId: string,
+): PipelineNeedEdge | undefined {
+  return predecessorEdges(node).find(
+    (edge) => edge.id === parentId || edge.id === parentDefId,
+  );
+}
+
+function edgeInstancesReady(
+  dag: ResolvedPipelineDag,
+  edge: PipelineNeedEdge,
+  states: Map<string, StageScheduleState>,
+): boolean {
+  const instances = definitionInstances(dag, edge.id);
+  if (instances.length === 0) return false;
+  const hasSucceededSibling = instances.some(
+    (id) => states.get(id) === "succeeded",
+  );
+  return instances.every((id) => {
+    const state = states.get(id);
+    if (!isNeedTerminalState(state)) return false;
+    if (edge.on.includes(state)) return true;
+    return state === "skipped" && hasSucceededSibling;
+  });
+}
+
+function shouldSkipForObservedNeed(
+  dag: ResolvedPipelineDag,
+  node: ResolvedPipelineStageNode,
+  parentId: string,
+  parentDefId: string,
+  observed: NeedTerminalState,
+): boolean {
+  const edge = parentNeedEdge(node, parentId, parentDefId);
+  if (!edge) return false;
+  if (edge.on.includes(observed)) return false;
+  if (
+    observed === "skipped" &&
+    predecessorEdges(node).length === 1 &&
+    typeof node.needs === "string" &&
+    isCloneInstance(dag, parentId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function skipRejectedNeedDependents(
+  dag: ResolvedPipelineDag,
+  parentId: string,
+  states: Map<string, StageScheduleState>,
+  observed: NeedTerminalState,
+  onSkip: (stageId: string) => void,
+): void {
+  const parentDefId = definitionIdForInstance(asDagSnapshot(dag), parentId);
+  for (const node of dag.nodes) {
+    if (states.get(node.id) !== "pending") continue;
+    if (!shouldSkipForObservedNeed(dag, node, parentId, parentDefId, observed)) {
+      continue;
+    }
+    onSkip(node.id);
+    skipRejectedNeedDependents(dag, node.id, states, "skipped", onSkip);
+  }
+}
+
+export function failureIsAccepted(
+  dag: ResolvedPipelineDag,
+  failedId: string,
+  states: Map<string, StageScheduleState>,
+): boolean {
+  const defId = definitionIdForInstance(asDagSnapshot(dag), failedId);
+  for (const node of dag.nodes) {
+    const edge = parentNeedEdge(node, failedId, defId);
+    if (!edge?.on.includes("failed")) continue;
+    const state = states.get(node.id);
+    if (state !== undefined && state !== "skipped") return true;
+  }
+  return false;
+}
+
 function joinSuccessorIds(
   dag: ResolvedPipelineDag,
   successorId: string,
 ): string[] {
-  return dag.nodes.filter((n) => n.needs === successorId).map((n) => n.id);
+  return dag.nodes
+    .filter((n) => predecessorEdges(n).some((edge) => edge.id === successorId))
+    .map((n) => n.id);
 }
 
 function joinAndDownstreamIds(
@@ -141,6 +231,13 @@ function joinAndDownstreamIds(
   const defId = definitionIdForInstance(asDagSnapshot(dag), cloneStageId);
   const ids: string[] = [];
   for (const joinId of joinSuccessorIds(dag, defId)) {
+    const node = dag.nodes.find((n) => n.id === joinId);
+    if (
+      node &&
+      !shouldSkipForObservedNeed(dag, node, cloneStageId, defId, "failed")
+    ) {
+      continue;
+    }
     ids.push(joinId);
     for (const desc of collectDownstreamStageIds(dag, joinId)) {
       ids.push(desc);
@@ -217,14 +314,14 @@ export function protectedClonableChildIds(
 }
 
 /**
- * Downstream closure for a retry, resolved through clone-instance ids.
- * Catalog-level children (e.g. a join stage) are registered in `childrenOf`
- * under the *definition* id, not per clone instance, so a plain childrenOf
- * walk starting above a fanout dead-ends at the instance ids it discovers
- * transitively (only the initially-given root ids' own definition-id
- * children were resolved before). Resolving at every step, not just the
- * roots, means retrying an ancestor several hops above a clone-fanout parent
- * still reaches the join and everything after it.
+ * Downstream closure for a retry, resolved through clone-instance ids and
+ * static multi-parent edges. Catalog-level children (e.g. a join stage) are
+ * registered in `childrenOf` under the *definition* id, not per clone
+ * instance, so a plain childrenOf walk starting above a fanout dead-ends at
+ * the instance ids it discovers transitively. Resolving definition-id
+ * children and `predecessorEdges` join successors at every step means
+ * retrying an ancestor or a single clone instance still reaches the join
+ * and everything after it, without pulling in sibling terminals.
  */
 export function cloneRetryDownstream(
   dag: ResolvedPipelineDag,
@@ -240,6 +337,8 @@ export function cloneRetryDownstream(
     const children = new Set<string>([
       ...(dag.childrenOf[id] ?? []),
       ...(defId !== id ? dag.childrenOf[defId] ?? [] : []),
+      ...joinSuccessorIds(dag, id),
+      ...(defId !== id ? joinSuccessorIds(dag, defId) : []),
     ]);
     for (const child of children) {
       if (downstream.has(child) || seeds.has(child)) continue;
@@ -292,28 +391,27 @@ export function cloneScheduleAllowsRun(
   if (definitionInstances(dag, stageId).some((id) => id !== stageId)) {
     return false;
   }
-  if (node.needs === null) {
-    return !sequentialPreviousUnsatisfied(
-      dag,
-      stageId,
-      states,
-      completedEnvelopes,
-    );
-  }
-  const instances = definitionInstances(dag, node.needs);
-  if (instances.length <= 1) {
-    const parentId = instances[0] ?? node.needs;
-    if (states.get(parentId) !== "succeeded") return false;
-  } else if (
-    // A retried fanout that shrank the clone count marks the now-excess
-    // instances "skipped" rather than dangling (see applyCloneForksToSchedule)
-    // — a join downstream of the cohort should still proceed once the
-    // instances that are actually running have succeeded.
-    !instances.every(
-      (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
-    )
-  ) {
-    return false;
+  const edges = predecessorEdges(node);
+  if (typeof node.needs === "string" && node.needs) {
+    const instances = definitionInstances(dag, node.needs);
+    if (instances.length <= 1) {
+      const parentId = instances[0] ?? node.needs;
+      if (states.get(parentId) !== "succeeded") return false;
+    } else if (
+      // A retried fanout that shrank the clone count marks the now-excess
+      // instances "skipped" rather than dangling (see applyCloneForksToSchedule)
+      // — a join downstream of the cohort should still proceed once the
+      // instances that are actually running have succeeded.
+      !instances.every(
+        (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
+      )
+    ) {
+      return false;
+    }
+  } else {
+    for (const edge of edges) {
+      if (!edgeInstancesReady(dag, edge, states)) return false;
+    }
   }
   return !sequentialPreviousUnsatisfied(
     dag,
@@ -346,9 +444,13 @@ export function applyCloneForksToSchedule(
   for (const item of envelope.clone_forks ?? []) {
     if (item.action === "skip") {
       skipPending(item.successor_id);
-      for (const desc of collectDownstreamStageIds(current, item.successor_id)) {
-        skipPending(desc);
-      }
+      skipRejectedNeedDependents(
+        current,
+        item.successor_id,
+        states,
+        "skipped",
+        skipPending,
+      );
       continue;
     }
     if (item.action !== "fanout") continue;
@@ -368,9 +470,7 @@ export function applyCloneForksToSchedule(
       const desired = item.clones.length;
       for (const id of existing.slice(desired)) {
         skipPending(id);
-        for (const desc of collectDownstreamStageIds(current, id)) {
-          skipPending(desc);
-        }
+        skipRejectedNeedDependents(current, id, states, "skipped", skipPending);
       }
       if (desired > existing.length) {
         const { snapshot, instanceIds } = appendCloneInstances(current, {

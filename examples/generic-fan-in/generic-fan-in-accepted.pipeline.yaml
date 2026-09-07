@@ -1,0 +1,17 @@
+id: generic-fan-in-accepted
+stages:
+  - id: clarify
+    uses: ./clarify.yaml
+  - id: research
+    needs: clarify
+    uses: ./research.yaml
+  - id: validation
+    needs: clarify
+    uses: ./validation.yaml
+  - id: synthesize
+    needs:
+      - id: research
+        on: [succeeded, failed, skipped]
+      - id: validation
+        on: [succeeded]
+    uses: ./synthesize.yaml

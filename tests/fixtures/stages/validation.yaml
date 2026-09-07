@@ -1,0 +1,3 @@
+id: validation
+system_prompt: Validate the concurrent branch.
+model: anthropic/claude-sonnet-4-5

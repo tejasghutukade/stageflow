@@ -4,7 +4,11 @@ import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstor
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
+import type {
+  LoadedPipeline,
+  NeedTerminalState,
+  ResolvedPipelineDag,
+} from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import {
   applyCloneForksFromEnvelopes,
@@ -14,11 +18,12 @@ import {
   cloneRetryDownstream,
   cloneFailFastSkipIds,
   cloneScheduleAllowsRun,
+  failureIsAccepted,
   isCloneInstance,
   protectedClonableChildIds,
   sequentialLaterCloneIds,
+  skipRejectedNeedDependents,
 } from "./cloneSchedule.js";
-import { collectDownstreamStageIds } from "./dagTraversal.js";
 import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
@@ -164,16 +169,16 @@ export async function hydrateScheduleFromStore(
       executionMode,
     );
     states.set(snap.stage_id, state);
+  }
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
     if (
-      state === "failed" &&
-      !cloneFailureContinuesSchedule(
-        resolvedDag,
-        snap.stage_id,
-        completedEnvelopes,
-      )
+      cloneFailureContinuesSchedule(resolvedDag, stageId, completedEnvelopes)
     ) {
-      schedulingHalted = true;
+      continue;
     }
+    if (failureIsAccepted(resolvedDag, stageId, states)) continue;
+    schedulingHalted = true;
   }
 
   return {
@@ -301,22 +306,19 @@ export async function resumeRun(
   });
 
   if (allTerminal) {
-    const allSucceeded = dag.nodes.every((node) => {
-      const s = hydrated.states.get(node.id);
-      return s === "succeeded" || s === "skipped";
-    });
+    const unhandledFailure = scheduleHasUnhandledFailure(dag, hydrated.states);
     await prepared.store.updateRunStatus(
       prepared.run.runId,
-      allSucceeded ? "succeeded" : "failed",
+      unhandledFailure ? "failed" : "succeeded",
     );
     return {
-      ok: allSucceeded,
-      outcome: allSucceeded ? "succeeded" : "failed",
+      ok: !unhandledFailure,
+      outcome: unhandledFailure ? "failed" : "succeeded",
       runDir: prepared.run.workspaceDir,
       runId: prepared.run.runId,
-      ...(allSucceeded
-        ? {}
-        : { reason: hydrated.firstFailureReason ?? "pipeline incomplete" }),
+      ...(unhandledFailure
+        ? { reason: hydrated.firstFailureReason ?? "pipeline incomplete" }
+        : {}),
     };
   }
 
@@ -394,9 +396,7 @@ function applyForkChoiceToSchedule(
     if (options?.protectedIds?.has(childId)) continue;
     if (!chosen.has(childId)) {
       skipPending(childId);
-      for (const desc of collectDownstreamStageIds(dag, childId)) {
-        skipPending(desc);
-      }
+      skipRejectedNeedDependents(dag, childId, states, "skipped", skipPending);
     }
   }
 }
@@ -423,6 +423,7 @@ export function applyRetryRootDelta(
   stageId: string,
   attempt: number,
   clearSchedulingHalt?: () => void,
+  alreadyLaunchedIds?: ReadonlySet<string>,
 ): void {
   retryRoots.set(stageId, attempt);
   const downstream = cloneRetryDownstream(dag, [stageId]);
@@ -433,7 +434,15 @@ export function applyRetryRootDelta(
 
   for (const id of resetIds) {
     const state = states.get(id);
-    if (state === "active" || state === "succeeded") {
+    if (state === "active") {
+      completedEnvelopes.delete(id);
+      continue;
+    }
+    if (
+      id === stageId &&
+      state === "succeeded" &&
+      alreadyLaunchedIds?.has(id)
+    ) {
       completedEnvelopes.delete(id);
       continue;
     }
@@ -451,7 +460,7 @@ export function hasWorkOutsideBranch(
 ): boolean {
   const branchIds = new Set([
     branchRootId,
-    ...collectDownstreamStageIds(dag, branchRootId),
+    ...cloneRetryDownstream(dag, [branchRootId]),
   ]);
   for (const node of dag.nodes) {
     if (branchIds.has(node.id)) continue;
@@ -486,6 +495,18 @@ function terminalState(status: StageScheduleState): boolean {
   return status === "succeeded" || status === "failed" || status === "skipped";
 }
 
+function scheduleHasUnhandledFailure(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+): boolean {
+  for (const [stageId, state] of states) {
+    if (state !== "failed") continue;
+    if (failureIsAccepted(dag, stageId, states)) continue;
+    return true;
+  }
+  return false;
+}
+
 function sortRunnableIds(
   dag: ResolvedPipelineDag,
   ids: string[],
@@ -509,6 +530,28 @@ function isRunnable(
   const state = states.get(stageId);
   if (state !== "pending") return false;
   return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
+}
+
+export function hydratedScheduleHasRunnableWork(
+  hydrated: HydratedSchedule,
+): boolean {
+  if (hydrated.schedulingHalted) return false;
+  const dag = hydrated.dag;
+  if (dag === undefined) return false;
+  for (const node of dag.nodes) {
+    if (
+      isRunnable(
+        dag,
+        node.id,
+        hydrated.states,
+        hydrated.schedulingHalted,
+        hydrated.completedEnvelopes,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function runPipelineDag(
@@ -608,6 +651,7 @@ export async function runPipelineDag(
 
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
+  const launchedIds = new Set<string>();
 
   const notifyRetryRootTerminal = (
     stageId: string,
@@ -619,11 +663,28 @@ export async function runPipelineDag(
     options.onRetryRootTerminal?.(stageId, attempt, outcome);
   };
 
+  const persistSkipRejected = async (
+    parentId: string,
+    observed: NeedTerminalState,
+  ) => {
+    const ids: string[] = [];
+    skipRejectedNeedDependents(dag, parentId, states, observed, (id) => {
+      if (states.get(id) !== "pending") return;
+      states.set(id, "skipped");
+      ids.push(id);
+    });
+    for (const id of ids) {
+      notifyRetryRootTerminal(id, "skipped");
+      await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    }
+  };
+
   const persistSkipPending = async (id: string) => {
     if (states.get(id) !== "pending") return;
     states.set(id, "skipped");
     notifyRetryRootTerminal(id, "skipped");
     await store.appendStageEvent(run.runId, id, { event: "skipped" });
+    await persistSkipRejected(id, "skipped");
   };
 
   for (const [stageId, state] of states) {
@@ -643,7 +704,7 @@ export async function runPipelineDag(
   };
 
   const markBranchDownstreamSkipped = (stageId: string) => {
-    for (const id of collectDownstreamStageIds(dag, stageId)) {
+    for (const id of cloneRetryDownstream(dag, [stageId])) {
       if (states.get(id) === "pending") {
         states.set(id, "skipped");
         notifyRetryRootTerminal(id, "skipped");
@@ -671,6 +732,7 @@ export async function runPipelineDag(
         () => {
           schedulingHalted = false;
         },
+        launchedIds,
       );
     });
   };
@@ -727,6 +789,7 @@ export async function runPipelineDag(
     states.set(stageId, "failed");
     notifyRetryRootTerminal(stageId, "failed");
     await recordCloneFailureEnvelope(stageId, reason, envelope);
+    await persistSkipRejected(stageId, "failed");
     if (cloneFailureContinuesSchedule(dag, stageId, completedEnvelopes)) {
       if (firstFailureReason === undefined) {
         firstFailureReason = reason;
@@ -744,19 +807,27 @@ export async function runPipelineDag(
       return;
     }
     if (retryContext) {
-      markBranchDownstreamSkipped(stageId);
+      const accepted = failureIsAccepted(dag, stageId, states);
+      if (!accepted) {
+        markBranchDownstreamSkipped(stageId);
+      }
       drainRetryMutations();
-      if (!hasWorkOutsideBranch(dag, stageId, states, outsideWorkContext())) {
+      if (
+        !accepted &&
+        !hasWorkOutsideBranch(dag, stageId, states, outsideWorkContext())
+      ) {
         schedulingHalted = true;
       }
-      if (firstFailureReason === undefined) {
+      if (!accepted && firstFailureReason === undefined) {
         firstFailureReason = reason;
       }
       return;
     }
-    if (!schedulingHalted) {
-      schedulingHalted = true;
-      firstFailureReason = reason;
+    if (!failureIsAccepted(dag, stageId, states)) {
+      if (!schedulingHalted) {
+        schedulingHalted = true;
+        firstFailureReason = reason;
+      }
     }
   };
 
@@ -907,6 +978,7 @@ export async function runPipelineDag(
   const startStage = (stageId: string) => {
     if (states.get(stageId) !== "pending") return;
     states.set(stageId, "active");
+    launchedIds.add(stageId);
     activeCount += 1;
     const taskPromise = launchStage(stageId).finally(() => {
       activeCount -= 1;
@@ -998,11 +1070,7 @@ export async function runPipelineDag(
     };
   }
 
-  const allSucceeded = dag.nodes.every((node) => {
-    const s = states.get(node.id);
-    return s === "succeeded" || s === "skipped";
-  });
-  if (!allSucceeded) {
+  if (scheduleHasUnhandledFailure(dag, states) || !allTerminal()) {
     if (retryContext === undefined) {
       await store.updateRunStatus(run.runId, "failed");
     }

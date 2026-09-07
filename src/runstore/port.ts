@@ -1,4 +1,5 @@
 import type { StageLogLine } from "../agent/activity.js";
+import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -302,10 +303,66 @@ export function stageStatusFromEvents(
   return status;
 }
 
-export function deriveStatusFromStages(stages: StageSnapshot[]): RunStatus {
+function definitionIdForStage(
+  dag: Pick<RunPipelineDagSnapshot, "nodes">,
+  stageId: string,
+  snapshotsById: Map<string, StageSnapshot>,
+): string {
+  const snap = snapshotsById.get(stageId);
+  if (snap?.definition_id) return snap.definition_id;
+  const node = dag.nodes.find((n) => n.id === stageId);
+  return node?.definition_id ?? stageId;
+}
+
+function failureAcceptedByJoin(
+  dag: Pick<RunPipelineDagSnapshot, "nodes">,
+  failedId: string,
+  snapshotsById: Map<string, StageSnapshot>,
+): boolean {
+  const defId = definitionIdForStage(dag, failedId, snapshotsById);
+  for (const node of dag.nodes) {
+    const edge = predecessorEdges(node).find(
+      (item) => item.id === failedId || item.id === defId,
+    );
+    if (!edge?.on.includes("failed")) continue;
+    const join = snapshotsById.get(node.id);
+    if (join && join.status !== "skipped") return true;
+  }
+  return false;
+}
+
+export function findUnhandledFailedStage(
+  stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+): StageSnapshot | undefined {
+  const byId = new Map(stages.map((s) => [s.stage_id, s]));
+  return stages.find((stage) => {
+    if (stage.status !== "failed") return false;
+    if (!dag) return true;
+    return !failureAcceptedByJoin(dag, stage.stage_id, byId);
+  });
+}
+
+function stageResolvedForSuccess(
+  stage: StageSnapshot,
+  dag: Pick<RunPipelineDagSnapshot, "nodes"> | null | undefined,
+  byId: Map<string, StageSnapshot>,
+): boolean {
+  if (stage.status === "succeeded" || stage.status === "skipped") return true;
+  if (stage.status === "failed" && dag) {
+    return failureAcceptedByJoin(dag, stage.stage_id, byId);
+  }
+  return false;
+}
+
+export function deriveStatusFromStages(
+  stages: StageSnapshot[],
+  dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+): RunStatus {
   if (stages.length === 0) return "created";
-  if (stages.some((s) => s.status === "failed")) return "failed";
-  if (stages.every((s) => s.status === "succeeded" || s.status === "skipped")) {
+  if (findUnhandledFailedStage(stages, dag)) return "failed";
+  const byId = new Map(stages.map((s) => [s.stage_id, s]));
+  if (stages.every((s) => stageResolvedForSuccess(s, dag, byId))) {
     return "succeeded";
   }
   if (

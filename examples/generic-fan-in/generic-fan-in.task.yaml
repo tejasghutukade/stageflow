@@ -1,0 +1,9 @@
+id: generic-fan-in
+goal: |
+  Dummy walkthrough for generic multi-parent fan-in. research and validation
+  run in parallel after clarify. Reply to each with ok <finding> or fail.
+  synthesize waits for both and must copy priorEnvelopesByStage into payload.received.
+context: |
+  Manual operator-console test. Distinct findings (for example glaciers and
+  citations) make it obvious which parent envelope landed under which key.
+  On fail of either parent, synthesize is skipped and the run fails.

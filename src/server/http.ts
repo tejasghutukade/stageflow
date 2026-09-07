@@ -232,6 +232,9 @@ function assertLoopbackHttpAccess(
 
 export function defaultUiDistDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
+  if (path.basename(path.dirname(here)) === "src") {
+    return path.resolve(here, "../../dist/ui");
+  }
   return path.resolve(here, "../ui");
 }
 

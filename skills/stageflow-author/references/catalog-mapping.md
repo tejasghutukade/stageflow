@@ -16,18 +16,19 @@ Collision handling lives in [`catalog-write-conventions.md`](catalog-write-conve
 
 ## Sequencing
 
-`needs` is a single parent stage id. Fan-in (one stage needing two parents) is out of catalog shape.
+`needs` is a single parent stage id, or an array of at least two parent ids when one step waits for several earlier steps. Strings default to `on: [succeeded]`. `{ id, on }` accepts a non-empty unique subset of `succeeded` | `failed` | `skipped`.
 
 | Human says | Pipeline shape |
 |---|---|
 | Steps in order | Each later stage `needs` the previous id. No `fork` field. |
 | Steps happen together | Sibling stages share one `needs` (the same parent). No `fork` field. |
+| A later step waits for two or more earlier steps | That stage `needs` an array of those parent ids (length ≥ 2). |
 | Exactly one branch runs | Deciding stage gets `fork: { select: one }`. Each branch `needs` the decider. |
 | Either, both, or a subset may run | Deciding stage gets `fork: { select: subset }`. Each branch `needs` the decider. |
 
 Default `select` is `one` unless the human says more than one branch can run.
 
-Map linear chains, sibling fan-out, and single-level `fork`. A runtime clone count is not knowable from a static description — stay on those three shapes. Leave `clonable` and `clone_forks` unset.
+Map linear chains, sibling fan-out, generic fan-in (`needs` array), and single-level `fork`. A runtime clone count is not knowable from a static description — leave `clonable` and `clone_forks` unset. Clone-list joins (one catalog parent, `priorEnvelopes`) are not this shape.
 
 A review, approval, or sign-off step is a gated stage: put `gate_kinds` on that stage file and follow [`stage-prompt-template.md`](stage-prompt-template.md).
 
@@ -109,6 +110,29 @@ stages:
 ```
 
 No `fork` field. Both siblings run.
+
+### Diamond join
+
+"After research and validation both finish, synthesize":
+
+```yaml
+stages:
+  - id: clarify
+    uses: ./clarify.yaml
+  - id: research
+    uses: ./research.yaml
+    needs: clarify
+  - id: validation
+    uses: ./validation.yaml
+    needs: clarify
+  - id: synthesize
+    uses: ./synthesize.yaml
+    needs:
+      - research
+      - validation
+```
+
+`needs` array length is ≥ 2. The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`.
 
 ### Fork, select subset
 

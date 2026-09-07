@@ -1,0 +1,20 @@
+id: diamond-fan-in-accepted
+stages:
+  - id: clarify
+    fork:
+      select: subset
+      allow_none: true
+    uses: ../stages/clarify.yaml
+  - id: research
+    needs: clarify
+    uses: ../stages/research.yaml
+  - id: validation
+    needs: clarify
+    uses: ../stages/validation.yaml
+  - id: synthesize
+    needs:
+      - id: research
+        on: [succeeded, failed, skipped]
+      - id: validation
+        on: [succeeded]
+    uses: ../stages/synthesize.yaml

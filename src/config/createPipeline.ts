@@ -1,6 +1,7 @@
 import { access, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { NormalizedPipelineStageEntry } from "../types/pipeline.js";
+import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
+import { parsePipelineNeeds } from "./pipelineNeeds.js";
 import type { StageGateKind } from "../types/stage.js";
 import { STAGE_ID_PATTERN } from "./createStage.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
@@ -23,7 +24,7 @@ export type CreatePipelineStageInline = {
 
 export type CreatePipelineStageRef = {
   id: string;
-  needs?: string;
+  needs?: PipelineNeeds;
   uses?: string;
   inline?: CreatePipelineStageInline;
 };
@@ -220,14 +221,15 @@ function parseStageEntry(
   const ref: CreatePipelineStageRef = { id };
 
   if (entry.needs !== undefined) {
-    if (typeof entry.needs !== "string") {
+    const parsedNeeds = parsePipelineNeeds(entry.needs, id);
+    if (!parsedNeeds.ok) {
       return {
         ok: false,
         status: 400,
-        error: `stages[${index}].needs must be a string`,
+        error: parsedNeeds.message.replace(/^stage "[^"]+": /, `stages[${index}].`),
       };
     }
-    ref.needs = entry.needs;
+    ref.needs = parsedNeeds.value;
   }
 
   if (entry.uses !== undefined) {
@@ -306,6 +308,25 @@ export function parseCreatePipelineBody(
   };
 }
 
+function appendNeedsYaml(lines: string[], needs: PipelineNeeds): void {
+  if (typeof needs === "string") {
+    lines.push(`    needs: ${needs}`);
+    return;
+  }
+  lines.push("    needs:");
+  for (const edge of needs) {
+    if (edge.on.length === 1 && edge.on[0] === "succeeded") {
+      lines.push(`      - ${edge.id}`);
+      continue;
+    }
+    lines.push(`      - id: ${edge.id}`);
+    lines.push("        on:");
+    for (const state of edge.on) {
+      lines.push(`          - ${state}`);
+    }
+  }
+}
+
 function formatInlineYamlScalar(value: string): string {
   if (
     value.includes("\n") ||
@@ -333,7 +354,7 @@ export function pipelineConfigToYaml(
     }
     lines.push(`  - id: ${stage.id}`);
     if (stage.needs) {
-      lines.push(`    needs: ${stage.needs}`);
+      appendNeedsYaml(lines, stage.needs);
     }
     if (stage.inline) {
       if (stage.inline.gate_kinds !== undefined) {

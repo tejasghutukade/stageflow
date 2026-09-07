@@ -11,6 +11,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStatus, RunStore } from "../src/runstore/port.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
+import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 function captureIo() {
   const stdout: string[] = [];
@@ -109,6 +110,56 @@ describe("runRunsCommand inspect/wait", () => {
     expect(detail.status).toBe("running");
     const parsed = JSON.parse(cap.stdout.join("\n"));
     expect(parsed).toEqual(projectRun(detail));
+  });
+
+  it("show --json diamond pipeline_track has both inbound synthesize edges", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-show-diamond-"));
+    const store = createRunStore({ rootDir: projectRoot });
+    const { runId } = await seedDiamondRun(store, "diamond-fan-in", {
+      clarify: "succeeded",
+      research: "succeeded",
+      validation: "pending",
+      synthesize: "pending",
+    }, "running");
+    const cap = captureIo();
+    const code = await runRunsCommand(["show", "--run", runId, "--json"], {
+      projectRoot,
+      store,
+      io: cap.io,
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout.join("\n")) as {
+      pipeline_track: { edges: Array<{ from: string; to: string }> };
+    };
+    expect(parsed.pipeline_track.edges.filter((e) => e.to === "synthesize")).toEqual([
+      { from: "research", to: "synthesize" },
+      { from: "validation", to: "synthesize" },
+    ]);
+  });
+
+  it("show --json accepted-failure success projects succeeded", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-show-accepted-"));
+    const store = createRunStore({ rootDir: projectRoot });
+    const { runId } = await seedDiamondRun(
+      store,
+      "diamond-fan-in-accepted",
+      {
+        clarify: "succeeded",
+        research: "failed",
+        validation: "succeeded",
+        synthesize: "succeeded",
+      },
+      "succeeded",
+    );
+    const cap = captureIo();
+    const code = await runRunsCommand(["show", "--run", runId, "--json"], {
+      projectRoot,
+      store,
+      io: cap.io,
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(cap.stdout.join("\n")) as { status: string };
+    expect(parsed.status).toBe("succeeded");
   });
 
   it("verify prints one stage's completion-check history", async () => {

@@ -306,6 +306,73 @@ describe("assertStageRetryEligible", () => {
     }
   });
 
+  it("allows retry of an accepted-failed parent while the join is still pending", () => {
+    const result = assertStageRetryEligible(
+      {
+        run_id: "run-1",
+        pipeline_id: "diamond-fan-in-accepted",
+        status: "running",
+        created_at: "2026-01-01T00:00:00.000Z",
+        task_yaml: "",
+        stages: [
+          {
+            stage_id: "research",
+            status: "failed",
+            events: [],
+            envelope: null,
+            artifacts: [],
+            attempt_count: 1,
+          },
+          {
+            stage_id: "synthesize",
+            status: "pending",
+            events: [],
+            envelope: null,
+            artifacts: [],
+            attempt_count: 0,
+          },
+        ],
+        pipeline_track: { nodes: [], edges: [] },
+      },
+      "research",
+      {
+        persistedStatus: "running",
+        dag: {
+          nodes: [
+            {
+              id: "research",
+              needs: null,
+              needsEdges: [],
+              ancestors: [],
+              stageIndex: 0,
+            },
+            {
+              id: "synthesize",
+              needs: null,
+              needsEdges: [
+                { id: "research", on: ["succeeded", "failed", "skipped"] },
+              ],
+              ancestors: ["research"],
+              stageIndex: 1,
+            },
+          ],
+          roots: ["research"],
+          childrenOf: { research: ["synthesize"] },
+        },
+      },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("allows retry when persisted meta is failed even if projected status is running", () => {
+    const result = assertStageRetryEligible(
+      eligibilityDetail({ runStatus: "running", stageStatus: "failed" }),
+      "design-doc",
+      { persistedStatus: "failed" },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
   it("allows a running run with a failed stage when recoveryActive is true", () => {
     const result = assertStageRetryEligible(
       eligibilityDetail({ runStatus: "running", stageStatus: "failed" }),
@@ -533,6 +600,119 @@ describe("RunRetryCoordinator.retryStage", () => {
 });
 
 describe("runtime stage retry", () => {
+  it("waits for original startRun done before retry when still tracked", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-wait-winddown-"));
+    const store = createRunStore({ rootDir: root });
+    let releaseFailedWrite!: () => void;
+    const holdFailedWrite = new Promise<void>((resolve) => {
+      releaseFailedWrite = resolve;
+    });
+    let heldFirstFailed = false;
+    const originalUpdate = store.updateRunStatus.bind(store);
+    store.updateRunStatus = async (runId, status) => {
+      if (status === "failed" && !heldFirstFailed) {
+        heldFirstFailed = true;
+        await holdFailedWrite;
+      }
+      return originalUpdate(runId, status);
+    };
+
+    const agent = scriptedFakeAgent([
+      { type: "emit", envelope: okEnvelope("clarify-ok") },
+      { type: "emit", envelope: failEnvelope("design-fail") },
+      { type: "emit", envelope: okEnvelope("design-ok-retry") },
+      { type: "emit", envelope: okEnvelope("plan-ok") },
+    ]);
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+        "failed"
+      );
+    });
+
+    const retryPromise = manager.retryStage(started.runId, "design-doc");
+    await waitFor(async () => manager.getActiveRunIds().includes(started.runId));
+    const mid = await store.readRun(started.runId);
+    expect(
+      mid.stages.find((s) => s.stage_id === "design-doc")?.attempt_count,
+    ).toBe(1);
+
+    releaseFailedWrite();
+    const retry = await retryPromise;
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.attemptIndex).toBe(2);
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+  });
+
+  it("bounds startRun wind-down wait so retry does not hang forever", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-wait-timeout-winddown-"));
+    const store = createRunStore({ rootDir: root });
+    const holdFailedWrite = new Promise<void>(() => {});
+    let heldFirstFailed = false;
+    const originalUpdate = store.updateRunStatus.bind(store);
+    store.updateRunStatus = async (runId, status) => {
+      if (status === "failed" && !heldFirstFailed) {
+        heldFirstFailed = true;
+        await holdFailedWrite;
+      }
+      return originalUpdate(runId, status);
+    };
+
+    const agent = scriptedFakeAgent([
+      { type: "emit", envelope: okEnvelope("clarify-ok") },
+      { type: "emit", envelope: failEnvelope("design-fail") },
+    ]);
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+        "failed"
+      );
+    });
+
+    const prevTimeout = process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS;
+    process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS = "100";
+    const startedAt = Date.now();
+    try {
+      const retry = await manager.retryStage(started.runId, "design-doc");
+      expect(Date.now() - startedAt).toBeLessThan(5000);
+      expect(retry.ok).toBe(false);
+      if (!retry.ok) {
+        expect(retry.status).toBe(409);
+      }
+    } finally {
+      if (prevTimeout === undefined) {
+        delete process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS;
+      } else {
+        process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS = prevTimeout;
+      }
+    }
+  }, 10000);
+
   it("AE1: linear retry with cascade succeeds on same runId", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-ae1-"));
     const store = createRunStore({ rootDir: root });
@@ -2365,7 +2545,7 @@ describe("runtime stage retry", () => {
       started.runId,
       "implementation-plan",
     );
-    expect(second.ok).toBe(true);
+    expect(second.ok, second.ok ? undefined : second.reason).toBe(true);
     if (second.ok) {
       expect(second.attemptIndex).toBe(2);
     }

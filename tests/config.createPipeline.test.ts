@@ -123,7 +123,56 @@ describe("parseCreatePipelineBody", () => {
     ).toEqual({
       ok: false,
       status: 400,
-      error: "stages[0].needs must be a string",
+      error:
+        "stages[0].needs must be a non-empty string or an array of at least two items",
+    });
+
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "one-parent-array",
+        stages: [{ id: "a", uses: "./a.yaml", needs: ["b"] }],
+      }),
+    ).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringMatching(/needs array must contain at least two items/),
+    });
+  });
+
+  it("accepts mixed multi-parent needs arrays", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "diamond",
+        stages: [
+          { id: "research", uses: "./research.yaml" },
+          { id: "validation", uses: "./validation.yaml" },
+          {
+            id: "synthesize",
+            uses: "./synthesize.yaml",
+            needs: [
+              "research",
+              { id: "validation", on: ["succeeded", "failed"] },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      directory: "pipelines",
+      id: "diamond",
+      stages: [
+        { id: "research", uses: "./research.yaml" },
+        { id: "validation", uses: "./validation.yaml" },
+        {
+          id: "synthesize",
+          uses: "./synthesize.yaml",
+          needs: [
+            { id: "research", on: ["succeeded"] },
+            { id: "validation", on: ["succeeded", "failed"] },
+          ],
+        },
+      ],
     });
   });
 });
@@ -221,6 +270,47 @@ describe("pipelineConfigToYaml", () => {
         "  - id: improve-a",
         "    needs: recon",
         "    uses: ./improve-a.yaml",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes mixed multi-parent needs arrays", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "diamond",
+          stages: [
+            { id: "research", uses: "./research.yaml" },
+            { id: "validation", uses: "./validation.yaml" },
+            {
+              id: "synthesize",
+              uses: "./synthesize.yaml",
+              needs: [
+                { id: "research", on: ["succeeded"] },
+                { id: "validation", on: ["succeeded", "failed"] },
+              ],
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: diamond",
+        "stages:",
+        "  - id: research",
+        "    uses: ./research.yaml",
+        "  - id: validation",
+        "    uses: ./validation.yaml",
+        "  - id: synthesize",
+        "    needs:",
+        "      - research",
+        "      - id: validation",
+        "        on:",
+        "          - succeeded",
+        "          - failed",
+        "    uses: ./synthesize.yaml",
         "",
       ].join("\n"),
     );

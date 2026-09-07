@@ -1,9 +1,11 @@
 import type { AgentPort } from "../agent/port.js";
-import type {
-  RunDetail,
-  RunStatus,
-  RunStore,
-  StageSnapshot,
+import {
+  findUnhandledFailedStage,
+  type RunDetail,
+  type RunPipelineDagSnapshot,
+  type RunStatus,
+  type RunStore,
+  type StageSnapshot,
 } from "../runstore/port.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
 import {
@@ -135,7 +137,11 @@ export function succeededStageRetryBlocker(
 export function assertStageRetryEligible(
   detail: RunDetail,
   stageId: string,
-  opts?: { recoveryActive?: boolean },
+  opts?: {
+    recoveryActive?: boolean;
+    persistedStatus?: RunStatus;
+    dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null;
+  },
 ): { ok: true } | { ok: false; reason: string; status: number } {
   const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
   if (!stageSnap) {
@@ -154,12 +160,18 @@ export function assertStageRetryEligible(
     };
   }
 
+  const runStatus = opts?.persistedStatus ?? detail.status;
   const recoveryActive = opts?.recoveryActive === true;
-  if (detail.status !== "failed" && detail.status !== "succeeded") {
-    if (!(detail.status === "running" && recoveryActive)) {
+  if (runStatus !== "failed" && runStatus !== "succeeded") {
+    const acceptedPendingRetry =
+      runStatus === "running" &&
+      stageSnap.status === "failed" &&
+      findUnhandledFailedStage(detail.stages, opts?.dag) === undefined &&
+      detail.stages.some((stage) => stage.status === "pending");
+    if (!(runStatus === "running" && recoveryActive) && !acceptedPendingRetry) {
       return {
         ok: false,
-        reason: `Run is not failed or succeeded (status=${detail.status})`,
+        reason: `Run is not failed or succeeded (status=${runStatus})`,
         status: 409,
       };
     }
@@ -191,7 +203,7 @@ function rootWaitKey(runId: string, stageId: string, attempt: number): string {
   return `${runId}\0${stageId}\0${attempt}`;
 }
 
-function readRetryRootWaitTimeoutMs(): number {
+export function readRetryRootWaitTimeoutMs(): number {
   const raw = process.env.STAGEFLOW_RETRY_ROOT_WAIT_TIMEOUT_MS;
   if (raw !== undefined && raw !== "") {
     const parsed = Number(raw);
@@ -381,8 +393,13 @@ export class RunRetryCoordinator {
     const { runId, stageId, store, tracking } = req;
 
     let detail;
+    let metaStatus: RunStatus;
+    let dag: RunPipelineDagSnapshot | undefined;
     try {
       detail = await store.readRun(runId);
+      const meta = await store.readRunMeta(runId);
+      metaStatus = meta.status ?? detail.status;
+      dag = meta.pipeline_dag;
     } catch {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
     }
@@ -391,6 +408,8 @@ export class RunRetryCoordinator {
 
     const eligibility = assertStageRetryEligible(detail, stageId, {
       recoveryActive,
+      persistedStatus: metaStatus,
+      ...(dag !== undefined ? { dag } : {}),
     });
     if (!eligibility.ok) {
       return {
@@ -418,7 +437,7 @@ export class RunRetryCoordinator {
       };
     }
 
-    const priorRunStatus = detail.status;
+    const priorRunStatus = metaStatus;
     let insertedForResume = false;
     let bumpedRunning = false;
 
@@ -471,7 +490,7 @@ export class RunRetryCoordinator {
         operatorCatalog: req.operatorCatalog,
       };
 
-      if (recoveryActive) {
+      if (this.isActive(runId)) {
         await this.addRoot(runId, stageId, execution.attempt);
       } else {
         this.start({

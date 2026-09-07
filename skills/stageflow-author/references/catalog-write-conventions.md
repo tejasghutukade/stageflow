@@ -20,7 +20,7 @@ One directory (or the project root) holds:
 | `<pipeline-id>.pipeline.yaml` | `id` matching the filename stem; `stages:` object entries |
 | `<stage-id>.yaml` | `id`, `system_prompt`, `model`; `gate_kinds` when the step is gated |
 
-Each pipeline stage entry has `id` and `uses: ./<id>.yaml` (path relative to the pipeline file). Non-root stages add `needs: <parent-id>`. A deciding stage adds `fork:`. Filename stem matches `id` on every file.
+Each pipeline stage entry has `id` and `uses: ./<id>.yaml` (path relative to the pipeline file). Non-root stages add `needs: <parent-id>`, or `needs:` as an array of at least two parent ids (strings or `{ id, on }`) when the stage waits for several parents. A deciding stage adds `fork:`. Filename stem matches `id` on every file.
 
 ## Collisions
 

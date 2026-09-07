@@ -10,12 +10,44 @@ import {
   buildPipelineDagSnapshotFromLoaded,
   instancesOfDefinition,
   linearCompatDagSnapshot,
+  parsePipelineDagSnapshot,
 } from "../src/runstore/pipelineDagSnapshot.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const owned = path.join(fixtures, "pipeline-owned");
 
 describe("pipeline DAG snapshot persistence", () => {
+  it("rehydrates historical scalar needs as a single succeeded edge", () => {
+    const parsed = parsePipelineDagSnapshot({
+      stage_ids: ["a", "b"],
+      nodes: [
+        { id: "a", needs: null, ancestors: [], stageIndex: 0 },
+        { id: "b", needs: "a", ancestors: ["a"], stageIndex: 1 },
+      ],
+      roots: ["a"],
+      childrenOf: { a: ["b"] },
+    });
+    expect(parsed?.nodes.map((node) => [node.id, node.needs, node.needsEdges])).toEqual([
+      ["a", null, []],
+      ["b", "a", [{ id: "a", on: ["succeeded"] }]],
+    ]);
+  });
+
+  it("persists diamond needsEdges from a loaded pipeline", async () => {
+    const loaded = await loadPipeline(
+      path.join(fixtures, "pipelines/diamond-fan-in.pipeline.yaml"),
+    );
+    const snapshot = buildPipelineDagSnapshotFromLoaded(loaded);
+    const synthesize = snapshot.nodes.find((node) => node.id === "synthesize");
+    expect(synthesize?.needs).toBeNull();
+    expect(synthesize?.needsEdges).toEqual([
+      { id: "research", on: ["succeeded"] },
+      { id: "validation", on: ["succeeded"] },
+    ]);
+    expect(snapshot.childrenOf.research).toEqual(["synthesize"]);
+    expect(snapshot.childrenOf.validation).toEqual(["synthesize"]);
+  });
+
   it("copies successor clone_input_schema and never the child payload_schema", () => {
     const assignment = {
       type: "object",

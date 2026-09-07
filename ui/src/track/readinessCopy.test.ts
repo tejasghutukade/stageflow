@@ -12,6 +12,16 @@ describe("readinessDetail", () => {
     ).toBe("Blocked on improve-b");
   });
 
+  it("lists every unresolved parent in blocked copy", () => {
+    expect(
+      readinessDetail({
+        readiness: "blocked",
+        blocked_by: ["research", "validation"],
+        status: "pending",
+      }),
+    ).toBe("Blocked on research, validation");
+  });
+
   it("returns Skipped for skipped readiness", () => {
     expect(
       readinessDetail({

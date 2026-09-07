@@ -1,4 +1,4 @@
-import type { StageEnvelope } from "../types/envelope.js";
+import type { StageEnvelope, TerminalEnvelope } from "../types/envelope.js";
 import type { CompletionContract } from "../types/completion.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { StageConfig } from "../types/stage.js";
@@ -29,6 +29,7 @@ export type StageRunInput = {
   task: TaskFile;
   priorEnvelope: StageEnvelope | null;
   priorEnvelopes?: StageEnvelope[];
+  priorEnvelopesByStage?: Record<string, TerminalEnvelope | TerminalEnvelope[]>;
   timeoutMs?: number;
   resumeToken?: StageResumeToken;
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */

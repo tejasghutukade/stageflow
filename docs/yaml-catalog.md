@@ -153,7 +153,60 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`needs` is a single stage id (string), not an array. Fan-in and diamond DAGs are unsupported. Parallel fan-out is multiple children with the same parent, not multiple parents.
+`needs` is either a single parent stage id (string) or an array of at least two parents. Parallel fan-out is multiple children with the same parent. Keyed generic fan-in is one child with a `needs` array — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+
+### Generic fan-in {#generic-fan-in}
+
+A stage may wait for two or more catalog parents. `needs` takes one of two forms:
+
+| Form | Shape | When |
+|------|-------|------|
+| Scalar | `needs: <stage-id>` | One parent. The accepted terminal is `succeeded` only (legacy form). |
+| Array | `needs: [ … ]` with length ≥ 2 | Keyed generic fan-in. A one-item array is rejected. |
+
+Array items may be mixed. A string id defaults to `on: [succeeded]`. `{ id, on }` declares a non-empty unique subset of `succeeded` \| `failed` \| `skipped`. Duplicate ids, unknown keys, unknown parents, empty `on`, and cycles are rejected.
+
+```yaml
+id: diamond-fan-in
+stages:
+  - id: clarify
+    uses: ../stages/clarify.yaml
+  - id: research
+    uses: ../stages/research.yaml
+    needs: clarify
+  - id: validation
+    uses: ../stages/validation.yaml
+    needs: clarify
+  - id: synthesize
+    uses: ../stages/synthesize.yaml
+    needs:
+      - research
+      - validation
+```
+
+Structured `on` sets (accepted failure or skip):
+
+```yaml
+  - id: synthesize
+    uses: ../stages/synthesize.yaml
+    needs:
+      - id: research
+        on: [succeeded, failed, skipped]
+      - id: validation
+        on: [succeeded]
+```
+
+The join starts only after every declared parent (or every current clone instance of a clonable parent) is terminal in that parent's accepted set. Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. Do not reuse clone-list `priorEnvelopes` — that field stays for [clone-list joins](#clonable-successors). A clonable parent under generic fan-in maps to one key whose value is that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
+
+A parent whose observed terminal is not in that edge's `on` set skips only incompatible paths. Independent siblings and joins that accept the observed state continue. Accepted failed or skipped parents stay visibly terminal and do not independently fail the run.
+
+Fixtures:
+
+- [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond, string `needs` array
+- [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — structured `on` including failed and skipped
+- [`diamond-fan-in-clone.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-clone.pipeline.yaml) — clonable parent plus named sibling join
+
+Runtime coverage: [`tests/runtime.genericFanIn.schedule.test.ts`](../tests/runtime.genericFanIn.schedule.test.ts), [`tests/runtime.genericFanIn.retry.test.ts`](../tests/runtime.genericFanIn.retry.test.ts), [`tests/runtime.envelopeRouting.test.ts`](../tests/runtime.envelopeRouting.test.ts), [`tests/runstore.trackProjection.test.ts`](../tests/runstore.trackProjection.test.ts).
 
 ### Pipeline fragments (`include:`)
 
@@ -190,7 +243,7 @@ A deciding stage may declare a `fork` object to require a runtime choice among i
 
 Children list `needs: <parent>`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
 
-Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch.
+Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor — unless a multi-parent join lists `skipped` in that parent's `on` set. That join waits for its other parents instead of cascade-skipping. Non-accepting paths still cascade. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch (scalar `needs`, so `skipped` is not accepted).
 
 Skipped stages appear on every observable surface with the same `skipped` status used when a parent fails: operator console spatial map / run detail, CLI stage output, MCP `get_run`, and JSON run records. Unchosen fork branches are not failures; see [CI / headless](ci.md) for exit-code behavior.
 
@@ -247,7 +300,7 @@ A clonable successor is not selected via `fork_choice`. `clone_forks` is the onl
 
 Run-once keeps the catalog id. Fan-out mints `{catalogId}~{n}` with 1-based `n` in the predecessor's clone-list order. YAML `needs` stays the catalog id. Instance ids must not contain `/`, `\`, or `..`. The operator console labels clones `definition · N` (see [Operator console](operator-console.md#clone-tracks)); disk paths and API keys stay the raw instance id.
 
-Join requires every clone to succeed in both modes. When the join runs, `priorEnvelopes` are success-only (0.7; 0.5 included failures). Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors).
+A clone-list join still names **one** catalog parent id. Join requires every clone to succeed in both modes. When the join runs, `priorEnvelopes` are success-only (0.7; 0.5 included failures). Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors). That list field is not used for [generic fan-in](#generic-fan-in) — a `needs` array receives `priorEnvelopesByStage` instead.
 
 Fixtures:
 
