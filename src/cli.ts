@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { PiAgentAdapter } from "./agent/piAdapter.js";
+import { globalAgentBackendFromManifest, resolveAgentPort } from "./agent/resolveAgentPort.js";
 import { ARTIFACT_USAGE, runArtifactCommand } from "./cli/artifactCommand.js";
 import {
   ENVELOPE_USAGE,
@@ -352,13 +352,14 @@ async function main(argv: string[]): Promise<number> {
     }
 
     const store = createRunStore({ rootDir: ctx.projectRoot });
+    const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
       const { url, mcpUrl } = await startUiServer({
-        agent: new PiAgentAdapter(),
+        agent: resolveAgentPort({ global: globalAgent }),
         store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
@@ -377,7 +378,7 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless: parsed.mcpStateless,
       });
       const { mcpUrl } = await startMcpServer({
-        agent: new PiAgentAdapter(),
+        agent: resolveAgentPort({ global: globalAgent }),
         store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,

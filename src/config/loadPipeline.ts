@@ -44,7 +44,7 @@ async function loadPipelineFromPath(
     return loadFailure(mergeOutcome.issues);
   }
 
-  const { entries: rawEntries, pipelineId } = mergeOutcome.value;
+  const { entries: rawEntries, pipelineId, agent: pipelineAgent } = mergeOutcome.value;
   const ctx = { pipelineId, path: normalizedPipelinePath };
 
   const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
@@ -138,6 +138,7 @@ async function loadPipelineFromPath(
   const pipeline: PipelineConfig = {
     id: pipelineId,
     stages: stageIds,
+    ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));

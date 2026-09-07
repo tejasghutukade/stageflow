@@ -1,4 +1,6 @@
-import { PiAgentAdapter } from "../agent/piAdapter.js";
+import { resolveAgentPort } from "../agent/resolveAgentPort.js";
+import { asAgentBackendId } from "../agent/agentBackend.js";
+import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { createRunStore } from "../runstore/createStore.js";
 import { loadRunContext } from "./resumeReconstruct.js";
@@ -43,7 +45,14 @@ export async function runStageWorker(
 
   const dag = meta.pipeline_dag ?? loaded.dag;
 
-  const agent = new PiAgentAdapter();
+  const manifestOutcome = await loadStageflowManifestOutcome(input.rootDir);
+  const agent = resolveAgentPort({
+    global: manifestOutcome.ok
+      ? asAgentBackendId(manifestOutcome.value.manifest.agent)
+      : undefined,
+    pipeline: asAgentBackendId(loaded.pipeline.agent),
+    stage: asAgentBackendId(stage.agent),
+  });
   const workspaceDir = store.getWorkspaceDir(input.runId);
   const checkoutRoot = meta.checkout_root;
   const mode = input.mode ?? "run";

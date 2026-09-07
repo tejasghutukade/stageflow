@@ -5,6 +5,8 @@ import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 export type PipelineConfig = {
   id: string;
   stages: string[];
+  /** Selects the AgentPort backend for every stage in this pipeline; overrides the global default. */
+  agent?: string;
 };
 
 export type PipelineForkConfig = {

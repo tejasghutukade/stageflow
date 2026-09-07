@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseAgentField } from "../agent/agentBackend.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { readYamlObject } from "./readYamlObject.js";
 
@@ -117,7 +118,9 @@ async function visitPipelineFile(
 
 export async function mergePipelineStages(
   rootPath: string,
-): Promise<LoadOutcome<{ entries: RawMergedEntry[]; pipelineId: string }>> {
+): Promise<
+  LoadOutcome<{ entries: RawMergedEntry[]; pipelineId: string; agent?: string }>
+> {
   const absRoot = normalizePath(rootPath);
 
   let raw: Record<string, unknown>;
@@ -155,6 +158,20 @@ export async function mergePipelineStages(
   }
 
   const pipelineId = raw.id;
+
+  const agentField = parseAgentField(raw.agent);
+  if (!agentField.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_agent",
+        message: `Invalid pipeline ${absRoot}: ${agentField.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const agent = agentField.value;
+
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
 
@@ -171,5 +188,5 @@ export async function mergePipelineStages(
     ]);
   }
 
-  return loadSuccess({ entries, pipelineId });
+  return loadSuccess({ entries, pipelineId, ...(agent !== undefined ? { agent } : {}) });
 }
