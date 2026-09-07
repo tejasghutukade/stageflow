@@ -5,6 +5,8 @@ import type {
   CreateStageInput,
   CreateStageResult,
   CredentialSource,
+  FeedbackDecisionResult,
+  FeedbackLoopDecisionKind,
   LoginSessionMutationResult,
   LoginSessionProjection,
   PipelineListing,
@@ -525,6 +527,71 @@ export function submitStageAnswer(
       body: JSON.stringify(answer),
     },
   );
+}
+
+export function postFeedbackDecision(
+  runId: string,
+  stageId: string,
+  body: {
+    decision: FeedbackLoopDecisionKind;
+    loopId?: string;
+    reason?: string;
+  },
+): Promise<{ ok: true; effect: string; loopId: string }> {
+  return api(
+    `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/feedback-decision`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function postFeedbackDecisionWithDetails(
+  runId: string,
+  stageId: string,
+  body: {
+    decision: FeedbackLoopDecisionKind;
+    loopId?: string;
+    reason?: string;
+  },
+): Promise<FeedbackDecisionResult> {
+  try {
+    const res = await fetch(
+      `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/feedback-decision`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const parsed = (await res.json().catch(() => ({}))) as {
+      ok?: boolean;
+      effect?: "extended" | "continued" | "abandoned";
+      loopId?: string;
+      error?: string;
+    };
+    if (
+      res.ok &&
+      parsed.ok === true &&
+      (parsed.effect === "extended" ||
+        parsed.effect === "continued" ||
+        parsed.effect === "abandoned") &&
+      typeof parsed.loopId === "string"
+    ) {
+      return { ok: true, effect: parsed.effect, loopId: parsed.loopId };
+    }
+    return {
+      ok: false,
+      error: parsed.error ?? `Request failed (${res.status})`,
+      status: res.status,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export async function fetchRunArtifact(

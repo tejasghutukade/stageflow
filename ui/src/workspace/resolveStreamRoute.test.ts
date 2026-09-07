@@ -24,6 +24,7 @@ function runWith(stages: StageSnapshot[]): RunDetail {
     task_yaml: "goal: test",
     stages,
     pipeline_track: { nodes: [], edges: [] },
+    feedback_loops: [],
   };
 }
 

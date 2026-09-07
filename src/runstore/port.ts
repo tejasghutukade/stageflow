@@ -2,6 +2,7 @@ import type { StageLogLine } from "../agent/activity.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
+  FeedbackLoopConfig,
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
 import type { CompletionCheck } from "../types/completion.js";
@@ -34,6 +35,7 @@ export type PipelineTrackNode = {
   gate_kinds?: StageGateKind[];
   attempt_count?: number;
   definition_id?: string;
+  feedback_loop?: { target: string };
 };
 
 export type PipelineTrackEdge = {
@@ -152,6 +154,158 @@ export type VerificationCheckResultPatch = {
   evidence?: Record<string, unknown>;
 };
 
+/** Durable lifecycle for one source-owned feedback-loop policy in a run. */
+export type FeedbackLoopState =
+  | "active"
+  | "waiting_for_human"
+  | "continued"
+  | "abandoned"
+  | "completed";
+
+/** Durable lifecycle for one accepted send-back through a feedback loop. */
+export type FeedbackReplayStatus =
+  | "scheduled"
+  | "active"
+  | "waiting_for_human"
+  | "completed"
+  | "failed"
+  | "superseded";
+
+/** Lifecycle for one persistent stage's pass within a feedback replay. */
+export type FeedbackReplayStagePassStatus =
+  | "pending"
+  | "running"
+  | "waiting"
+  | "succeeded"
+  | "failed"
+  | "superseded";
+
+/** Active/history state for a dynamic clone cohort created by a fork parent. */
+export type ForkGenerationStatus = "active" | "completed" | "superseded";
+
+/** Deferred over-limit send_back awaiting a human feedback-loop decision. */
+export type DeferredFeedbackSendBack = {
+  target: string;
+  feedback_envelope: StageEnvelope;
+  source_attempt: number;
+};
+
+export type FeedbackLoopRecord = {
+  run_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  policy: FeedbackLoopConfig;
+  state: FeedbackLoopState;
+  current_replay_id?: string;
+  current_replay_number?: number;
+  deferred_send_back?: DeferredFeedbackSendBack;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayRecord = {
+  run_id: string;
+  replay_id: string;
+  loop_id: string;
+  source_stage_id: string;
+  source_attempt: number;
+  target_stage_id: string;
+  /** One-based accepted send-back count for this loop. */
+  replay_number: number;
+  max_replays: number;
+  replay_session: FeedbackLoopConfig["replay_session"];
+  route_stage_ids: string[];
+  feedback_envelope: StageEnvelope;
+  status: FeedbackReplayStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FeedbackReplayStagePassRecord = {
+  run_id: string;
+  replay_id: string;
+  stage_id: string;
+  /** Execution attempt whose session this pass resumes or newly creates. */
+  stage_attempt: number;
+  /** Immutable attempt whose Pi session resume targets; never rebound. */
+  session_origin_attempt?: number;
+  session_mode: FeedbackLoopConfig["replay_session"];
+  status: FeedbackReplayStagePassStatus;
+  started_at?: string;
+  finished_at?: string;
+  emitted_envelope?: StageEnvelope;
+};
+
+export type ForkGenerationRecord = {
+  run_id: string;
+  generation_id: string;
+  /** Undefined for an initial fan-out that is not part of a replay. */
+  replay_id?: string;
+  fork_parent_stage_id: string;
+  generation_number: number;
+  clone_stage_ids: string[];
+  status: ForkGenerationStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateFeedbackLoopInput = Omit<
+  FeedbackLoopRecord,
+  "run_id" | "state" | "current_replay_id" | "current_replay_number" | "created_at" | "updated_at"
+> & {
+  state?: FeedbackLoopState;
+};
+
+export type FeedbackLoopPatch = Partial<
+  Pick<
+    FeedbackLoopRecord,
+    | "state"
+    | "current_replay_id"
+    | "current_replay_number"
+    | "policy"
+  >
+> & {
+  /** Set to clear a previously deferred send_back. */
+  deferred_send_back?: DeferredFeedbackSendBack | null;
+};
+
+export type CreateFeedbackReplayInput = Omit<
+  FeedbackReplayRecord,
+  "run_id" | "status" | "created_at" | "updated_at"
+> & {
+  status?: FeedbackReplayStatus;
+};
+
+export type FeedbackReplayPatch = Partial<Pick<FeedbackReplayRecord, "status">>;
+
+export type CreateFeedbackReplayStagePassInput = Omit<
+  FeedbackReplayStagePassRecord,
+  "run_id" | "status" | "started_at" | "finished_at" | "emitted_envelope"
+> & {
+  status?: FeedbackReplayStagePassStatus;
+  started_at?: string;
+  finished_at?: string;
+  emitted_envelope?: StageEnvelope;
+};
+
+export type FeedbackReplayStagePassPatch = Partial<
+  Pick<FeedbackReplayStagePassRecord, "status" | "stage_attempt">
+> & {
+  started_at?: string | null;
+  finished_at?: string | null;
+  emitted_envelope?: StageEnvelope | null;
+};
+
+export type CreateForkGenerationInput = Omit<
+  ForkGenerationRecord,
+  "run_id" | "status" | "created_at" | "updated_at"
+> & {
+  status?: ForkGenerationStatus;
+};
+
+export type ForkGenerationPatch = Partial<Pick<ForkGenerationRecord, "status">>;
+
 export type CompactStage = {
   id: string;
   status: StageSnapshot["status"];
@@ -176,18 +330,33 @@ export type RunSummary = {
   waiting_stage_ids?: string[];
   /** Short prompt text for Today triage; omitted when not waiting. */
   waiting_summary?: string;
-  waiting_kind?: AskOperatorPrompt["kind"];
+  waiting_kind?: AskOperatorPrompt["kind"] | "feedback_loop_decision";
   waiting_prompt_id?: string;
   waiting_artifacts?: string[];
   waiting_questions?: string[];
   failed_stage_id?: string;
   failed_reason?: string;
+  /** The active loop, when a run is currently replaying or awaiting a decision. */
+  active_feedback_loop?: FeedbackLoopRecord;
 };
 
 export type RunDetail = Omit<RunSummary, "stages"> & {
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
+  /** Append-only feedback-loop and replay history, ordered by creation. */
+  feedback_loops: FeedbackLoopHistory[];
+};
+
+export type FeedbackLoopHistory = {
+  loop: FeedbackLoopRecord;
+  replays: Array<{
+    replay: FeedbackReplayRecord;
+    stage_passes: FeedbackReplayStagePassRecord[];
+    fork_generations: ForkGenerationRecord[];
+  }>;
+  /** Fork cohorts not associated with a replay, for example the first pass. */
+  fork_generations: ForkGenerationRecord[];
 };
 
 export type CreateRunInput = {
@@ -286,6 +455,61 @@ export interface RunStore {
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
+  createFeedbackLoop(
+    runId: string,
+    input: CreateFeedbackLoopInput,
+  ): Promise<FeedbackLoopRecord>;
+  getFeedbackLoop(runId: string, loopId: string): Promise<FeedbackLoopRecord>;
+  listFeedbackLoops(runId: string): Promise<FeedbackLoopRecord[]>;
+  /**
+   * Patch a feedback loop. When `expectedState` is set, the update is conditional
+   * (CAS): returns false if the row exists but state does not match.
+   * Throws if the loop is missing.
+   */
+  updateFeedbackLoop(
+    runId: string,
+    loopId: string,
+    patch: FeedbackLoopPatch,
+    options?: { expectedState?: FeedbackLoopState },
+  ): Promise<boolean>;
+  createFeedbackReplay(
+    runId: string,
+    input: CreateFeedbackReplayInput,
+  ): Promise<FeedbackReplayRecord>;
+  getFeedbackReplay(runId: string, replayId: string): Promise<FeedbackReplayRecord>;
+  listFeedbackReplays(runId: string, loopId: string): Promise<FeedbackReplayRecord[]>;
+  updateFeedbackReplay(
+    runId: string,
+    replayId: string,
+    patch: FeedbackReplayPatch,
+  ): Promise<void>;
+  createFeedbackReplayStagePass(
+    runId: string,
+    input: CreateFeedbackReplayStagePassInput,
+  ): Promise<FeedbackReplayStagePassRecord>;
+  listFeedbackReplayStagePasses(
+    runId: string,
+    replayId: string,
+  ): Promise<FeedbackReplayStagePassRecord[]>;
+  updateFeedbackReplayStagePass(
+    runId: string,
+    replayId: string,
+    stageId: string,
+    patch: FeedbackReplayStagePassPatch,
+  ): Promise<void>;
+  createForkGeneration(
+    runId: string,
+    input: CreateForkGenerationInput,
+  ): Promise<ForkGenerationRecord>;
+  listForkGenerations(
+    runId: string,
+    options?: { replayId?: string; forkParentStageId?: string },
+  ): Promise<ForkGenerationRecord[]>;
+  updateForkGeneration(
+    runId: string,
+    generationId: string,
+    patch: ForkGenerationPatch,
+  ): Promise<void>;
 }
 
 export function stageStatusFromEvents(

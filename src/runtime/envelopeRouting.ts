@@ -6,6 +6,12 @@ import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedPipeline, ResolvedPipelineDag } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
+import {
+  activeCohortFromCloneIds,
+  filterJoinInputs,
+  selectActiveInput,
+  type ActiveCohort,
+} from "./forkGeneration.js";
 
 function definitionInstances(
   dag: ResolvedPipelineDag,
@@ -16,6 +22,27 @@ function definitionInstances(
     return instancesOfDefinition(snapshot, catalogId);
   }
   return dag.nodes.some((n) => n.id === catalogId) ? [catalogId] : [];
+}
+
+async function resolveActiveCohortForNeeds(
+  dag: ResolvedPipelineDag,
+  needsId: string,
+  store?: RunStore,
+  runId?: string,
+  activeCloneIds?: Set<string> | null,
+  scheduleOverride?: ReadonlyMap<string, ReadonlySet<string>>,
+): Promise<ActiveCohort> {
+  if (activeCloneIds !== undefined) {
+    return activeCohortFromCloneIds(activeCloneIds);
+  }
+  if (store === undefined || runId === undefined) return { kind: "untracked" };
+  return selectActiveInput({
+    store,
+    runId,
+    dag,
+    needsStageId: needsId,
+    ...(scheduleOverride !== undefined ? { scheduleOverride } : {}),
+  });
 }
 
 export async function buildCompletedEnvelopesFromRun(
@@ -75,6 +102,9 @@ export async function resolvePriorEnvelope(options: {
   completedEnvelopes: Map<string, StageEnvelope>;
   store?: RunStore;
   runId?: string;
+  /** When set (including null), skips store lookup for active fork generation. */
+  activeCloneIds?: Set<string> | null;
+  scheduleOverride?: ReadonlyMap<string, ReadonlySet<string>>;
 }): Promise<ResolvePriorEnvelopeResult> {
   const node = dagNode(options.dag, options.stageId);
   if (!node) {
@@ -87,8 +117,17 @@ export async function resolvePriorEnvelope(options: {
     return { ok: true, prior: null };
   }
 
-  const joinInstances = definitionInstances(options.dag, node.needs);
-  if (joinInstances.length > 1) {
+  const allJoinInstances = definitionInstances(options.dag, node.needs);
+  if (allJoinInstances.length > 1) {
+    const cohort = await resolveActiveCohortForNeeds(
+      options.dag,
+      node.needs,
+      options.store,
+      options.runId,
+      options.activeCloneIds,
+      options.scheduleOverride,
+    );
+    const joinInstances = filterJoinInputs(allJoinInstances, cohort);
     const joinPriors: StageEnvelope[] = [];
     for (const id of joinInstances) {
       const fromMap = options.completedEnvelopes.get(id);
@@ -141,7 +180,16 @@ export async function resolvePriorEnvelope(options: {
       return { ok: true, prior: structuredClone(item.envelope) };
     }
     if (item.action === "fanout") {
-      const instanceIds = definitionInstances(options.dag, item.successor_id);
+      const allInstanceIds = definitionInstances(options.dag, item.successor_id);
+      const cohort = await resolveActiveCohortForNeeds(
+        options.dag,
+        item.successor_id,
+        options.store,
+        options.runId,
+        options.activeCloneIds,
+        options.scheduleOverride,
+      );
+      const instanceIds = filterJoinInputs(allInstanceIds, cohort);
       const index = instanceIds.indexOf(options.stageId);
       if (index >= 0) {
         const clone = item.clones[index];

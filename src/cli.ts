@@ -163,7 +163,7 @@ function parseArgs(argv: string[]): {
 export function parseRunStageArgs(argv: string[]): {
   runId: string;
   stageId: string;
-  mode?: "run" | "resume";
+  mode?: "run" | "resume" | "feedback_resume" | "new_session";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;
@@ -172,7 +172,7 @@ export function parseRunStageArgs(argv: string[]): {
 } {
   let runId: string | undefined;
   let stageId: string | undefined;
-  let mode: "run" | "resume" | undefined;
+  let mode: "run" | "resume" | "feedback_resume" | "new_session" | undefined;
   let resumeAnswer: unknown;
   let attempt: number | undefined;
   let sessionFilePath: string | undefined;
@@ -186,8 +186,15 @@ export function parseRunStageArgs(argv: string[]): {
       stageId = argv[++i];
     } else if (argv[i] === "--mode") {
       const raw = argv[++i];
-      if (raw !== "run" && raw !== "resume") {
-        throw new Error("--mode must be run or resume");
+      if (
+        raw !== "run" &&
+        raw !== "resume" &&
+        raw !== "feedback_resume" &&
+        raw !== "new_session"
+      ) {
+        throw new Error(
+          "--mode must be run, resume, feedback_resume, or new_session",
+        );
       }
       mode = raw;
     } else if (argv[i] === "--resume-answer") {

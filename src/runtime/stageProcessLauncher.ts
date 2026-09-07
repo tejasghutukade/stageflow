@@ -14,7 +14,7 @@ export type StageLaunchInput = {
   runId: string;
   stageId: string;
   rootDir: string;
-  mode?: "run" | "resume";
+  mode?: "run" | "resume" | "feedback_resume" | "new_session";
   resumeAnswer?: unknown;
   attempt?: number;
   sessionFilePath?: string;

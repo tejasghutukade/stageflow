@@ -139,6 +139,7 @@ function isMutatingApi(method: string, pathname: string): boolean {
     pathname === "/api/pipelines" ||
     /^\/api\/runs\/[^/]+\/rerun$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
+    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/feedback-decision$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
@@ -389,6 +390,63 @@ export async function startUiServer(
             return true;
           }
           json(res, 202, { ok: true });
+          return true;
+        }
+
+        const feedbackDecisionMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/feedback-decision$/,
+        );
+        if (method === "POST" && feedbackDecisionMatch) {
+          const runId = decodeURIComponent(feedbackDecisionMatch[1] ?? "");
+          const stageId = decodeURIComponent(feedbackDecisionMatch[2] ?? "");
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body === null || typeof body !== "object" || Array.isArray(body)) {
+            json(res, 400, { error: "Body must be a JSON object" });
+            return true;
+          }
+          const raw = body as {
+            decision?: unknown;
+            loopId?: unknown;
+            reason?: unknown;
+          };
+          if (
+            raw.decision !== "extend" &&
+            raw.decision !== "continue" &&
+            raw.decision !== "abandon"
+          ) {
+            json(res, 400, {
+              error: "decision must be extend, continue, or abandon",
+            });
+            return true;
+          }
+          if (raw.loopId !== undefined && typeof raw.loopId !== "string") {
+            json(res, 400, { error: "loopId must be a string" });
+            return true;
+          }
+          if (raw.reason !== undefined && typeof raw.reason !== "string") {
+            json(res, 400, { error: "reason must be a string" });
+            return true;
+          }
+          const result = await manager.decideFeedbackLoop(runId, stageId, {
+            decision: raw.decision,
+            ...(raw.loopId !== undefined ? { loopId: raw.loopId } : {}),
+            ...(raw.reason !== undefined ? { reason: raw.reason } : {}),
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 500, { error: result.reason });
+            return true;
+          }
+          json(res, 202, {
+            ok: true,
+            effect: result.effect,
+            loopId: result.loopId,
+          });
           return true;
         }
 

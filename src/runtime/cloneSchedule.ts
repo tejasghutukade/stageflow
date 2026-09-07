@@ -7,6 +7,11 @@ import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import { collectDownstreamStageIds } from "./dagTraversal.js";
+import {
+  activeCohortFromCloneIds,
+  filterJoinInputs,
+  type ActiveCohort,
+} from "./forkGeneration.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
 function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
@@ -157,13 +162,19 @@ function joinAndDownstreamIds(
  * fanout for reactivation. Instances that are still active/terminal, or
  * merely `pending` without having gone through a retry reset (e.g. an
  * envelope processed twice in one live run), are rejected as before.
+ *
+ * Feedback-loop replay is different: the prior cohort was superseded
+ * (`skipped`) and a new generation must mint fresh `~N` ids, so
+ * `forceFreshCloneIds` bypasses the conflict.
  */
 export function cloneFanoutConflict(
   dag: ResolvedPipelineDag,
   envelope: StageEnvelope,
   states: Map<string, StageScheduleState>,
   retryDownstreamIds: ReadonlySet<string>,
+  options?: { forceFreshCloneIds?: boolean },
 ): string | undefined {
+  if (options?.forceFreshCloneIds === true) return undefined;
   const snapshot = asDagSnapshot(dag);
   for (const item of envelope.clone_forks ?? []) {
     if (item.action !== "fanout") continue;
@@ -186,7 +197,7 @@ export function cloneFanoutConflict(
   return undefined;
 }
 
-function nextFreeCloneSuffix(
+export function nextFreeCloneSuffix(
   snapshot: RunPipelineDagSnapshot,
   catalogId: string,
 ): number {
@@ -286,6 +297,10 @@ export function cloneScheduleAllowsRun(
   stageId: string,
   states: Map<string, StageScheduleState>,
   completedEnvelopes: Map<string, StageEnvelope>,
+  options?: {
+    activeCohortForNeeds?: (needsId: string) => ActiveCohort;
+    activeCloneIdsForNeeds?: (needsId: string) => Set<string> | null;
+  },
 ): boolean {
   const node = dag.nodes.find((n) => n.id === stageId);
   if (!node) return false;
@@ -300,15 +315,22 @@ export function cloneScheduleAllowsRun(
       completedEnvelopes,
     );
   }
-  const instances = definitionInstances(dag, node.needs);
+  const allInstances = definitionInstances(dag, node.needs);
+  const cohort =
+    options?.activeCohortForNeeds?.(node.needs) ??
+    activeCohortFromCloneIds(options?.activeCloneIdsForNeeds?.(node.needs));
+  if (cohort.kind === "awaiting_mint") {
+    return false;
+  }
+  const instances = filterJoinInputs(allInstances, cohort);
   if (instances.length <= 1) {
     const parentId = instances[0] ?? node.needs;
     if (states.get(parentId) !== "succeeded") return false;
+  } else if (cohort.kind === "active") {
+    if (!instances.every((id) => states.get(id) === "succeeded")) {
+      return false;
+    }
   } else if (
-    // A retried fanout that shrank the clone count marks the now-excess
-    // instances "skipped" rather than dangling (see applyCloneForksToSchedule)
-    // — a join downstream of the cohort should still proceed once the
-    // instances that are actually running have succeeded.
     !instances.every(
       (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
     )
@@ -326,6 +348,8 @@ export function cloneScheduleAllowsRun(
 export type ApplyCloneForksResult = {
   dag: RunPipelineDagSnapshot;
   skippedIds: string[];
+  /** Freshly minted instance ids keyed by clonable catalog successor id. */
+  mintedBySuccessor?: Map<string, string[]>;
 };
 
 export function applyCloneForksToSchedule(
@@ -333,9 +357,12 @@ export function applyCloneForksToSchedule(
   predecessorId: string,
   envelope: StageEnvelope,
   states: Map<string, StageScheduleState>,
+  options?: { forceFreshCloneIds?: boolean },
 ): ApplyCloneForksResult {
   let current = asDagSnapshot(dag);
   const skippedIds: string[] = [];
+  const mintedBySuccessor = new Map<string, string[]>();
+  const forceFresh = options?.forceFreshCloneIds === true;
   const skipPending = (stageId: string) => {
     if (states.get(stageId) === "pending") {
       states.set(stageId, "skipped");
@@ -355,6 +382,21 @@ export function applyCloneForksToSchedule(
     const existing = definitionInstances(current, item.successor_id).filter(
       (id) => id !== item.successor_id,
     );
+    if (forceFresh) {
+      const { snapshot, instanceIds } = appendCloneInstances(current, {
+        catalogId: item.successor_id,
+        predecessorId,
+        count: item.clones.length,
+        startAt: nextFreeCloneSuffix(current, item.successor_id),
+      });
+      current = snapshot;
+      states.delete(item.successor_id);
+      for (const id of instanceIds) {
+        states.set(id, "pending");
+      }
+      mintedBySuccessor.set(item.successor_id, instanceIds);
+      continue;
+    }
     if (existing.length > 0) {
       // Reactivating instances a retry cascade reset to `pending` (see
       // cloneFanoutConflict), which only allows this fanout through when
@@ -396,9 +438,14 @@ export function applyCloneForksToSchedule(
     for (const id of instanceIds) {
       states.set(id, "pending");
     }
+    mintedBySuccessor.set(item.successor_id, instanceIds);
   }
 
-  return { dag: current, skippedIds };
+  return {
+    dag: current,
+    skippedIds,
+    ...(mintedBySuccessor.size > 0 ? { mintedBySuccessor } : {}),
+  };
 }
 
 export function applyCloneForksFromEnvelopes(

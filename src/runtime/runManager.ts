@@ -13,7 +13,11 @@ import {
   startPipeline,
   type PipelineRunResult,
 } from "./pipelineRunner.js";
-import { resumeRun } from "./pipelineScheduler.js";
+import { resumeRun, runPipelineDag } from "./pipelineScheduler.js";
+import {
+  resolveFeedbackLoopDecision,
+  type FeedbackLoopDecisionKind,
+} from "./feedbackLoopDecision.js";
 import {
   RunRetryCoordinator,
   type RetryStageResult,
@@ -90,6 +94,14 @@ export type { RetryStageResult };
 
 export type AbandonStageResult =
   | { ok: true; runId: string; stageId: string }
+  | { ok: false; reason: string; status?: number };
+
+export type DecideFeedbackLoopResult =
+  | {
+      ok: true;
+      effect: "extended" | "continued" | "abandoned";
+      loopId: string;
+    }
   | { ok: false; reason: string; status?: number };
 
 export type StopManualRecoveryResult =
@@ -908,6 +920,179 @@ export class RunManager {
       if (!isLive) {
         this.resumeInFlight.delete(resumeKey);
       }
+    }
+  }
+
+  /**
+   * Resolve a feedback-loop wait_for_human decision after the scheduler has
+   * exited waiting (host-down / HTTP / CLI). Persist-only resolve, then
+   * resume orchestration for extend/continue.
+   */
+  async decideFeedbackLoop(
+    runId: string,
+    stageId: string,
+    input: {
+      decision: FeedbackLoopDecisionKind;
+      loopId?: string;
+      reason?: string;
+    },
+  ): Promise<DecideFeedbackLoopResult> {
+    const resumeKey = waitKey(runId, stageId);
+    if (this.resumeInFlight.has(resumeKey)) {
+      return {
+        ok: false,
+        reason: `Resume already in progress for run ${runId} stage ${stageId}`,
+        status: 409,
+      };
+    }
+    this.resumeInFlight.add(resumeKey);
+
+    let detail;
+    try {
+      detail = await this.options.store.readRun(runId);
+    } catch {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
+    if (!stageSnap) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `Stage not found: ${stageId}`,
+        status: 404,
+      };
+    }
+
+    const active = detail.active_feedback_loop;
+    if (
+      active === undefined ||
+      active.state !== "waiting_for_human"
+    ) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: "no feedback loop is waiting_for_human",
+        status: 409,
+      };
+    }
+    if (active.source_stage_id !== stageId) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `stage "${stageId}" is not the feedback loop source (expected ${active.source_stage_id})`,
+        status: 409,
+      };
+    }
+    if (
+      input.loopId !== undefined &&
+      input.loopId !== active.loop_id
+    ) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `feedback loop not found: ${input.loopId}`,
+        status: 404,
+      };
+    }
+    if (stageSnap.status !== "waiting_for_input") {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: `Stage is not waiting for input (status=${stageSnap.status})`,
+        status: 409,
+      };
+    }
+
+    const wasActive = this.active.has(runId);
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return {
+        ok: false,
+        reason: tracked.reason,
+        status: 409,
+      };
+    }
+    const insertedForResume = !wasActive;
+
+    try {
+      const decided = await resolveFeedbackLoopDecision({
+        store: this.options.store,
+        runId,
+        decision: input.decision,
+        loopId: input.loopId ?? active.loop_id,
+        reason: input.reason,
+      });
+      if (!decided.ok) {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        return { ok: false, reason: decided.reason, status: 409 };
+      }
+
+      if (decided.effect === "abandoned") {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        return {
+          ok: true,
+          effect: "abandoned",
+          loopId: decided.loop.loop_id,
+        };
+      }
+
+      const { meta, task, loaded } = await loadRunContext(
+        this.options.store,
+        runId,
+        this.cwd,
+      );
+      const done = runPipelineDag({
+        prepared: {
+          task,
+          loaded,
+          run: {
+            runId,
+            workspaceDir: this.options.store.getWorkspaceDir(runId),
+          },
+          agent: this.options.agent,
+          store: this.options.store,
+          cwd: this.cwd,
+          projectRoot: this.projectRoot,
+          checkoutRoot: meta.checkout_root,
+          hitl: this.hitl,
+          operatorCatalog: this.options.operatorCatalog,
+        },
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+      });
+      this.registerResumeUntrack(runId, done);
+      const rest = await done;
+      if (rest.outcome === "failed") {
+        return {
+          ok: false,
+          reason: rest.reason ?? "pipeline failed after feedback decision",
+          status: 500,
+        };
+      }
+      return {
+        ok: true,
+        effect: decided.effect === "extended" ? "extended" : "continued",
+        loopId: decided.loop.loop_id,
+      };
+    } catch (err) {
+      if (insertedForResume) {
+        this.removeActiveEntry(runId, false);
+      }
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : String(err),
+        status: 500,
+      };
+    } finally {
+      this.resumeInFlight.delete(resumeKey);
     }
   }
 

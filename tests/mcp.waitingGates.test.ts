@@ -49,6 +49,7 @@ function detail(
     pipeline_track: { nodes: [], edges: [] },
     waiting_stage_id: "clarify",
     waiting_stage_ids: ["clarify"],
+    feedback_loops: [],
     ...overrides,
   };
 }
@@ -213,6 +214,59 @@ describe("projectWaitingGate", () => {
     expect(item).toEqual({
       runId: "run-1",
       stageId: "other",
+    });
+  });
+
+  it("feedback_loop_decision includes loop id and deferred target", () => {
+    const loop = {
+      run_id: "run-1",
+      loop_id: "loop-99",
+      source_stage_id: "review",
+      source_attempt: 2,
+      policy: {
+        target: "implement",
+        max_replays: 1,
+        on_max_replays: "wait_for_human" as const,
+        replay_session: "resume" as const,
+      },
+      state: "waiting_for_human" as const,
+      deferred_send_back: {
+        target: "implement",
+        feedback_envelope: {
+          status: "success" as const,
+          summary: "send-back",
+          artifacts: [] as string[],
+          feedback_loop: { action: "send_back" as const, target: "implement" },
+        },
+        source_attempt: 2,
+      },
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:01:00.000Z",
+    };
+    const item = projectWaitingGate({
+      runId: "run-1",
+      stageId: "review",
+      stage: stage({
+        stage_id: "review",
+        status: "waiting_for_input",
+      }),
+      summary: summary({
+        waiting_stage_id: "review",
+        waiting_stage_ids: ["review"],
+        waiting_kind: "feedback_loop_decision",
+        waiting_summary:
+          "Feedback loop limit reached — extend, continue, or abandon",
+      }),
+      activeFeedbackLoop: loop,
+    });
+    expect(item).toEqual({
+      runId: "run-1",
+      stageId: "review",
+      waiting_kind: "feedback_loop_decision",
+      waiting_summary:
+        "Feedback loop limit reached — extend, continue, or abandon",
+      feedback_loop_id: "loop-99",
+      deferred_target: "implement",
     });
   });
 });

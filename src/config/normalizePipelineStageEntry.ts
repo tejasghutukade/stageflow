@@ -8,6 +8,7 @@ import {
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { parseFeedbackLoopConfig } from "./resolvePipelineDag.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -161,6 +162,33 @@ export function normalizePipelineStageEntries(
     const policyOutcome = parseExecutionPolicy(raw, id);
     if (!policyOutcome.ok) return policyOutcome;
 
+    let feedbackLoop: NormalizedPipelineStageEntry["feedback_loop"] | undefined;
+    if (raw.feedback_loop !== undefined) {
+      try {
+        feedbackLoop = parseFeedbackLoopConfig(raw.feedback_loop, id, ctx);
+      } catch (err) {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: err instanceof Error ? err.message : String(err),
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+    }
+
+    if (raw.replay_safe !== undefined && typeof raw.replay_safe !== "boolean") {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": replay_safe must be a boolean`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+
     if (raw.needs !== undefined) {
       if (Array.isArray(raw.needs)) {
         return loadFailure([
@@ -221,6 +249,12 @@ export function normalizePipelineStageEntries(
       ...(policyOutcome.value.recovery !== undefined
         ? { recovery: policyOutcome.value.recovery }
         : {}),
+      ...(feedbackLoop !== undefined
+        ? { feedback_loop: feedbackLoop }
+        : {}),
+      ...(raw.replay_safe !== undefined
+        ? { replay_safe: raw.replay_safe as boolean }
+        : {}),
       ...(skill !== undefined ? { skill } : {}),
     };
 
@@ -252,6 +286,8 @@ export function toWiringRefs(
   clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
+  feedback_loop?: NormalizedPipelineStageEntry["feedback_loop"];
+  replay_safe?: boolean;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
@@ -261,5 +297,9 @@ export function toWiringRefs(
     ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
     ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
     ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
+    ...(entry.feedback_loop !== undefined
+      ? { feedback_loop: entry.feedback_loop }
+      : {}),
+    ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
   }));
 }

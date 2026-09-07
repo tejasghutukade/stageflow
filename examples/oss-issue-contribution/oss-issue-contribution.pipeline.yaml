@@ -1,0 +1,231 @@
+id: oss-issue-contribution
+stages:
+  - id: oss-issue-intake
+    uses: ./oss-issue-intake.yaml
+    completion:
+      mode: all
+      checks:
+        - id: issue-intake
+          type: artifact
+          path: issue-intake.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-explain-issue
+    uses: ./oss-explain-issue.yaml
+    needs: oss-issue-intake
+    skill: ce-explain
+    completion:
+      mode: all
+      checks:
+        - id: issue-explainer
+          type: artifact
+          path: issue-explainer.html
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-reproduce-issue
+    uses: ./oss-reproduce-issue.yaml
+    needs: oss-issue-intake
+    completion:
+      mode: all
+      checks:
+        - id: reproduction
+          type: artifact
+          path: reproduction.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-plan-investigation
+    uses: ./oss-plan-investigation.yaml
+    needs: oss-reproduce-issue
+    completion:
+      mode: all
+      checks:
+        - id: investigation-map
+          type: artifact
+          path: investigation-map.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-investigate-area
+    uses: ./oss-investigate-area.yaml
+    needs: oss-plan-investigation
+    clonable: true
+    clone_cap: 5
+    completion:
+      mode: all
+      checks:
+        - id: investigation
+          type: artifact
+          path: investigation.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-approve-plan
+    uses: ./oss-approve-plan.yaml
+    needs: oss-investigate-area
+    completion:
+      mode: all
+      checks:
+        - id: implementation-plan
+          type: artifact
+          path: implementation-plan.md
+          nonempty: true
+        - id: plan-approved
+          type: gate
+          kind: artifact_backed
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-write-regression-test
+    uses: ./oss-write-regression-test.yaml
+    needs: oss-approve-plan
+    completion:
+      mode: all
+      checks:
+        - id: regression-test-report
+          type: artifact
+          path: regression-test-report.md
+          nonempty: true
+        - id: checkout-changed
+          type: checkout_changes
+          path_fields: [test_files]
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-implement-source-fix
+    uses: ./oss-implement-source-fix.yaml
+    needs: oss-write-regression-test
+    completion:
+      mode: all
+      checks:
+        - id: implementation-report
+          type: artifact
+          path: implementation-report.md
+          nonempty: true
+        - id: checkout-changed
+          type: checkout_changes
+          path_fields: [changed_files]
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-verify-fix
+    uses: ./oss-verify-fix.yaml
+    needs: oss-implement-source-fix
+    completion:
+      mode: all
+      checks:
+        - id: verification
+          type: artifact
+          path: verification.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-explain-fix
+    uses: ./oss-explain-fix.yaml
+    needs: oss-verify-fix
+    skill: ce-explain
+    completion:
+      mode: all
+      checks:
+        - id: fix-explainer
+          type: artifact
+          path: fix-explainer.html
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-plan-review
+    uses: ./oss-plan-review.yaml
+    needs: oss-verify-fix
+    completion:
+      mode: all
+      checks:
+        - id: review-plan
+          type: artifact
+          path: review-plan.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-review-change
+    uses: ./oss-review-change.yaml
+    needs: oss-plan-review
+    clonable: true
+    clone_cap: 4
+    completion:
+      mode: all
+      checks:
+        - id: review
+          type: artifact
+          path: review.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-address-review-feedback
+    uses: ./oss-address-review-feedback.yaml
+    needs: oss-review-change
+    completion:
+      mode: all
+      checks:
+        - id: review-feedback-report
+          type: artifact
+          path: review-feedback-report.md
+          nonempty: true
+    recovery:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: oss-approve-contribution
+    uses: ./oss-approve-contribution.yaml
+    needs: oss-address-review-feedback
+    completion:
+      mode: all
+      checks:
+        - id: contribution-package
+          type: artifact
+          path: contribution-package.md
+          nonempty: true
+        - id: pull-request
+          type: artifact
+          path: pull-request.md
+          nonempty: true
+        - id: contribution-approved
+          type: gate
+          kind: artifact_backed
+    recovery:
+      mode: manual
+      retry_safety: side_effecting

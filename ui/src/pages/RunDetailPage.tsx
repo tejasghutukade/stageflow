@@ -21,6 +21,8 @@ import { ArtifactReader } from "../components/ArtifactReader";
 import { ArtifactDecideColumn } from "../components/DecidePanel";
 import { EnvelopeDrawer } from "../components/EnvelopeDrawer";
 import { EnvelopeRecord } from "../components/EnvelopeFields";
+import { FeedbackDecidePanel } from "../components/FeedbackDecidePanel";
+import { FeedbackLoopPanel } from "../components/FeedbackLoopPanel";
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
@@ -609,6 +611,12 @@ export function RunDetailPage({
           </div>
         ) : hasMapNodes ? (
           <div className="workspace">
+            {(run.active_feedback_loop || (run.feedback_loops?.length ?? 0) > 0) ? (
+              <FeedbackLoopPanel
+                active={run.active_feedback_loop}
+                history={run.feedback_loops ?? []}
+              />
+            ) : null}
             <SpatialRunMap
               layout={workspace.spatialLayout}
               stages={run.stages}
@@ -625,6 +633,7 @@ export function RunDetailPage({
               onAbandonStage={abandon}
               runId={runId}
               showHint={!showWorkspace}
+              feedbackOverlays={workspace.feedbackOverlays}
             />
           </div>
         ) : (
@@ -726,7 +735,15 @@ export function RunDetailPage({
                 {center}
               </div>
 
-              {workspace.showDecide && workspace.decidePrompt && stage ? (
+              {workspace.showFeedbackDecide && workspace.feedbackDecide ? (
+                <div className="decide" style={{ width: 320, flexShrink: 0 }}>
+                  <FeedbackDecidePanel
+                    runId={runId}
+                    decide={workspace.feedbackDecide}
+                    onSuccess={onStageActionSuccess}
+                  />
+                </div>
+              ) : workspace.showDecide && workspace.decidePrompt && stage ? (
                 <div className="decide" style={{ width: 320, flexShrink: 0 }}>
                   <ArtifactDecideColumn
                     runId={runId}
