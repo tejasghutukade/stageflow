@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { PiAgentAdapter } from "../agent/piAdapter.js";
+import { resolveGlobalOnlyAgentPort } from "../agent/resolveAgentPort.js";
 import { projectRun } from "../projection/projectRun.js";
 import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
 import { projectWaitingGates } from "../mcp/waitingGates.js";
@@ -384,6 +384,8 @@ export async function runRunsCommand(
 
   const mutatingIo: CliRunReportIo = out;
 
+  const agent = await resolveGlobalOnlyAgentPort(projectRoot);
+
   const buildManager = (): RunManager => {
     const store = getStore();
     if (options.createManager) return options.createManager(store);
@@ -393,7 +395,7 @@ export async function runRunsCommand(
       defaultCwd: cwd,
     });
     return new RunManager({
-      agent: new PiAgentAdapter(),
+      agent,
       store,
       cwd,
       projectRoot,

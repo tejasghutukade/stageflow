@@ -5,7 +5,7 @@ title: Architecture
 
 # Architecture
 
-Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; Pi is the current agent execution backend behind `AgentPort`.
+Stageflow is a local-first runtime for configurable multi-stage agent workflows. It separates **workflow orchestration** from **agent execution**: Stageflow owns the pipeline graph, scheduling, persisted state, handoff contracts, retries, human gates, and operator interfaces; agent execution runs behind `AgentPort`, with two selectable backends today — Pi (`@earendil-works/pi-coding-agent`, the default) and Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, opt-in per pipeline via an `agent:` field). Pipelines that don't opt in behave exactly as before; the two are additive, not a migration.
 
 ## System boundaries
 
@@ -18,7 +18,9 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, clone instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
 | Stage runtime | Build attempt context, open the agent, validate handoff and optional completion checks, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
-| Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/` |
+| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts` |
+| Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
+| Claude adapter | Translate Stageflow stage execution into Claude Agent SDK sessions and tools | `src/agent/claudeAdapter.ts`, `claudeTools.ts`, `claudeActivity.ts`, `claudeSession.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
 | Operator surfaces | Drive and inspect the same runtime through CLI, browser console, or MCP | `src/cli/`, `src/server/`, `src/mcp/`, `ui/` |
 
@@ -70,7 +72,9 @@ Persisted state lets the runtime reconstruct scheduler state for HITL resume and
 
 ## Human-in-the-loop lifecycle
 
-`AgentPort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, reopens the saved agent session, delivers the opaque answer, and continues the remaining DAG.
+`AgentPort.openStage()` returns a live `StageHandle`. The runtime pulls either a completion or a `waiting_for_input` event. A waiting attempt is parked without converting the prompt into an unstructured failure. When the operator answers, Stageflow reconstructs the run context, delivers the opaque answer to the adapter, and continues the remaining DAG.
+
+How an adapter actually survives that park is adapter-internal and deliberately allowed to differ: Pi reopens its own on-disk session and splices the answer directly into the pending tool call, then resumes mid-thought. The Claude adapter never lets a tool call go dangling in the first place — `ask_operator` returns an immediate placeholder and the turn ends cleanly (via an `interrupt()` backstop), so parking has nothing to repair; answering resumes the same session as a new turn with the real prior conversation reloaded, not mid-thought. Both satisfy the same `StageHandle` contract from the runtime's point of view.
 
 This same lifecycle supports interactive console use and headless automation: CI exits with code `2` when a run requires input, while MCP clients can discover waiting gates and answer them programmatically.
 
@@ -90,7 +94,11 @@ Workflow topology and stage configuration live with the consuming project, where
 
 ### Orchestration behind ports
 
-`AgentPort` keeps scheduling and persistence code independent of Pi-specific session mechanics. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist.
+`AgentPort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveAgentPort()` and never affecting a stage that doesn't opt in. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `AgentPort` already redeemed that promise once.
+
+### Two backends, one contract
+
+Pi and the Claude adapter satisfy `StageHandle.next()`/`deliverAnswer()`/`close()` identically, but are free to — and do — implement HITL wait/park/resume with completely different internal mechanisms (mid-thought session splicing vs. clean-stop-and-resume). Making one adapter's internals resemble the other's is not a goal; contract-level parity is. `tests/agent.port.contract.test.ts` and `tests/agent.claudeAdapter.test.ts` cover this from the port's side and the Claude adapter's side respectively — Pi's own mechanics are covered by its dedicated test files (`tests/agent.piAdapter.*.test.ts`) rather than a shared black-box harness, since Pi has no scriptable test seam equivalent to `FakeAgent`'s or the Claude adapter's mocked-SDK tests.
 
 ### Local-first operator control
 

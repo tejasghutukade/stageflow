@@ -1,3 +1,4 @@
+import { parseAgentField } from "../agent/agentBackend.js";
 import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import {
   STAGE_GATE_KINDS,
@@ -255,6 +256,21 @@ function parseStageFields(
       ]);
     }
     stage.skill = raw.skill.trim();
+  }
+
+  const agentField = parseAgentField(raw.agent);
+  if (!agentField.ok) {
+    return loadFailure([
+      {
+        code: "stage.invalid_agent",
+        message: `Invalid stage ${label}: ${agentField.message}`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+  if (agentField.value !== undefined) {
+    stage.agent = agentField.value;
   }
 
   return loadSuccess(stage);

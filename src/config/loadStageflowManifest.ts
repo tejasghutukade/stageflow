@@ -1,6 +1,7 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { parseAgentField } from "../agent/agentBackend.js";
 import type {
   LoadedManifest,
   StageflowManifest,
@@ -158,6 +159,14 @@ export function parseStageflowManifestOutcome(
 
   const patterns = parsePatterns(catalogRecord.patterns, issues);
 
+  let agent: string | undefined;
+  const agentField = parseAgentField(record.agent);
+  if (!agentField.ok) {
+    issues.push(catalogIssue("catalog.manifest_invalid", agentField.message));
+  } else {
+    agent = agentField.value;
+  }
+
   if (issues.length > 0) {
     return loadFailure(issues);
   }
@@ -180,7 +189,11 @@ export function parseStageflowManifestOutcome(
     }
   }
 
-  const manifest: StageflowManifest = { version: 1, catalog };
+  const manifest: StageflowManifest = {
+    version: 1,
+    catalog,
+    ...(agent !== undefined ? { agent } : {}),
+  };
   return loadSuccess({
     path: manifestPath,
     projectRoot,

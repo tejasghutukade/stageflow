@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "bin": {
@@ -60,6 +60,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.263",
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@modelcontextprotocol/node": "^2.0.0",
