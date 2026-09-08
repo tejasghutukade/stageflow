@@ -170,7 +170,7 @@ Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [
 
 ### payload_schema {#payload-schema}
 
-When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. Unknown keywords are ignored.
+When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored.
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
