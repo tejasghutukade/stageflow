@@ -3,8 +3,45 @@ import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 
 export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
+export type IsolatedMcpSettings = {
+  directTools: true;
+  elicitation: false;
+  hostConfigDiscovery: "off";
+};
+
+export type IsolatedMcpServerEntry = Record<string, unknown> & {
+  lifecycle: "eager";
+  directTools: true;
+};
+
+export type IsolatedMcpConfig = {
+  mcpServers: Record<string, IsolatedMcpServerEntry>;
+  settings: IsolatedMcpSettings;
+};
+
+const ISOLATED_MCP_SETTINGS: IsolatedMcpSettings = {
+  directTools: true,
+  elicitation: false,
+  hostConfigDiscovery: "off",
+};
+
+export function toIsolatedMcpConfig(snapshot: ResolvedMcpServers): IsolatedMcpConfig {
+  const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
+  for (const [name, entry] of Object.entries(snapshot)) {
+    mcpServers[name] = {
+      ...entry,
+      lifecycle: "eager",
+      directTools: true,
+    };
+  }
+  return {
+    mcpServers,
+    settings: { ...ISOLATED_MCP_SETTINGS },
+  };
+}
+
 type CreateMcpAdapter = (options: {
-  config: { mcpServers: ResolvedMcpServers };
+  config: IsolatedMcpConfig;
 }) => ExtensionFactory;
 
 const PI_MCP_ADAPTER_SPEC: string = "pi-mcp-adapter";
@@ -40,7 +77,7 @@ export function mcpExtensionFactoriesForSnapshot(
     {
       name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
       factory: createMcpAdapter({
-        config: { mcpServers: snapshot },
+        config: toIsolatedMcpConfig(snapshot),
       }),
     },
   ];

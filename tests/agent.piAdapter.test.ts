@@ -3,7 +3,14 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MCP_STATUS_EVENT,
+  mcpStatusSourceFromEvents,
+  waitForIsolatedMcpConnect,
+  type IsolatedMcpStatusSnapshot,
+} from "../src/agent/piMcpConnect.js";
 import { createSealedResourceLoader } from "../src/agent/piAdapter.js";
+import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 
 const createMcpAdapter = vi.hoisted(() => vi.fn(() => () => {}));
 
@@ -11,8 +18,11 @@ vi.mock("pi-mcp-adapter", () => ({
   createMcpAdapter,
 }));
 
-const { mcpExtensionFactoriesForSnapshot, STAGEFLOW_PI_MCP_EXTENSION_NAME } =
-  await import("../src/agent/piMcpExtension.js");
+const {
+  mcpExtensionFactoriesForSnapshot,
+  STAGEFLOW_PI_MCP_EXTENSION_NAME,
+  toIsolatedMcpConfig,
+} = await import("../src/agent/piMcpExtension.js");
 
 async function writeSkill(dir: string, name: string): Promise<void> {
   const skillDir = path.join(dir, name);
@@ -55,6 +65,56 @@ async function plantHostResources(cwd: string, agentDir: string): Promise<void> 
   await writeExtension(path.join(cwd, ".pi", "extensions"), "project-canary.ts");
 }
 
+describe("toIsolatedMcpConfig", () => {
+  it("maps stdio and HTTP servers to eager isolated entries", () => {
+    const snapshot = {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: "x" },
+        cwd: "/tmp/github",
+      },
+      docs: {
+        url: "https://mcp.example.com/mcp",
+        headers: { Authorization: "Bearer t" },
+      },
+    };
+    const config = toIsolatedMcpConfig(snapshot);
+    expect(Object.keys(config.mcpServers)).toEqual(["github", "docs"]);
+    expect(config.mcpServers.github).toMatchObject({
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-github"],
+      env: { GITHUB_TOKEN: "x" },
+      cwd: "/tmp/github",
+      lifecycle: "eager",
+      directTools: true,
+    });
+    expect(config.mcpServers.docs).toMatchObject({
+      url: "https://mcp.example.com/mcp",
+      headers: { Authorization: "Bearer t" },
+      lifecycle: "eager",
+      directTools: true,
+    });
+    expect(config).not.toHaveProperty("configPath");
+    expect(config).not.toHaveProperty("imports");
+    expect(config.settings).toEqual({
+      directTools: true,
+      elicitation: false,
+      hostConfigDiscovery: "off",
+    });
+    expect(config.settings).not.toHaveProperty("approveTools");
+    expect(config.settings).not.toHaveProperty("autoAuth");
+  });
+
+  it("overlays eager lifecycle even when the snapshot asked for lazy", () => {
+    const config = toIsolatedMcpConfig({
+      github: { command: "npx", lifecycle: "lazy", directTools: false },
+    });
+    expect(config.mcpServers.github?.lifecycle).toBe("eager");
+    expect(config.mcpServers.github?.directTools).toBe(true);
+  });
+});
+
 describe("mcpExtensionFactoriesForSnapshot", () => {
   beforeEach(() => {
     createMcpAdapter.mockClear();
@@ -85,10 +145,126 @@ describe("mcpExtensionFactoriesForSnapshot", () => {
       }),
     );
     expect(createMcpAdapter).toHaveBeenCalledTimes(1);
-    expect(createMcpAdapter.mock.calls[0]?.[0]).toEqual({
-      config: { mcpServers: snapshot },
+    const adapterOptions = createMcpAdapter.mock.calls[0]?.[0];
+    expect(adapterOptions).toEqual({
+      config: toIsolatedMcpConfig(snapshot),
     });
-    expect(createMcpAdapter.mock.calls[0]?.[0]).not.toHaveProperty("configPath");
+    expect(adapterOptions).not.toHaveProperty("configPath");
+    expect(adapterOptions?.config.settings.hostConfigDiscovery).toBe("off");
+    expect(adapterOptions?.config.settings.elicitation).toBe(false);
+  });
+});
+
+describe("waitForIsolatedMcpConnect", () => {
+  const snapshot = {
+    github: { url: "https://mcp.example.invalid/mcp" },
+  };
+
+  function statusOf(
+    name: string,
+    status: IsolatedMcpStatusSnapshot["servers"][number]["status"],
+  ): IsolatedMcpStatusSnapshot {
+    return { servers: [{ name, status }] };
+  }
+
+  it("skips connect wait for an empty snapshot", async () => {
+    const subscribe = vi.fn();
+    const read = vi.fn();
+    await waitForIsolatedMcpConnect({}, { read, subscribe }, { timeoutMs: 20 });
+    await waitForIsolatedMcpConnect(undefined, { read, subscribe }, { timeoutMs: 20 });
+    expect(read).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+  });
+
+  async function expectConnectFailed(
+    run: Promise<void>,
+    message: string | RegExp,
+  ): Promise<void> {
+    const err = await run.then(
+      () => {
+        throw new Error("expected StageMcpError");
+      },
+      (caught: unknown) => caught,
+    );
+    expect(err).toBeInstanceOf(StageMcpError);
+    expect(err).toMatchObject({
+      name: "StageMcpError",
+      code: "connect_failed",
+    });
+    expect((err as StageMcpError).message).toMatch(message);
+  }
+
+  it("treats a failed status for github as connect_failed", async () => {
+    await expectConnectFailed(
+      waitForIsolatedMcpConnect(snapshot, {
+        read: () => statusOf("github", "failed"),
+      }),
+      /github/,
+    );
+  });
+
+  it("treats needs-auth as connect_failed", async () => {
+    await expectConnectFailed(
+      waitForIsolatedMcpConnect(snapshot, {
+        read: () => statusOf("github", "needs-auth"),
+      }),
+      /github[\s\S]*needs-auth|needs-auth[\s\S]*github/,
+    );
+  });
+
+  it("treats a status wait that times out as connect_failed", async () => {
+    await expectConnectFailed(
+      waitForIsolatedMcpConnect(
+        snapshot,
+        { read: () => statusOf("github", "not-connected") },
+        { timeoutMs: 20 },
+      ),
+      /github/,
+    );
+  });
+
+  it("resolves when a subscribed status becomes connected", async () => {
+    const listeners = new Set<(next: IsolatedMcpStatusSnapshot) => void>();
+    const pending = waitForIsolatedMcpConnect(
+      snapshot,
+      {
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => {
+            listeners.delete(listener);
+          };
+        },
+      },
+      { timeoutMs: 200 },
+    );
+    for (const listener of listeners) {
+      listener(statusOf("github", "connected"));
+    }
+    await pending;
+  });
+
+  it("maps MCP_STATUS_EVENT snapshots from an event bus", async () => {
+    const handlers = new Set<(data: unknown) => void>();
+    const pending = waitForIsolatedMcpConnect(
+      snapshot,
+      mcpStatusSourceFromEvents({
+        on(channel, handler) {
+          expect(channel).toBe(MCP_STATUS_EVENT);
+          handlers.add(handler);
+          return () => {
+            handlers.delete(handler);
+          };
+        },
+      }),
+      { timeoutMs: 200 },
+    );
+    for (const handler of handlers) {
+      handler({
+        version: 1,
+        servers: [{ name: "github", status: "cached", toolCount: 1, disabled: false }],
+      });
+    }
+    await pending;
   });
 });
 
