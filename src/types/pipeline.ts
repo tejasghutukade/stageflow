@@ -55,6 +55,7 @@ export type PipelineStageYamlEntry = PipelineStageRef & {
   clone_input_schema?: unknown;
   clone_actions?: CloneAction[];
   skill?: string;
+  mcp?: string[];
 };
 
 export type PipelineIncludeEntry = {
@@ -77,6 +78,7 @@ export type NormalizedPipelineStageEntry = {
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
   skill?: string;
+  mcp?: string[];
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
     | { kind: "uses"; path: string; absolutePath: string };

@@ -25,6 +25,7 @@ export type StageConfig = {
   /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
   timeout_ms?: number;
   skill?: string;
+  mcp?: string[];
   /**
    * Selects the AgentPort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.
