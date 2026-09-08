@@ -5,6 +5,24 @@ stages:
     fork:
       select: subset
       allow_none: true
+    completion:
+      mode: all
+      checks:
+        - id: changes-on-disk
+          type: artifact
+          path: changes.json
+          nonempty: true
+        - id: payload-ok
+          type: payload_schema
+        - id: matches-ci-context
+          type: command
+          run: node scripts/validate-detect-envelope.mjs
+          timeout_ms: 30000
+    recovery:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: author-diagrams
     uses: ./author-diagrams.yaml
     needs: detect-changes

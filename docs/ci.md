@@ -281,10 +281,13 @@ every PR). Inputs: `pr_number` and/or `head_ref` (provide one), plus optional
 `base_ref` (default `main`). Sticky PR comments run only when `pr_number` is set.
 
 Provider auth uses **OpenRouter** (`OPENROUTER_API_KEY`), not OpenAI.
-`scripts/prepare-ci-context.sh` writes full `changed_files` plus filtered
-`relevant_files`; when the relevant set is empty, GHA skips the pipeline early.
-Otherwise Stageflow agents **detect** diagram types (`architecture`, `workflow`,
-`sequence`, `dataflow`, `lifecycle`) and **author-diagrams** writes
+`scripts/prepare-ci-context.sh` writes full `changed_files`, filtered
+`relevant_files`, and deterministic `diagram_types` / `change_summary` /
+`expected_fork_choice` from path rules; when the relevant set is empty, GHA
+skips the pipeline early. **detect-changes** copies that context into
+`changes.json` and the envelope (no type-selection heuristics); pipeline
+completion checks the handoff against ci-context via
+`scripts/validate-detect-envelope.mjs`. **author-diagrams** then writes
 `{type}.spec.json` per type. The workflow uses
 [`.github/actions/sf-run`](../.github/actions/sf-run) with `export-run: true`,
 then runs Archify `deliver` for each spec via `scripts/deliver-diagrams.sh`,
