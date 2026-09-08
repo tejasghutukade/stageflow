@@ -69,14 +69,17 @@ async function* emptyStream(): AsyncGenerator<unknown> {
   // no messages, no emit call — simulates a turn that ends without emitting
 }
 
-function initMessage(sessionId: string) {
+function initMessage(
+  sessionId: string,
+  mcpServers: Array<{ name: string; status: string; error?: string }> = [],
+) {
   return {
     type: "system",
     subtype: "init",
     session_id: sessionId,
     cwd: "/tmp",
     tools: [],
-    mcp_servers: [],
+    mcp_servers: mcpServers,
     model: "claude-sonnet-4-5",
     permissionMode: "bypassPermissions",
     slash_commands: [],
@@ -290,6 +293,23 @@ describe("ClaudeAgentAdapter — run loop", () => {
     if (!result.ok) expect(result.reason).toBe("subprocess spawn failed");
   });
 
+  it("surfaces a thrown query() error even when a snapshot is passed, not as connect_failed", async () => {
+    queryImpl = async function* () {
+      throw new Error("subprocess spawn failed");
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("subprocess spawn failed");
+      expect(result.reason).not.toMatch(/connect_failed/i);
+    }
+  });
+
   it("openStage never waits — completes directly via next()", async () => {
     queryImpl = async function* (options) {
       const emitTool = findTool(options, "emit_stage_envelope");
@@ -352,6 +372,172 @@ describe("ClaudeAgentAdapter — run loop", () => {
       "tool_end",
       "agent_end",
     ]);
+  });
+});
+
+describe("ClaudeAgentAdapter — MCP connect-fail", () => {
+  let workspaceDir: string;
+
+  beforeEach(async () => {
+    workspaceDir = await mkdtemp(path.join(tmpdir(), "sf-claude-adapter-mcp-"));
+  });
+
+  afterEach(async () => {
+    await rm(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("AE3: failed init status for a passed server fails the stage as connect_failed and interrupts", async () => {
+    let emitHandlerRan = false;
+    queryImpl = async function* (options) {
+      yield initMessage("session-connect-fail", [{ name: "github", status: "failed" }]);
+      const emitTool = findTool(options, "emit_stage_envelope");
+      emitHandlerRan = true;
+      await emitTool.handler({ status: "success", summary: "should not win", artifacts: [] }, undefined);
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/connect_failed|failed to connect/i);
+      expect(result.reason).toMatch(/github/);
+    }
+    expect(lastInterruptSpy).toHaveBeenCalled();
+    expect(emitHandlerRan).toBe(false);
+  });
+
+  it("treats needs-auth for a passed HTTP server as connect_failed", async () => {
+    queryImpl = async function* () {
+      yield initMessage("session-needs-auth", [{ name: "remote", status: "needs-auth" }]);
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { remote: { type: "http", url: "https://example.invalid/mcp" } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/connect_failed|failed to connect/i);
+      expect(result.reason).toMatch(/remote/);
+    }
+    expect(lastInterruptSpy).toHaveBeenCalled();
+  });
+
+  it("treats pending init status for a passed server as connect_failed", async () => {
+    queryImpl = async function* () {
+      yield initMessage("session-pending", [{ name: "github", status: "pending" }]);
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toMatch(/connect_failed|failed to connect/i);
+      expect(result.reason).toMatch(/github/);
+    }
+    expect(lastInterruptSpy).toHaveBeenCalled();
+  });
+
+  it("continues the turn when a passed server is connected and emit still succeeds", async () => {
+    queryImpl = async function* (options) {
+      yield initMessage("session-connected", [{ name: "github", status: "connected" }]);
+      const emitTool = findTool(options, "emit_stage_envelope");
+      await emitTool.handler({ status: "success", summary: "done with github", artifacts: [] }, undefined);
+      yield userToolResultMessage("c1", "ok");
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.envelope.summary).toBe("done with github");
+  });
+
+  it("empty snapshot and init mcp_servers: [] does not connect_fail; missing emit still applies", async () => {
+    queryImpl = async function* () {
+      yield initMessage("session-empty");
+      yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage(baseInput());
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("missing emit_stage_envelope");
+      expect(result.reason).not.toMatch(/connect_failed/i);
+    }
+  });
+
+  it("empty resolvedMcpServers plus default init mcp_servers: [] does not connect_fail", async () => {
+    queryImpl = async function* () {
+      yield initMessage("session-empty-snapshot");
+      yield { type: "result", subtype: "success", is_error: false, result: "done talking" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({ ...baseInput(), resolvedMcpServers: {} });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("missing emit_stage_envelope");
+      expect(result.reason).not.toMatch(/connect_failed/i);
+    }
+  });
+
+  it("resume turn with a failed passed server is connect_failed and does not complete the parked prompt as success", async () => {
+    queryImpl = async function* (options) {
+      if (options.resume !== undefined) {
+        yield initMessage("session-resume-connect-fail", [{ name: "github", status: "failed" }]);
+        const emitTool = findTool(options, "emit_stage_envelope");
+        await emitTool.handler(
+          { status: "success", summary: "should not complete", artifacts: [] },
+          undefined,
+        );
+        yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+        return;
+      }
+      yield initMessage("session-resume-connect-fail", [{ name: "github", status: "connected" }]);
+      const askTool = findTool(options, "ask_operator");
+      const result = await askTool.handler(
+        { kind: "free_text", message: "Which env?", id: "q1" },
+        undefined,
+      );
+      yield userToolResultMessage("c1", result.content);
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const input: StageRunInput = {
+      ...baseInput({ gate_kinds: undefined }),
+      roots: buildStageRoots(workspaceDir, "review"),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    };
+    const handle = adapter.openStage(input);
+    const waitEvent = await handle.next();
+    expect(waitEvent.status).toBe("waiting_for_input");
+
+    handle.deliverAnswer({ promptId: "q1", kind: "free_text", text: "staging" });
+    const doneEvent = await handle.next();
+    expect(doneEvent.status).toBe("completed");
+    if (doneEvent.status === "completed") {
+      expect(doneEvent.result.ok).toBe(false);
+      if (!doneEvent.result.ok) {
+        expect(doneEvent.result.reason).toMatch(/connect_failed|failed to connect/i);
+        expect(doneEvent.result.reason).toMatch(/github/);
+      }
+    }
+    expect(lastInterruptSpy).toHaveBeenCalled();
   });
 });
 
@@ -473,12 +659,13 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const snapshot = { github: { command: "npx", args: ["-y", "pkg"] } };
     queryImpl = async function* (options) {
       if (options.resume !== undefined) {
+        yield initMessage("session-resume-mcp", [{ name: "github", status: "connected" }]);
         const emitTool = findTool(options, "emit_stage_envelope");
         await emitTool.handler({ status: "success", summary: "resumed with mcp", artifacts: [] }, undefined);
         yield { type: "result", subtype: "success", is_error: false, result: "ok" };
         return;
       }
-      yield initMessage("session-resume-mcp");
+      yield initMessage("session-resume-mcp", [{ name: "github", status: "connected" }]);
       const askTool = findTool(options, "ask_operator");
       const result = await askTool.handler(
         { kind: "free_text", message: "Which env?", id: "q1" },
