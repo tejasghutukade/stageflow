@@ -1,13 +1,42 @@
-import { StageMcpError } from "../config/resolveStageMcpServers.js";
-import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
+import {
+  type EventBus,
+  type ExtensionFactory,
+  type InlineExtension,
+  createEventBus,
+} from "@earendil-works/pi-coding-agent";
+import {
+  StageMcpError,
+  type ResolvedMcpServers,
+} from "../config/resolveStageMcpServers.js";
 
-export const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
+export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
-export const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 5_000;
-
+const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
+const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 5_000;
 const STATUS_POLL_MS = 50;
+const PI_MCP_ADAPTER_SPEC: string = "pi-mcp-adapter";
 
-export type IsolatedMcpServerRuntimeStatus =
+type IsolatedMcpSettings = {
+  directTools: true;
+  elicitation: false;
+  hostConfigDiscovery: "off";
+};
+
+type IsolatedMcpServerEntry = Record<string, unknown> & {
+  lifecycle: "eager";
+  directTools: true;
+};
+
+type IsolatedMcpConfig = {
+  mcpServers: Record<string, IsolatedMcpServerEntry>;
+  settings: IsolatedMcpSettings;
+};
+
+type CreateMcpAdapter = (options: {
+  config: IsolatedMcpConfig;
+}) => ExtensionFactory;
+
+type IsolatedMcpServerRuntimeStatus =
   | "connected"
   | "cached"
   | "failed"
@@ -15,27 +44,39 @@ export type IsolatedMcpServerRuntimeStatus =
   | "not-connected"
   | "disabled";
 
-export type IsolatedMcpStatusServer = {
+type IsolatedMcpStatusServer = {
   name: string;
   status: IsolatedMcpServerRuntimeStatus;
 };
 
-export type IsolatedMcpStatusSnapshot = {
+type IsolatedMcpStatusSnapshot = {
   servers: ReadonlyArray<IsolatedMcpStatusServer>;
 };
 
-export type IsolatedMcpStatusSource = {
+type IsolatedMcpStatusSource = {
   read?: () => IsolatedMcpStatusSnapshot | undefined;
   subscribe?: (listener: (snapshot: IsolatedMcpStatusSnapshot) => void) => () => void;
 };
 
-export type IsolatedMcpConnectWaitOptions = {
+type IsolatedMcpStatusEvents = {
+  on(channel: string, handler: (data: unknown) => void): (() => void) | void;
+  off?(channel: string, handler: (data: unknown) => void): void;
+};
+
+export type IsolatedMcpAttachOptions = {
   timeoutMs?: number;
 };
 
-export type IsolatedMcpStatusEvents = {
-  on(channel: string, handler: (data: unknown) => void): (() => void) | void;
-  off?(channel: string, handler: (data: unknown) => void): void;
+export type IsolatedMcpAttach = {
+  extensionFactories: InlineExtension[] | undefined;
+  eventBus: EventBus | undefined;
+  connecting: Promise<void> | undefined;
+};
+
+const ISOLATED_MCP_SETTINGS: IsolatedMcpSettings = {
+  directTools: true,
+  elicitation: false,
+  hostConfigDiscovery: "off",
 };
 
 const SUCCESS_STATUSES = new Set<IsolatedMcpServerRuntimeStatus>([
@@ -49,6 +90,53 @@ const FAILURE_STATUSES = new Set<IsolatedMcpServerRuntimeStatus>([
   "disabled",
 ]);
 
+const EMPTY_ATTACH: IsolatedMcpAttach = {
+  extensionFactories: undefined,
+  eventBus: undefined,
+  connecting: undefined,
+};
+
+let cachedCreateMcpAdapter: CreateMcpAdapter | undefined;
+
+function toIsolatedMcpConfig(snapshot: ResolvedMcpServers): IsolatedMcpConfig {
+  const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
+  for (const [name, entry] of Object.entries(snapshot)) {
+    mcpServers[name] = {
+      ...entry,
+      lifecycle: "eager",
+      directTools: true,
+    };
+  }
+  return {
+    mcpServers,
+    settings: { ...ISOLATED_MCP_SETTINGS },
+  };
+}
+
+async function loadCreateMcpAdapter(): Promise<CreateMcpAdapter> {
+  if (cachedCreateMcpAdapter !== undefined) {
+    return cachedCreateMcpAdapter;
+  }
+  try {
+    const mod = (await import(PI_MCP_ADAPTER_SPEC)) as {
+      createMcpAdapter: CreateMcpAdapter;
+    };
+    if (typeof mod.createMcpAdapter === "function") {
+      cachedCreateMcpAdapter = mod.createMcpAdapter;
+      return cachedCreateMcpAdapter;
+    }
+  } catch {
+    // Node does not type-strip .ts under node_modules.
+  }
+  const { createJiti } = await import("jiti/static");
+  const jiti = createJiti(import.meta.url);
+  const mod = (await jiti.import(PI_MCP_ADAPTER_SPEC)) as {
+    createMcpAdapter: CreateMcpAdapter;
+  };
+  cachedCreateMcpAdapter = mod.createMcpAdapter;
+  return cachedCreateMcpAdapter;
+}
+
 function isRuntimeStatus(value: string): value is IsolatedMcpServerRuntimeStatus {
   return (
     value === "connected" ||
@@ -60,7 +148,7 @@ function isRuntimeStatus(value: string): value is IsolatedMcpServerRuntimeStatus
   );
 }
 
-export function asIsolatedMcpStatusSnapshot(
+function asIsolatedMcpStatusSnapshot(
   data: unknown,
 ): IsolatedMcpStatusSnapshot | undefined {
   if (data === null || typeof data !== "object") return undefined;
@@ -78,7 +166,7 @@ export function asIsolatedMcpStatusSnapshot(
   return { servers: parsed };
 }
 
-export function mcpStatusSourceFromEvents(
+function mcpStatusSourceFromEvents(
   events: IsolatedMcpStatusEvents,
 ): IsolatedMcpStatusSource {
   return {
@@ -142,16 +230,12 @@ function evaluateConnectStatus(
   return { kind: "ok" };
 }
 
-export async function waitForIsolatedMcpConnect(
-  snapshot: ResolvedMcpServers | undefined,
-  source: IsolatedMcpStatusSource = {},
-  options?: IsolatedMcpConnectWaitOptions,
+function waitForIsolatedMcpConnect(
+  snapshot: ResolvedMcpServers,
+  source: IsolatedMcpStatusSource,
+  options?: IsolatedMcpAttachOptions,
 ): Promise<void> {
-  const serverNames = Object.keys(snapshot ?? {});
-  if (serverNames.length === 0) {
-    return;
-  }
-
+  const serverNames = Object.keys(snapshot);
   const timeoutMs = options?.timeoutMs ?? DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS;
   let lastSnapshot = source.read?.();
 
@@ -201,4 +285,36 @@ export async function waitForIsolatedMcpConnect(
       );
     }, timeoutMs);
   });
+}
+
+export function emitIsolatedMcpStatus(
+  eventBus: EventBus,
+  servers: ReadonlyArray<{ name: string; status: string }>,
+): void {
+  eventBus.emit(MCP_STATUS_EVENT, { servers });
+}
+
+export async function attachIsolatedMcp(
+  snapshot?: ResolvedMcpServers,
+  options?: IsolatedMcpAttachOptions,
+): Promise<IsolatedMcpAttach> {
+  if (snapshot === undefined || Object.keys(snapshot).length === 0) {
+    return EMPTY_ATTACH;
+  }
+  const createMcpAdapter = await loadCreateMcpAdapter();
+  const extensionFactories: InlineExtension[] = [
+    {
+      name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
+      factory: createMcpAdapter({
+        config: toIsolatedMcpConfig(snapshot),
+      }),
+    },
+  ];
+  const eventBus = createEventBus();
+  const connecting = waitForIsolatedMcpConnect(
+    snapshot,
+    mcpStatusSourceFromEvents(eventBus),
+    options,
+  );
+  return { extensionFactories, eventBus, connecting };
 }
