@@ -34,8 +34,10 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentSession,
+  type EventBus,
   type InlineExtension,
   createAgentSession,
+  createEventBus,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -43,6 +45,15 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { StageMcpError } from "../config/resolveStageMcpServers.js";
+import {
+  STAGEFLOW_PI_MCP_EXTENSION_NAME,
+  mcpExtensionFactoriesForSnapshot,
+} from "./piMcpExtension.js";
+import {
+  mcpStatusSourceFromEvents,
+  waitForIsolatedMcpConnect,
+} from "./piMcpConnect.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
@@ -626,6 +637,7 @@ export function createSealedResourceLoader(options: {
   additionalExtensionPaths?: string[];
   additionalSkillPaths?: string[];
   extensionFactories?: InlineExtension[];
+  eventBus?: EventBus;
 }): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd: options.cwd,
@@ -635,13 +647,32 @@ export function createSealedResourceLoader(options: {
     appendSystemPromptOverride: () => [],
     additionalExtensionPaths: options.additionalExtensionPaths,
     additionalSkillPaths: options.additionalSkillPaths,
-    extensionFactories: options.extensionFactories,
+    ...(options.extensionFactories !== undefined
+      ? { extensionFactories: options.extensionFactories }
+      : {}),
+    ...(options.eventBus !== undefined ? { eventBus: options.eventBus } : {}),
     noContextFiles: true,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
   });
+}
+
+function resolvedMcpSnapshotHasEntries(
+  snapshot: StageRunInput["resolvedMcpServers"],
+): snapshot is NonNullable<StageRunInput["resolvedMcpServers"]> {
+  return snapshot !== undefined && Object.keys(snapshot).length > 0;
+}
+
+function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
+  const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  const names: string[] = [];
+  for (const ext of loader.getExtensions().extensions) {
+    if (ext.path !== inlinePath) continue;
+    names.push(...ext.tools.keys());
+  }
+  return names;
 }
 
 async function shutdownSession(session: AgentSession | undefined): Promise<void> {
@@ -1054,6 +1085,13 @@ async function prepareStageSessionWiring(
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
+    const mcpSnapshot = resolvedMcpSnapshotHasEntries(input.resolvedMcpServers)
+      ? input.resolvedMcpServers
+      : undefined;
+    const extensionFactories = mcpSnapshot
+      ? mcpExtensionFactoriesForSnapshot(mcpSnapshot)
+      : undefined;
+    const eventBus = extensionFactories !== undefined ? createEventBus() : undefined;
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
@@ -1063,7 +1101,16 @@ async function prepareStageSessionWiring(
       ...(input.skillFilePath !== undefined
         ? { additionalSkillPaths: [input.skillFilePath] }
         : {}),
+      ...(extensionFactories !== undefined ? { extensionFactories } : {}),
+      ...(eventBus !== undefined ? { eventBus } : {}),
     });
+    const connecting =
+      mcpSnapshot !== undefined && eventBus !== undefined
+        ? waitForIsolatedMcpConnect(
+            mcpSnapshot,
+            mcpStatusSourceFromEvents(eventBus),
+          )
+        : undefined;
     await loader.reload();
 
     const extensionErrors = loader.getExtensions().errors;
@@ -1100,21 +1147,29 @@ async function prepareStageSessionWiring(
       };
     }
 
+    if (connecting !== undefined) {
+      await connecting;
+    }
+
     const customTools = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
+    const tools = resolveStageToolNames(
+      emitDef.name,
+      artifactDef.name,
+      askDef?.name ?? "ask_operator",
+      gateKinds,
+    );
+    if (mcpSnapshot !== undefined) {
+      tools.push(...collectMcpExtensionToolNames(loader));
+    }
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: resolveStageToolNames(
-        emitDef.name,
-        artifactDef.name,
-        askDef?.name ?? "ask_operator",
-        gateKinds,
-      ),
+      tools,
       customTools,
       emitDefName: emitDef.name,
       ...(askDef ? { askOperatorDefName: askDef.name } : {}),
@@ -1126,6 +1181,9 @@ async function prepareStageSessionWiring(
     };
   } catch (err) {
     restoreProvider?.();
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
     throw err;
   }
 }
