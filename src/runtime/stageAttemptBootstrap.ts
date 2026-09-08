@@ -7,6 +7,12 @@ import type {
   StageSessionMode,
 } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
+import {
+  MCP_CATALOG_FILENAME,
+  StageMcpError,
+  resolveStageMcpServers,
+  type ResolvedMcpServers,
+} from "../config/resolveStageMcpServers.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
@@ -80,19 +86,50 @@ async function resolveStageSkillForRun(
   return { ok: true, skillFilePath: resolved.filePath };
 }
 
+async function resolveAttemptMcpServers(
+  allowlist: readonly string[] | undefined,
+  factoryCwd: string | undefined,
+): Promise<ResolvedMcpServers | undefined> {
+  const names = allowlist ?? [];
+  if (names.length === 0) return undefined;
+  if (factoryCwd === undefined) {
+    throw new StageMcpError(
+      `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
+      "missing_catalog",
+    );
+  }
+  const resolved = await resolveStageMcpServers({
+    projectRoot: factoryCwd,
+    allowlist: names,
+    env: process.env,
+  });
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
 async function openStageWithOperatorCatalog(
   agent: Pick<AgentPort, "openStage">,
   input: Omit<StageRunInput, "skillFilePath">,
   catalog?: OperatorCatalog,
+  factoryCwd?: string,
 ): Promise<OpenStageWithOperatorCatalogResult> {
   const skill = await resolveStageSkillForRun(input.stage, catalog);
   if (!skill.ok) return skill;
+  let resolvedMcpServers: ResolvedMcpServers | undefined;
+  try {
+    resolvedMcpServers = await resolveAttemptMcpServers(input.stage.mcp, factoryCwd);
+  } catch (err) {
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
+    throw err;
+  }
   try {
     const handle = agent.openStage({
       ...input,
       ...(skill.skillFilePath !== undefined
         ? { skillFilePath: skill.skillFilePath }
         : {}),
+      ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
     });
     return { ok: true, handle };
   } catch (err) {
@@ -266,6 +303,7 @@ export async function openStageAttempt(
         : {}),
     },
     input.operatorCatalog,
+    input.factoryCwd,
   );
   if (!opened.ok) return opened;
   return {
