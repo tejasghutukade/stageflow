@@ -28,6 +28,30 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.value[0]?.id).toBe("gate");
   });
 
+  it("treats uses plus mcp as a file-stage override, not an inline conflict", () => {
+    const outcome = normalizePipelineStageEntries(
+      [
+        {
+          raw: {
+            id: "x",
+            uses: "./x.yaml",
+            mcp: ["github"],
+          },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
+      ctx,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value[0]?.body).toMatchObject({
+      kind: "uses",
+      path: "./x.yaml",
+    });
+    expect(outcome.value[0]?.mcp).toEqual(["github"]);
+    expect(toWiringRefs(outcome.value)).toEqual([{ id: "x" }]);
+  });
+
   it("rejects uses and inline body conflict", () => {
     const outcome = normalizePipelineStageEntries(
       [

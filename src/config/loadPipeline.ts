@@ -130,6 +130,7 @@ async function loadPipelineFromPath(
     const stage: StageConfig = {
       ...stageOutcome.value,
       ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
+      ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
     };
     stages.push(stage);
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };

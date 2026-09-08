@@ -36,6 +36,7 @@ export type ValidationFindingCode =
   | "stage.invalid_pre_emit_checks"
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
+  | "stage.invalid_mcp"
   | "stage.invalid_agent"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
