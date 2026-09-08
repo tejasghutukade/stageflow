@@ -373,6 +373,62 @@ describe("ClaudeAgentAdapter — run loop", () => {
       "agent_end",
     ]);
   });
+
+  it("emits tool_start/tool_end for mcp__github__list_issues via onActivity", async () => {
+    queryImpl = async function* (options) {
+      const emitTool = findTool(options, "emit_stage_envelope");
+      yield {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "mcp-1",
+              name: "mcp__github__list_issues",
+              input: { owner: "acme", repo: "app" },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      yield {
+        type: "user",
+        message: {
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "mcp-1",
+              content: '[{"number":1}]',
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      };
+      await emitTool.handler({ status: "success", summary: "ok", artifacts: [] }, undefined);
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const events: Array<{ event: string; toolName?: string }> = [];
+    await adapter.runStage({
+      ...baseInput(),
+      onActivity: (event) => {
+        events.push(
+          event.event === "tool_start" || event.event === "tool_end"
+            ? { event: event.event, toolName: event.toolName }
+            : { event: event.event },
+        );
+      },
+    });
+    expect(events).toEqual([
+      { event: "agent_start" },
+      { event: "turn_start" },
+      { event: "tool_start", toolName: "mcp__github__list_issues" },
+      { event: "tool_end", toolName: "mcp__github__list_issues" },
+      { event: "agent_end" },
+    ]);
+  });
 });
 
 describe("ClaudeAgentAdapter — MCP connect-fail", () => {
