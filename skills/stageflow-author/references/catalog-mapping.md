@@ -28,15 +28,56 @@ Collision handling lives in [`catalog-write-conventions.md`](catalog-write-conve
 
 Default `select` is `one` unless the human says more than one branch can run.
 
-Map linear chains, sibling fan-out, generic fan-in (`needs` array), and single-level `fork`. A runtime clone count is not knowable from a static description — leave `clonable` and `clone_forks` unset. Clone-list joins (one catalog parent, `priorEnvelopes`) are not this shape.
+Map linear chains, sibling fan-out, generic fan-in (`needs` array), and single-level `fork`.
 
 A review, approval, or sign-off step is a gated stage: put `gate_kinds` on that stage file and follow [`stage-prompt-template.md`](stage-prompt-template.md).
+
+## Review then fix then approve
+
+When the human wants a review that can demand changes, then a later approve/ship:
+
+```
+… → review → address-feedback → approve
+```
+
+Do not wire approve/ship as the immediate child of review. Pipelines are forward-only; without an address-feedback stage, blocking findings have nowhere to land. The address-feedback stage is the only post-review editor; the approve stage is the backstop.
+
+## Completion and recovery
+
+Put `completion` / `recovery` on the **pipeline** stage entry (the `uses:` wrapper), not on the stage body. Use when the human needs a hard gate before advance:
+
+| Need | Pipeline wiring |
+|---|---|
+| Required file under the attempt artifact dir | `completion.checks` with `type: artifact`, `path`, usually `nonempty: true` |
+| HITL must complete | `type: gate` with `kind` that appears in the stage's `gate_kinds` |
+| Implement must change the checkout | `type: checkout_changes` with `path_fields` naming required arrays in `payload_schema` |
+| Auto-retry after verification fail | `recovery: { mode: repair, max_attempts: N, retry_safety: idempotent, include_failed_checks: true }` |
+| Side-effecting publish / ship | `recovery: { mode: manual, retry_safety: side_effecting }` |
+
+`completion.mode` is `all`. Check `id` values must be unique within the stage. Wire these for writer stages and final gates; prompts alone do not enforce them.
+
+## Clonable successors
+
+A runtime clone count is not knowable from a vague description — leave `clonable` and `clone_forks` unset and prefer sibling stages or a single review.
+
+When the human explicitly wants N parallel instances of **one** successor catalog id (e.g. several review lenses, several prototype variants):
+
+- On that successor pipeline entry: `clonable: true` and `clone_cap` (integer ≥ 2).
+- That successor must have at least one child (a join / address-feedback / collect stage). It cannot be a DAG leaf.
+- Parent success emit uses `clone_forks` for that successor (not `fork_choice`). Each clone assignment is a full envelope; validate assignments with `clone_input_schema` on the clonable stage body.
+- Join stages that wait on the clonable parent read clone-list `priorEnvelopes`, not `priorEnvelopesByStage`.
+
+`fork` + `fork_choice` picks which **branch stage ids** run. `clone_forks` spawns **N instances** of one successor id.
+
+## Models
+
+Confirm providers before writing. After a fork, give every sibling the same configured `model` unless the human asks for different ones. Prefer a reliable configured model on side-effecting final stages.
 
 ## Worked examples
 
 ### Review loop (linear)
 
-Three sequential steps; the middle one is a sign-off.
+Three sequential steps; the middle one is a sign-off. Reject/revise stays inside the gated `review` stage.
 
 ```yaml
 id: review-loop
@@ -53,6 +94,26 @@ stages:
 
 `review` carries `gate_kinds: [artifact_backed]`. Full set: [`../assets/examples/linear-review/`](../assets/examples/linear-review/).
 
+### Review with separate fix stage
+
+When review can emit blockers and a later stage approves or ships, insert address-feedback between them:
+
+```yaml
+stages:
+  - id: implement
+    uses: ./implement.yaml
+  - id: review
+    uses: ./review.yaml
+    needs: implement
+  - id: address-feedback
+    uses: ./address-feedback.yaml
+    needs: review
+  - id: approve
+    uses: ./approve.yaml
+    needs: address-feedback
+```
+
+Do not make `approve` / `ship` `needs: review` when blockers are expected.
 ### Release gate (fork, select one)
 
 One deciding step, then exactly one successor.

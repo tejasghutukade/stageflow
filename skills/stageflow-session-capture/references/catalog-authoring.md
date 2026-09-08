@@ -16,8 +16,11 @@ Every `system_prompt` ends with a mandatory `emit_stage_envelope` footer, for ex
 
 ```
 When finished, call emit_stage_envelope once with status, summary, artifacts,
-and a payload the next stage can use.
+and a payload the next stage can use. Your last tool call in this attempt must
+be emit_stage_envelope. An empty final message is a stage failure.
 ```
+
+Write reviewable or required outputs with `write_stage_artifact`, not checkout `write`/`edit`, unless the step's deliverable is intentionally checkout-only. `summary` is for the next stage — outcomes and artifact pointers only; do not put this stage's prohibitions in the summary.
 
 Omit `gate_kinds`. A human-review checkpoint from the source session stays as prose in the stage approach, not a HITL gate.
 
