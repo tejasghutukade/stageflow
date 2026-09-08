@@ -22,7 +22,7 @@ export type StageConfig = {
   pre_emit_checks?: PreEmitCheck[];
   clone_input_schema?: unknown;
   clone_actions?: CloneAction[];
-  /** Optional stage wall-clock timeout in milliseconds (default 15 minutes). */
+  /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
   timeout_ms?: number;
   skill?: string;
   /**

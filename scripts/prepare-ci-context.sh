@@ -6,10 +6,20 @@ usage() {
 Usage: $(basename "$0") [output.json]
 
 Resolve PR/git context for Archify-on-PR before Stageflow runs.
-Writes ci-context.json with head_sha, repo metadata, changed files, and
-path verification at the pinned head commit.
+Writes ci-context.json with head_sha, repo metadata, changed_files (full),
+relevant_files (filtered for architecture-impacting paths), path
+verification at the pinned head commit, diagram_types (deterministic from
+relevant_files), change_summary, and expected_fork_choice.
+
+relevant_files excludes docs/**, *.md (except skills/**), lockfiles,
+non-fixture tests/**, .editorconfig / .vscode/ / .idea/, and pitch-deck.* /
+pitch-assets/**. tests/fixtures/**/*.yaml|yml and skills/** are kept.
+content_hash is derived from relevant_files only (empty string when none).
+diagram_types / change_summary / expected_fork_choice are derived from
+relevant_files only.
 
 Environment:
+  PR_NUMBER          PR number override (preferred over GITHUB_EVENT_PATH / gh)
   PR_HEAD_SHA        PR head commit (preferred over git rev-parse HEAD)
   GITHUB_REPOSITORY  owner/repo
   GITHUB_BASE_REF    base branch (default: main)
@@ -87,6 +97,10 @@ resolve_repository() {
 }
 
 resolve_pr_number() {
+  if [[ -n "${PR_NUMBER:-}" ]]; then
+    printf '%s' "$PR_NUMBER"
+    return
+  fi
   if [[ -n "${GITHUB_EVENT_PATH:-}" && -f "${GITHUB_EVENT_PATH}" ]]; then
     jq -r '.pull_request.number // .number // empty' "${GITHUB_EVENT_PATH}" 2>/dev/null || true
     return
@@ -129,6 +143,129 @@ path_exists_at_revision() {
   git -C "$REPO_ROOT" cat-file -e "${head_sha}:${path}" >/dev/null 2>&1
 }
 
+# Returns 0 if path is architecture-relevant, 1 if filtered out.
+is_relevant_path() {
+  local path="$1"
+  local base
+  base="$(basename "$path")"
+
+  if [[ "$path" == docs/* ]]; then
+    return 1
+  fi
+
+  if [[ "$path" == skills/* ]]; then
+    return 0
+  fi
+
+  if [[ "$path" == *.md ]]; then
+    return 1
+  fi
+
+  case "$base" in
+    package-lock.json|npm-shrinkwrap.json|yarn.lock|pnpm-lock.yaml|bun.lock|bun.lockb|Cargo.lock|poetry.lock|Gemfile.lock)
+      return 1
+      ;;
+  esac
+
+  if [[ "$path" == tests/* ]]; then
+    if [[ "$path" == tests/fixtures/* && ( "$path" == *.yaml || "$path" == *.yml ) ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if [[ "$base" == .editorconfig ]]; then
+    return 1
+  fi
+
+  if [[ "$path" == .vscode/* || "$path" == .idea/* ]]; then
+    return 1
+  fi
+
+  if [[ "$base" == pitch-deck.* ]]; then
+    return 1
+  fi
+
+  if [[ "$path" == pitch-assets/* ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+diagram_types_for_path() {
+  local path="$1"
+
+  if [[ "$path" == src/agent || "$path" == src/agent/* ||
+        "$path" == src/server || "$path" == src/server/* ||
+        "$path" == src/mcp || "$path" == src/mcp/* ||
+        "$path" == src/runstore || "$path" == src/runstore/* ||
+        "$path" == ui || "$path" == ui/* ||
+        "$path" == skills || "$path" == skills/* ||
+        "$path" == stageflow.yaml || "$path" == package.json ]]; then
+    printf '%s\n' architecture
+  fi
+
+  if [[ "$path" == *.pipeline.yaml ||
+        "$path" == examples || "$path" == examples/* ||
+        "$path" == .github/workflows || "$path" == .github/workflows/* ||
+        "$path" == scripts || "$path" == scripts/* ||
+        "$path" == src/runtime || "$path" == src/runtime/* ||
+        "$path" == src/config || "$path" == src/config/* ]]; then
+    printf '%s\n' workflow
+  fi
+
+  if [[ "$path" == src/server || "$path" == src/server/* ||
+        "$path" == src/mcp || "$path" == src/mcp/* ||
+        "$path" == src/cli/runs* ||
+        "$path" == ui || "$path" == ui/* ]]; then
+    printf '%s\n' sequence
+  fi
+
+  if [[ "$path" == src/envelope || "$path" == src/envelope/* ||
+        "$path" == src/runstore || "$path" == src/runstore/* ||
+        "$path" == src/projection || "$path" == src/projection/* ||
+        "$path" == src/config || "$path" == src/config/* ]]; then
+    printf '%s\n' dataflow
+  fi
+
+  if [[ "$path" == src/runtime || "$path" == src/runtime/* ||
+        "$path" == src/tools || "$path" == src/tools/* ]]; then
+    printf '%s\n' lifecycle
+  fi
+}
+
+select_diagram_types() {
+  local path type
+  local has_architecture=0 has_workflow=0 has_sequence=0 has_dataflow=0 has_lifecycle=0
+  local -a types=()
+
+  for path in "${RELEVANT_FILES[@]+"${RELEVANT_FILES[@]}"}"; do
+    while IFS= read -r type; do
+      [[ -z "$type" ]] && continue
+      case "$type" in
+        architecture) has_architecture=1 ;;
+        workflow) has_workflow=1 ;;
+        sequence) has_sequence=1 ;;
+        dataflow) has_dataflow=1 ;;
+        lifecycle) has_lifecycle=1 ;;
+      esac
+    done < <(diagram_types_for_path "$path")
+  done
+
+  ((has_architecture)) && types+=("architecture")
+  ((has_workflow)) && types+=("workflow")
+  ((has_sequence)) && types+=("sequence")
+  ((has_dataflow)) && types+=("dataflow")
+  ((has_lifecycle)) && types+=("lifecycle")
+
+  if ((${#RELEVANT_FILES[@]} > 0)) && ((${#types[@]} == 0)); then
+    types+=("architecture")
+  fi
+
+  printf '%s\n' "${types[@]+"${types[@]}"}"
+}
+
 HEAD_SHA="$(resolve_head_sha)"
 BASE_REF="$(resolve_base_ref)"
 HEAD_REF="$(resolve_head_ref)"
@@ -141,15 +278,39 @@ if ! git -C "$REPO_ROOT" cat-file -e "${HEAD_SHA}^{commit}" >/dev/null 2>&1; the
   exit 1
 fi
 
-mapfile -t CHANGED_FILES 2>/dev/null < <(collect_changed_files "$DIFF_BASE" "$HEAD_SHA" | sed '/^$/d' | sort -u) || {
-  CHANGED_FILES=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && CHANGED_FILES+=("$line")
-  done < <(collect_changed_files "$DIFF_BASE" "$HEAD_SHA" | sed '/^$/d' | sort -u)
-}
+CHANGED_FILES=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && CHANGED_FILES+=("$line")
+done < <(collect_changed_files "$DIFF_BASE" "$HEAD_SHA" | sed '/^$/d' | sort -u)
+
+RELEVANT_FILES=()
+for path in "${CHANGED_FILES[@]+"${CHANGED_FILES[@]}"}"; do
+  if is_relevant_path "$path"; then
+    RELEVANT_FILES+=("$path")
+  fi
+done
+
+DIAGRAM_TYPES=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && DIAGRAM_TYPES+=("$line")
+done < <(select_diagram_types)
+
+if ((${#RELEVANT_FILES[@]} == 0)); then
+  CHANGE_SUMMARY="No diagram-relevant paths."
+elif ((${#DIAGRAM_TYPES[@]} == 0)); then
+  DIAGRAM_TYPES=("architecture")
+  CHANGE_SUMMARY="${#RELEVANT_FILES[@]} relevant path(s) → architecture"
+else
+  CHANGE_SUMMARY="${#RELEVANT_FILES[@]} relevant path(s) → $(IFS=', '; echo "${DIAGRAM_TYPES[*]}")"
+fi
+
+EXPECTED_FORK_CHOICE=()
+if ((${#DIAGRAM_TYPES[@]} > 0)); then
+  EXPECTED_FORK_CHOICE=("author-diagrams")
+fi
 
 VERIFIED_PATHS='{}'
-for path in "${CHANGED_FILES[@]}"; do
+for path in "${CHANGED_FILES[@]+"${CHANGED_FILES[@]}"}"; do
   if path_exists_at_revision "$HEAD_SHA" "$path"; then
     VERIFIED_PATHS="$(jq --arg p "$path" '. + {($p): true}' <<<"$VERIFIED_PATHS")"
   else
@@ -157,8 +318,8 @@ for path in "${CHANGED_FILES[@]}"; do
   fi
 done
 
-if ((${#CHANGED_FILES[@]} > 0)); then
-  CONTENT_HASH="$(printf '%s\n' "${CHANGED_FILES[@]}" | hash_files)"
+if ((${#RELEVANT_FILES[@]} > 0)); then
+  CONTENT_HASH="$(printf '%s\n' "${RELEVANT_FILES[@]}" | hash_files)"
 else
   CONTENT_HASH="$(printf '' | hash_files)"
 fi
@@ -166,6 +327,26 @@ fi
 REPO_URL=""
 if [[ -n "$REPOSITORY" ]]; then
   REPO_URL="https://github.com/${REPOSITORY}"
+fi
+
+CHANGED_JSON='[]'
+if ((${#CHANGED_FILES[@]} > 0)); then
+  CHANGED_JSON="$(printf '%s\n' "${CHANGED_FILES[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+fi
+
+RELEVANT_JSON='[]'
+if ((${#RELEVANT_FILES[@]} > 0)); then
+  RELEVANT_JSON="$(printf '%s\n' "${RELEVANT_FILES[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+fi
+
+DIAGRAM_TYPES_JSON='[]'
+if ((${#DIAGRAM_TYPES[@]} > 0)); then
+  DIAGRAM_TYPES_JSON="$(printf '%s\n' "${DIAGRAM_TYPES[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
+fi
+
+EXPECTED_FORK_JSON='[]'
+if ((${#EXPECTED_FORK_CHOICE[@]} > 0)); then
+  EXPECTED_FORK_JSON="$(printf '%s\n' "${EXPECTED_FORK_CHOICE[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')"
 fi
 
 jq -n \
@@ -178,8 +359,12 @@ jq -n \
   --arg repo_url "$REPO_URL" \
   --arg diff_base "$DIFF_BASE" \
   --arg content_hash "$CONTENT_HASH" \
-  --argjson changed_files "$(printf '%s\n' "${CHANGED_FILES[@]}" | jq -R -s 'split("\n") | map(select(length > 0))')" \
+  --arg change_summary "$CHANGE_SUMMARY" \
+  --argjson changed_files "$CHANGED_JSON" \
+  --argjson relevant_files "$RELEVANT_JSON" \
   --argjson verified_paths "$VERIFIED_PATHS" \
+  --argjson diagram_types "$DIAGRAM_TYPES_JSON" \
+  --argjson expected_fork_choice "$EXPECTED_FORK_JSON" \
   '{
     schema_version: $schema_version,
     pr_number: $pr_number,
@@ -190,8 +375,12 @@ jq -n \
     repo_url: $repo_url,
     diff_base: $diff_base,
     changed_files: $changed_files,
+    relevant_files: $relevant_files,
     verified_paths: $verified_paths,
-    content_hash: $content_hash
+    content_hash: $content_hash,
+    diagram_types: $diagram_types,
+    change_summary: $change_summary,
+    expected_fork_choice: $expected_fork_choice
   }' >"$OUTPUT"
 
 cat "$OUTPUT"

@@ -6,6 +6,12 @@ system_prompt: |
   pr_number, changed_files, diagram_types, change_summary, and content_hash. Use
   verified_paths from ci-context.json — only cite source paths marked true.
 
+  When evidence exists in relevant paths, authored diagrams may reflect modern
+  Stageflow concepts: forks, clonable successors, fan-in, feedback loops,
+  verified stage execution, dual AgentPort (Pi/Claude), MCP + sf runs host-down,
+  and skills binding. Still require verified_paths and repo evidence; do not
+  invent components without source.
+
   For each entry in diagram_types (architecture, workflow, sequence, dataflow,
   lifecycle), write a separate spec artifact via write_stage_artifact:
   architecture.spec.json, workflow.spec.json, sequence.spec.json,
@@ -34,7 +40,7 @@ system_prompt: |
   with a diagrams array — one object per authored type:
   { diagram_type, spec_artifact, summary }.
   Do not stop after a chat reply.
-model: openai/gpt-5-mini
+model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
 payload_schema:
   type: object
   required: [diagrams]

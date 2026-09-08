@@ -4,11 +4,14 @@ goal: |
   JSON specs (architecture, workflow, sequence, dataflow, lifecycle) when warranted.
 context: |
   GHA runs scripts/prepare-ci-context.sh before this pipeline, writing ci-context.json
-  at the repo root with head_sha, repo_url, changed_files, and verified_paths. Both
-  stages read ci-context.json as the single source of truth for git/PR identity.
-  Stage 1 selects applicable diagram types and may skip downstream work. Stage 2
-  writes one spec artifact per selected type for GHA to deliver as HTML outside the agent.
+  at the repo root with head_sha, repo_url, changed_files, relevant_files,
+  diagram_types, change_summary, expected_fork_choice, and verified_paths.
+  Diagram type selection is deterministic in prepare-ci-context — detect-changes only
+  copies those fields into the envelope. CI uses OpenRouter (OPENROUTER_API_KEY).
+  Stage 1 emits the detect handoff (completion-checked). Stage 2 writes one spec
+  artifact per selected type for GHA to deliver as HTML outside the agent.
 constraints: |
-  No HITL. Do not call ask_operator. The author stage must not install Archify,
-  run npm install, or call deliver or doctor — GHA owns tool provisioning and HTML
-  delivery after the run completes.
+  No HITL. Do not call ask_operator. Stages use OpenRouter models; ensure
+  OPENROUTER_API_KEY is available in CI. detect-changes must not invent diagram_types
+  or paths. The author stage must not install Archify, run npm install, or call
+  deliver or doctor — GHA owns tool provisioning and HTML delivery after the run.

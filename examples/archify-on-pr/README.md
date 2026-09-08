@@ -1,46 +1,79 @@
 # archify-on-pr
 
-PR-triggered Archify diagrams: detect relevant diff changes, choose one or more
-diagram types (architecture, workflow, sequence, dataflow, lifecycle), and author
-JSON specs for GHA to deliver as HTML.
+Manually triggered Archify diagrams: prepare deterministic PR context (paths +
+diagram types), copy that into a detect-changes handoff, and author JSON specs
+for GHA to deliver as HTML.
 
 ## Layout
 
 | Path | Role |
 |------|------|
-| `archify-on-pr.pipeline.yaml` | detect-changes fork → author-diagrams |
-| `detect-changes.yaml` | Diagram-type selection from `ci-context.json`, `fork_choice` routing |
+| `archify-on-pr.pipeline.yaml` | detect-changes fork → author-diagrams; completion + recovery on detect |
+| `detect-changes.yaml` | Thin copy/emit from `ci-context.json` → `changes.json` + envelope |
 | `author-diagrams.yaml` | Writes `{type}.spec.json` per selected type (skill: archify on pipeline entry) |
 | `archify-on-pr.task.yaml` | Task bound at run time |
-| `../../scripts/prepare-ci-context.sh` | Deterministic PR/git context before `sf run` (GHA + local) |
+| `../../scripts/prepare-ci-context.sh` | Deterministic PR/git context + diagram type selection before `sf run` |
+| `../../scripts/validate-detect-envelope.mjs` | Completion check: `changes.json` / envelope match `ci-context.json` |
 
 ## Diagram types
 
-| Type | Typical triggers |
-|------|------------------|
-| `architecture` | Modules, services, boundaries, layout |
-| `workflow` | Pipelines, stages, CI, orchestration, runbooks |
-| `sequence` | API routes, middleware chains, request lifecycles |
-| `dataflow` | Persistence, migrations, ETL, envelope/artifact flow |
-| `lifecycle` | State machines, run status, HITL, retry/recovery |
+Selection is **deterministic** in `prepare-ci-context.sh` from path rules on
+`relevant_files` (not the detect agent). The table documents those rules:
 
-detect-changes selects 1–5 types based on the PR diff; author-diagrams writes one
-spec artifact per type.
+| Type | Path rules (typical) |
+|------|----------------------|
+| `architecture` | `src/agent`, `src/server`, `src/mcp`, `src/runstore`, `ui/`, `skills/`, `stageflow.yaml`, `package.json` |
+| `workflow` | `*.pipeline.yaml`, `examples/`, `.github/workflows/`, `scripts/`, `src/runtime`, `src/config` |
+| `sequence` | `src/server`, `src/mcp`, `src/cli/runs*`, `ui/` |
+| `dataflow` | `src/envelope`, `src/runstore`, `src/projection`, `src/config` |
+| `lifecycle` | `src/runtime`, `src/tools` |
+
+A path may map to more than one type. If `relevant_files` is non-empty but no
+rule matches, the script defaults to `architecture`. Empty `relevant_files`
+yields empty `diagram_types` / `expected_fork_choice`.
+
+detect-changes copies those types into `changes.json` and the envelope;
+author-diagrams writes one spec artifact per type.
 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **OpenAI** provider (`openai/gpt-5.3-codex`) — set `OPENAI_API_KEY`
+- **OpenRouter** provider
+  (`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`) — set
+  `OPENROUTER_API_KEY`, then:
+  `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`
 - **Archify skill** at `.pi/skills/archify/` (see below)
-- Git checkout at the PR head; run `prepare-ci-context.sh` before `sf run` (GHA does
-  this automatically)
+- Git checkout at the target head; run `prepare-ci-context.sh` before `sf run`
+  (GHA does this automatically)
 
 ## CI context (`ci-context.json`)
 
 Before Stageflow runs, GHA executes `scripts/prepare-ci-context.sh`. It resolves
-`head_sha`, `repo_url`, the PR diff file list, and `verified_paths` (whether each
-changed path exists at `head_sha`). Both pipeline stages read this file — agents
-do not use `GITHUB_SHA` or run their own git diff.
+`head_sha`, `repo_url`, file lists, and diagram selection:
+
+| Field | Meaning |
+|-------|---------|
+| `changed_files` | Full three-dot diff vs base |
+| `relevant_files` | Filtered subset for diagram decisions |
+| `content_hash` | Hash of `relevant_files` only (empty string when none) |
+| `verified_paths` | Whether each changed path exists at `head_sha` |
+| `diagram_types` | Deterministic types from path rules on `relevant_files` |
+| `change_summary` | Short summary derived from the relevant set |
+| `expected_fork_choice` | `["author-diagrams"]` when types non-empty, else `[]` |
+
+`relevant_files` excludes `docs/**`, `*.md` (except `skills/**`), lockfiles,
+`tests/**` except `tests/fixtures/**/*.{yaml,yml}`, pitch-deck / pitch-assets,
+and editor noise (`.editorconfig`, `.vscode/`, `.idea/`). When that list is
+empty, `diagram_types` and `expected_fork_choice` are empty and GHA early-skips
+the `sf-run` step. detect-changes copies `relevant_files` into
+`changes.json` as `changed_files` and sets `fork_choice` from
+`expected_fork_choice`.
+
+Both pipeline stages read this file — agents do not use `GITHUB_SHA` or run
+their own git diff. detect-changes does not re-derive types; it only copies and
+emits. The pipeline enforces that with `pre_emit_checks` (artifact declared:
+`changes.json`), `completion` (on-disk artifact + payload schema +
+`node scripts/validate-detect-envelope.mjs`), and `recovery: repair`.
 
 Local dry-run:
 
@@ -75,7 +108,8 @@ Local dry-run from repo root:
 
 ```bash
 sf validate --strict
-export OPENAI_API_KEY=…
+export OPENROUTER_API_KEY=…
+sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY
 ./scripts/prepare-ci-context.sh ci-context.json
 sf run \
   --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
@@ -85,9 +119,9 @@ sf run \
   --json > sf-run.json
 ```
 
-When detect-changes finds no diagram-relevant paths, `author-diagrams` is skipped
-(`fork_choice: []`). When types are selected, inspect `{type}.spec.json` files in
-the run workspace.
+When prepare-ci-context selects no types (`expected_fork_choice: []`),
+detect-changes copies that through and `author-diagrams` is skipped. When types
+are selected, inspect `{type}.spec.json` files in the run workspace.
 
 ### Extract envelope
 
@@ -124,31 +158,42 @@ done < <(jq -c '.diagrams[]' envelope.json)
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | `sf run` | Provider auth (required) |
+| `OPENROUTER_API_KEY` | `sf run` | OpenRouter provider auth (required) |
+| `PR_NUMBER` | prepare-ci-context | PR number override (enables sticky comment in GHA when set) |
 | `PR_HEAD_SHA` | prepare-ci-context | PR head commit SHA |
 | `GITHUB_REPOSITORY` | prepare-ci-context | `owner/repo` |
 | `GITHUB_BASE_REF` | prepare-ci-context | PR base branch (default: `main`) |
 | `GITHUB_HEAD_REF` | prepare-ci-context | PR head branch name |
-| `CI_CONTEXT_FILE` | deliver-diagrams.sh | Path to context JSON (default: `ci-context.json`) |
+| `CI_CONTEXT_FILE` | deliver-diagrams.sh / validate-detect-envelope.mjs | Path to context JSON (default: `ci-context.json`) |
 | `ARCHIFY_SOURCE_DIR` | GHA secret | Local Archify skill path (`sf skills install --from-path`) |
 | `ARCHIFY_ZIP_URL` | GHA variable | Release zip URL (`sf skills install --from-zip`; defaults to Archify v2.15.0) |
 
 ## Fork PR limitation
 
-The workflow posts a sticky PR comment with `pull-requests: write`. On **fork
-PRs**, GitHub downgrades `GITHUB_TOKEN` — the job may succeed but cannot post
-or update the comment. Same-repo branch PRs are supported; fork comment posting
-is deferred.
+The workflow posts a sticky PR comment with `pull-requests: write` only when
+`pr_number` is provided. On **fork PRs**, GitHub downgrades `GITHUB_TOKEN` — the
+job may succeed but cannot post or update the comment. Same-repo branch PRs are
+supported; fork comment posting is deferred.
 
 ## GitHub Actions
 
 See [`.github/workflows/archify-pr-diagrams.yml`](../../.github/workflows/archify-pr-diagrams.yml).
 
+**Manual trigger only** (`workflow_dispatch` — not automatic on every PR).
+
+1. Open **Actions** → **Archify PR diagrams** → **Run workflow**
+2. Provide **one of**:
+   - `pr_number` — resolves head/base from the PR; enables the sticky PR comment
+   - `head_ref` — branch or commit SHA when not targeting a PR
+3. Optionally set `base_ref` (default: `main`) for the three-dot diff
+
 The workflow uses the [`.github/actions/sf-run`](../../.github/actions/sf-run)
 composite to run the pipeline and extract a handoff envelope via
 `sf envelope get --format handoff`. `prepare-ci-context.sh` runs before the
-pipeline; agents author JSON only; GHA runs
-`deliver-diagrams.sh` (Archify `deliver` per type), uploads each `{type}.html`
-unzipped (`upload-artifact@v7`, `archive: false`) for in-browser viewing, also
-uploads a zipped `diagrams/` bundle, and updates the sticky comment. Debug
-artifacts include `ci-context.json`, `sf-run.json`, `envelope.json`, and `run-export.json`.
+pipeline; if `relevant_files` is empty, GHA skips `sf-run`, deliver, upload, and
+comment. detect-changes only copies/validates against that context; agents
+author JSON only in author-diagrams. GHA runs `deliver-diagrams.sh` (Archify
+`deliver` per type), uploads each `{type}.html` unzipped (`upload-artifact@v7`,
+`archive: false`) for in-browser viewing, also uploads a zipped `diagrams/`
+bundle, and updates the sticky comment when `pr_number` is set. Debug artifacts
+include `ci-context.json`, `sf-run.json`, `envelope.json`, and `run-export.json`.
