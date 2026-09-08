@@ -104,7 +104,7 @@ Operator console code lives in **`ui/`**. Read **[ui/AGENTS.md](ui/AGENTS.md)** 
 
 - Public docs index: [docs/README.md](docs/README.md)
 - Human contributor flow: [CONTRIBUTING.md](CONTRIBUTING.md)
-- Planning artifacts under `docs/plans/` and `docs/ideation/` are local-only (gitignored)
+- Planning artifacts under `docs/plans/`, `docs/ideation/`, and `docs/adr/` are local-only (gitignored), as are `docs/compare-conductor.md` and `docs/migrate-real-oss-issue-pipeline.md`
 
 ## Positioning (public copy)
 

@@ -26,7 +26,6 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Architecture](architecture.md) | Runtime boundaries, execution flow, persistence, recovery, and design tradeoffs |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Verified Stage Execution](verified-stage-execution.md) | Completion checks, evidence, and repair policy |
-| [Migrate the Real OSS Issue Pipeline](migrate-real-oss-issue-pipeline.md) | Replace the older OSS contract runtime with Verified Stage Execution |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 
@@ -45,12 +44,6 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 For clonable fan-out (clone one successor N times at completion), see [`examples/clonable-fanout/`](../examples/clonable-fanout/) and [YAML catalog — Clonable successors](yaml-catalog.md#clonable-successors). For a diamond join (two named parents into one child, inspect keyed envelopes), see [`examples/generic-fan-in/`](../examples/generic-fan-in/) and [YAML catalog — Generic fan-in](yaml-catalog.md#generic-fan-in).
 
 For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedback-loop/`](../examples/feedback-loop/) and [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
-
-## Positioning
-
-| Doc | What you'll learn |
-|-----|-------------------|
-| [Stageflow vs Conductor](compare-conductor.md) | How Stageflow differs from multi-agent workflow runners |
 
 ## Canonical YAML examples
 
