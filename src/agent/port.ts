@@ -172,4 +172,4 @@ export function createCompletedOnlyStageHandle(options: {
   };
 }
 
-export const DEFAULT_STAGE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_STAGE_TIMEOUT_MS = 60 * 60 * 1000;
