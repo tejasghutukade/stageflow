@@ -142,6 +142,85 @@ describe("ClaudeAgentAdapter — run loop", () => {
     });
     expect(lastQueryOptions?.settingSources).toEqual([]);
     expect(lastQueryOptions?.permissionMode).toBe("bypassPermissions");
+    expect(lastQueryOptions?.strictMcpConfig).toBe(true);
+    expect(lastQueryOptions?.tools).toEqual(["Read", "Write", "Edit", "Bash"]);
+    expect(Object.keys((lastQueryOptions?.mcpServers as object) ?? {})).toEqual(["stageflow"]);
+  });
+
+  it("empty resolvedMcpServers snapshot still yields only the in-process stageflow server", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    await adapter.runStage({ ...baseInput(), resolvedMcpServers: {} });
+    expect(Object.keys((lastQueryOptions?.mcpServers as object) ?? {})).toEqual(["stageflow"]);
+    expect(lastQueryOptions?.settingSources).toEqual([]);
+    expect(lastQueryOptions?.strictMcpConfig).toBe(true);
+  });
+
+  it("merges a github snapshot beside stageflow without mutating the input", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const snapshot = { github: { command: "npx", args: ["-y", "pkg"] } };
+    await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
+    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
+    expect(Object.keys(mcpServers)).toEqual(["stageflow", "github"]);
+    expect(mcpServers.github.alwaysLoad).toBe(true);
+    expect(mcpServers.github.command).toBe("npx");
+    expect(mcpServers).not.toHaveProperty("notion");
+    expect(snapshot.github).not.toHaveProperty("alwaysLoad");
+    expect(lastQueryOptions?.settingSources).toEqual([]);
+    expect(lastQueryOptions?.strictMcpConfig).toBe(true);
+  });
+
+  it("keeps the in-process stageflow SDK server when two passed servers are merged", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: {
+        github: { command: "npx", args: ["-y", "pkg"] },
+        slack: { command: "npx", args: ["-y", "slack"] },
+      },
+    });
+    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
+    expect(Object.keys(mcpServers)).toEqual(["stageflow", "github", "slack"]);
+    expect(mcpServers.stageflow.type).toBe("sdk");
+    expect(mcpServers.github.alwaysLoad).toBe(true);
+    expect(mcpServers.slack.alwaysLoad).toBe(true);
+  });
+
+  it("merges an HTTP snapshot beside stageflow with alwaysLoad at query time", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const snapshot = { remote: { type: "http", url: "https://example.invalid/mcp" } };
+    await adapter.runStage({ ...baseInput(), resolvedMcpServers: snapshot });
+    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
+    expect(Object.keys(mcpServers)).toEqual(["stageflow", "remote"]);
+    expect(mcpServers.remote).toMatchObject({
+      type: "http",
+      url: "https://example.invalid/mcp",
+      alwaysLoad: true,
+    });
+    expect(snapshot.remote).not.toHaveProperty("alwaysLoad");
+  });
+
+  it("emit_stage_envelope still succeeds when a github snapshot is passed", async () => {
+    queryImpl = async function* (options) {
+      const emitTool = findTool(options, "emit_stage_envelope");
+      await emitTool.handler({ status: "success", summary: "done with github", artifacts: [] }, undefined);
+      yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage({
+      ...baseInput(),
+      resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.envelope.summary).toBe("done with github");
   });
 
   it("returns ok:true when emit_stage_envelope is called with status=success", async () => {
@@ -388,6 +467,50 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
       expect(doneEvent.result.ok).toBe(true);
     }
     expect(resumeSeen).toBe("session-resume-1");
+  });
+
+  it("resume query() merges the snapshot and keeps isolation flags", async () => {
+    const snapshot = { github: { command: "npx", args: ["-y", "pkg"] } };
+    queryImpl = async function* (options) {
+      if (options.resume !== undefined) {
+        const emitTool = findTool(options, "emit_stage_envelope");
+        await emitTool.handler({ status: "success", summary: "resumed with mcp", artifacts: [] }, undefined);
+        yield { type: "result", subtype: "success", is_error: false, result: "ok" };
+        return;
+      }
+      yield initMessage("session-resume-mcp");
+      const askTool = findTool(options, "ask_operator");
+      const result = await askTool.handler(
+        { kind: "free_text", message: "Which env?", id: "q1" },
+        undefined,
+      );
+      yield userToolResultMessage("c1", result.content);
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const input: StageRunInput = {
+      ...baseInput({ gate_kinds: undefined }),
+      roots: buildStageRoots(workspaceDir, "review"),
+      resolvedMcpServers: snapshot,
+    };
+    const handle = adapter.openStage(input);
+    const waitEvent = await handle.next();
+    expect(waitEvent.status).toBe("waiting_for_input");
+
+    handle.deliverAnswer({ promptId: "q1", kind: "free_text", text: "staging" });
+    const doneEvent = await handle.next();
+    expect(doneEvent.status).toBe("completed");
+    if (doneEvent.status === "completed") {
+      expect(doneEvent.result.ok).toBe(true);
+    }
+
+    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
+    expect(lastQueryOptions?.resume).toBe("session-resume-mcp");
+    expect(lastQueryOptions?.strictMcpConfig).toBe(true);
+    expect(lastQueryOptions?.settingSources).toEqual([]);
+    expect(Object.keys(mcpServers)).toEqual(["stageflow", "github"]);
+    expect(mcpServers.github.alwaysLoad).toBe(true);
+    expect(snapshot.github).not.toHaveProperty("alwaysLoad");
   });
 
   it("resumes correctly from a fresh handle (new process) after park, via the persisted marker", async () => {

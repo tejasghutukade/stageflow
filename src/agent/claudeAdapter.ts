@@ -184,6 +184,13 @@ async function runTurn(
         : {}),
     });
 
+    const passedServers = Object.fromEntries(
+      Object.entries(input.resolvedMcpServers ?? {}).map(([name, config]) => [
+        name,
+        { ...config, alwaysLoad: true },
+      ]),
+    );
+
     const stream = query({
       prompt: singleUserMessage(promptText),
       options: {
@@ -193,10 +200,11 @@ async function runTurn(
         systemPrompt: { type: "custom", prompt: input.stage.system_prompt },
         settingSources: [],
         tools: CLAUDE_BUILTIN_TOOLS,
-        mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: mcpServer },
+        mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: mcpServer, ...passedServers },
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         persistSession: true,
+        strictMcpConfig: true,
         ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
       },
     });
