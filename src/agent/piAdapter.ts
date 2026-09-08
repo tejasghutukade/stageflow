@@ -997,6 +997,8 @@ type StageSessionWiring = {
   restoreProvider?: () => void;
   capture: EmitCapture;
   askWaitChannel: AskOperatorWaitChannel;
+  connecting?: Promise<void>;
+  cancelConnecting?: () => void;
 };
 
 async function prepareStageSessionWiring(
@@ -1057,6 +1059,7 @@ async function prepareStageSessionWiring(
     restoreProvider = prepared.restore;
   }
 
+  let attached: Awaited<ReturnType<typeof attachIsolatedMcp>> | undefined;
   try {
     const modelRuntime = await ModelRuntime.create(
       roots.authPath
@@ -1074,7 +1077,12 @@ async function prepareStageSessionWiring(
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
-    const attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    const failAfterAttach = (reason: string): StageRunResult => {
+      attached?.cancel?.();
+      restoreProvider?.();
+      return { ok: false, reason };
+    };
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
@@ -1093,40 +1101,28 @@ async function prepareStageSessionWiring(
 
     const extensionErrors = loader.getExtensions().errors;
     if (extensionErrors.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load Pi extension(s): ${extensionErrors
+      return failAfterAttach(
+        `Failed to load Pi extension(s): ${extensionErrors
           .map((e) => `${e.path}: ${e.error}`)
           .join("; ")}`,
-      };
+      );
     }
 
     const skillDiagnostics = loader
       .getSkills()
       .diagnostics.filter((d) => d.type === "error" || d.type === "collision");
     if (skillDiagnostics.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load skill(s): ${skillDiagnostics
+      return failAfterAttach(
+        `Failed to load skill(s): ${skillDiagnostics
           .map((d) => (d.path !== undefined ? `${d.path}: ${d.message}` : d.message))
           .join("; ")}`,
-      };
+      );
     }
     if (
       input.stage.skill !== undefined &&
       !loader.getSkills().skills.some((skill) => skill.name === input.stage.skill)
     ) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Skill "${input.stage.skill}" is not installed`,
-      };
-    }
-
-    if (attached.connecting !== undefined) {
-      await attached.connecting;
+      return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
     const customTools = askTool
@@ -1156,8 +1152,11 @@ async function prepareStageSessionWiring(
       restoreProvider,
       capture,
       askWaitChannel,
+      connecting: attached.connecting,
+      cancelConnecting: attached.cancel,
     };
   } catch (err) {
+    attached?.cancel?.();
     restoreProvider?.();
     if (err instanceof StageMcpError) {
       return { ok: false, reason: err.message };
@@ -1219,6 +1218,9 @@ export async function reconstructStageSessionForAnswer(
     });
     session = created.session;
     await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
 
     const resolved = resolveCliModel({
       cliModel: input.stage.model,
@@ -1250,6 +1252,7 @@ export async function reconstructStageSessionForAnswer(
       },
     };
   } catch (err) {
+    wiring.cancelConnecting?.();
     await shutdownSession(session);
     wiring.restoreProvider?.();
     if (err instanceof StageSessionReconstructError) throw err;
@@ -1280,7 +1283,19 @@ async function bindStageSession(
   });
   const session = created.session;
   ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
-  await session.bindExtensions({});
+  try {
+    await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
+  } catch (err) {
+    wiring.cancelConnecting?.();
+    await shutdownSession(session);
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
+    throw err;
+  }
 
   const resolved = resolveCliModel({
     cliModel: input.stage.model,

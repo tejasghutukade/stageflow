@@ -176,6 +176,33 @@ describe("ClaudeAgentAdapter — run loop", () => {
     expect(lastQueryOptions?.strictMcpConfig).toBe(true);
   });
 
+  it("keeps query() cwd as the agent workspace and passes stamped per-server cwd", async () => {
+    queryImpl = emptyStream;
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const input = baseInput();
+    const projectRoot = "/factory/catalog-root";
+    await adapter.runStage({
+      ...input,
+      resolvedMcpServers: {
+        echo: {
+          command: "npx",
+          args: [path.resolve(projectRoot, "examples/stage-mcp/echo-mcp.mjs")],
+          cwd: projectRoot,
+        },
+      },
+    });
+    const mcpServers = lastQueryOptions?.mcpServers as Record<string, Record<string, unknown>>;
+    expect(lastQueryOptions?.cwd).toBe(input.roots.cwd);
+    expect(lastQueryOptions?.cwd).not.toBe(projectRoot);
+    expect(mcpServers.echo).toMatchObject({
+      command: "npx",
+      args: [path.resolve(projectRoot, "examples/stage-mcp/echo-mcp.mjs")],
+      cwd: projectRoot,
+      alwaysLoad: true,
+    });
+  });
+
   it("keeps the in-process stageflow SDK server when two passed servers are merged", async () => {
     queryImpl = emptyStream;
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");

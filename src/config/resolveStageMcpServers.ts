@@ -162,7 +162,7 @@ function interpolateField(
   env: NodeJS.ProcessEnv,
   serverName: string,
 ): unknown {
-  if ((key === "command" || key === "url") && typeof value === "string") {
+  if ((key === "command" || key === "url" || key === "cwd") && typeof value === "string") {
     return interpolateString(value, env, serverName);
   }
   if (key === "args" && Array.isArray(value)) {
@@ -183,16 +183,74 @@ function interpolateField(
   return value;
 }
 
+function hasPathSeparator(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function isRelativeFsPath(value: string): boolean {
+  if (value.length === 0 || path.isAbsolute(value) || value.startsWith("-") || value.startsWith("@")) {
+    return false;
+  }
+  return hasPathSeparator(value) || value.startsWith(".");
+}
+
+function isInsideProjectRoot(projectRoot: string, candidate: string): boolean {
+  const root = path.resolve(projectRoot);
+  const resolved = path.resolve(candidate);
+  const rel = path.relative(root, resolved);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+function stampSpawnRoot(
+  resolved: ResolvedMcpServerConfig,
+  projectRoot: string,
+  serverName: string,
+): ResolvedMcpServerConfig {
+  const command = resolved.command;
+  if (typeof command === "string" && hasPathSeparator(command) && !path.isAbsolute(command)) {
+    resolved.command = path.resolve(projectRoot, command);
+  }
+  if (Array.isArray(resolved.args)) {
+    resolved.args = resolved.args.map((item) =>
+      typeof item === "string" && isRelativeFsPath(item)
+        ? path.resolve(projectRoot, item)
+        : item,
+    );
+  }
+
+  const catalogCwd = resolved.cwd;
+  if (catalogCwd !== undefined) {
+    if (typeof catalogCwd !== "string" || catalogCwd.length === 0 || !path.isAbsolute(catalogCwd)) {
+      throw new StageMcpError(
+        `MCP catalog server "${serverName}" cwd must be an absolute path inside the project root`,
+        "invalid_config",
+      );
+    }
+    const canonical = path.resolve(catalogCwd);
+    if (!isInsideProjectRoot(projectRoot, canonical)) {
+      throw new StageMcpError(
+        `MCP catalog server "${serverName}" cwd is outside the project root`,
+        "invalid_config",
+      );
+    }
+    resolved.cwd = canonical;
+  } else if (typeof command === "string") {
+    resolved.cwd = path.resolve(projectRoot);
+  }
+  return resolved;
+}
+
 function interpolateServer(
   entry: Record<string, unknown>,
   env: NodeJS.ProcessEnv,
   serverName: string,
+  projectRoot: string,
 ): ResolvedMcpServerConfig {
   const resolved: ResolvedMcpServerConfig = {};
   for (const [key, value] of Object.entries(entry)) {
     resolved[key] = interpolateField(key, value, env, serverName);
   }
-  return resolved;
+  return stampSpawnRoot(resolved, projectRoot, serverName);
 }
 
 export async function resolveStageMcpServers(options: {
@@ -208,7 +266,12 @@ export async function resolveStageMcpServers(options: {
   assertMcpAllowlistKnown(catalog.servers, allowlist);
   const resolved: ResolvedMcpServers = {};
   for (const name of allowlist) {
-    resolved[name] = interpolateServer(catalog.servers[name], options.env, name);
+    resolved[name] = interpolateServer(
+      catalog.servers[name],
+      options.env,
+      name,
+      options.projectRoot,
+    );
   }
   return resolved;
 }

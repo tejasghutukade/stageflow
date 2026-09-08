@@ -427,7 +427,8 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Behavior | Detail |
 |----------|--------|
 | Catalog | `.mcp.json` `{ "mcpServers": { "<name>": { … } } }` at the project root that holds `stageflow.yaml` |
-| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, and `headers` values |
+| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd` |
+| Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
 | Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
 | Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |

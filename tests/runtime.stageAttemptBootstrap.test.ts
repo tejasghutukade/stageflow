@@ -878,6 +878,7 @@ describe("openStageAttempt", () => {
       github: {
         command: "npx",
         args: ["-y", "@modelcontextprotocol/server-github"],
+        cwd: path.resolve(factoryCwd),
       },
     });
   });

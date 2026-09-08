@@ -10,11 +10,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import {
   createSealedResourceLoader,
+  createStageSessionManager,
   PiAgentAdapter,
+  reconstructStageSessionForAnswer,
   resolveStageToolNames,
+  StageSessionReconstructError,
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
 import type { StageRunInput } from "../src/agent/port.js";
+import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 
 const piSdkMocks = vi.hoisted(() => {
@@ -67,16 +71,34 @@ vi.mock("pi-mcp-adapter", () => ({
 
 const attachIsolatedMcpImpl = piIsolatedMcp.attachIsolatedMcp;
 
+const pendingMcpAttach: {
+  attached?: Awaited<ReturnType<typeof attachIsolatedMcpImpl>>;
+  snapshot?: Parameters<typeof attachIsolatedMcpImpl>[0];
+  status: string;
+} = { status: "connected" };
+
+function emitPendingMcpStatus() {
+  const attached = pendingMcpAttach.attached;
+  if (attached?.eventBus === undefined) return;
+  piIsolatedMcp.emitIsolatedMcpStatus(
+    attached.eventBus,
+    Object.keys(pendingMcpAttach.snapshot ?? {}).map((name) => ({
+      name,
+      status: pendingMcpAttach.status,
+    })),
+  );
+}
+
 function wrapAttachAndEmitStatus(status: string) {
+  pendingMcpAttach.status = status;
+  pendingMcpAttach.attached = undefined;
+  pendingMcpAttach.snapshot = undefined;
   return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
     async (snapshot, options) => {
       const attached = await attachIsolatedMcpImpl(snapshot, options);
-      if (attached.eventBus !== undefined) {
-        piIsolatedMcp.emitIsolatedMcpStatus(
-          attached.eventBus,
-          Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
-        );
-      }
+      pendingMcpAttach.attached = attached;
+      pendingMcpAttach.snapshot = snapshot;
+      pendingMcpAttach.status = status;
       return attached;
     },
   );
@@ -209,7 +231,9 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     piSdkMocks.createAgentSession.mockReset();
     piSdkMocks.createAgentSession.mockImplementation(async () => ({
       session: {
-        bindExtensions: async () => {},
+        bindExtensions: async () => {
+          emitPendingMcpStatus();
+        },
         setModel: async () => {},
         setThinkingLevel: () => {},
         prompt: async () => {},
@@ -320,7 +344,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(lastLoaderExtensionPaths()).toContain(mcpInlinePath);
   });
 
-  it("connect-fail returns ok false and never creates a session", async () => {
+  it("connect-fail returns ok false after bindExtensions", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-fail-"));
     attachSpy = wrapAttachAndEmitStatus("failed");
     const restore = vi.fn();
@@ -341,7 +365,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       ok: false,
       reason: 'MCP server "github" failed to connect (status: failed)',
     });
-    expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
+    expect(piSdkMocks.createAgentSession).toHaveBeenCalled();
     expect(restore).toHaveBeenCalled();
   });
 
@@ -389,5 +413,185 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     const loadedPaths = lastLoaderExtensionPaths();
     expect(loadedPaths).toContain(cursorExt);
     expect(loadedPaths).toContain(mcpInlinePath);
+  });
+
+  it("awaits isolated MCP connecting after bindExtensions, not at attach", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-wait-bind-"));
+    let bindStarted = false;
+    let connectingAwaitedBeforeBind = false;
+    const connecting = {
+      then(
+        onFulfilled?: (value: void) => unknown,
+        onRejected?: (reason: unknown) => unknown,
+      ) {
+        if (!bindStarted) connectingAwaitedBeforeBind = true;
+        return Promise.resolve().then(onFulfilled, onRejected);
+      },
+    };
+
+    attachSpy.mockResolvedValue({
+      extensionFactories: [
+        { name: piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME, factory: () => {} },
+      ],
+      eventBus: { on() {}, emit() {}, off() {} },
+      connecting: connecting as Promise<void>,
+    });
+    piSdkMocks.createAgentSession.mockImplementation(async () => ({
+      session: {
+        bindExtensions: async () => {
+          bindStarted = true;
+        },
+        setModel: async () => {},
+        setThinkingLevel: () => {},
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        subscribe: () => () => {},
+        agent: { state: { messages: [] }, continue: async () => {} },
+      },
+    }));
+
+    await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+
+    expect(bindStarted).toBe(true);
+    expect(connectingAwaitedBeforeBind).toBe(false);
+  });
+
+  it("reconstruct awaits connecting after bindExtensions and fail-closes connect", async () => {
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-recon-"));
+    const roots = buildStageRoots(runWs, "clarify");
+    const sm = await createStageSessionManager(roots, "clarify");
+    sm.appendMessage({
+      role: "user",
+      content: "start",
+      timestamp: Date.now(),
+    });
+    sm.appendMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_wait_mcp_1",
+          name: "ask_operator",
+          arguments: { prompt: "need approval" },
+        },
+      ],
+      timestamp: Date.now(),
+      api: "test",
+      provider: "test",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "toolUse",
+    });
+
+    let bindStarted = false;
+    const connectError = new StageMcpError(
+      'MCP server "github" failed to connect (status: failed)',
+      "connect_failed",
+    );
+    const connecting = {
+      then(
+        onFulfilled?: (value: void) => unknown,
+        onRejected?: (reason: unknown) => unknown,
+      ) {
+        if (!bindStarted) {
+          return Promise.resolve().then(onFulfilled, onRejected);
+        }
+        return Promise.reject(connectError).then(onFulfilled, onRejected);
+      },
+    };
+
+    attachSpy.mockResolvedValue({
+      extensionFactories: [
+        { name: piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME, factory: () => {} },
+      ],
+      eventBus: { on() {}, emit() {}, off() {} },
+      connecting: connecting as Promise<void>,
+    });
+    piSdkMocks.createAgentSession.mockImplementation(async () => ({
+      session: {
+        bindExtensions: async () => {
+          bindStarted = true;
+        },
+        setModel: async () => {},
+        setThinkingLevel: () => {},
+        prompt: async () => {},
+        abort: async () => {},
+        dispose: () => {},
+        subscribe: () => () => {},
+        agent: { state: { messages: [] }, continue: async () => {} },
+      },
+    }));
+
+    await expect(
+      reconstructStageSessionForAnswer(
+        wiringInput(runWs, {
+          roots,
+          resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+        }),
+        { text: "approved" },
+      ),
+    ).rejects.toSatisfy(
+      (err) =>
+        err instanceof StageSessionReconstructError &&
+        err.message.includes("failed to connect"),
+    );
+    expect(piSdkMocks.createAgentSession).toHaveBeenCalled();
+    expect(bindStarted).toBe(true);
+  });
+
+  it("cancels connecting when skill validation fails after attach", async () => {
+    attachSpy.mockRestore();
+    const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-cancel-"));
+    const skillDir = path.join(runWs, "other-skill");
+    await mkdir(skillDir, { recursive: true });
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    await writeFile(
+      skillFilePath,
+      "---\nname: other-skill\ndescription: Not the named skill.\n---\n# Other\n",
+      "utf8",
+    );
+    const attachReal = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+
+    const result = await new PiAgentAdapter().runStage(
+      wiringInput(runWs, {
+        stage: {
+          id: "clarify",
+          system_prompt: "x",
+          model: "anthropic/claude-sonnet-4-5",
+          skill: "wanted-skill",
+        },
+        skillFilePath,
+        resolvedMcpServers: { github: { url: "https://mcp.example.invalid/mcp" } },
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'Skill "wanted-skill" is not installed',
+    });
+    const attached = await attachReal.mock.results.at(-1)?.value;
+    expect(attached?.connecting).toBeInstanceOf(Promise);
+    const settled = await Promise.race([
+      attached.connecting.then(
+        () => "settled",
+        () => "settled",
+      ),
+      new Promise<string>((resolve) => {
+        setTimeout(() => resolve("pending"), 80);
+      }),
+    ]);
+    expect(settled).toBe("settled");
   });
 });

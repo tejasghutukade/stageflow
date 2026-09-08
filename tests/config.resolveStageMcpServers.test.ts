@@ -418,4 +418,133 @@ describe("resolveStageMcpServers", () => {
     });
     expect(resolved.github.url).toBe("https://example.com/");
   });
+
+  it("stamps stdio cwd to projectRoot and resolves relative command/args against it", async () => {
+    const root = await writeCatalog({
+      echo: {
+        command: "bin/echo-mcp",
+        args: ["examples/stage-mcp/echo-mcp.mjs", "-y", "@modelcontextprotocol/server-github"],
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["echo"],
+      env: {},
+    });
+    expect(resolved.echo.cwd).toBe(path.resolve(root));
+    expect(resolved.echo.command).toBe(path.resolve(root, "bin/echo-mcp"));
+    expect(resolved.echo.args).toEqual([
+      path.resolve(root, "examples/stage-mcp/echo-mcp.mjs"),
+      "-y",
+      "@modelcontextprotocol/server-github",
+    ]);
+  });
+
+  it("keeps bare commands on PATH and still stamps spawn cwd to projectRoot", async () => {
+    const root = await writeCatalog({
+      local: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["local"],
+      env: {},
+    });
+    expect(resolved.local.command).toBe("npx");
+    expect(resolved.local.args).toEqual(["-y", "@modelcontextprotocol/server-github"]);
+    expect(resolved.local.cwd).toBe(path.resolve(root));
+  });
+
+  it("does not stamp cwd on url-only HTTP servers", async () => {
+    const root = await writeCatalog({
+      github: {
+        type: "http",
+        url: "https://api.github.com/mcp",
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: {},
+    });
+    expect(resolved.github).toEqual({
+      type: "http",
+      url: "https://api.github.com/mcp",
+    });
+    expect(resolved.github).not.toHaveProperty("cwd");
+  });
+
+  it("keeps an absolute cwd that canonicalizes inside projectRoot", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          local: {
+            command: "node",
+            args: ["server.mjs"],
+            cwd: path.join(root, "tools", "mcp"),
+          },
+        },
+      }),
+    );
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["local"],
+      env: {},
+    });
+    expect(resolved.local.cwd).toBe(path.resolve(root, "tools", "mcp"));
+    expect(resolved.local.command).toBe("node");
+    expect(resolved.local.args).toEqual(["server.mjs"]);
+  });
+
+  it("fails closed when catalog cwd is relative", async () => {
+    const root = await writeCatalog({
+      local: {
+        command: "node",
+        cwd: "tools/mcp",
+      },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["local"],
+        env: {},
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("invalid_config");
+      expect((err as StageMcpError).message).toMatch(/cwd/);
+    }
+  });
+
+  it("fails closed when catalog cwd canonicalizes outside projectRoot", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          local: {
+            command: "node",
+            cwd: path.resolve(root, "..", "outside-mcp"),
+          },
+        },
+      }),
+    );
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["local"],
+        env: {},
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("invalid_config");
+      expect((err as StageMcpError).message).toMatch(/cwd/);
+    }
+  });
 });

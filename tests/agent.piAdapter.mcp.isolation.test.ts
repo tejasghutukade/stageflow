@@ -77,16 +77,34 @@ vi.mock("pi-mcp-adapter", () => ({
 
 const attachIsolatedMcpImpl = piIsolatedMcp.attachIsolatedMcp;
 
+const pendingMcpAttach: {
+  attached?: Awaited<ReturnType<typeof attachIsolatedMcpImpl>>;
+  snapshot?: Parameters<typeof attachIsolatedMcpImpl>[0];
+  status: string;
+} = { status: "connected" };
+
+function emitPendingMcpStatus() {
+  const attached = pendingMcpAttach.attached;
+  if (attached?.eventBus === undefined) return;
+  piIsolatedMcp.emitIsolatedMcpStatus(
+    attached.eventBus,
+    Object.keys(pendingMcpAttach.snapshot ?? {}).map((name) => ({
+      name,
+      status: pendingMcpAttach.status,
+    })),
+  );
+}
+
 function wrapAttachAndEmitStatus(status: string) {
+  pendingMcpAttach.status = status;
+  pendingMcpAttach.attached = undefined;
+  pendingMcpAttach.snapshot = undefined;
   return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
     async (snapshot, options) => {
       const attached = await attachIsolatedMcpImpl(snapshot, options);
-      if (attached.eventBus !== undefined) {
-        piIsolatedMcp.emitIsolatedMcpStatus(
-          attached.eventBus,
-          Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
-        );
-      }
+      pendingMcpAttach.attached = attached;
+      pendingMcpAttach.snapshot = snapshot;
+      pendingMcpAttach.status = status;
       return attached;
     },
   );
@@ -101,7 +119,7 @@ const EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS = {
     mcpServers: {
       github: {
         url: "https://mcp.example.invalid/github",
-        lifecycle: "eager",
+        lifecycle: "lazy",
         directTools: true,
       },
     },
@@ -351,7 +369,9 @@ describe("ambient MCP isolation", () => {
     piSdkMocks.createAgentSession.mockReset();
     piSdkMocks.createAgentSession.mockImplementation(async () => ({
       session: {
-        bindExtensions: async () => {},
+        bindExtensions: async () => {
+          emitPendingMcpStatus();
+        },
         setModel: async () => {},
         setThinkingLevel: () => {},
         prompt: async () => {},

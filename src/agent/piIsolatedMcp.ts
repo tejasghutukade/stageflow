@@ -23,7 +23,7 @@ type IsolatedMcpSettings = {
 };
 
 type IsolatedMcpServerEntry = Record<string, unknown> & {
-  lifecycle: "eager";
+  lifecycle: "lazy";
   directTools: true;
 };
 
@@ -71,6 +71,7 @@ export type IsolatedMcpAttach = {
   extensionFactories: InlineExtension[] | undefined;
   eventBus: EventBus | undefined;
   connecting: Promise<void> | undefined;
+  cancel?: () => void;
 };
 
 const ISOLATED_MCP_SETTINGS: IsolatedMcpSettings = {
@@ -101,11 +102,15 @@ let cachedCreateMcpAdapter: CreateMcpAdapter | undefined;
 function toIsolatedMcpConfig(snapshot: ResolvedMcpServers): IsolatedMcpConfig {
   const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
   for (const [name, entry] of Object.entries(snapshot)) {
-    mcpServers[name] = {
+    const isolated: IsolatedMcpServerEntry = {
       ...entry,
-      lifecycle: "eager",
+      lifecycle: "lazy",
       directTools: true,
     };
+    if (typeof entry.cwd === "string") {
+      isolated.cwd = entry.cwd;
+    }
+    mcpServers[name] = isolated;
   }
   return {
     mcpServers,
@@ -234,18 +239,19 @@ function waitForIsolatedMcpConnect(
   snapshot: ResolvedMcpServers,
   source: IsolatedMcpStatusSource,
   options?: IsolatedMcpAttachOptions,
-): Promise<void> {
+): { connecting: Promise<void>; cancel: () => void } {
   const serverNames = Object.keys(snapshot);
   const timeoutMs = options?.timeoutMs ?? DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS;
   let lastSnapshot = source.read?.();
+  let finish: (error?: StageMcpError) => void = () => {};
 
-  return new Promise<void>((resolve, reject) => {
+  const connecting = new Promise<void>((resolve, reject) => {
     let settled = false;
     let unsubscribe: (() => void) | undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
-    const finish = (error?: StageMcpError) => {
+    finish = (error?: StageMcpError) => {
       if (settled) return;
       settled = true;
       unsubscribe?.();
@@ -285,6 +291,14 @@ function waitForIsolatedMcpConnect(
       );
     }, timeoutMs);
   });
+
+  return {
+    connecting,
+    cancel() {
+      void connecting.then(() => undefined, () => undefined);
+      finish(new StageMcpError("MCP connect wait cancelled", "connect_failed"));
+    },
+  };
 }
 
 export function emitIsolatedMcpStatus(
@@ -311,10 +325,10 @@ export async function attachIsolatedMcp(
     },
   ];
   const eventBus = createEventBus();
-  const connecting = waitForIsolatedMcpConnect(
+  const { connecting, cancel } = waitForIsolatedMcpConnect(
     snapshot,
     mcpStatusSourceFromEvents(eventBus),
     options,
   );
-  return { extensionFactories, eventBus, connecting };
+  return { extensionFactories, eventBus, connecting, cancel };
 }

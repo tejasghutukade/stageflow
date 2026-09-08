@@ -1,7 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
+import {
+  StageMcpError,
+  resolveStageMcpServers,
+} from "../src/config/resolveStageMcpServers.js";
 
 const createMcpAdapter = vi.hoisted(() => vi.fn(() => () => {}));
 
@@ -78,7 +82,7 @@ describe("attachIsolatedMcp", () => {
         mcpServers: {
           github: expect.objectContaining({
             command: "npx",
-            lifecycle: "eager",
+            lifecycle: "lazy",
             directTools: true,
           }),
         },
@@ -133,13 +137,13 @@ describe("attachIsolatedMcp", () => {
             args: ["-y", "@modelcontextprotocol/server-github"],
             env: { GITHUB_TOKEN: "x" },
             cwd: "/tmp/github",
-            lifecycle: "eager",
+            lifecycle: "lazy",
             directTools: true,
           },
           docs: {
             url: "https://mcp.example.com/mcp",
             headers: { Authorization: "Bearer t" },
-            lifecycle: "eager",
+            lifecycle: "lazy",
             directTools: true,
           },
         },
@@ -158,6 +162,45 @@ describe("attachIsolatedMcp", () => {
       { name: "github", status: "connected" },
       { name: "docs", status: "cached" },
     ]);
+    await attached.connecting;
+  });
+
+  it("forwards stamped projectRoot cwd from resolveStageMcpServers into isolated config", async () => {
+    createMcpAdapter.mockClear();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-cwd-"));
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          echo: {
+            command: "npx",
+            args: ["examples/stage-mcp/echo-mcp.mjs"],
+          },
+        },
+      }),
+    );
+    const snapshot = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["echo"],
+      env: {},
+    });
+    expect(snapshot.echo.cwd).toBe(path.resolve(root));
+    expect(snapshot.echo.args).toEqual([
+      path.resolve(root, "examples/stage-mcp/echo-mcp.mjs"),
+    ]);
+
+    const attached = await attachIsolatedMcp(snapshot);
+    const adapterOptions = createMcpAdapter.mock.calls[0]?.[0] as
+      | { config?: { mcpServers?: Record<string, Record<string, unknown>> } }
+      | undefined;
+    expect(adapterOptions?.config?.mcpServers?.echo).toMatchObject({
+      command: "npx",
+      args: [path.resolve(root, "examples/stage-mcp/echo-mcp.mjs")],
+      cwd: path.resolve(root),
+      lifecycle: "lazy",
+      directTools: true,
+    });
+    emitIsolatedMcpStatus(attached.eventBus!, [{ name: "echo", status: "connected" }]);
     await attached.connecting;
   });
 
@@ -186,6 +229,15 @@ describe("attachIsolatedMcp", () => {
   it("rejects connecting with connect_failed when a short timeout never connects", async () => {
     const attached = await attachIsolatedMcp(githubSnapshot(), { timeoutMs: 20 });
     await expectConnectFailed(attached.connecting, /github/);
+  });
+
+  it("cancel settles connecting without waiting for the timeout", async () => {
+    const attached = await attachIsolatedMcp(githubSnapshot(), { timeoutMs: 5_000 });
+    expect(attached.cancel).toEqual(expect.any(Function));
+    const started = Date.now();
+    attached.cancel?.();
+    await expectConnectFailed(attached.connecting, /cancelled/);
+    expect(Date.now() - started).toBeLessThan(500);
   });
 });
 
