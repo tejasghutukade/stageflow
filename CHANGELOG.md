@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-07
+
+### Added
+
+- `payload_schema` / `clone_input_schema` string constraints: `pattern` (JS RegExp, unicode), `minLength`, and `maxLength`
+- `nullable: true` on nested schema nodes (compiles to a union with `null`; root object cannot be nullable)
+
+### Changed
+
+- Keywords `pattern`, `minLength`, `maxLength`, and `nullable` that were previously ignored are now enforced at compile/runtime
+
 ## [0.11.0] - 2026-09-07
 
 ### Added
@@ -155,7 +166,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/tejasghutukade/stageflow/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tejasghutukade/stageflow/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/tejasghutukade/stageflow/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/tejasghutukade/stageflow/compare/v0.8.0...v0.9.0
