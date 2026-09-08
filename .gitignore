@@ -29,6 +29,9 @@ docs/manual-tests/
 docs/random-ideas/
 docs/explainers/
 docs/handoffs/
+docs/adr/
+docs/compare-conductor.md
+docs/migrate-real-oss-issue-pipeline.md
 examples/prototyping/
 
 # Public docs (planning subtrees above stay ignored)
@@ -41,8 +44,8 @@ docs/*
 !docs/providers/
 docs/providers/*
 !docs/providers/*.md
-!docs/adr/
-!docs/adr/*.md
+docs/compare-conductor.md
+docs/migrate-real-oss-issue-pipeline.md
 CONTEXT.md
 .cursor/
 .pi/

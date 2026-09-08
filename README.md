@@ -241,7 +241,6 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
-| [docs/compare-conductor.md](docs/compare-conductor.md) | Positioning deep dive |
 
 ## Develop from source
 
