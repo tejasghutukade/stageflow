@@ -1,8 +1,8 @@
 # archify-on-pr
 
-PR-triggered Archify diagrams: detect relevant diff changes, choose one or more
-diagram types (architecture, workflow, sequence, dataflow, lifecycle), and author
-JSON specs for GHA to deliver as HTML.
+Manually triggered Archify diagrams: detect relevant diff changes, choose one or
+more diagram types (architecture, workflow, sequence, dataflow, lifecycle), and
+author JSON specs for GHA to deliver as HTML.
 
 ## Layout
 
@@ -18,29 +18,45 @@ JSON specs for GHA to deliver as HTML.
 
 | Type | Typical triggers |
 |------|------------------|
-| `architecture` | Modules, services, boundaries, layout |
-| `workflow` | Pipelines, stages, CI, orchestration, runbooks |
-| `sequence` | API routes, middleware chains, request lifecycles |
-| `dataflow` | Persistence, migrations, ETL, envelope/artifact flow |
-| `lifecycle` | State machines, run status, HITL, retry/recovery |
+| `architecture` | Modules, services, boundaries, layout; AgentPort / Pi / Claude adapters |
+| `workflow` | Pipelines, stages, forks, clonable successors, fan-in, feedback loops, CI, runbooks |
+| `sequence` | API routes, middleware, MCP / `sf runs` handoffs, request lifecycles |
+| `dataflow` | Persistence, migrations, ETL, envelope/artifact flow, VSE surfaces |
+| `lifecycle` | State machines, run status, HITL, retry/recovery, skills provisioning |
 
-detect-changes selects 1–5 types based on the PR diff; author-diagrams writes one
-spec artifact per type.
+detect-changes selects 1–5 types based on the filtered diff; author-diagrams
+writes one spec artifact per type.
 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **OpenAI** provider (`openai/gpt-5.3-codex`) — set `OPENAI_API_KEY`
+- **OpenRouter** provider (`openrouter/minimax/minimax-m3:free`) — set
+  `OPENROUTER_API_KEY`, then:
+  `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`
 - **Archify skill** at `.pi/skills/archify/` (see below)
-- Git checkout at the PR head; run `prepare-ci-context.sh` before `sf run` (GHA does
-  this automatically)
+- Git checkout at the target head; run `prepare-ci-context.sh` before `sf run`
+  (GHA does this automatically)
 
 ## CI context (`ci-context.json`)
 
 Before Stageflow runs, GHA executes `scripts/prepare-ci-context.sh`. It resolves
-`head_sha`, `repo_url`, the PR diff file list, and `verified_paths` (whether each
-changed path exists at `head_sha`). Both pipeline stages read this file — agents
-do not use `GITHUB_SHA` or run their own git diff.
+`head_sha`, `repo_url`, and two file lists:
+
+| Field | Meaning |
+|-------|---------|
+| `changed_files` | Full three-dot diff vs base |
+| `relevant_files` | Filtered subset for diagram decisions |
+| `content_hash` | Hash of `relevant_files` only (empty string when none) |
+| `verified_paths` | Whether each changed path exists at `head_sha` |
+
+`relevant_files` excludes `docs/**`, `*.md` (except `skills/**`), lockfiles,
+`tests/**` except `tests/fixtures/**/*.{yaml,yml}`, pitch-deck / pitch-assets,
+and editor noise (`.editorconfig`, `.vscode/`, `.idea/`). detect-changes prefers
+`relevant_files`; when that list is empty it skips (`fork_choice: []`). GHA also
+early-skips the `sf-run` step when `relevant_files` is empty.
+
+Both pipeline stages read this file — agents do not use `GITHUB_SHA` or run
+their own git diff.
 
 Local dry-run:
 
@@ -75,7 +91,8 @@ Local dry-run from repo root:
 
 ```bash
 sf validate --strict
-export OPENAI_API_KEY=…
+export OPENROUTER_API_KEY=…
+sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY
 ./scripts/prepare-ci-context.sh ci-context.json
 sf run \
   --pipeline examples/archify-on-pr/archify-on-pr.pipeline.yaml \
@@ -124,7 +141,8 @@ done < <(jq -c '.diagrams[]' envelope.json)
 
 | Variable | Used by | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | `sf run` | Provider auth (required) |
+| `OPENROUTER_API_KEY` | `sf run` | OpenRouter provider auth (required) |
+| `PR_NUMBER` | prepare-ci-context | PR number override (enables sticky comment in GHA when set) |
 | `PR_HEAD_SHA` | prepare-ci-context | PR head commit SHA |
 | `GITHUB_REPOSITORY` | prepare-ci-context | `owner/repo` |
 | `GITHUB_BASE_REF` | prepare-ci-context | PR base branch (default: `main`) |
@@ -135,20 +153,29 @@ done < <(jq -c '.diagrams[]' envelope.json)
 
 ## Fork PR limitation
 
-The workflow posts a sticky PR comment with `pull-requests: write`. On **fork
-PRs**, GitHub downgrades `GITHUB_TOKEN` — the job may succeed but cannot post
-or update the comment. Same-repo branch PRs are supported; fork comment posting
-is deferred.
+The workflow posts a sticky PR comment with `pull-requests: write` only when
+`pr_number` is provided. On **fork PRs**, GitHub downgrades `GITHUB_TOKEN` — the
+job may succeed but cannot post or update the comment. Same-repo branch PRs are
+supported; fork comment posting is deferred.
 
 ## GitHub Actions
 
 See [`.github/workflows/archify-pr-diagrams.yml`](../../.github/workflows/archify-pr-diagrams.yml).
 
+**Manual trigger only** (`workflow_dispatch` — not automatic on every PR).
+
+1. Open **Actions** → **Archify PR diagrams** → **Run workflow**
+2. Provide **one of**:
+   - `pr_number` — resolves head/base from the PR; enables the sticky PR comment
+   - `head_ref` — branch or commit SHA when not targeting a PR
+3. Optionally set `base_ref` (default: `main`) for the three-dot diff
+
 The workflow uses the [`.github/actions/sf-run`](../../.github/actions/sf-run)
 composite to run the pipeline and extract a handoff envelope via
 `sf envelope get --format handoff`. `prepare-ci-context.sh` runs before the
-pipeline; agents author JSON only; GHA runs
-`deliver-diagrams.sh` (Archify `deliver` per type), uploads each `{type}.html`
-unzipped (`upload-artifact@v7`, `archive: false`) for in-browser viewing, also
-uploads a zipped `diagrams/` bundle, and updates the sticky comment. Debug
-artifacts include `ci-context.json`, `sf-run.json`, `envelope.json`, and `run-export.json`.
+pipeline; if `relevant_files` is empty, GHA skips `sf-run`, deliver, upload, and
+comment. Agents author JSON only; GHA runs `deliver-diagrams.sh` (Archify
+`deliver` per type), uploads each `{type}.html` unzipped (`upload-artifact@v7`,
+`archive: false`) for in-browser viewing, also uploads a zipped `diagrams/`
+bundle, and updates the sticky comment when `pr_number` is set. Debug artifacts
+include `ci-context.json`, `sf-run.json`, `envelope.json`, and `run-export.json`.

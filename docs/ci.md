@@ -276,19 +276,25 @@ Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact thi
 This repo dogfoods [`examples/archify-on-pr/`](../examples/archify-on-pr/) in
 [`.github/workflows/archify-pr-diagrams.yml`](../.github/workflows/archify-pr-diagrams.yml).
 
-On pull requests, Stageflow agents **detect** diagram-relevant diffs and choose
-one or more Archify types (`architecture`, `workflow`, `sequence`, `dataflow`,
-`lifecycle`). The **author-diagrams** stage writes `{type}.spec.json` per type.
-The workflow uses [`.github/actions/sf-run`](../.github/actions/sf-run) with
-`export-run: true`, then runs Archify `deliver` for each spec via
-`scripts/deliver-diagrams.sh`, uploads per-type HTML (unzipped for in-browser
-viewing) plus a `diagrams/` bundle, and updates a sticky PR comment. Skill
-provisioning uses `sf skills install --from-zip`; agents do not install Archify
-or post comments.
+The workflow is **manually triggered** via `workflow_dispatch` (not automatic on
+every PR). Inputs: `pr_number` and/or `head_ref` (provide one), plus optional
+`base_ref` (default `main`). Sticky PR comments run only when `pr_number` is set.
 
-When detect emits `fork_choice: []` (docs-only changes), GHA skips deliver,
-upload, and comment. Fork PRs cannot receive bot comments with the default token;
-see the example README.
+Provider auth uses **OpenRouter** (`OPENROUTER_API_KEY`), not OpenAI.
+`scripts/prepare-ci-context.sh` writes full `changed_files` plus filtered
+`relevant_files`; when the relevant set is empty, GHA skips the pipeline early.
+Otherwise Stageflow agents **detect** diagram types (`architecture`, `workflow`,
+`sequence`, `dataflow`, `lifecycle`) and **author-diagrams** writes
+`{type}.spec.json` per type. The workflow uses
+[`.github/actions/sf-run`](../.github/actions/sf-run) with `export-run: true`,
+then runs Archify `deliver` for each spec via `scripts/deliver-diagrams.sh`,
+uploads per-type HTML (unzipped for in-browser viewing) plus a `diagrams/`
+bundle, and updates a sticky PR comment when applicable. Skill provisioning uses
+`sf skills install --from-zip`; agents do not install Archify or post comments.
+
+When detect emits `fork_choice: []`, GHA skips deliver, upload, and comment.
+Fork PRs cannot receive bot comments with the default token; see the example
+README.
 
 ## See also
 

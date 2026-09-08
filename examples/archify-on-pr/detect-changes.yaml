@@ -3,35 +3,48 @@ system_prompt: |
   Inspect the pull-request diff and decide which Archify diagram types apply.
 
   Read ci-context.json from the repository root first. It is the single source of
-  truth for pr_number, base_ref, head_sha, changed_files, verified_paths, and
-  content_hash. Do not run git diff or read GITHUB_SHA for head identity.
+  truth for pr_number, base_ref, head_sha, changed_files, relevant_files,
+  verified_paths, and content_hash. Do not run git diff or read GITHUB_SHA for
+  head identity.
 
-  Use changed_files from ci-context.json. Skip diagram generation when the diff is
-  limited to docs/**, *.md, tests/** (unless stage fixture YAML under
-  tests/fixtures changes), lockfile-only, or formatting-only churn with no paths below.
+  Prefer relevant_files as the diagram-decision input. If relevant_files is
+  missing (older context), fall back to filtering changed_files with the skip
+  rules below. If relevant_files is present and empty → set diagram_types to [],
+  fork_choice: [], and skip — do not invent relevance from docs.
 
-  From the relevant paths, select one or more diagram types (1 to 5):
+  Explicit skip rules (already applied in prepare-ci-context when relevant_files
+  is present): docs/**, *.md except skills/**, lockfiles, tests/** except
+  tests/fixtures/**/*.yaml|yml, pitch-deck/pitch-assets, editor config noise.
+  Do not flag docs-only or formatting-only diffs. Keep skills/** changes.
+
+  From the architecture-relevant paths, select one or more diagram types (1 to 5):
 
   architecture — components, services, modules, boundaries, infrastructure:
-  src/**, ui/src/**, new packages or top-level layout, cloud or security boundaries.
+  src/agent/** (Pi + Claude AgentPort), src/server/**, src/mcp/**, src/runstore/**,
+  ui/src/**, package layout, skills/ tree vs stage skill: binding, createHttpHost
+  shared HTTP, cloud or security boundaries.
 
   workflow — processes, pipelines, orchestration, runbooks, CI/CD:
   examples/**/*.pipeline.yaml, stage YAML under examples/, .github/workflows/**,
-  fork/gate/scheduling logic, multi-stage handoffs.
+  scripts/** for CI handoff, fork/fork_choice, clonable/clone_cap/clone_forks,
+  multi-parent needs/fan-in, feedback_loop continue/send_back, verified stage
+  execution completion/recovery, scheduler.
 
   sequence — API call chains, request lifecycles, client-server interactions:
-  HTTP route handlers, API clients, middleware chains, RPC or message request paths.
+  HTTP routes (src/server), MCP tools/resources (src/mcp), sf runs host-down CLI
+  (src/cli/runs*), console API clients (ui), envelope get → deliver handoff.
 
   dataflow — pipelines, ETL/ELT, lineage, schema, consumers:
-  migrations, ORM models, data transforms, ingestion or export paths, config that
-  wires producers to stores or sinks.
+  src/envelope/**, payload_schema / clone_input_schema, priorEnvelopes vs
+  priorEnvelopesByStage, runstore/projection, artifact wiring, migrations if any.
 
   lifecycle — state machines, status transitions, retries, terminal states:
-  run or job state enums, HITL gates, retry/backoff logic, status fields that
-  drive branching or recovery.
+  run/stage status transitions, HITL park/resume, clone join fail→skip, VSE
+  repair/manual recovery, feedback replay / wait_for_human, retry/backoff.
 
   Write changes.json via write_stage_artifact with pr_number, base_ref, head_sha,
-  changed_files (architecture-relevant paths only), diagram_types (selected types),
+  changed_files (architecture-relevant paths only — the filtered relevant set
+  used for decisions, not the full raw diff), diagram_types (selected types),
   change_summary, and content_hash copied from or derived from ci-context.json.
 
   Call emit_stage_envelope exactly once with status success, changes.json in
@@ -40,7 +53,7 @@ system_prompt: |
   - fork_choice: ["author-diagrams"] when diagram_types is non-empty
 
   Do not call ask_operator. Do not stop after a chat reply.
-model: openai/gpt-5-mini
+model: openrouter/minimax/minimax-m3:free
 payload_schema:
   type: object
   required:
