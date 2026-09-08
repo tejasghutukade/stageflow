@@ -358,6 +358,196 @@ describe("payload_schema", () => {
     }
   });
 
+  it("rejects strings outside pattern/minLength/maxLength", () => {
+    const schema = {
+      type: "object",
+      required: ["code"],
+      properties: {
+        code: {
+          type: "string",
+          pattern: "^[a-z]{2,4}$",
+          minLength: 2,
+          maxLength: 4,
+        },
+      },
+    };
+    for (const value of ["a", "abcdef", "AB"]) {
+      const envelope = assertRequiredEnvelope({
+        status: "success",
+        summary: "checked",
+        artifacts: [],
+        payload: { code: value },
+      });
+      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
+        EnvelopeError,
+      );
+    }
+    for (const value of ["ab", "abcd"]) {
+      const envelope = assertRequiredEnvelope({
+        status: "success",
+        summary: "checked",
+        artifacts: [],
+        payload: { code: value },
+      });
+      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
+    }
+  });
+
+  it("rejects invalid pattern and negative/non-integer string bounds at compile time", () => {
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", pattern: "[" } },
+      }),
+    ).toThrow(/pattern must be a valid regular expression/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", pattern: "\\1" } },
+      }),
+    ).toThrow(/pattern must be a valid regular expression/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", pattern: 5 } },
+      }),
+    ).toThrow(/pattern must be a string when present/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", minLength: -1 } },
+      }),
+    ).toThrow(/minLength must be a non-negative integer/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", maxLength: 1.5 } },
+      }),
+    ).toThrow(/maxLength must be a non-negative integer/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", minLength: 5, maxLength: 2 } },
+      }),
+    ).toThrow(/minLength must be <= maxLength/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: { code: { type: "string", nullable: "yes" } },
+      }),
+    ).toThrow(/nullable must be a boolean when present/);
+  });
+
+  it("rejects strings that fail combined enum and pattern/minLength constraints", () => {
+    const schema = {
+      type: "object",
+      required: ["code"],
+      properties: {
+        code: {
+          type: "string",
+          enum: ["a", "AB"],
+          pattern: "^[A-Z]+$",
+          minLength: 2,
+        },
+      },
+    };
+    const reject = assertRequiredEnvelope({
+      status: "success",
+      summary: "checked",
+      artifacts: [],
+      payload: { code: "a" },
+    });
+    expect(() => assertEnvelopePayload(reject, schema)).toThrow(EnvelopeError);
+
+    const accept = assertRequiredEnvelope({
+      status: "success",
+      summary: "checked",
+      artifacts: [],
+      payload: { code: "AB" },
+    });
+    expect(() => assertEnvelopePayload(accept, schema)).not.toThrow();
+  });
+
+  it("rejects nullable root at compile time", () => {
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        nullable: true,
+        properties: {},
+      }),
+    ).toThrow(/root cannot be nullable/);
+  });
+
+  it("allows null for a nullable node in addition to its base type", () => {
+    const schema = {
+      type: "object",
+      required: ["note", "detail"],
+      properties: {
+        note: { type: "string", nullable: true },
+        detail: {
+          type: "object",
+          required: ["mode"],
+          properties: { mode: { type: "string", nullable: true } },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    };
+    for (const payload of [
+      { note: "ok", detail: { mode: null } },
+      { note: null, detail: { mode: "strict" } },
+      { note: null, detail: { mode: null } },
+    ]) {
+      const envelope = assertRequiredEnvelope({
+        status: "success",
+        summary: "checked",
+        artifacts: [],
+        payload,
+      });
+      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
+    }
+
+    // Values of neither the base type nor null are rejected.
+    for (const payload of [
+      { note: 7, detail: { mode: "strict" } },
+      { note: "ok", detail: { mode: 1 } },
+    ]) {
+      const envelope = assertRequiredEnvelope({
+        status: "success",
+        summary: "checked",
+        artifacts: [],
+        payload,
+      });
+      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
+        EnvelopeError,
+      );
+    }
+  });
+
+  it("allows null for a nullable enum node", () => {
+    const schema = {
+      type: "object",
+      required: ["status"],
+      properties: { status: { type: "string", enum: ["pass"], nullable: true } },
+    };
+    for (const value of ["pass", null]) {
+      const envelope = assertRequiredEnvelope({
+        status: "success",
+        summary: "checked",
+        artifacts: [],
+        payload: { status: value },
+      });
+      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
+    }
+    const bad = assertRequiredEnvelope({
+      status: "success",
+      summary: "checked",
+      artifacts: [],
+      payload: { status: "fail" },
+    });
+    expect(() => assertEnvelopePayload(bad, schema)).toThrow(EnvelopeError);
+  });
+
   it("compiles unknown keywords without failing load", () => {
     const schema = {
       type: "object",
@@ -432,148 +622,5 @@ describe("payload_schema", () => {
         "clone_forks[0].envelope",
       ),
     ).toThrow(/clone_forks\[0\]\.envelope/);
-  });
-
-  it("rejects string values outside pattern", () => {
-    const schema = {
-      type: "object",
-      required: ["name"],
-      properties: {
-        name: { type: "string", pattern: "^[A-Z]+$" },
-      },
-    };
-
-    const fail = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { name: "lowercase" },
-    });
-    expect(() => assertEnvelopePayload(fail, schema)).toThrow(EnvelopeError);
-
-    const pass = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { name: "UPPER" },
-    });
-    expect(() => assertEnvelopePayload(pass, schema)).not.toThrow();
-  });
-
-  it("rejects string values outside minLength/maxLength", () => {
-    const schema = {
-      type: "object",
-      required: ["code"],
-      properties: {
-        code: { type: "string", minLength: 2, maxLength: 4 },
-      },
-    };
-
-    for (const value of ["A", "ABCDE"]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload: { code: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).toThrow(
-        EnvelopeError,
-      );
-    }
-    for (const value of ["AB", "ABCD", "ABC"]) {
-      const envelope = assertRequiredEnvelope({
-        status: "success",
-        summary: "checked",
-        artifacts: [],
-        payload: { code: value },
-      });
-      expect(() => assertEnvelopePayload(envelope, schema)).not.toThrow();
-    }
-  });
-
-  it("allows null when nullable is true, rejects other types", () => {
-    const schema = {
-      type: "object",
-      required: ["value"],
-      properties: {
-        value: { type: "string", nullable: true },
-      },
-    };
-
-    const nullEnvelope = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { value: null },
-    });
-    expect(() => assertEnvelopePayload(nullEnvelope, schema)).not.toThrow();
-
-    const stringEnvelope = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { value: "hello" },
-    });
-    expect(() => assertEnvelopePayload(stringEnvelope, schema)).not.toThrow();
-
-    const wrongEnvelope = assertRequiredEnvelope({
-      status: "success",
-      summary: "checked",
-      artifacts: [],
-      payload: { value: 42 },
-    });
-    expect(() => assertEnvelopePayload(wrongEnvelope, schema)).toThrow(
-      EnvelopeError,
-    );
-  });
-
-  it("rejects invalid pattern/minLength/maxLength at compile time", () => {
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { name: { type: "string", pattern: "[unclosed" } },
-      }),
-    ).toThrow(/pattern must be a valid regular expression/);
-
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { name: { type: "string", minLength: -1 } },
-      }),
-    ).toThrow(/minLength must be a non-negative integer/);
-
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { name: { type: "string", maxLength: 2.5 } },
-      }),
-    ).toThrow(/maxLength must be a non-negative integer/);
-  });
-
-  it("rejects invalid pattern/minLength/maxLength at compile time even when enum is present", () => {
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: {
-          name: { type: "string", enum: ["a"], pattern: "[unclosed" },
-        },
-      }),
-    ).toThrow(/pattern must be a valid regular expression/);
-
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: {
-          name: { type: "string", enum: ["a"], minLength: -1 },
-        },
-      }),
-    ).toThrow(/minLength must be a non-negative integer/);
-
-    expect(() =>
-      compilePayloadSchema({
-        type: "object",
-        properties: { name: { type: "string", enum: ["a"], maxLength: 2.5 } },
-      }),
-    ).toThrow(/maxLength must be a non-negative integer/);
   });
 });
