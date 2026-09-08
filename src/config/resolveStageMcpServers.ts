@@ -123,3 +123,92 @@ export function assertMcpAllowlistKnown(
     }
   }
 }
+
+const INTERPOLATION_TOKEN = /\$\{([^}]*)\}/g;
+const ENV_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const ENV_VAR_WITH_DEFAULT = /^([A-Za-z_][A-Za-z0-9_]*):-(.*)$/;
+
+function interpolateString(
+  value: string,
+  env: NodeJS.ProcessEnv,
+  serverName: string,
+): string {
+  return value.replace(INTERPOLATION_TOKEN, (_match, inner: string) => {
+    const withDefault = ENV_VAR_WITH_DEFAULT.exec(inner);
+    if (withDefault) {
+      const found = env[withDefault[1]];
+      return found !== undefined ? found : withDefault[2];
+    }
+    if (ENV_VAR_NAME.test(inner)) {
+      const found = env[inner];
+      if (found !== undefined) {
+        return found;
+      }
+      throw new StageMcpError(
+        `Unresolved MCP catalog variable "${inner}"`,
+        "unresolved_var",
+      );
+    }
+    throw new StageMcpError(
+      `MCP catalog server "${serverName}" has an invalid interpolation form`,
+      "invalid_config",
+    );
+  });
+}
+
+function interpolateField(
+  key: string,
+  value: unknown,
+  env: NodeJS.ProcessEnv,
+  serverName: string,
+): unknown {
+  if ((key === "command" || key === "url") && typeof value === "string") {
+    return interpolateString(value, env, serverName);
+  }
+  if (key === "args" && Array.isArray(value)) {
+    return value.map((item) =>
+      typeof item === "string" ? interpolateString(item, env, serverName) : item,
+    );
+  }
+  if ((key === "env" || key === "headers") && isPlainObject(value)) {
+    const copied: Record<string, unknown> = {};
+    for (const [field, fieldValue] of Object.entries(value)) {
+      copied[field] =
+        typeof fieldValue === "string"
+          ? interpolateString(fieldValue, env, serverName)
+          : fieldValue;
+    }
+    return copied;
+  }
+  return value;
+}
+
+function interpolateServer(
+  entry: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+  serverName: string,
+): ResolvedMcpServerConfig {
+  const resolved: ResolvedMcpServerConfig = {};
+  for (const [key, value] of Object.entries(entry)) {
+    resolved[key] = interpolateField(key, value, env, serverName);
+  }
+  return resolved;
+}
+
+export async function resolveStageMcpServers(options: {
+  projectRoot: string;
+  allowlist?: readonly string[];
+  env: NodeJS.ProcessEnv;
+}): Promise<ResolvedMcpServers> {
+  const allowlist = options.allowlist ?? [];
+  if (allowlist.length === 0) {
+    return {};
+  }
+  const catalog = await loadMcpCatalog(options.projectRoot);
+  assertMcpAllowlistKnown(catalog.servers, allowlist);
+  const resolved: ResolvedMcpServers = {};
+  for (const name of allowlist) {
+    resolved[name] = interpolateServer(catalog.servers[name], options.env, name);
+  }
+  return resolved;
+}

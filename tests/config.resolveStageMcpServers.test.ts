@@ -9,6 +9,7 @@ import {
   loadMcpCatalog,
   mcpCatalogPath,
   parseMcpCatalog,
+  resolveStageMcpServers,
   type ResolvedMcpServerConfig,
   type ResolvedMcpServers,
 } from "../src/config/resolveStageMcpServers.js";
@@ -163,5 +164,258 @@ describe("MCP catalog reader", () => {
     expect(() =>
       assertMcpAllowlistKnown({ github: { command: "npx" } }, ["github"]),
     ).not.toThrow();
+  });
+});
+
+async function writeCatalog(
+  servers: Record<string, Record<string, unknown>>,
+): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-resolve-"));
+  await writeFile(path.join(root, ".mcp.json"), JSON.stringify({ mcpServers: servers }));
+  return root;
+}
+
+describe("resolveStageMcpServers", () => {
+  it("returns only allowlisted keys when the catalog has more servers (AE1)", async () => {
+    const root = await writeCatalog({
+      github: {
+        type: "http",
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+      notion: {
+        type: "http",
+        url: "https://api.notion.com/mcp",
+        headers: { Authorization: "Bearer ${NOTION_TOKEN}" },
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { GITHUB_TOKEN: "ghs_test_token" },
+    });
+    expect(Object.keys(resolved)).toEqual(["github"]);
+    expect(resolved.github).toEqual({
+      type: "http",
+      url: "https://api.github.com/mcp",
+      headers: { Authorization: "Bearer ghs_test_token" },
+    });
+    expect(resolved).not.toHaveProperty("notion");
+  });
+
+  it("throws unresolved_var when a required variable is unset (AE2)", async () => {
+    const root = await writeCatalog({
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: { OTHER_SECRET: "s3cret-value-do-not-print" },
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("unresolved_var");
+      expect((err as StageMcpError).message).toContain("GITHUB_TOKEN");
+      expect((err as StageMcpError).message).not.toContain("s3cret-value-do-not-print");
+    }
+  });
+
+  it("uses ${VAR:-default} when the variable is unset (AE10)", async () => {
+    const root = await writeCatalog({
+      github: {
+        type: "http",
+        url: "${API_BASE_URL:-https://api.example.com}/mcp",
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: {},
+    });
+    expect(resolved.github.url).toBe("https://api.example.com/mcp");
+  });
+
+  it("interpolates a token inside a larger headers value", async () => {
+    const root = await writeCatalog({
+      github: {
+        type: "http",
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer ${TOKEN}" },
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { TOKEN: "abc123" },
+    });
+    expect(resolved.github.headers).toEqual({ Authorization: "Bearer abc123" });
+    expect(resolved.github.type).toBe("http");
+  });
+
+  it("interpolates args entries and leaves type unchanged", async () => {
+    const root = await writeCatalog({
+      local: {
+        type: "http",
+        command: "node",
+        args: ["${HOME}/bin"],
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["local"],
+      env: { HOME: "/Users/me" },
+    });
+    expect(resolved.local.args).toEqual(["/Users/me/bin"]);
+    expect(resolved.local.type).toBe("http");
+    expect(resolved.local.command).toBe("node");
+  });
+
+  it("interpolates env values with defaults and set vars", async () => {
+    const root = await writeCatalog({
+      local: {
+        command: "npx",
+        env: {
+          UNSET_ONE: "${MISSING:-x}",
+          SET_ONE: "${PRESENT:-x}",
+        },
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["local"],
+      env: { PRESENT: "y" },
+    });
+    expect(resolved.local.env).toEqual({
+      UNSET_ONE: "x",
+      SET_ONE: "y",
+    });
+  });
+
+  it("returns {} for an empty allowlist without reading a missing catalog", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-empty-allow-"));
+    await expect(
+      resolveStageMcpServers({ projectRoot: root, allowlist: [], env: {} }),
+    ).resolves.toEqual({});
+    await expect(
+      resolveStageMcpServers({ projectRoot: root, allowlist: undefined, env: {} }),
+    ).resolves.toEqual({});
+  });
+
+  it("treats connect_failed as a valid code and never throws it", async () => {
+    expect(new StageMcpError("later", "connect_failed").code).toBe("connect_failed");
+    const missingRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-no-cat-"));
+    await expect(
+      resolveStageMcpServers({
+        projectRoot: missingRoot,
+        allowlist: ["github"],
+        env: {},
+      }),
+    ).rejects.toMatchObject({ name: "StageMcpError", code: "missing_catalog" });
+
+    const root = await writeCatalog({
+      github: { url: "${GITHUB_TOKEN}" },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: {},
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).not.toBe("connect_failed");
+      expect((err as StageMcpError).code).toBe("unresolved_var");
+    }
+  });
+
+  it("interpolates multiple tokens in one string", async () => {
+    const root = await writeCatalog({
+      github: {
+        url: "${HOST}/v1/${PATH}",
+      },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { HOST: "https://api.example.com", PATH: "mcp" },
+    });
+    expect(resolved.github.url).toBe("https://api.example.com/v1/mcp");
+  });
+
+  it("throws invalid_config for unrecognized interpolation forms", async () => {
+    const root = await writeCatalog({
+      github: { url: "${FOO:bar}" },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: { FOO: "x" },
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("invalid_config");
+    }
+  });
+
+  it("does not mutate catalog objects when interpolating", async () => {
+    const root = await writeCatalog({
+      github: {
+        url: "${HOST}/mcp",
+        args: ["${HOME}/bin"],
+        env: { TOKEN: "${TOKEN}" },
+        headers: { Authorization: "Bearer ${TOKEN}" },
+      },
+    });
+    const catalog = await loadMcpCatalog(root);
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { HOST: "https://api.example.com", HOME: "/h", TOKEN: "tok" },
+    });
+    expect(resolved.github.url).toBe("https://api.example.com/mcp");
+    (resolved.github.args as string[]).push("mutated");
+    (resolved.github.env as Record<string, string>).TOKEN = "mutated";
+    (resolved.github.headers as Record<string, string>).Authorization = "mutated";
+    expect(catalog.servers.github).toEqual({
+      url: "${HOST}/mcp",
+      args: ["${HOME}/bin"],
+      env: { TOKEN: "${TOKEN}" },
+      headers: { Authorization: "Bearer ${TOKEN}" },
+    });
+    const reread = await loadMcpCatalog(root);
+    expect(reread.servers.github).toEqual(catalog.servers.github);
+  });
+
+  it("throws unknown_server for allowlist names missing from the catalog", async () => {
+    const root = await writeCatalog({
+      github: { command: "npx" },
+    });
+    await expect(
+      resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["notion"],
+        env: {},
+      }),
+    ).rejects.toMatchObject({ name: "StageMcpError", code: "unknown_server" });
+  });
+
+  it("treats an empty-string env value as set", async () => {
+    const root = await writeCatalog({
+      github: { url: "https://example.com/${EMPTY_VAR:-fallback}" },
+    });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: root,
+      allowlist: ["github"],
+      env: { EMPTY_VAR: "" },
+    });
+    expect(resolved.github.url).toBe("https://example.com/");
   });
 });
