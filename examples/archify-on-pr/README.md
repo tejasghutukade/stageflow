@@ -30,13 +30,10 @@ writes one spec artifact per type.
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **OpenRouter** provider (`openrouter/minimax/minimax-m3`) — set
+- **OpenRouter** provider
+  (`openrouter/nvidia/nemotron-3-ultra-550b-a55b:free`) — set
   `OPENROUTER_API_KEY`, then:
-  `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`.
-  GHA writes a `models.json` that caps `maxTokens` (OpenRouter reserves the full
-  budget against credits; Minimax’s default ~512k max often 402s on small balances).
-  Locally, if you see a 402 about `max_tokens`, add the same override under
-  `~/.pi/agent/models.json` or `~/.stageflow/agent/models.json`.
+  `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`
 - **Archify skill** at `.pi/skills/archify/` (see below)
 - Git checkout at the target head; run `prepare-ci-context.sh` before `sf run`
   (GHA does this automatically)

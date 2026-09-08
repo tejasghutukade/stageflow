@@ -148,19 +148,6 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: node dist/cli.js providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY
 
-      - name: Cap OpenRouter maxTokens
-        if: steps.relevance.outputs.skipped != 'true'
-        run: |
-          set -euo pipefail
-          # OpenRouter credits-check reserves the full max_tokens budget. Minimax
-          # advertises ~512k, which 402s on small balances. Cap for CI stages.
-          MODELS_JSON='{"providers":{"openrouter":{"modelOverrides":{"minimax/minimax-m3":{"contextWindow":131072,"maxTokens":8192}}}}}'
-          for dir in "${HOME}/.stageflow/agent" "${HOME}/.pi/agent"; do
-            mkdir -p "${dir}"
-            printf '%s\n' "${MODELS_JSON}" > "${dir}/models.json"
-            echo "wrote ${dir}/models.json"
-          done
-
       - id: envelope
         name: Run Archify-on-PR pipeline
         if: steps.relevance.outputs.skipped != 'true'

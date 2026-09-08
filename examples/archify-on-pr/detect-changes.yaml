@@ -53,7 +53,7 @@ system_prompt: |
   - fork_choice: ["author-diagrams"] when diagram_types is non-empty
 
   Do not call ask_operator. Do not stop after a chat reply.
-model: openrouter/minimax/minimax-m3
+model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
 payload_schema:
   type: object
   required:
