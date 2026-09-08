@@ -8,11 +8,12 @@ import {
   buildValidationResult,
   loadPipelineValidated,
   validateCatalog,
+  validatePipeline,
   type ValidationFinding,
 } from "../src/config/validateCatalog.js";
 import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { REPO_ROOT, FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
@@ -393,6 +394,230 @@ describe("validateCatalog legacy fixtures", () => {
       expect(result.findings.some((f) => f.code === "catalog.manifest_missing")).toBe(
         true,
       );
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+});
+
+async function writeInlinePipeline(
+  root: string,
+  options: { id?: string; mcp?: string[] } = {},
+): Promise<string> {
+  const id = options.id ?? "worker";
+  const mcpLines =
+    options.mcp === undefined
+      ? []
+      : options.mcp.length === 0
+        ? ["    mcp: []"]
+        : ["    mcp:", ...options.mcp.map((name) => `      - ${name}`)];
+  const pipelinePath = path.join(root, `${id}.pipeline.yaml`);
+  await writeFile(
+    pipelinePath,
+    [
+      `id: ${id}`,
+      "stages:",
+      `  - id: ${id}`,
+      "    system_prompt: test",
+      "    model: anthropic/claude-sonnet-4-5",
+      ...mcpLines,
+      "",
+    ].join("\n"),
+  );
+  return pipelinePath;
+}
+
+function catalogFindings(findings: ValidationFinding[]): ValidationFinding[] {
+  return findings.filter((f) => f.code === "catalog.invalid_mcp");
+}
+
+describe("validateCatalog stage MCP catalog inspect", () => {
+  it("AE6: no-mcp pipeline without .mcp.json has no catalog.invalid_mcp", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const pipelinePath = await writeInlinePipeline(root);
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(true);
+      expect(catalogFindings(result.findings)).toHaveLength(0);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("AE4: listed name without .mcp.json reports catalog.invalid_mcp missing catalog", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const pipelinePath = await writeInlinePipeline(root, { mcp: ["github"] });
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      const mcpFindings = catalogFindings(result.findings);
+      expect(mcpFindings.length).toBeGreaterThan(0);
+      expect(mcpFindings[0]?.message).toMatch(/missing/i);
+      expect(mcpFindings[0]?.message).toMatch(/\.mcp\.json/);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("AE5: unknown allowlist name reports catalog.invalid_mcp", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { github: { type: "http", url: "https://example.test" } } }),
+      );
+      const pipelinePath = await writeInlinePipeline(root, { mcp: ["notion"] });
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      const mcpFindings = catalogFindings(result.findings);
+      expect(mcpFindings.length).toBeGreaterThan(0);
+      expect(mcpFindings[0]?.message).toMatch(/unknown/i);
+      expect(mcpFindings[0]?.message).toContain("notion");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("AE3: reserved catalog key stageflow fails even when allowlists are empty", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { stageflow: { command: "npx" } } }),
+      );
+      const pipelinePath = await writeInlinePipeline(root);
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      const mcpFindings = catalogFindings(result.findings);
+      expect(mcpFindings.length).toBeGreaterThan(0);
+      expect(mcpFindings[0]?.message).toMatch(/reserved/i);
+      expect(mcpFindings[0]?.message).toContain("stageflow");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("invalid JSON in .mcp.json reports catalog.invalid_mcp", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(path.join(root, ".mcp.json"), "{ not json");
+      const pipelinePath = await writeInlinePipeline(root);
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("mcpServers as an array reports catalog.invalid_mcp", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: [{ name: "github" }] }),
+      );
+      const pipelinePath = await writeInlinePipeline(root);
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("R6: known object entry validates without env interpolation", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const prevToken = process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_TOKEN;
+    try {
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            github: {
+              type: "http",
+              url: "https://api.github.com/mcp",
+              headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+            },
+          },
+        }),
+      );
+      const pipelinePath = await writeInlinePipeline(root, { mcp: ["github"] });
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(true);
+      expect(catalogFindings(result.findings)).toHaveLength(0);
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.GITHUB_TOKEN;
+      } else {
+        process.env.GITHUB_TOKEN = prevToken;
+      }
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("single.pipeline.yaml validates with no mcp and no repo-root catalog file", async () => {
+    clearFindProjectRootCacheForTests();
+    const result = await validatePipeline(SINGLE_PIPELINE, { cwd: REPO_ROOT });
+    expect(result.findings.some((f) => f.code === "catalog.invalid_mcp")).toBe(false);
+    expect(result.ok).toBe(true);
+  });
+
+  it("single-style pipeline validates against a well-formed catalog with no reserved key", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await writeFile(
+        path.join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { github: { command: "npx" } } }),
+      );
+      const pipelinePath = await writeInlinePipeline(root);
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(true);
+      expect(catalogFindings(result.findings)).toHaveLength(0);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("missing project root with a non-empty allowlist reports catalog.invalid_mcp", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-nogit-"));
+    try {
+      const pipelinePath = await writeInlinePipeline(root, { mcp: ["github"] });
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(false);
+      expect(catalogFindings(result.findings).length).toBeGreaterThan(0);
+    } finally {
+      clearFindProjectRootCacheForTests();
+    }
+  });
+
+  it("empty mcp list without .mcp.json has no catalog.invalid_mcp", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const pipelinePath = await writeInlinePipeline(root, { mcp: [] });
+      clearFindProjectRootCacheForTests();
+      const result = await validatePipeline(pipelinePath, { cwd: root });
+      expect(result.ok).toBe(true);
+      expect(catalogFindings(result.findings)).toHaveLength(0);
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
