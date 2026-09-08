@@ -40,7 +40,7 @@ system_prompt: |
   with a diagrams array — one object per authored type:
   { diagram_type, spec_artifact, summary }.
   Do not stop after a chat reply.
-model: openrouter/minimax/minimax-m3:free
+model: openrouter/minimax/minimax-m3
 payload_schema:
   type: object
   required: [diagrams]

@@ -30,7 +30,7 @@ writes one spec artifact per type.
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow built (`npm run build`)
-- **OpenRouter** provider (`openrouter/minimax/minimax-m3:free`) — set
+- **OpenRouter** provider (`openrouter/minimax/minimax-m3`) — set
   `OPENROUTER_API_KEY`, then:
   `sf providers login openrouter --type api_key --api-key-env OPENROUTER_API_KEY`
 - **Archify skill** at `.pi/skills/archify/` (see below)
