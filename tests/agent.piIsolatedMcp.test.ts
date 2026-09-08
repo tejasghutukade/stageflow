@@ -107,6 +107,60 @@ describe("attachIsolatedMcp", () => {
     await attached.connecting;
   });
 
+  it("maps stdio and HTTP snapshot servers through createMcpAdapter config only", async () => {
+    createMcpAdapter.mockClear();
+    const snapshot = {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: "x" },
+        cwd: "/tmp/github",
+      },
+      docs: {
+        url: "https://mcp.example.com/mcp",
+        headers: { Authorization: "Bearer t" },
+      },
+    };
+    const attached = await attachIsolatedMcp(snapshot);
+    const adapterOptions = createMcpAdapter.mock.calls[0]?.[0] as
+      | { config?: { settings?: Record<string, unknown> } }
+      | undefined;
+    expect(adapterOptions).toEqual({
+      config: {
+        mcpServers: {
+          github: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-github"],
+            env: { GITHUB_TOKEN: "x" },
+            cwd: "/tmp/github",
+            lifecycle: "eager",
+            directTools: true,
+          },
+          docs: {
+            url: "https://mcp.example.com/mcp",
+            headers: { Authorization: "Bearer t" },
+            lifecycle: "eager",
+            directTools: true,
+          },
+        },
+        settings: {
+          directTools: true,
+          elicitation: false,
+          hostConfigDiscovery: "off",
+        },
+      },
+    });
+    expect(adapterOptions).not.toHaveProperty("configPath");
+    expect(adapterOptions?.config).not.toHaveProperty("imports");
+    expect(adapterOptions?.config.settings).not.toHaveProperty("approveTools");
+    expect(adapterOptions?.config.settings).not.toHaveProperty("autoAuth");
+    emitIsolatedMcpStatus(attached.eventBus!, [
+      { name: "github", status: "connected" },
+      { name: "docs", status: "cached" },
+    ]);
+    await attached.connecting;
+  });
+
   it.each(["connected", "cached"] as const)(
     "resolves connecting when %s is emitted before reload",
     async (status) => {

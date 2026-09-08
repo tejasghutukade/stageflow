@@ -7,21 +7,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MCP_STATUS_EVENT,
-  mcpStatusSourceFromEvents,
-  waitForIsolatedMcpConnect,
-  type IsolatedMcpStatusSnapshot,
-} from "../src/agent/piMcpConnect.js";
-import * as piMcpConnect from "../src/agent/piMcpConnect.js";
-import * as piMcpExtension from "../src/agent/piMcpExtension.js";
+import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import {
   createSealedResourceLoader,
   PiAgentAdapter,
   resolveStageToolNames,
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
-import { StageMcpError } from "../src/config/resolveStageMcpServers.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 
@@ -51,17 +43,44 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
   };
 });
 
-const createMcpAdapter = vi.hoisted(() => vi.fn(() => () => {}));
+const createMcpAdapter = vi.hoisted(() =>
+  vi.fn((options?: { config?: { mcpServers?: Record<string, unknown> } }) => {
+    return (pi: ExtensionAPI) => {
+      for (const name of Object.keys(options?.config?.mcpServers ?? {})) {
+        pi.registerTool({
+          name: `${name}__list_issues`,
+          label: name,
+          description: `Isolated snapshot tool for ${name}`,
+          parameters: Type.Object({}),
+          async execute() {
+            return { content: [{ type: "text", text: "ok" }], details: {} };
+          },
+        });
+      }
+    };
+  }),
+);
 
 vi.mock("pi-mcp-adapter", () => ({
   createMcpAdapter,
 }));
 
-const {
-  mcpExtensionFactoriesForSnapshot,
-  STAGEFLOW_PI_MCP_EXTENSION_NAME,
-  toIsolatedMcpConfig,
-} = await import("../src/agent/piMcpExtension.js");
+const attachIsolatedMcpImpl = piIsolatedMcp.attachIsolatedMcp;
+
+function wrapAttachAndEmitStatus(status: string) {
+  return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+    async (snapshot, options) => {
+      const attached = await attachIsolatedMcpImpl(snapshot, options);
+      if (attached.eventBus !== undefined) {
+        piIsolatedMcp.emitIsolatedMcpStatus(
+          attached.eventBus,
+          Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
+        );
+      }
+      return attached;
+    },
+  );
+}
 
 async function writeSkill(dir: string, name: string): Promise<void> {
   const skillDir = path.join(dir, name);
@@ -103,209 +122,6 @@ async function plantHostResources(cwd: string, agentDir: string): Promise<void> 
   await writeExtension(path.join(agentDir, "extensions"), "host-canary.ts");
   await writeExtension(path.join(cwd, ".pi", "extensions"), "project-canary.ts");
 }
-
-describe("toIsolatedMcpConfig", () => {
-  it("maps stdio and HTTP servers to eager isolated entries", () => {
-    const snapshot = {
-      github: {
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-github"],
-        env: { GITHUB_TOKEN: "x" },
-        cwd: "/tmp/github",
-      },
-      docs: {
-        url: "https://mcp.example.com/mcp",
-        headers: { Authorization: "Bearer t" },
-      },
-    };
-    const config = toIsolatedMcpConfig(snapshot);
-    expect(Object.keys(config.mcpServers)).toEqual(["github", "docs"]);
-    expect(config.mcpServers.github).toMatchObject({
-      command: "npx",
-      args: ["-y", "@modelcontextprotocol/server-github"],
-      env: { GITHUB_TOKEN: "x" },
-      cwd: "/tmp/github",
-      lifecycle: "eager",
-      directTools: true,
-    });
-    expect(config.mcpServers.docs).toMatchObject({
-      url: "https://mcp.example.com/mcp",
-      headers: { Authorization: "Bearer t" },
-      lifecycle: "eager",
-      directTools: true,
-    });
-    expect(config).not.toHaveProperty("configPath");
-    expect(config).not.toHaveProperty("imports");
-    expect(config.settings).toEqual({
-      directTools: true,
-      elicitation: false,
-      hostConfigDiscovery: "off",
-    });
-    expect(config.settings).not.toHaveProperty("approveTools");
-    expect(config.settings).not.toHaveProperty("autoAuth");
-  });
-
-  it("overlays eager lifecycle even when the snapshot asked for lazy", () => {
-    const config = toIsolatedMcpConfig({
-      github: { command: "npx", lifecycle: "lazy", directTools: false },
-    });
-    expect(config.mcpServers.github?.lifecycle).toBe("eager");
-    expect(config.mcpServers.github?.directTools).toBe(true);
-  });
-});
-
-describe("mcpExtensionFactoriesForSnapshot", () => {
-  beforeEach(() => {
-    createMcpAdapter.mockClear();
-  });
-
-  it("returns no factory for an omitted snapshot", () => {
-    expect(mcpExtensionFactoriesForSnapshot(undefined)).toEqual([]);
-    expect(createMcpAdapter).not.toHaveBeenCalled();
-  });
-
-  it("returns no factory for an empty snapshot", () => {
-    expect(mcpExtensionFactoriesForSnapshot({})).toEqual([]);
-    expect(createMcpAdapter).not.toHaveBeenCalled();
-  });
-
-  it("returns a named factory for a non-empty snapshot", () => {
-    const snapshot = {
-      docs: { url: "https://mcp.example.com/mcp" },
-    };
-    const factories = mcpExtensionFactoriesForSnapshot(snapshot);
-    expect(factories).toHaveLength(1);
-    expect(factories[0]).toMatchObject({
-      name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
-    });
-    expect(factories[0]).toEqual(
-      expect.objectContaining({
-        factory: expect.any(Function),
-      }),
-    );
-    expect(createMcpAdapter).toHaveBeenCalledTimes(1);
-    const adapterOptions = createMcpAdapter.mock.calls[0]?.[0];
-    expect(adapterOptions).toEqual({
-      config: toIsolatedMcpConfig(snapshot),
-    });
-    expect(adapterOptions).not.toHaveProperty("configPath");
-    expect(adapterOptions?.config.settings.hostConfigDiscovery).toBe("off");
-    expect(adapterOptions?.config.settings.elicitation).toBe(false);
-  });
-});
-
-describe("waitForIsolatedMcpConnect", () => {
-  const snapshot = {
-    github: { url: "https://mcp.example.invalid/mcp" },
-  };
-
-  function statusOf(
-    name: string,
-    status: IsolatedMcpStatusSnapshot["servers"][number]["status"],
-  ): IsolatedMcpStatusSnapshot {
-    return { servers: [{ name, status }] };
-  }
-
-  it("skips connect wait for an empty snapshot", async () => {
-    const subscribe = vi.fn();
-    const read = vi.fn();
-    await waitForIsolatedMcpConnect({}, { read, subscribe }, { timeoutMs: 20 });
-    await waitForIsolatedMcpConnect(undefined, { read, subscribe }, { timeoutMs: 20 });
-    expect(read).not.toHaveBeenCalled();
-    expect(subscribe).not.toHaveBeenCalled();
-  });
-
-  async function expectConnectFailed(
-    run: Promise<void>,
-    message: string | RegExp,
-  ): Promise<void> {
-    const err = await run.then(
-      () => {
-        throw new Error("expected StageMcpError");
-      },
-      (caught: unknown) => caught,
-    );
-    expect(err).toBeInstanceOf(StageMcpError);
-    expect(err).toMatchObject({
-      name: "StageMcpError",
-      code: "connect_failed",
-    });
-    expect((err as StageMcpError).message).toMatch(message);
-  }
-
-  it("treats a failed status for github as connect_failed", async () => {
-    await expectConnectFailed(
-      waitForIsolatedMcpConnect(snapshot, {
-        read: () => statusOf("github", "failed"),
-      }),
-      /github/,
-    );
-  });
-
-  it("treats needs-auth as connect_failed", async () => {
-    await expectConnectFailed(
-      waitForIsolatedMcpConnect(snapshot, {
-        read: () => statusOf("github", "needs-auth"),
-      }),
-      /github[\s\S]*needs-auth|needs-auth[\s\S]*github/,
-    );
-  });
-
-  it("treats a status wait that times out as connect_failed", async () => {
-    await expectConnectFailed(
-      waitForIsolatedMcpConnect(
-        snapshot,
-        { read: () => statusOf("github", "not-connected") },
-        { timeoutMs: 20 },
-      ),
-      /github/,
-    );
-  });
-
-  it("resolves when a subscribed status becomes connected", async () => {
-    const listeners = new Set<(next: IsolatedMcpStatusSnapshot) => void>();
-    const pending = waitForIsolatedMcpConnect(
-      snapshot,
-      {
-        subscribe: (listener) => {
-          listeners.add(listener);
-          return () => {
-            listeners.delete(listener);
-          };
-        },
-      },
-      { timeoutMs: 200 },
-    );
-    for (const listener of listeners) {
-      listener(statusOf("github", "connected"));
-    }
-    await pending;
-  });
-
-  it("maps MCP_STATUS_EVENT snapshots from an event bus", async () => {
-    const handlers = new Set<(data: unknown) => void>();
-    const pending = waitForIsolatedMcpConnect(
-      snapshot,
-      mcpStatusSourceFromEvents({
-        on(channel, handler) {
-          expect(channel).toBe(MCP_STATUS_EVENT);
-          handlers.add(handler);
-          return () => {
-            handlers.delete(handler);
-          };
-        },
-      }),
-      { timeoutMs: 200 },
-    );
-    for (const handler of handlers) {
-      handler({
-        version: 1,
-        servers: [{ name: "github", status: "cached", toolCount: 1, disabled: false }],
-      });
-    }
-    await pending;
-  });
-});
 
 describe("createSealedResourceLoader extensionFactories", () => {
   it("loads zero extensions and zero skills when host dirs exist and no factory is passed", async () => {
@@ -357,18 +173,6 @@ describe("createSealedResourceLoader extensionFactories", () => {
 
 const MCP_TOOL_NAME = "github__list_issues";
 
-function registerMcpTool(pi: ExtensionAPI) {
-  pi.registerTool({
-    name: MCP_TOOL_NAME,
-    label: "List issues",
-    description: "List GitHub issues",
-    parameters: Type.Object({}),
-    async execute() {
-      return { content: [{ type: "text", text: "ok" }], details: {} };
-    },
-  });
-}
-
 function wiringInput(
   runWs: string,
   overrides: Partial<StageRunInput> = {},
@@ -396,8 +200,11 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     "emit_stage_envelope",
     "write_stage_artifact",
   );
+  const mcpInlinePath = `<inline:${piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  let attachSpy: ReturnType<typeof wrapAttachAndEmitStatus>;
 
   beforeEach(() => {
+    createMcpAdapter.mockClear();
     piSdkMocks.resetLoaderOptions();
     piSdkMocks.createAgentSession.mockReset();
     piSdkMocks.createAgentSession.mockImplementation(async () => ({
@@ -412,7 +219,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
         agent: { state: { messages: [] }, continue: async () => {} },
       },
     }));
-    vi.spyOn(piMcpConnect, "waitForIsolatedMcpConnect").mockResolvedValue(undefined);
+    attachSpy = wrapAttachAndEmitStatus("connected");
   });
 
   afterEach(() => {
@@ -441,30 +248,38 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     return options?.resourceLoader?.getExtensions().extensions.map((ext) => ext.path) ?? [];
   }
 
+  async function lastAttached() {
+    return attachSpy.mock.results.at(-1)?.value;
+  }
+
   it("omitted resolvedMcpServers does not pass extensionFactories and keeps sealed tools", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-omit-"));
-    const factoriesSpy = vi.spyOn(piMcpExtension, "mcpExtensionFactoriesForSnapshot");
     await new PiAgentAdapter().runStage(wiringInput(runWs));
 
-    expect(factoriesSpy).not.toHaveBeenCalled();
-    expect(piMcpConnect.waitForIsolatedMcpConnect).not.toHaveBeenCalled();
+    expect(await lastAttached()).toEqual({
+      extensionFactories: undefined,
+      eventBus: undefined,
+      connecting: undefined,
+    });
+    expect(createMcpAdapter).not.toHaveBeenCalled();
     expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
-    expect(lastLoaderExtensionPaths()).not.toContain(
-      `<inline:${piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`,
-    );
+    expect(lastLoaderExtensionPaths()).not.toContain(mcpInlinePath);
   });
 
   it("empty resolvedMcpServers matches omitted", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-empty-snap-"));
-    const factoriesSpy = vi.spyOn(piMcpExtension, "mcpExtensionFactoriesForSnapshot");
     await new PiAgentAdapter().runStage(
       wiringInput(runWs, { resolvedMcpServers: {} }),
     );
 
-    expect(factoriesSpy).not.toHaveBeenCalled();
-    expect(piMcpConnect.waitForIsolatedMcpConnect).not.toHaveBeenCalled();
+    expect(await lastAttached()).toEqual({
+      extensionFactories: undefined,
+      eventBus: undefined,
+      connecting: undefined,
+    });
+    expect(createMcpAdapter).not.toHaveBeenCalled();
     expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
@@ -473,17 +288,28 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
   it("non-empty snapshot passes a factory into the sealed loader", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-factory-"));
     const snapshot = { github: { url: "https://mcp.example.invalid/mcp" } };
-    const factoriesSpy = vi.spyOn(piMcpExtension, "mcpExtensionFactoriesForSnapshot");
 
     await new PiAgentAdapter().runStage(
       wiringInput(runWs, { resolvedMcpServers: snapshot }),
     );
 
-    expect(factoriesSpy).toHaveBeenCalledWith(snapshot);
+    const attached = await lastAttached();
+    expect(attached?.extensionFactories).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME,
+          factory: expect.any(Function),
+        }),
+      ]),
+    );
+    expect(attached?.eventBus).toEqual(
+      expect.objectContaining({ on: expect.any(Function), emit: expect.any(Function) }),
+    );
+    expect(attached?.connecting).toBeInstanceOf(Promise);
     expect(lastLoaderOptions().extensionFactories).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME,
+          name: piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME,
           factory: expect.any(Function),
         }),
       ]),
@@ -491,19 +317,12 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(lastLoaderOptions().eventBus).toEqual(
       expect.objectContaining({ on: expect.any(Function), emit: expect.any(Function) }),
     );
-    expect(piMcpConnect.waitForIsolatedMcpConnect).toHaveBeenCalledTimes(1);
-    expect(lastLoaderExtensionPaths()).toContain(
-      `<inline:${piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`,
-    );
+    expect(lastLoaderExtensionPaths()).toContain(mcpInlinePath);
   });
 
   it("connect-fail returns ok false and never creates a session", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-fail-"));
-    const connectError = new StageMcpError(
-      'MCP server "github" failed to connect (status: failed)',
-      "connect_failed",
-    );
-    vi.mocked(piMcpConnect.waitForIsolatedMcpConnect).mockRejectedValue(connectError);
+    attachSpy = wrapAttachAndEmitStatus("failed");
     const restore = vi.fn();
     registerProviderSupport({
       id: "u3-mcp-restore",
@@ -518,19 +337,16 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       }),
     );
 
-    expect(result).toEqual({ ok: false, reason: connectError.message });
+    expect(result).toEqual({
+      ok: false,
+      reason: 'MCP server "github" failed to connect (status: failed)',
+    });
     expect(piSdkMocks.createAgentSession).not.toHaveBeenCalled();
     expect(restore).toHaveBeenCalled();
   });
 
   it("successful connect unions MCP tool names and keeps Stageflow tools", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-tools-"));
-    vi.spyOn(piMcpExtension, "mcpExtensionFactoriesForSnapshot").mockReturnValue([
-      {
-        name: piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME,
-        factory: registerMcpTool,
-      },
-    ]);
 
     await new PiAgentAdapter().runStage(
       wiringInput(runWs, {
@@ -554,12 +370,6 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       matches: (ref) => ref.startsWith("u3-cursor/"),
       prepare: () => ({ extensionPaths: [cursorExt] }),
     });
-    vi.spyOn(piMcpExtension, "mcpExtensionFactoriesForSnapshot").mockReturnValue([
-      {
-        name: piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME,
-        factory: registerMcpTool,
-      },
-    ]);
 
     await new PiAgentAdapter().runStage(
       wiringInput(runWs, {
@@ -572,14 +382,12 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     expect(lastLoaderOptions().extensionFactories).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          name: piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME,
+          name: piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME,
         }),
       ]),
     );
     const loadedPaths = lastLoaderExtensionPaths();
     expect(loadedPaths).toContain(cursorExt);
-    expect(loadedPaths).toContain(
-      `<inline:${piMcpExtension.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`,
-    );
+    expect(loadedPaths).toContain(mcpInlinePath);
   });
 });

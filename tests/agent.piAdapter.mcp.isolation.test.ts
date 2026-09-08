@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as piMcpConnect from "../src/agent/piMcpConnect.js";
+import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import {
   createSealedResourceLoader,
   PiAgentAdapter,
@@ -75,14 +75,42 @@ vi.mock("pi-mcp-adapter", () => ({
   createMcpAdapter,
 }));
 
-const {
-  mcpExtensionFactoriesForSnapshot,
-  STAGEFLOW_PI_MCP_EXTENSION_NAME,
-  toIsolatedMcpConfig,
-} = await import("../src/agent/piMcpExtension.js");
+const attachIsolatedMcpImpl = piIsolatedMcp.attachIsolatedMcp;
+
+function wrapAttachAndEmitStatus(status: string) {
+  return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+    async (snapshot, options) => {
+      const attached = await attachIsolatedMcpImpl(snapshot, options);
+      if (attached.eventBus !== undefined) {
+        piIsolatedMcp.emitIsolatedMcpStatus(
+          attached.eventBus,
+          Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
+        );
+      }
+      return attached;
+    },
+  );
+}
 
 const GITHUB_SNAPSHOT = {
   github: { url: "https://mcp.example.invalid/github" },
+} as const;
+
+const EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS = {
+  config: {
+    mcpServers: {
+      github: {
+        url: "https://mcp.example.invalid/github",
+        lifecycle: "eager",
+        directTools: true,
+      },
+    },
+    settings: {
+      directTools: true,
+      elicitation: false,
+      hostConfigDiscovery: "off",
+    },
+  },
 } as const;
 
 const CANARY_SERVER_NAMES = [
@@ -315,6 +343,8 @@ function wiringInput(
 }
 
 describe("ambient MCP isolation", () => {
+  let attachSpy: ReturnType<typeof wrapAttachAndEmitStatus>;
+
   beforeEach(() => {
     createMcpAdapter.mockClear();
     piSdkMocks.resetLoaderOptions();
@@ -331,9 +361,7 @@ describe("ambient MCP isolation", () => {
         agent: { state: { messages: [] }, continue: async () => {} },
       },
     }));
-    vi.spyOn(piMcpConnect, "waitForIsolatedMcpConnect").mockResolvedValue(
-      undefined,
-    );
+    attachSpy = wrapAttachAndEmitStatus("connected");
   });
 
   afterEach(() => {
@@ -342,14 +370,16 @@ describe("ambient MCP isolation", () => {
 
   it("AE1: github snapshot factory config is exactly github; ambient canaries stay out", async () => {
     await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
-      const factories = mcpExtensionFactoriesForSnapshot(GITHUB_SNAPSHOT);
-      expect(factories).toHaveLength(1);
-      expect(factories[0]?.name).toBe(STAGEFLOW_PI_MCP_EXTENSION_NAME);
+      const attached = await piIsolatedMcp.attachIsolatedMcp(GITHUB_SNAPSHOT);
+      expect(attached.extensionFactories).toHaveLength(1);
+      expect(attached.extensionFactories?.[0]?.name).toBe(
+        piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME,
+      );
 
       const loader = await sealedLoader({
         cwd,
         agentDir,
-        extensionFactories: factories,
+        extensionFactories: attached.extensionFactories,
       });
 
       expect(lastLoaderOptions().noExtensions).toBe(true);
@@ -358,16 +388,14 @@ describe("ambient MCP isolation", () => {
       expect(Object.keys(adapterOptions?.config?.mcpServers ?? {})).toEqual([
         "github",
       ]);
-      expect(adapterOptions).toEqual({
-        config: toIsolatedMcpConfig(GITHUB_SNAPSHOT),
-      });
+      expect(adapterOptions).toEqual(EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS);
       expect(adapterOptions).not.toHaveProperty("configPath");
       expect(adapterOptions?.config).not.toHaveProperty("configPath");
 
       const tools = registeredToolNames(loader);
       expect(tools).toEqual(["github__list_issues"]);
       expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
-        `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`,
+        `<inline:${piIsolatedMcp.STAGEFLOW_PI_MCP_EXTENSION_NAME}>`,
       ]);
       expect(loader.getExtensions().errors).toEqual([]);
       expectNoCanaryLeak({ home, cwd, agentDir, loader });
@@ -376,8 +404,16 @@ describe("ambient MCP isolation", () => {
 
   it("empty snapshot installs no MCP factory and no canary tools", async () => {
     await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
-      expect(mcpExtensionFactoriesForSnapshot({})).toEqual([]);
-      expect(mcpExtensionFactoriesForSnapshot(undefined)).toEqual([]);
+      expect(await piIsolatedMcp.attachIsolatedMcp({})).toEqual({
+        extensionFactories: undefined,
+        eventBus: undefined,
+        connecting: undefined,
+      });
+      expect(await piIsolatedMcp.attachIsolatedMcp(undefined)).toEqual({
+        extensionFactories: undefined,
+        eventBus: undefined,
+        connecting: undefined,
+      });
       expect(createMcpAdapter).not.toHaveBeenCalled();
 
       const loader = await sealedLoader({ cwd, agentDir });
@@ -394,10 +430,11 @@ describe("ambient MCP isolation", () => {
 
   it("Cursor .cursor/mcp.json canary is not loaded", async () => {
     await withPlantedAmbientMcp(async ({ cwd, agentDir }) => {
+      const attached = await piIsolatedMcp.attachIsolatedMcp(GITHUB_SNAPSHOT);
       const loader = await sealedLoader({
         cwd,
         agentDir,
-        extensionFactories: mcpExtensionFactoriesForSnapshot(GITHUB_SNAPSHOT),
+        extensionFactories: attached.extensionFactories,
       });
       const cursorPath = path.join(cwd, ".cursor", "mcp.json");
       const blob = [
@@ -416,18 +453,16 @@ describe("ambient MCP isolation", () => {
 
   it("createMcpAdapter records only the Stageflow snapshot object", async () => {
     await withPlantedAmbientMcp(async ({ cwd, agentDir }) => {
-      const factories = mcpExtensionFactoriesForSnapshot(GITHUB_SNAPSHOT);
+      const attached = await piIsolatedMcp.attachIsolatedMcp(GITHUB_SNAPSHOT);
       await sealedLoader({
         cwd,
         agentDir,
-        extensionFactories: factories,
+        extensionFactories: attached.extensionFactories,
       });
 
       expect(createMcpAdapter).toHaveBeenCalled();
       for (const options of recordedAdapterOptions()) {
-        expect(options).toEqual({
-          config: toIsolatedMcpConfig(GITHUB_SNAPSHOT),
-        });
+        expect(options).toEqual(EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS);
         expect(options).not.toHaveProperty("configPath");
         expect(Object.keys((options as { config: { mcpServers: object } }).config.mcpServers)).toEqual(
           ["github"],
@@ -445,9 +480,7 @@ describe("ambient MCP isolation", () => {
       expect(lastLoaderOptions().noExtensions).toBe(true);
       expect(createMcpAdapter).toHaveBeenCalledTimes(1);
       const adapterOptions = createMcpAdapter.mock.calls[0]?.[0];
-      expect(adapterOptions).toEqual({
-        config: toIsolatedMcpConfig(GITHUB_SNAPSHOT),
-      });
+      expect(adapterOptions).toEqual(EXPECTED_ISOLATED_GITHUB_ADAPTER_OPTIONS);
       expect(adapterOptions).not.toHaveProperty("configPath");
       expect(Object.keys(adapterOptions?.config?.mcpServers ?? {})).toEqual([
         "github",
@@ -482,7 +515,11 @@ describe("ambient MCP isolation", () => {
       expect(createMcpAdapter).not.toHaveBeenCalled();
       expect(lastLoaderOptions().noExtensions).toBe(true);
       expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
-      expect(piMcpConnect.waitForIsolatedMcpConnect).not.toHaveBeenCalled();
+      expect(await attachSpy.mock.results.at(-1)?.value).toEqual({
+        extensionFactories: undefined,
+        eventBus: undefined,
+        connecting: undefined,
+      });
 
       const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
         | {
