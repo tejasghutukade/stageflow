@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "echo": {
+      "command": "node",
+      "args": ["examples/stage-mcp/echo-mcp.mjs"],
+      "env": {
+        "ECHO_TOKEN": "${ECHO_TOKEN:-local}"
+      }
+    },
+    "unused": {
+      "command": "node",
+      "args": ["examples/stage-mcp/echo-mcp.mjs"],
+      "env": {
+        "ECHO_LABEL": "unused"
+      }
+    },
+    "needs-token": {
+      "command": "node",
+      "args": ["examples/stage-mcp/echo-mcp.mjs"],
+      "env": {
+        "STAGE_MCP_REQUIRED_TOKEN": "${STAGE_MCP_REQUIRED_TOKEN}"
+      }
+    },
+    "dead": {
+      "command": "stageflow-mcp-dead-server"
+    }
+  }
+}

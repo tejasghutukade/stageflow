@@ -193,6 +193,8 @@ Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on 
 
 HITL-aware tools include `wait_run`, `answer_gate`, and `list_waiting`. Full tool list: [docs/mcp.md](docs/mcp.md).
 
+Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
+
 ## Stageflow vs Conductor
 
 Both projects address multi-step agent workflows. They differ in orchestration model and runtime.
@@ -218,6 +220,7 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 | [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** |
 | [conditional-fork](examples/conditional-fork/) | Exclusive fork routing with operator branch choice |
 | [clonable-fanout](examples/clonable-fanout/) | Clone one successor N times, then join |
+| [stage-mcp](examples/stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
 | [ci-validate](examples/ci-validate/) | Strict validate in CI |
 
