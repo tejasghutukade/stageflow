@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-09-08
+
+### Changed
+
+- Harness `stageflow-author` documents run-derived anti-patterns as Always-do contracts (emit, artifacts, checkout writers, review remediation, completion wiring)
+- `stage-prompt-template` and `catalog-mapping` harden prompts and DAG shape for those contracts; `stageflow-session-capture` catalog authoring matches the same emit/artifact/summary rules
+
 ## [0.12.0] - 2026-09-07
 
 ### Added
@@ -166,7 +173,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/tejasghutukade/stageflow/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tejasghutukade/stageflow/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/tejasghutukade/stageflow/compare/v0.9.0...v0.10.0
