@@ -1,4 +1,7 @@
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+  type InlineExtension,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -29,6 +32,7 @@ async function sealedLoader(options: {
   cwd: string;
   agentDir: string;
   additionalSkillPaths?: string[];
+  extensionFactories?: InlineExtension[];
 }) {
   const loader = createSealedResourceLoader({
     cwd: options.cwd,
@@ -36,6 +40,7 @@ async function sealedLoader(options: {
     settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
     systemPrompt: "sealed",
     additionalSkillPaths: options.additionalSkillPaths,
+    extensionFactories: options.extensionFactories,
   });
   await loader.reload();
   return loader;
@@ -75,6 +80,26 @@ describe("sealed skill inject", () => {
 
     const loader = await sealedLoader({ cwd, agentDir });
     expect(loader.getSkills().skills).toEqual([]);
+  });
+
+  it("still loads no host skills when an inline factory is present", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-skill-factory-cwd-"));
+    const agentDir = await mkdtemp(path.join(tmpdir(), "sf-skill-factory-agent-"));
+    await writeSkill(
+      path.join(agentDir, "skills"),
+      "other-skill",
+      "---\nname: other-skill\ndescription: Must stay sealed out.\n---\n# Other\n",
+    );
+
+    const loader = await sealedLoader({
+      cwd,
+      agentDir,
+      extensionFactories: [{ name: "stub-factory", factory: () => {} }],
+    });
+    expect(loader.getSkills().skills).toEqual([]);
+    expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
+      "<inline:stub-factory>",
+    ]);
   });
 
   it("still injects a command-only skill", async () => {

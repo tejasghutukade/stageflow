@@ -34,6 +34,7 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentSession,
+  type InlineExtension,
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
@@ -612,9 +613,9 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
  * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
  * and APPEND_SYSTEM.md. Stages must not inherit that context.
  *
- * `additionalExtensionPaths` is the only way extensions enter a sealed stage
- * (used by StageProviderSupport implementations). With `noExtensions: true`,
- * discovered global/project packages stay out; only allowlisted paths load.
+ * `additionalExtensionPaths` is the Cursor/provider seam. `extensionFactories`
+ * is the isolated MCP seam. With `noExtensions: true`, discovered
+ * global/project packages stay out; only those allowlists load.
  * `additionalSkillPaths` is the matching allowlist for one named skill.
  */
 export function createSealedResourceLoader(options: {
@@ -624,6 +625,7 @@ export function createSealedResourceLoader(options: {
   systemPrompt: string;
   additionalExtensionPaths?: string[];
   additionalSkillPaths?: string[];
+  extensionFactories?: InlineExtension[];
 }): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd: options.cwd,
@@ -633,6 +635,7 @@ export function createSealedResourceLoader(options: {
     appendSystemPromptOverride: () => [],
     additionalExtensionPaths: options.additionalExtensionPaths,
     additionalSkillPaths: options.additionalSkillPaths,
+    extensionFactories: options.extensionFactories,
     noContextFiles: true,
     noExtensions: true,
     noSkills: true,
