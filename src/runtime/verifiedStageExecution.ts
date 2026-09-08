@@ -1,6 +1,11 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { StageRunResult } from "../agent/port.js";
 import { listQaExchanges } from "../hitl/qaTrail.js";
-import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
+import {
+  attemptArtifactsDir,
+  attemptWorkspaceDir,
+} from "../runstore/workspaceLayout.js";
 import type { RunStore } from "../runstore/port.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
@@ -19,6 +24,10 @@ import {
 } from "./completionCheckoutBaseline.js";
 import { createGitCheckoutCapability } from "./gitCheckoutCapability.js";
 import type { StageRoots } from "./stageRoots.js";
+
+/** Sidecar written before completion command checks so they can inspect fork_choice. */
+export const COMPLETION_CANDIDATE_ENVELOPE_FILENAME =
+  "completion-candidate-envelope.json";
 
 export type VerifiedStageExecution = {
   /** Establish durable observation before agent work begins. */
@@ -114,11 +123,27 @@ export function createVerifiedStageExecution(options: {
     async verify(candidate) {
       if (contract === undefined) return candidate;
       try {
+        const artifactsDir = attemptArtifactsDir(
+          roots.runWorkspaceDir,
+          stageId,
+          attempt,
+        );
+        const attemptDir = attemptWorkspaceDir(
+          roots.runWorkspaceDir,
+          stageId,
+          attempt,
+        );
+        await mkdir(attemptDir, { recursive: true });
+        await writeFile(
+          path.join(attemptDir, COMPLETION_CANDIDATE_ENVELOPE_FILENAME),
+          `${JSON.stringify(candidate.envelope, null, 2)}\n`,
+          "utf8",
+        );
         const verification = await runCompletionContract({
           contract,
           envelope: candidate.envelope,
           payloadSchema: stage.payload_schema,
-          artifactsDir: attemptArtifactsDir(roots.runWorkspaceDir, stageId, attempt),
+          artifactsDir,
           commandWorkingDirectory: roots.cwd,
           gates: gateDecisionsForAttempt({ store, runId, stageId, attempt }),
           checkout,

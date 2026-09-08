@@ -3,6 +3,8 @@ import { readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+const CANDIDATE_ENVELOPE = "completion-candidate-envelope.json";
+
 function fail(message) {
   console.error(message);
   process.exit(1);
@@ -73,8 +75,12 @@ if (!changesPath) {
   );
 }
 
+const attemptDir = path.dirname(path.dirname(changesPath));
+const envelopePath = path.join(attemptDir, CANDIDATE_ENVELOPE);
+
 let ci;
 let changes;
+let envelope;
 try {
   ci = JSON.parse(await readFile(ciPath, "utf8"));
 } catch (err) {
@@ -84,6 +90,13 @@ try {
   changes = JSON.parse(await readFile(changesPath, "utf8"));
 } catch (err) {
   fail(`validate-detect-envelope: failed to read/parse ${changesPath}: ${err.message}`);
+}
+try {
+  envelope = JSON.parse(await readFile(envelopePath, "utf8"));
+} catch (err) {
+  fail(
+    `validate-detect-envelope: failed to read/parse candidate envelope at ${envelopePath}: ${err.message}`,
+  );
 }
 
 if (String(changes.pr_number) !== String(ci.pr_number)) {
@@ -130,24 +143,52 @@ if (changes.change_summary !== ci.change_summary) {
   );
 }
 
+const diagramTypes = changes.diagram_types;
+const expectedFork =
+  Array.isArray(diagramTypes) && diagramTypes.length === 0 ? [] : ["author-diagrams"];
+
 if (ci.expected_fork_choice !== undefined) {
-  if (!deepEqual(changes.fork_choice, ci.expected_fork_choice)) {
+  if (!deepEqual(ci.expected_fork_choice, expectedFork)) {
     fail(
-      `validate-detect-envelope: fork_choice !== expected_fork_choice\n  changes: ${JSON.stringify(changes.fork_choice)}\n  ci:      ${JSON.stringify(ci.expected_fork_choice)}`,
+      `validate-detect-envelope: ci.expected_fork_choice inconsistent with diagram_types\n  expected_fork_choice: ${JSON.stringify(ci.expected_fork_choice)}\n  derived: ${JSON.stringify(expectedFork)}`,
     );
   }
 }
 
-const diagramTypes = changes.diagram_types;
-const expectedFork =
-  Array.isArray(diagramTypes) && diagramTypes.length === 0 ? [] : ["author-diagrams"];
 if (!deepEqual(changes.fork_choice, expectedFork)) {
   fail(
-    `validate-detect-envelope: fork_choice must be ${JSON.stringify(expectedFork)} when diagram_types=${JSON.stringify(diagramTypes)}; got ${JSON.stringify(changes.fork_choice)}`,
+    `validate-detect-envelope: changes.json fork_choice must be ${JSON.stringify(expectedFork)}; got ${JSON.stringify(changes.fork_choice)}`,
   );
 }
 
+if (!deepEqual(envelope.fork_choice, expectedFork)) {
+  fail(
+    `validate-detect-envelope: envelope.fork_choice must be ${JSON.stringify(expectedFork)}; got ${JSON.stringify(envelope.fork_choice)}`,
+  );
+}
+
+const payload = envelope.payload ?? {};
+for (const key of [
+  "pr_number",
+  "base_ref",
+  "head_sha",
+  "content_hash",
+  "change_summary",
+]) {
+  if (String(payload[key] ?? "") !== String(changes[key] ?? "")) {
+    fail(
+      `validate-detect-envelope: envelope.payload.${key} !== changes.${key}`,
+    );
+  }
+}
+if (!deepEqual(payload.changed_files, changes.changed_files)) {
+  fail("validate-detect-envelope: envelope.payload.changed_files !== changes.changed_files");
+}
+if (!deepEqual(payload.diagram_types, changes.diagram_types)) {
+  fail("validate-detect-envelope: envelope.payload.diagram_types !== changes.diagram_types");
+}
+
 console.log(
-  `validate-detect-envelope: OK pr=${changes.pr_number} diagrams=${JSON.stringify(changes.diagram_types)} fork=${JSON.stringify(changes.fork_choice)} file=${changesPath}`,
+  `validate-detect-envelope: OK pr=${changes.pr_number} diagrams=${JSON.stringify(changes.diagram_types)} fork=${JSON.stringify(envelope.fork_choice)} file=${changesPath}`,
 );
 process.exit(0);
