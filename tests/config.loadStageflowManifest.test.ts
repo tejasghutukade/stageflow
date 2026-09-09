@@ -78,4 +78,58 @@ describe("loadStageflowManifest", () => {
     if (outcome.ok) return;
     expect(outcome.issues[0]?.code).toBe("catalog.manifest_load_error");
   });
+
+  it("accepts top-level model", () => {
+    const outcome = parseStageflowManifestOutcome(
+      [
+        "version: 1",
+        "model: openai/gpt-4o",
+        "catalog:",
+        "  pipelines: [pipelines]",
+        "  tasks: [tasks]",
+        "",
+      ].join("\n"),
+      "stageflow.yaml",
+      manifestCatalog,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.manifest.model).toBe("openai/gpt-4o");
+  });
+
+  it("rejects empty model", () => {
+    const outcome = parseStageflowManifestOutcome(
+      [
+        "version: 1",
+        'model: ""',
+        "catalog:",
+        "  pipelines: [pipelines]",
+        "  tasks: [tasks]",
+        "",
+      ].join("\n"),
+      "stageflow.yaml",
+      manifestCatalog,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((i) => i.code === "catalog.manifest_invalid")).toBe(true);
+  });
+
+  it("rejects non-string model", () => {
+    const outcome = parseStageflowManifestOutcome(
+      [
+        "version: 1",
+        "model: 12",
+        "catalog:",
+        "  pipelines: [pipelines]",
+        "  tasks: [tasks]",
+        "",
+      ].join("\n"),
+      "stageflow.yaml",
+      manifestCatalog,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((i) => i.code === "catalog.manifest_invalid")).toBe(true);
+  });
 });

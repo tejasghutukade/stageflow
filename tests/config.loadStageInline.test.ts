@@ -16,14 +16,24 @@ describe("loadStageFromObjectOutcome", () => {
     expect(outcome.value.system_prompt).toBe("Do work");
   });
 
-  it("rejects missing model", () => {
+  it("allows missing model at parse time", () => {
     const outcome = loadStageFromObjectOutcome(
       { system_prompt: "Do work" },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
     );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value).not.toHaveProperty("model");
+  });
+
+  it("rejects empty model string", () => {
+    const outcome = loadStageFromObjectOutcome(
+      { system_prompt: "Do work", model: "" },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("stage.invalid_shape");
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_model");
   });
 
   it("rejects invalid gate_kinds", () => {

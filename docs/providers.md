@@ -80,15 +80,23 @@ sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
 
 Clears stored credentials for one provider id.
 
-## Stage `model` field
+## Model resolution
 
-Each stage YAML sets the model id:
+`model` is the LLM/provider id passed to the active agent backend. It is resolved per stage as:
+
+```text
+stage.model ?? pipeline.model ?? stageflow.yaml model
+```
+
+If still unset after that chain, load/run fails with a clear error — Stageflow never invents a silent hardcoded model string. `agent` (Pi vs Claude SDK) is a separate field with its own hierarchy; see [Architecture](architecture.md) and [YAML catalog — Model defaults and precedence](yaml-catalog.md#model-defaults-and-precedence).
+
+Stages may still set an explicit model:
 
 ```yaml
 model: anthropic/claude-sonnet-4-5
 ```
 
-The provider must be configured before runs succeed. Validation does **not** check provider auth.
+Or omit it when a pipeline or manifest default fills the value. The provider must be configured before runs succeed. Validation does **not** check provider auth — that is checked at run time.
 
 ## Pi shell, not a separate runtime
 

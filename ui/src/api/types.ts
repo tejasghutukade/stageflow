@@ -409,7 +409,7 @@ export type CreateStageInput = {
   filename: string;
   id: string;
   system_prompt: string;
-  model: string;
+  model?: string;
   gate_kinds?: StageGateKind[];
 };
 
@@ -429,7 +429,7 @@ export type CreatePipelineStageRef = {
   uses?: string;
   inline?: {
     system_prompt: string;
-    model: string;
+    model?: string;
     gate_kinds?: StageGateKind[];
   };
 };

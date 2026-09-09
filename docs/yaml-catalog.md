@@ -45,6 +45,13 @@ Required top-level fields:
 | `id` | string | Pipeline identifier (should match filename stem) |
 | `stages` | array | Non-empty list of **object** stage entries |
 
+Optional top-level fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
+| `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
+
 Bare string stage refs are rejected.
 
 ### Stage entries
@@ -54,19 +61,46 @@ Each stage is an object with one of:
 | Form | Fields | Use when |
 |------|--------|----------|
 | External | `uses: <path>` | Stage body lives in another YAML file |
-| Inline | `system_prompt`, `model`, … | Single-file pipeline |
+| Inline | `system_prompt`, optional `model`, … | Single-file pipeline |
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
 **Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `mcp`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
 
-**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. Effective `model` is resolved at load/run time — see [Model defaults and precedence](#model-defaults-and-precedence). The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
 `completion` and `recovery` are pipeline-stage execution policy. They may sit beside
 `uses:` because a reusable stage can require different proof or recovery behavior in
 different pipelines.
+
+### Model defaults and precedence
+
+`model` is an LLM/provider id string. It is distinct from `agent`, which selects the execution backend (Pi vs Claude SDK). The two hierarchies share the same tier *shape* but use separate keys.
+
+Effective model for each stage:
+
+```text
+stage.model ?? pipeline.model ?? stageflow.yaml model
+```
+
+| Tier | Source | Wins when |
+|------|--------|-----------|
+| Stage | Inline body or external stage YAML | Stage sets `model` |
+| Pipeline | Top-level `model` on `*.pipeline.yaml` | Stage omits `model` |
+| Global | Top-level `model` on `stageflow.yaml` | Stage and pipeline omit `model` |
+
+If the chain still leaves `model` unset, load/run **fails with a clear error**. There is **no** silent hardcoded model string (unlike backend selection, which falls back to `"pi"`).
+
+Canonical fixtures:
+
+| Case | Path |
+|------|------|
+| Manifest-only fill | [`tests/fixtures/model-hierarchy/global-default/`](../tests/fixtures/model-hierarchy/global-default/) |
+| Pipeline-only fill | [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/) |
+| Stage overrides pipeline and global | [`tests/fixtures/model-hierarchy/stage-override/`](../tests/fixtures/model-hierarchy/stage-override/) |
+| All three tiers empty (must fail) | [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/) |
 
 ### Completion and recovery
 
@@ -128,7 +162,7 @@ stages:
 
 See [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-Inline single stage:
+Inline single stage (explicit stage `model`):
 
 ```yaml
 id: hello
@@ -137,6 +171,18 @@ stages:
     system_prompt: Summarize the task goal.
     model: anthropic/claude-sonnet-4-5
 ```
+
+Pipeline-level `model` with omitted stage `model` (filled from the pipeline default):
+
+```yaml
+id: hello
+model: anthropic/claude-sonnet-4-5
+stages:
+  - id: research
+    system_prompt: Summarize the task goal.
+```
+
+See also [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/).
 
 Parallel fan-out: multiple stages with the same `needs` (siblings):
 
@@ -461,9 +507,14 @@ Stage YAML (referenced via `uses:`) requires:
 |-------|-------------|
 | `id` | Must match the pipeline entry `id` and the filename stem (`sf validate`) |
 | `system_prompt` | Agent instructions |
-| `model` | Provider/model string |
 
-Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema) and [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Optional when a pipeline or manifest default can fill it:
+
+| Field | Description |
+|-------|-------------|
+| `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
+
+Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema) and [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -481,10 +532,12 @@ See [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.tas
 
 ## Manifest (`stageflow.yaml`)
 
-Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse.
+Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
 
 ```yaml
 version: 1
+# model: anthropic/claude-sonnet-4-5   # optional global default LLM id
+# agent: pi                            # optional global default backend
 catalog:
   pipelines:
     - examples/hello-world
@@ -499,6 +552,8 @@ catalog:
     - tests/fixtures
 ```
 
+- **`model`**: optional global default; participates in `stage → pipeline → global` resolution.
+- **`agent`**: optional global default backend; separate from `model`.
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
 
@@ -512,7 +567,7 @@ sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and it
 sf validate --task path/to/x.task.yaml --strict           # that task
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect.
+Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect.
 
 ## CLI run
 

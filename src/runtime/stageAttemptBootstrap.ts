@@ -168,7 +168,7 @@ function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): Sta
       ? rootsForStageWorker(
           input.workspaceDir,
           stageId,
-          input.stage.model,
+          input.stage.model!,
           input.checkoutRoot,
           input.attemptCtx,
         )

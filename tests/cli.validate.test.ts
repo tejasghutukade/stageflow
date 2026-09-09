@@ -80,6 +80,7 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "full",
       cwd,
+      projectRoot: cwd,
       pipeline: undefined,
       task: undefined,
       strict: false,
@@ -98,6 +99,7 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "pipeline",
       cwd,
+      projectRoot: cwd,
       pipeline: demoPipeline,
       task: undefined,
       strict: false,
@@ -115,6 +117,7 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "full",
       cwd,
+      projectRoot: cwd,
       pipeline: undefined,
       task: undefined,
       strict: true,
@@ -134,8 +137,30 @@ describe("runValidateCommand", () => {
     expect(validateCatalog).toHaveBeenCalledWith({
       scope: "task",
       cwd,
+      projectRoot: cwd,
       pipeline: undefined,
       task: taskPath,
+      strict: false,
+    });
+  });
+
+  it("forwards explicit projectRoot when it differs from cwd", async () => {
+    const validateCatalog = vi.fn(async () => cannedResult());
+    const cwd = "/tmp/nested";
+    const projectRoot = "/tmp/project";
+    const code = await runValidateCommand([], {
+      cwd,
+      projectRoot,
+      validateCatalog,
+      io: { log: () => undefined, error: () => undefined },
+    });
+    expect(code).toBe(0);
+    expect(validateCatalog).toHaveBeenCalledWith({
+      scope: "full",
+      cwd,
+      projectRoot,
+      pipeline: undefined,
+      task: undefined,
       strict: false,
     });
   });

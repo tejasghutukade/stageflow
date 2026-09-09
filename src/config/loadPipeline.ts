@@ -7,12 +7,14 @@ import type {
 } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { loadStageflowManifestOutcome } from "./loadStageflowManifest.js";
 import { mergePipelineStages } from "./mergePipelineIncludes.js";
 import {
   normalizePipelineStageEntries,
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
+import { globalModelFromManifest, resolveModelOutcome } from "./resolveModel.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
@@ -36,6 +38,8 @@ export async function resolvePipelinePath(
 
 async function loadPipelineFromPath(
   pipelinePath: string,
+  cwd: string,
+  projectRoot: string = cwd,
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
 
@@ -44,7 +48,12 @@ async function loadPipelineFromPath(
     return loadFailure(mergeOutcome.issues);
   }
 
-  const { entries: rawEntries, pipelineId, agent: pipelineAgent } = mergeOutcome.value;
+  const {
+    entries: rawEntries,
+    pipelineId,
+    agent: pipelineAgent,
+    model: pipelineModel,
+  } = mergeOutcome.value;
   const ctx = { pipelineId, path: normalizedPipelinePath };
 
   const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
@@ -136,10 +145,31 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
+  const manifestOutcome = await loadStageflowManifestOutcome(projectRoot);
+  const globalModel = manifestOutcome.ok
+    ? globalModelFromManifest(manifestOutcome.value)
+    : undefined;
+
+  for (const stage of stages) {
+    const modelOutcome = resolveModelOutcome(
+      {
+        stage: stage.model,
+        pipeline: pipelineModel,
+        global: globalModel,
+      },
+      { stageId: stage.id, pipelineId },
+    );
+    if (!modelOutcome.ok) {
+      return loadFailure(modelOutcome.issues);
+    }
+    stage.model = modelOutcome.value;
+  }
+
   const pipeline: PipelineConfig = {
     id: pipelineId,
     stages: stageIds,
     ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
+    ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
@@ -160,9 +190,10 @@ async function loadPipelineFromPath(
 
 export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; projectRoot?: string } = {},
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
   try {
@@ -178,12 +209,12 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  return loadPipelineFromPath(pipelinePath);
+  return loadPipelineFromPath(pipelinePath, cwd, projectRoot);
 }
 
 export async function loadPipeline(
   nameOrPath: string,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; projectRoot?: string } = {},
 ): Promise<LoadedPipeline> {
   const outcome = await loadPipelineOutcome(nameOrPath, options);
   if (!outcome.ok) {

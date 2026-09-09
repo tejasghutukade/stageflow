@@ -62,6 +62,36 @@ describe("parseCreateStageBody", () => {
     });
   });
 
+  it("accepts omitted model and rejects non-string model", () => {
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "inherit-model.yaml",
+        id: "inherit-model",
+        system_prompt: "Use pipeline or global default.",
+      }),
+    ).toEqual({
+      pipeline_directory: "pipelines",
+      filename: "inherit-model.yaml",
+      id: "inherit-model",
+      system_prompt: "Use pipeline or global default.",
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "bad-model.yaml",
+        id: "bad-model",
+        system_prompt: "x",
+        model: 1,
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "model must be a string",
+    });
+  });
+
   it("rejects invalid ids and required fields", () => {
     expect(parseCreateStageBody(null)).toEqual({
       ok: false,
@@ -128,6 +158,23 @@ describe("stageConfigToYaml", () => {
       }),
     ).not.toMatch(/gate_kinds/);
   });
+
+  it("omits model when unset", () => {
+    expect(
+      stageConfigToYaml({
+        id: "inherit",
+        system_prompt: "Use default model.",
+      }),
+    ).toBe(
+      ["id: inherit", "system_prompt: Use default model.", ""].join("\n"),
+    );
+    expect(
+      stageConfigToYaml({
+        id: "inherit",
+        system_prompt: "Use default model.",
+      }),
+    ).not.toMatch(/^model:/m);
+  });
 });
 
 describe("createStage", () => {
@@ -191,6 +238,49 @@ describe("createStage", () => {
       expect(pathCollision.ok).toBe(false);
       if (pathCollision.ok) return;
       expect(pathCollision.status).toBe(409);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("creates stage YAML without model when global default exists", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: cursor/auto",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "",
+        ].join("\n"),
+      );
+
+      const created = await createStage(root, {
+        pipeline_directory: "pipelines",
+        filename: "inherit-model.yaml",
+        id: "inherit-model",
+        system_prompt: "Use the global default.",
+      });
+      expect(created).toEqual({
+        ok: true,
+        stage: {
+          path: "pipelines/inherit-model.yaml",
+          id: "inherit-model",
+        },
+      });
+
+      const yaml = await readFile(path.join(root, "pipelines/inherit-model.yaml"), "utf8");
+      expect(yaml).not.toMatch(/^model:/m);
+
+      await expect(loadStage(path.join(root, "pipelines/inherit-model.yaml"))).resolves.toEqual({
+        id: "inherit-model",
+        system_prompt: "Use the global default.",
+      });
     } finally {
       await cleanup();
     }

@@ -1,0 +1,4 @@
+id: global-default-fill
+stages:
+  - id: inherits
+    uses: ./inherits.yaml

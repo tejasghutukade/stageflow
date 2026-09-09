@@ -18,7 +18,7 @@ import { loadPipelineOutcome } from "./loadPipeline.js";
 
 export type CreatePipelineStageInline = {
   system_prompt: string;
-  model: string;
+  model?: string;
   gate_kinds?: StageGateKind[];
 };
 
@@ -78,7 +78,9 @@ function stageRefToRaw(ref: CreatePipelineStageRef): Record<string, unknown> {
   if (ref.uses !== undefined) raw.uses = ref.uses;
   if (ref.inline) {
     raw.system_prompt = ref.inline.system_prompt;
-    raw.model = ref.inline.model;
+    if (ref.inline.model !== undefined && ref.inline.model.length > 0) {
+      raw.model = ref.inline.model;
+    }
     if (ref.inline.gate_kinds !== undefined) {
       raw.gate_kinds = ref.inline.gate_kinds;
     }
@@ -108,7 +110,9 @@ function normalizedToCreateRefs(
       const raw = entry.body.raw;
       ref.inline = {
         system_prompt: String(raw.system_prompt ?? ""),
-        model: String(raw.model ?? ""),
+        ...(typeof raw.model === "string" && raw.model.length > 0
+          ? { model: raw.model }
+          : {}),
         ...(Array.isArray(raw.gate_kinds)
           ? { gate_kinds: raw.gate_kinds as StageGateKind[] }
           : {}),
@@ -158,17 +162,22 @@ function parseInlineBody(
       error: `stages[${index}].system_prompt is required for inline stage`,
     };
   }
-  if (typeof entry.model !== "string" || entry.model.length === 0) {
-    return {
-      ok: false,
-      status: 400,
-      error: `stages[${index}].model is required for inline stage`,
-    };
-  }
   const inline: CreatePipelineStageInline = {
     system_prompt: entry.system_prompt,
-    model: entry.model,
   };
+  if (entry.model !== undefined) {
+    if (typeof entry.model !== "string") {
+      return {
+        ok: false,
+        status: 400,
+        error: `stages[${index}].model must be a string`,
+      };
+    }
+    const trimmed = entry.model.trim();
+    if (trimmed.length > 0) {
+      inline.model = trimmed;
+    }
+  }
   if (entry.gate_kinds !== undefined) {
     if (!Array.isArray(entry.gate_kinds)) {
       return {
@@ -377,7 +386,9 @@ export function pipelineConfigToYaml(
           `    system_prompt: ${formatInlineYamlScalar(stage.inline.system_prompt)}`,
         );
       }
-      lines.push(`    model: ${formatInlineYamlScalar(stage.inline.model)}`);
+      if (stage.inline.model !== undefined && stage.inline.model.length > 0) {
+        lines.push(`    model: ${formatInlineYamlScalar(stage.inline.model)}`);
+      }
     } else if (stage.uses) {
       lines.push(`    uses: ${stage.uses}`);
     }

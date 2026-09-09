@@ -7,6 +7,8 @@ export type PipelineConfig = {
   stages: string[];
   /** Selects the AgentPort backend for every stage in this pipeline; overrides the global default. */
   agent?: string;
+  /** Default LLM model id for every stage in this pipeline; overrides the global default. */
+  model?: string;
 };
 
 export type PipelineForkConfig = {

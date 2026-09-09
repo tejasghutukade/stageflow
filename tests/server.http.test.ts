@@ -497,6 +497,42 @@ describe("localhost HTTP API", () => {
         }),
       });
       expect(invalid.status).toBe(400);
+
+      await writeFile(
+        path.join(repoRoot, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: anthropic/claude-sonnet-4-5",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const inherited = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_directory: "pipelines",
+          filename: "inherit-model.yaml",
+          id: "inherit-model",
+          system_prompt: "Use the global default.",
+        }),
+      });
+      expect(inherited.status).toBe(201);
+      expect(inherited.body).toEqual({
+        path: "pipelines/inherit-model.yaml",
+        id: "inherit-model",
+      });
+      const inheritedYaml = await readFile(
+        path.join(repoRoot, "pipelines/inherit-model.yaml"),
+        "utf8",
+      );
+      expect(inheritedYaml).not.toMatch(/^model:/m);
     } finally {
       clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {
@@ -580,6 +616,43 @@ describe("localhost HTTP API", () => {
       });
       expect(missingStage.status).toBe(422);
       expect(missingStage.body.error).toContain("missing stage file");
+
+      await writeFile(
+        path.join(repoRoot, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: anthropic/claude-sonnet-4-5",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const inherited = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directory: "pipelines",
+          id: "inherit-inline",
+          stages: [
+            {
+              id: "inherit-inline",
+              system_prompt: "Use the global default.",
+            },
+          ],
+        }),
+      });
+      expect(inherited.status).toBe(201);
+      expect(inherited.body.path).toBe("pipelines/inherit-inline.pipeline.yaml");
+      const inheritedYaml = await readFile(
+        path.join(repoRoot, "pipelines", "inherit-inline.pipeline.yaml"),
+        "utf8",
+      );
+      expect(inheritedYaml).not.toMatch(/^    model:/m);
     } finally {
       clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {

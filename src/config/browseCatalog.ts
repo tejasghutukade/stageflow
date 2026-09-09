@@ -189,7 +189,7 @@ async function listModelsFromManifest(
     try {
       const loaded = await loadPipeline(filePath, { cwd: projectRoot });
       for (const stage of loaded.stages) {
-        if (stage.model.trim()) {
+        if (stage.model?.trim()) {
           models.add(stage.model);
         }
       }

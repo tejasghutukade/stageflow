@@ -18,6 +18,7 @@ export function createStageGateKindsPayload(
 }
 
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+export const MODEL_INHERIT = "__inherit__";
 const MODEL_OTHER = "__other__";
 
 const GATE_KINDS: StageGateKind[] = [
@@ -36,7 +37,7 @@ export type NewStagePanelProps = {
 
 type FieldErrors = Partial<Record<"id" | "model" | "system_prompt", string>>;
 
-function validateFields(values: {
+export function validateFields(values: {
   id: string;
   model: string;
   system_prompt: string;
@@ -48,13 +49,28 @@ function validateFields(values: {
   } else if (id.length > 64 || !STAGE_ID_PATTERN.test(id)) {
     errors.id = "Id must be lowercase kebab-case.";
   }
-  if (!values.model.trim()) {
-    errors.model = "Model is required.";
-  }
   if (!values.system_prompt.trim()) {
     errors.system_prompt = "System prompt is required.";
   }
   return errors;
+}
+
+export function resolveCreateStageModel(options: {
+  useDropdown: boolean;
+  modelSelect: string;
+  customModel: string;
+  plainModel: string;
+}): string {
+  if (options.useDropdown) {
+    if (options.modelSelect === MODEL_INHERIT) {
+      return "";
+    }
+    if (options.modelSelect === MODEL_OTHER) {
+      return options.customModel.trim();
+    }
+    return options.modelSelect.trim();
+  }
+  return options.plainModel.trim();
 }
 
 function stageCreateBanner(status: number, serverError?: string): string {
@@ -71,7 +87,7 @@ const emptyForm = () => ({
   system_prompt: "",
   gateMode: "all" as GateKindsMode,
   gateKinds: [] as StageGateKind[],
-  modelSelect: "",
+  modelSelect: MODEL_INHERIT,
   customModel: "",
   plainModel: "",
 });
@@ -99,10 +115,6 @@ export function NewStagePanel({
         if (listed.length > 0) {
           setModels(listed);
           setUseDropdown(true);
-          setForm((prev) => ({
-            ...prev,
-            modelSelect: prev.modelSelect || listed[0] || "",
-          }));
         } else {
           setModels([]);
           setUseDropdown(false);
@@ -128,13 +140,12 @@ export function NewStagePanel({
   }, [isOpen, onClose]);
 
   function resolvedModel(): string {
-    if (useDropdown) {
-      if (form.modelSelect === MODEL_OTHER) {
-        return form.customModel.trim();
-      }
-      return form.modelSelect.trim();
-    }
-    return form.plainModel.trim();
+    return resolveCreateStageModel({
+      useDropdown,
+      modelSelect: form.modelSelect,
+      customModel: form.customModel,
+      plainModel: form.plainModel,
+    });
   }
 
   function toggleGateKind(kind: StageGateKind) {
@@ -162,7 +173,9 @@ export function NewStagePanel({
     const result = await createStageWithDetails({
       pipeline_directory: pipelineDirectory,
       filename: `${form.id.trim()}.yaml`,
-      ...payload,
+      id: payload.id,
+      system_prompt: payload.system_prompt,
+      ...(model.length > 0 ? { model } : {}),
       ...createStageGateKindsPayload(form.gateMode, form.gateKinds),
     });
     setSubmitting(false);
@@ -253,6 +266,7 @@ export function NewStagePanel({
                     setForm((prev) => ({ ...prev, modelSelect: e.target.value }))
                   }
                 >
+                  <option value={MODEL_INHERIT}>Inherit default</option>
                   {models.map((model) => (
                     <option key={model} value={model}>
                       {model}
@@ -288,7 +302,11 @@ export function NewStagePanel({
             )}
             {fieldErrors.model ? (
               <p className="field-error">{fieldErrors.model}</p>
-            ) : null}
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Optional. Inherits pipeline then global default when omitted.
+              </p>
+            )}
           </div>
 
           <div className="form-field">

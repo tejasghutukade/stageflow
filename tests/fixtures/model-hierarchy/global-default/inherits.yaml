@@ -1,0 +1,2 @@
+id: inherits
+system_prompt: Inherit model from the stageflow.yaml global default.

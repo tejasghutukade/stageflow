@@ -94,6 +94,7 @@ async function preparePipeline(options: {
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
+    projectRoot: options.projectRoot ?? options.cwd,
     validateStages: true,
   });
   if (!loadResult.ok) {

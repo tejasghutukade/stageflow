@@ -65,7 +65,7 @@ export async function runStageWorker(
     rootsForStageWorker(
       workspaceDir,
       input.stageId,
-      stage.model,
+      stage.model!,
       checkoutRoot,
       attemptCtx,
     ),
