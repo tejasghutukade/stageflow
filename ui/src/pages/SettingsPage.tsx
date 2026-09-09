@@ -7,6 +7,7 @@ import {
 import type { ThemeMode } from "../themePreference";
 import { SettingsAppearance } from "../components/SettingsAppearance";
 import { SettingsMcp } from "../components/SettingsMcp";
+import { SettingsProjectMcp } from "../components/SettingsProjectMcp";
 import { SettingsProviders } from "../components/SettingsProviders";
 import {
   notificationPermission,
@@ -79,6 +80,8 @@ export function SettingsPage({
       <SettingsAppearance value={themeMode} onChange={onThemeChange} />
 
       <SettingsProviders />
+
+      <SettingsProjectMcp />
 
       <SettingsMcp />
 

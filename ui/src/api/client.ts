@@ -27,6 +27,8 @@ import type {
   CreatedStageListing,
   PackageListing,
   ExtensionFileListing,
+  ProjectMcpCatalogList,
+  ProjectMcpProbeResult,
 } from "./types";
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -592,6 +594,20 @@ export async function postFeedbackDecisionWithDetails(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export function fetchProjectMcp(): Promise<ProjectMcpCatalogList> {
+  return api("/api/project-mcp");
+}
+
+export function postProjectMcpProbe(
+  name: string,
+  init?: { signal?: AbortSignal },
+): Promise<ProjectMcpProbeResult> {
+  return api(`/api/project-mcp/${encodeURIComponent(name)}/probe`, {
+    method: "POST",
+    signal: init?.signal,
+  });
 }
 
 export async function fetchRunArtifact(
