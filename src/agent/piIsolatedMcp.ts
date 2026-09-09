@@ -23,7 +23,7 @@ type IsolatedMcpSettings = {
 };
 
 type IsolatedMcpServerEntry = Record<string, unknown> & {
-  lifecycle: "lazy";
+  lifecycle: "lazy" | "eager";
   directTools: true;
 };
 
@@ -65,6 +65,7 @@ type IsolatedMcpStatusEvents = {
 
 export type IsolatedMcpAttachOptions = {
   timeoutMs?: number;
+  lifecycle?: IsolatedMcpServerEntry["lifecycle"];
 };
 
 export type IsolatedMcpAttach = {
@@ -99,12 +100,15 @@ const EMPTY_ATTACH: IsolatedMcpAttach = {
 
 let cachedCreateMcpAdapter: CreateMcpAdapter | undefined;
 
-function toIsolatedMcpConfig(snapshot: ResolvedMcpServers): IsolatedMcpConfig {
+function toIsolatedMcpConfig(
+  snapshot: ResolvedMcpServers,
+  lifecycle: IsolatedMcpServerEntry["lifecycle"] = "lazy",
+): IsolatedMcpConfig {
   const mcpServers: Record<string, IsolatedMcpServerEntry> = {};
   for (const [name, entry] of Object.entries(snapshot)) {
     const isolated: IsolatedMcpServerEntry = {
       ...entry,
-      lifecycle: "lazy",
+      lifecycle,
       directTools: true,
     };
     if (typeof entry.cwd === "string") {
@@ -320,7 +324,7 @@ export async function attachIsolatedMcp(
     {
       name: STAGEFLOW_PI_MCP_EXTENSION_NAME,
       factory: createMcpAdapter({
-        config: toIsolatedMcpConfig(snapshot),
+        config: toIsolatedMcpConfig(snapshot, options?.lifecycle ?? "lazy"),
       }),
     },
   ];

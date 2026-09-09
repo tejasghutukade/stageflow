@@ -330,7 +330,10 @@ export async function probeProjectMcpServer(
       return { name, status: "cancelled" };
     }
 
-    attached = await piIsolatedMcp.attachIsolatedMcp(snapshot, { timeoutMs });
+    attached = await piIsolatedMcp.attachIsolatedMcp(snapshot, {
+      timeoutMs,
+      lifecycle: "eager",
+    });
     if (attached.eventBus === undefined) {
       return { name, status: "invalid_config" };
     }

@@ -313,6 +313,7 @@ describe("probeProjectMcpServer", () => {
     const openStage = vi.spyOn(PiAgentAdapter.prototype, "openStage");
     let probed: unknown;
     try {
+      createMcpAdapter.mockClear();
       await withAttachEmit("connected", async () => {
         probed = await probeProjectMcpServer({
           projectRoot: root,
@@ -321,6 +322,16 @@ describe("probeProjectMcpServer", () => {
       });
       expect(probed).toEqual({ name: "github", status: "connected" });
       expect(openStage).not.toHaveBeenCalled();
+      const adapterOptions = createMcpAdapter.mock.calls[0]?.[0] as
+        | {
+            config?: {
+              mcpServers?: Record<string, Record<string, unknown>>;
+            };
+          }
+        | undefined;
+      expect(adapterOptions?.config?.mcpServers?.github).toMatchObject({
+        lifecycle: "eager",
+      });
     } finally {
       openStage.mockRestore();
     }
