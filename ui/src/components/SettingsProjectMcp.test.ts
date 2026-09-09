@@ -199,14 +199,16 @@ describe("project catalog Settings copy and wiring", () => {
     expect(PROJECT_MCP_SETTINGS_COPY).not.toMatch(/SDLC/i);
   });
 
-  it("mounts a separate project catalog section and leaves SettingsMcp titled MCP", () => {
+  it("mounts two differently titled MCP sections (Project MCP servers vs operator-host MCP)", () => {
     const page = readUi("../pages/SettingsPage.tsx");
     expect(page).toMatch(/SettingsProjectMcp/);
     expect(page).toMatch(/SettingsMcp/);
     const mcp = readUi("./SettingsMcp.tsx");
-    expect(mcp).toMatch(/<h2>MCP<\/h2>/);
+    expect(mcp).toMatch(/<h2>Operator-host MCP<\/h2>/);
+    expect(mcp).not.toMatch(/<h2>MCP<\/h2>/);
     const project = readUi("./SettingsProjectMcp.tsx");
-    expect(project).toMatch(/Project MCP servers/);
+    expect(project).toMatch(/<h2>Project MCP servers<\/h2>/);
+    expect(project).not.toMatch(/<h2>Operator-host MCP<\/h2>/);
     expect(project).toMatch(/className="setting"/);
     expect(project).toMatch(/className=\{`dot/);
   });

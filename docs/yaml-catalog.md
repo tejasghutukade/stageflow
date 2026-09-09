@@ -432,6 +432,7 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
 | Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
+| Settings inspect | Operator console Settings lists git-root `.mcp.json` names and Check connect without a run. Inspect is not attach. |
 
 **Validate-time failures** (author language):
 
@@ -448,7 +449,9 @@ Pi and Claude both receive the servers named on the stage; transports and protoc
 
 MCP elicitation is unsupported — a passed server cannot ask the operator a question through Stageflow.
 
-Operator MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
+
+Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
 
 ## External stage files
 

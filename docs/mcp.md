@@ -18,7 +18,7 @@ http://127.0.0.1:3847/mcp
 
 The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-Stage agents consuming author-declared MCP is a different surface. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+Stage agents consuming author-declared MCP is a different surface. Settings can inspect git-root `.mcp.json` names and Check connect without a run; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) plus Settings.
 
 ## Sessions (how MCP works)
 
@@ -580,7 +580,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 ## See also
 
-- [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json` plus stage `mcp` names (not this host)
+- [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json`, Settings inspect, and stage `mcp` names (not this host)
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
 - [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
