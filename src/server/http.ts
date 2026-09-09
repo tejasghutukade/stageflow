@@ -148,7 +148,8 @@ function isMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/logout$/.test(pathname)
+    /^\/api\/providers\/[^/]+\/logout$/.test(pathname) ||
+    /^\/api\/project-mcp\/[^/]+\/probe$/.test(pathname)
   );
 }
 

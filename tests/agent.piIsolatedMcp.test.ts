@@ -18,6 +18,10 @@ const {
   emitIsolatedMcpStatus,
   STAGEFLOW_PI_MCP_EXTENSION_NAME,
 } = await import("../src/agent/piIsolatedMcp.js");
+const piIsolatedMcp = await import("../src/agent/piIsolatedMcp.js");
+const { probeProjectMcpServer, PROJECT_MCP_PROBE_TIMEOUT_MS } = await import(
+  "../src/agent/piIsolatedMcpProbe.js"
+);
 
 function githubSnapshot(overrides: Record<string, unknown> = {}) {
   return {
@@ -249,5 +253,309 @@ describe("piAdapter isolated MCP imports", () => {
     );
     expect(source).not.toMatch(/piMcpExtension/);
     expect(source).not.toMatch(/piMcpConnect/);
+  });
+});
+
+describe("probeProjectMcpServer", () => {
+  const secret = "u2-probe-secret-token-7e1d";
+
+  async function writeCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  async function withAttachEmit(
+    status: string,
+    run: () => Promise<unknown>,
+  ): Promise<ReturnType<typeof attachIsolatedMcp> | undefined> {
+    let attached: Awaited<ReturnType<typeof attachIsolatedMcp>> | undefined;
+    const spy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot, options) => {
+        attached = await attachIsolatedMcp(snapshot, options);
+        queueMicrotask(() => {
+          if (attached?.eventBus) {
+            emitIsolatedMcpStatus(attached.eventBus, [
+              { name: Object.keys(snapshot ?? {})[0] ?? "github", status },
+            ]);
+          }
+        });
+        return attached;
+      },
+    );
+    try {
+      await run();
+      return attached;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("does not import openStage or prepareStageSessionWiring", async () => {
+    const source = await readFile(
+      path.join(import.meta.dirname, "../src/agent/piIsolatedMcpProbe.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/openStage/);
+    expect(source).not.toMatch(/prepareStageSessionWiring/);
+  });
+
+  it("returns connected without calling openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-connected-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const { PiAgentAdapter } = await import("../src/agent/piAdapter.js");
+    const openStage = vi.spyOn(PiAgentAdapter.prototype, "openStage");
+    let probed: unknown;
+    try {
+      await withAttachEmit("connected", async () => {
+        probed = await probeProjectMcpServer({
+          projectRoot: root,
+          name: "github",
+        });
+      });
+      expect(probed).toEqual({ name: "github", status: "connected" });
+      expect(openStage).not.toHaveBeenCalled();
+    } finally {
+      openStage.mockRestore();
+    }
+  });
+
+  it("maps Pi cached to connected", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-cached-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    let probed: unknown;
+    await withAttachEmit("cached", async () => {
+      probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+      });
+    });
+    expect(probed).toEqual({ name: "github", status: "connected" });
+  });
+
+  it("maps needs-auth to needs_auth, not connect_failed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-auth-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    let probed: unknown;
+    await withAttachEmit("needs-auth", async () => {
+      probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+      });
+    });
+    expect(probed).toEqual({ name: "github", status: "needs_auth" });
+    expect(probed).not.toMatchObject({ status: "connect_failed" });
+  });
+
+  it("maps failed status to connect_failed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-fail-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    let probed: unknown;
+    await withAttachEmit("failed", async () => {
+      probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+      });
+    });
+    expect(probed).toMatchObject({
+      name: "github",
+      status: "connect_failed",
+    });
+  });
+
+  it("maps timeout to connect_failed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-timeout-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const probed = await probeProjectMcpServer({
+      projectRoot: root,
+      name: "github",
+      timeoutMs: 20,
+    });
+    expect(probed).toMatchObject({
+      name: "github",
+      status: "connect_failed",
+    });
+  });
+
+  it("abort yields cancelled and calls cancel without leaving connecting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-abort-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const ac = new AbortController();
+    let attached: Awaited<ReturnType<typeof attachIsolatedMcp>> | undefined;
+    const spy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot, options) => {
+        attached = await attachIsolatedMcp(snapshot, {
+          ...options,
+          timeoutMs: 5_000,
+        });
+        queueMicrotask(() => ac.abort());
+        return attached;
+      },
+    );
+    try {
+      const probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+        signal: ac.signal,
+        timeoutMs: 5_000,
+      });
+      expect(probed).toEqual({ name: "github", status: "cancelled" });
+      await expectConnectFailed(attached?.connecting, /cancelled/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("unresolved interpolation is unresolved_var and does not attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-unresolved-"));
+    await writeCatalog(root, {
+      github: {
+        url: "https://secret-host.example/${MISSING_PROBE_VAR}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+      neighbor: { command: "npx", args: ["should-not-spawn"] },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    createMcpAdapter.mockClear();
+    try {
+      const probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+        env: {},
+      });
+      expect(probed.status).toBe("unresolved_var");
+      expect(probed).not.toHaveProperty("resolved");
+      expect(JSON.stringify(probed)).not.toContain("secret-host.example");
+      expect(JSON.stringify(probed)).not.toContain(secret);
+      expect(attachSpy).not.toHaveBeenCalled();
+      expect(createMcpAdapter).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+    }
+  });
+
+  it("rejects an unknown name without probing neighbors", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-unknown-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+      neighbor: { command: "npx", args: ["should-not-spawn"] },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    createMcpAdapter.mockClear();
+    try {
+      const probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "missing",
+      });
+      expect(probed.status).toBe("invalid_config");
+      expect(attachSpy).not.toHaveBeenCalled();
+      expect(createMcpAdapter).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+    }
+  });
+
+  it("bad catalog is invalid_config without attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-badcat-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    try {
+      const probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+      });
+      expect(probed).toEqual({ name: "github", status: "invalid_config" });
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+    }
+  });
+
+  it("scrubs interpolated env and header values from connect errors", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-scrub-"));
+    await writeCatalog(root, {
+      github: {
+        url: "https://mcp.example.invalid/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+        env: { GITHUB_TOKEN: secret },
+      },
+    });
+    const spy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot, options) => {
+        const attached = await attachIsolatedMcp(snapshot, options);
+        queueMicrotask(() => {
+          emitIsolatedMcpStatus(attached.eventBus!, [
+            { name: "github", status: "failed" },
+          ]);
+        });
+        return {
+          ...attached,
+          connecting: Promise.reject(
+            new StageMcpError(
+              `MCP server "github" failed to connect (status: failed) token=${secret}`,
+              "connect_failed",
+            ),
+          ),
+        };
+      },
+    );
+    try {
+      const probed = await probeProjectMcpServer({
+        projectRoot: root,
+        name: "github",
+        env: {},
+      });
+      expect(probed.status).toBe("connect_failed");
+      expect(JSON.stringify(probed)).not.toContain(secret);
+      expect(probed.error).toContain("[redacted]");
+      expect(probed).not.toHaveProperty("env");
+      expect(probed).not.toHaveProperty("headers");
+      expect(probed).not.toHaveProperty("args");
+      expect(probed).not.toHaveProperty("url");
+      expect(probed).not.toHaveProperty("resolved");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("uses a Settings-length timeout, not the stage 5s default", async () => {
+    expect(PROJECT_MCP_PROBE_TIMEOUT_MS).toBe(30_000);
+    const root = await mkdtemp(path.join(tmpdir(), "sf-probe-timeout-bound-"));
+    await writeCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const spy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot, options) => {
+        expect(options?.timeoutMs).toBe(30_000);
+        const attached = await attachIsolatedMcp(snapshot, options);
+        queueMicrotask(() => {
+          emitIsolatedMcpStatus(attached.eventBus!, [
+            { name: "github", status: "connected" },
+          ]);
+        });
+        return attached;
+      },
+    );
+    try {
+      await probeProjectMcpServer({ projectRoot: root, name: "github" });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

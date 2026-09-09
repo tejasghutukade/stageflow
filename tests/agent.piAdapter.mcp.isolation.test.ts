@@ -526,6 +526,70 @@ describe("ambient MCP isolation", () => {
     }, { useStageAgentDir: true });
   });
 
+  it("AE5: after a successful catalog probe, empty mcp still gets no catalog tools", async () => {
+    const { probeProjectMcpServer } = await import(
+      "../src/agent/piIsolatedMcpProbe.js"
+    );
+    await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
+      await writeFile(
+        path.join(cwd, ".mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            github: { url: "https://mcp.example.invalid/github" },
+          },
+        }),
+      );
+      createMcpAdapter.mockClear();
+      attachSpy.mockImplementation(async (snapshot, options) => {
+        const attached = await attachIsolatedMcpImpl(snapshot, options);
+        queueMicrotask(() => {
+          if (attached.eventBus) {
+            piIsolatedMcp.emitIsolatedMcpStatus(attached.eventBus, [
+              { name: "github", status: "connected" },
+            ]);
+          }
+        });
+        return attached;
+      });
+      const probed = await probeProjectMcpServer({
+        projectRoot: cwd,
+        name: "github",
+      });
+      expect(probed.status).toBe("connected");
+      attachSpy.mockRestore();
+      attachSpy = wrapAttachAndEmitStatus("connected");
+
+      createMcpAdapter.mockClear();
+      piSdkMocks.resetLoaderOptions();
+      await new PiAgentAdapter().runStage(
+        wiringInput(cwd, { resolvedMcpServers: {} }),
+      );
+
+      expect(createMcpAdapter).not.toHaveBeenCalled();
+      expect(lastLoaderOptions().noExtensions).toBe(true);
+      expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
+
+      const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
+        | {
+            resourceLoader?: {
+              getExtensions: () => {
+                extensions: Array<{ path: string; tools: Map<string, unknown> }>;
+                errors: Array<{ path: string; error: string }>;
+              };
+            };
+          }
+        | undefined;
+      const loader = sessionOptions?.resourceLoader;
+      expect(loader).toBeDefined();
+      if (loader === undefined) {
+        throw new Error("createAgentSession was not given a resourceLoader");
+      }
+      expect(registeredToolNames(loader)).toEqual([]);
+      expect(recordedServerNames()).not.toContain("github");
+      expectNoCanaryLeak({ home, cwd, agentDir, loader });
+    }, { useStageAgentDir: true });
+  });
+
   it("wiring with an empty snapshot installs no MCP factory", async () => {
     await withPlantedAmbientMcp(async ({ home, cwd, agentDir }) => {
       await new PiAgentAdapter().runStage(
