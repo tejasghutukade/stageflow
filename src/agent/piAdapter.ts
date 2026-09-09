@@ -1007,7 +1007,7 @@ async function prepareStageSessionWiring(
   existingAskWaitChannel?: AskOperatorWaitChannel,
 ): Promise<StageSessionWiring | StageRunResult> {
   const { roots } = input;
-  const provider = findProviderSupport(input.stage.model!);
+  const provider = findProviderSupport(input.stage.model);
   const capture: EmitCapture = {};
   const askWaitChannel = existingAskWaitChannel ?? new AskOperatorWaitChannel();
 
@@ -1051,7 +1051,7 @@ async function prepareStageSessionWiring(
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
   if (provider) {
-    const prepared = provider.prepare(input.stage.model!);
+    const prepared = provider.prepare(input.stage.model);
     if (prepared.error) {
       return { ok: false, reason: prepared.error };
     }

@@ -7,17 +7,13 @@ import type {
 } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
-import {
-  loadStageflowManifestOutcome,
-  manifestPathForProject,
-} from "./loadStageflowManifest.js";
 import { mergePipelineStages } from "./mergePipelineIncludes.js";
 import {
   normalizePipelineStageEntries,
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
-import { globalModelFromManifest, resolveModelOutcome } from "./resolveModel.js";
+import { materializeStageModels } from "./materializeStageModels.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
@@ -148,36 +144,15 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
-  let globalModel: string | undefined;
-  const manifestPath = manifestPathForProject(projectRoot);
-  let manifestExists = true;
-  try {
-    await access(manifestPath);
-  } catch {
-    manifestExists = false;
+  const materializeOutcome = await materializeStageModels(stages, {
+    pipelineModel,
+    pipelineId,
+    projectRoot,
+  });
+  if (!materializeOutcome.ok) {
+    return loadFailure(materializeOutcome.issues);
   }
-  if (manifestExists) {
-    const manifestOutcome = await loadStageflowManifestOutcome(projectRoot);
-    if (!manifestOutcome.ok) {
-      return loadFailure(manifestOutcome.issues);
-    }
-    globalModel = globalModelFromManifest(manifestOutcome.value);
-  }
-
-  for (const stage of stages) {
-    const modelOutcome = resolveModelOutcome(
-      {
-        stage: stage.model,
-        pipeline: pipelineModel,
-        global: globalModel,
-      },
-      { stageId: stage.id, pipelineId },
-    );
-    if (!modelOutcome.ok) {
-      return loadFailure(modelOutcome.issues);
-    }
-    stage.model = modelOutcome.value;
-  }
+  const loadedStages = materializeOutcome.value;
 
   const pipeline: PipelineConfig = {
     id: pipelineId,
@@ -187,7 +162,7 @@ async function loadPipelineFromPath(
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
-  for (const stage of stages) {
+  for (const stage of loadedStages) {
     const completion = nodeById.get(stage.id)?.completion;
     const completionOutcome = validateCompletionContractForStage(stage, completion);
     if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
@@ -195,7 +170,7 @@ async function loadPipelineFromPath(
 
   return loadSuccess({
     pipeline,
-    stages,
+    stages: loadedStages,
     dag,
     pipelinePath: normalizedPipelinePath,
     stageSources,

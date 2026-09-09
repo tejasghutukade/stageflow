@@ -22,7 +22,7 @@ import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
-import type { StageConfig } from "../types/stage.js";
+import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
   buildCompletedEnvelopesFromRun,
@@ -49,7 +49,7 @@ export type StageAttemptOpenInput = {
   agent: Pick<AgentPort, "openStage">;
   store: RunStore;
   runId: string;
-  stage: StageConfig;
+  stage: LoadedStageConfig;
   task: TaskFile;
   dag: ResolvedPipelineDag;
   checkoutRoot?: string;
@@ -168,7 +168,7 @@ function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): Sta
       ? rootsForStageWorker(
           input.workspaceDir,
           stageId,
-          input.stage.model!,
+          input.stage.model,
           input.checkoutRoot,
           input.attemptCtx,
         )

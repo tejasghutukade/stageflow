@@ -109,7 +109,7 @@ function preflight(input: StageRunInput): Preflight {
       reason: `stage declares skill "${input.stage.skill}"; the claude agent backend does not support skills yet`,
     };
   }
-  return resolveClaudeModel(input.stage.model!);
+  return resolveClaudeModel(input.stage.model);
 }
 
 function resultFromCapture(capture: EmitCapture): StageRunResult {

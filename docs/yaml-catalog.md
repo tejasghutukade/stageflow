@@ -67,7 +67,7 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `mcp`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. Effective `model` is resolved at load/run time — see [Model defaults and precedence](#model-defaults-and-precedence). The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
@@ -77,9 +77,9 @@ different pipelines.
 
 ### Model defaults and precedence
 
-`model` is an LLM/provider id string. It is distinct from `agent`, which selects the execution backend (Pi vs Claude SDK). The two hierarchies share the same tier *shape* but use separate keys.
+`model` is an LLM/provider id string. It is distinct from `agent`, which selects the execution backend (Pi vs Claude SDK). The two hierarchies share the same tier *shape* but use separate keys — this model hierarchy is separate from `agent`.
 
-Effective model for each stage:
+Effective model for each stage is materialized at **pipeline load** (not at stage runtime):
 
 ```text
 stage.model ?? pipeline.model ?? stageflow.yaml model
@@ -95,7 +95,7 @@ Pipeline `model` is read only from the **root** pipeline file (the path passed t
 
 Global tier: **absence** of `stageflow.yaml` means no global default. A **present but invalid** `stageflow.yaml` (bad shape, empty `model`, etc.) fails pipeline load with catalog/manifest errors — it is not treated as “no global.”
 
-If the chain still leaves `model` unset, load/run **fails with a clear error**. There is **no** silent hardcoded model string (unlike backend selection, which falls back to `"pi"`).
+If the chain still leaves `model` unset, pipeline load **fails with a clear error**. There is **no** silent hardcoded model string (unlike backend selection, which falls back to `"pi"`).
 
 Canonical fixtures:
 

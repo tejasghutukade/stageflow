@@ -32,3 +32,5 @@ export type StageConfig = {
    */
   agent?: string;
 };
+
+export type LoadedStageConfig = StageConfig & { model: string };
