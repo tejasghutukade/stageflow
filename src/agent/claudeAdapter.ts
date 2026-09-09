@@ -76,6 +76,7 @@ import {
   type StageRunInput,
   type StageRunResult,
 } from "./port.js";
+import { StageMcpError } from "../config/resolveStageMcpServers.js";
 
 /** Built-in tool allowlist, mirroring Pi's sealed-session base set (read/bash/write/edit). */
 const CLAUDE_BUILTIN_TOOLS = ["Read", "Write", "Edit", "Bash"];
@@ -122,6 +123,25 @@ function resultFromCapture(capture: EmitCapture): StageRunResult {
     return { ok: false, reason: "status: failure", envelope: capture.envelope };
   }
   return { ok: true, envelope: capture.envelope };
+}
+
+function failedPassedMcpConnect(
+  resolved: StageRunInput["resolvedMcpServers"],
+  listed: ReadonlyArray<{ name: string; status: string; error?: string }>,
+): StageMcpError | undefined {
+  const names = Object.keys(resolved ?? {});
+  if (names.length === 0) return undefined;
+  const byName = new Map(listed.map((entry) => [entry.name, entry]));
+  for (const name of names) {
+    const entry = byName.get(name);
+    if (entry?.status === "connected") continue;
+    const statusOrError = entry?.error ?? entry?.status ?? "missing";
+    return new StageMcpError(
+      `MCP server "${name}" failed to connect (status: ${statusOrError})`,
+      "connect_failed",
+    );
+  }
+  return undefined;
 }
 
 type ClaudeTurnOutcome =
@@ -184,6 +204,13 @@ async function runTurn(
         : {}),
     });
 
+    const passedServers = Object.fromEntries(
+      Object.entries(input.resolvedMcpServers ?? {}).map(([name, config]) => [
+        name,
+        { ...config, alwaysLoad: true },
+      ]),
+    );
+
     const stream = query({
       prompt: singleUserMessage(promptText),
       options: {
@@ -193,10 +220,11 @@ async function runTurn(
         systemPrompt: { type: "custom", prompt: input.stage.system_prompt },
         settingSources: [],
         tools: CLAUDE_BUILTIN_TOOLS,
-        mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: mcpServer },
+        mcpServers: { [STAGEFLOW_MCP_SERVER_NAME]: mcpServer, ...passedServers },
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         persistSession: true,
+        strictMcpConfig: true,
         ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
       },
     });
@@ -209,6 +237,15 @@ async function runTurn(
       if (message.type === "system" && message.subtype === "init") {
         sessionId = message.session_id;
         await writeClaudeSessionMarker(markerPath, { sessionId: message.session_id });
+        const connectError = failedPassedMcpConnect(input.resolvedMcpServers, message.mcp_servers);
+        if (connectError) {
+          try {
+            await stream.interrupt();
+          } catch {
+            // best-effort backstop; a natural stop may have already ended the turn
+          }
+          return { kind: "completed", result: { ok: false, reason: connectError.message } };
+        }
       }
 
       if (

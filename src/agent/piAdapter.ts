@@ -34,6 +34,8 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type AgentSession,
+  type EventBus,
+  type InlineExtension,
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
@@ -42,6 +44,11 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { StageMcpError } from "../config/resolveStageMcpServers.js";
+import {
+  attachIsolatedMcp,
+  STAGEFLOW_PI_MCP_EXTENSION_NAME,
+} from "./piIsolatedMcp.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
@@ -612,9 +619,9 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
  * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
  * and APPEND_SYSTEM.md. Stages must not inherit that context.
  *
- * `additionalExtensionPaths` is the only way extensions enter a sealed stage
- * (used by StageProviderSupport implementations). With `noExtensions: true`,
- * discovered global/project packages stay out; only allowlisted paths load.
+ * `additionalExtensionPaths` is the Cursor/provider seam. `extensionFactories`
+ * is the isolated MCP seam. With `noExtensions: true`, discovered
+ * global/project packages stay out; only those allowlists load.
  * `additionalSkillPaths` is the matching allowlist for one named skill.
  */
 export function createSealedResourceLoader(options: {
@@ -624,6 +631,8 @@ export function createSealedResourceLoader(options: {
   systemPrompt: string;
   additionalExtensionPaths?: string[];
   additionalSkillPaths?: string[];
+  extensionFactories?: InlineExtension[];
+  eventBus?: EventBus;
 }): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd: options.cwd,
@@ -633,12 +642,26 @@ export function createSealedResourceLoader(options: {
     appendSystemPromptOverride: () => [],
     additionalExtensionPaths: options.additionalExtensionPaths,
     additionalSkillPaths: options.additionalSkillPaths,
+    ...(options.extensionFactories !== undefined
+      ? { extensionFactories: options.extensionFactories }
+      : {}),
+    ...(options.eventBus !== undefined ? { eventBus: options.eventBus } : {}),
     noContextFiles: true,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
   });
+}
+
+function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
+  const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
+  const names: string[] = [];
+  for (const ext of loader.getExtensions().extensions) {
+    if (ext.path !== inlinePath) continue;
+    names.push(...ext.tools.keys());
+  }
+  return names;
 }
 
 async function shutdownSession(session: AgentSession | undefined): Promise<void> {
@@ -974,6 +997,8 @@ type StageSessionWiring = {
   restoreProvider?: () => void;
   capture: EmitCapture;
   askWaitChannel: AskOperatorWaitChannel;
+  connecting?: Promise<void>;
+  cancelConnecting?: () => void;
 };
 
 async function prepareStageSessionWiring(
@@ -1034,6 +1059,7 @@ async function prepareStageSessionWiring(
     restoreProvider = prepared.restore;
   }
 
+  let attached: Awaited<ReturnType<typeof attachIsolatedMcp>> | undefined;
   try {
     const modelRuntime = await ModelRuntime.create(
       roots.authPath
@@ -1051,6 +1077,12 @@ async function prepareStageSessionWiring(
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: false },
     });
+    attached = await attachIsolatedMcp(input.resolvedMcpServers);
+    const failAfterAttach = (reason: string): StageRunResult => {
+      attached?.cancel?.();
+      restoreProvider?.();
+      return { ok: false, reason };
+    };
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
@@ -1060,58 +1092,58 @@ async function prepareStageSessionWiring(
       ...(input.skillFilePath !== undefined
         ? { additionalSkillPaths: [input.skillFilePath] }
         : {}),
+      ...(attached.extensionFactories !== undefined
+        ? { extensionFactories: attached.extensionFactories }
+        : {}),
+      ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });
     await loader.reload();
 
     const extensionErrors = loader.getExtensions().errors;
     if (extensionErrors.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load Pi extension(s): ${extensionErrors
+      return failAfterAttach(
+        `Failed to load Pi extension(s): ${extensionErrors
           .map((e) => `${e.path}: ${e.error}`)
           .join("; ")}`,
-      };
+      );
     }
 
     const skillDiagnostics = loader
       .getSkills()
       .diagnostics.filter((d) => d.type === "error" || d.type === "collision");
     if (skillDiagnostics.length > 0) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Failed to load skill(s): ${skillDiagnostics
+      return failAfterAttach(
+        `Failed to load skill(s): ${skillDiagnostics
           .map((d) => (d.path !== undefined ? `${d.path}: ${d.message}` : d.message))
           .join("; ")}`,
-      };
+      );
     }
     if (
       input.stage.skill !== undefined &&
       !loader.getSkills().skills.some((skill) => skill.name === input.stage.skill)
     ) {
-      restoreProvider?.();
-      return {
-        ok: false,
-        reason: `Skill "${input.stage.skill}" is not installed`,
-      };
+      return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
     const customTools = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
+    const tools = resolveStageToolNames(
+      emitDef.name,
+      artifactDef.name,
+      askDef?.name ?? "ask_operator",
+      gateKinds,
+    );
+    if (attached.extensionFactories !== undefined) {
+      tools.push(...collectMcpExtensionToolNames(loader));
+    }
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: resolveStageToolNames(
-        emitDef.name,
-        artifactDef.name,
-        askDef?.name ?? "ask_operator",
-        gateKinds,
-      ),
+      tools,
       customTools,
       emitDefName: emitDef.name,
       ...(askDef ? { askOperatorDefName: askDef.name } : {}),
@@ -1120,9 +1152,15 @@ async function prepareStageSessionWiring(
       restoreProvider,
       capture,
       askWaitChannel,
+      connecting: attached.connecting,
+      cancelConnecting: attached.cancel,
     };
   } catch (err) {
+    attached?.cancel?.();
     restoreProvider?.();
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
     throw err;
   }
 }
@@ -1180,6 +1218,9 @@ export async function reconstructStageSessionForAnswer(
     });
     session = created.session;
     await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
 
     const resolved = resolveCliModel({
       cliModel: input.stage.model,
@@ -1211,6 +1252,7 @@ export async function reconstructStageSessionForAnswer(
       },
     };
   } catch (err) {
+    wiring.cancelConnecting?.();
     await shutdownSession(session);
     wiring.restoreProvider?.();
     if (err instanceof StageSessionReconstructError) throw err;
@@ -1241,7 +1283,19 @@ async function bindStageSession(
   });
   const session = created.session;
   ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
-  await session.bindExtensions({});
+  try {
+    await session.bindExtensions({});
+    if (wiring.connecting !== undefined) {
+      await wiring.connecting;
+    }
+  } catch (err) {
+    wiring.cancelConnecting?.();
+    await shutdownSession(session);
+    if (err instanceof StageMcpError) {
+      return { ok: false, reason: err.message };
+    }
+    throw err;
+  }
 
   const resolved = resolveCliModel({
     cliModel: input.stage.model,

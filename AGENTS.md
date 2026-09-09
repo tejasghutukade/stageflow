@@ -71,7 +71,7 @@ Repo-root [`stageflow.yaml`](stageflow.yaml) lists example catalog roots and exc
 
 When changing pipeline/stage/task schema, validation, or doc examples:
 
-- Read **[docs/yaml-catalog.md](docs/yaml-catalog.md)** — authoritative schema reference, including `clonable` / `clone_forks` ([Clonable successors](docs/yaml-catalog.md#clonable-successors))
+- Read **[docs/yaml-catalog.md](docs/yaml-catalog.md)** — authoritative schema reference, including `clonable` / `clone_forks` ([Clonable successors](docs/yaml-catalog.md#clonable-successors)) and stage `mcp` / `.mcp.json` ([Stage MCP](docs/yaml-catalog.md#stage-mcp))
 - Treat **`tests/fixtures/`** as canonical YAML; keep `examples/` in sync when behavior changes
 - Runnable walkthroughs: **[examples/README.md](examples/README.md)**
 

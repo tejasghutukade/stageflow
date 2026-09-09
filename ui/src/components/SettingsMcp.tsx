@@ -10,7 +10,7 @@ export function SettingsMcp() {
   return (
     <section className="card">
       <div className="card__head">
-        <h2>MCP</h2>
+        <h2>Operator-host MCP</h2>
       </div>
       <p style={{ margin: 0, color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}>
         This console process also serves Streamable HTTP MCP on localhost.

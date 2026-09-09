@@ -8,6 +8,13 @@ import { readYamlObject } from "./readYamlObject.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
 import { manifestPathForProject } from "./loadStageflowManifest.js";
+import {
+  MCP_CATALOG_FILENAME,
+  StageMcpError,
+  assertMcpAllowlistKnown,
+  loadMcpCatalog,
+  mcpCatalogPath,
+} from "./resolveStageMcpServers.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -36,6 +43,7 @@ export type ValidationFindingCode =
   | "stage.invalid_pre_emit_checks"
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
+  | "stage.invalid_mcp"
   | "stage.invalid_agent"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
@@ -45,7 +53,8 @@ export type ValidationFindingCode =
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
   | "catalog.empty_catalog"
-  | "catalog.manifest_load_error";
+  | "catalog.manifest_load_error"
+  | "catalog.invalid_mcp";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -352,6 +361,65 @@ async function validateStageFile(
   return findings;
 }
 
+function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
+  const names = new Set<string>();
+  for (const stage of loaded.stages) {
+    for (const name of stage.mcp ?? []) {
+      names.add(name);
+    }
+  }
+  return [...names];
+}
+
+async function findingsForStageMcpCatalog(
+  cwd: string,
+  loaded: LoadedPipeline,
+): Promise<ValidationFinding[]> {
+  const allowlist = collectMcpAllowlistNames(loaded);
+  const ctx = await resolveCatalogContext(cwd);
+  const projectRoot = ctx.projectRoot;
+  const catalogAbsPath = projectRoot
+    ? mcpCatalogPath(projectRoot)
+    : path.resolve(cwd, MCP_CATALOG_FILENAME);
+
+  if (!projectRoot) {
+    if (allowlist.length === 0) return [];
+    return [
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
+        "catalog.invalid_mcp",
+        "error",
+      ),
+    ];
+  }
+
+  let catalog;
+  try {
+    catalog = await loadMcpCatalog(projectRoot);
+  } catch (err) {
+    if (!(err instanceof StageMcpError)) throw err;
+    if (err.code === "missing_catalog" && allowlist.length === 0) return [];
+    return [
+      findingCatalog(cwd, catalogAbsPath, err.message, "catalog.invalid_mcp", "error"),
+    ];
+  }
+
+  try {
+    assertMcpAllowlistKnown(catalog.servers, allowlist);
+  } catch (err) {
+    if (err instanceof StageMcpError) {
+      return [
+        findingCatalog(cwd, catalogAbsPath, err.message, "catalog.invalid_mcp", "error"),
+      ];
+    }
+    throw err;
+  }
+
+  return [];
+}
+
 type PipelineValidationCoreResult =
   | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
   | { ok: false; findings: ValidationFinding[] };
@@ -386,6 +454,8 @@ async function runPipelineValidation(
     findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
     return { ok: false, findings };
   }
+
+  findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {

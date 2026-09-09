@@ -14,6 +14,7 @@ Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/),
 ```
 my-project/
   stageflow.yaml
+  .mcp.json                   # optional project MCP catalog
   pipelines/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
@@ -57,11 +58,11 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `mcp`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
 
-**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted).
+**Body** (inline entry or external stage file): `system_prompt`, `model`, `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
 
-`uses:` plus any body key except `skill` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` may sit on the `uses:` wrapper.
+`uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
 `completion` and `recovery` are pipeline-stage execution policy. They may sit beside
 `uses:` because a reusable stage can require different proof or recovery behavior in
@@ -396,6 +397,62 @@ sf skills install --from-zip <url> --skill-name archify
 
 Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA provisions Archify, agents author JSON specs only; shell steps run `deliver` outside the agent.
 
+### Stage MCP {#stage-mcp}
+
+Pass project MCP servers to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
+
+```yaml
+stages:
+  - id: use-echo
+    uses: ./use-echo.yaml
+    mcp: [echo]
+```
+
+Project `.mcp.json` lives at the same root as `stageflow.yaml`:
+
+```json
+{
+  "mcpServers": {
+    "echo": {
+      "command": "node",
+      "args": ["examples/stage-mcp/echo-mcp.mjs"],
+      "env": {
+        "ECHO_TOKEN": "${ECHO_TOKEN:-local}"
+      }
+    }
+  }
+}
+```
+
+| Behavior | Detail |
+|----------|--------|
+| Catalog | `.mcp.json` `{ "mcpServers": { "<name>": { … } } }` at the project root that holds `stageflow.yaml` |
+| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
+| Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
+| Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
+| Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
+| Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
+| Settings inspect | Operator console Settings lists git-root `.mcp.json` names and Check connect without a run. Inspect is not attach. |
+
+**Validate-time failures** (author language):
+
+- `.mcp.json` is missing when a stage lists one or more `mcp` names
+- A listed name is not in `mcpServers`
+- The catalog or a stage list uses the reserved name `stageflow`
+- The catalog is not valid JSON, is not an object, is missing `mcpServers`, or a server entry is not an object
+
+If `.mcp.json` is present, validate checks its shape and reserved names even when no stage lists `mcp`. Connect failure and unset required vars fail at **run**, not `sf validate`.
+
+GitHub, Notion, or a company MCP use the same authoring shape when those servers exist in `.mcp.json`.
+
+Pi and Claude both receive the servers named on the stage; transports and protocol features may differ. Walkthroughs: [`examples/stage-mcp/`](../examples/stage-mcp/), [`examples/playwright-mcp/`](../examples/playwright-mcp/) (open a page and save a PNG screenshot; pass `${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png` because Playwright named `filename` values resolve against the project checkout, not `--output-dir`), [`examples/context7-mcp/`](../examples/context7-mcp/) (resolve a library, fetch docs, write a brief).
+
+MCP elicitation is unsupported — a passed server cannot ask the operator a question through Stageflow.
+
+Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
+
+Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
 ## External stage files
 
 Stage YAML (referenced via `uses:`) requires:
@@ -406,7 +463,7 @@ Stage YAML (referenced via `uses:`) requires:
 | `system_prompt` | Agent instructions |
 | `model` | Provider/model string |
 
-Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema) and [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The loader accepts `skill:` here; prefer binding it on the pipeline entry (see [Skill binding](#skill-binding)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Optional body fields on the file (not on the `uses:` wrapper): `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema) and [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -455,7 +512,7 @@ sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and it
 sf validate --task path/to/x.task.yaml --strict           # that task
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. It does not verify provider credentials or checkout paths.
+Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect.
 
 ## CLI run
 

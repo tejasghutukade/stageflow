@@ -1,0 +1,4 @@
+id: playwright-mcp
+goal: Open https://google.com and take a screenshot of that page as a PNG artifact.
+context: One-stage Playwright MCP walkthrough. Playwright must save page.png under this attempt's artifacts directory (absolute path in the stage prompt), not the repo root.
+constraints: Use only the playwright server named on the stage. Do not call ask_operator. The screenshot must be page.png in artifacts, not markdown and not the git root.

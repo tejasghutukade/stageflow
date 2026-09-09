@@ -571,3 +571,37 @@ export type RetryStageResult =
       conflictingRunId?: string;
       conflictingCheckout?: string;
     };
+
+export type ProjectMcpCatalogTransport = "stdio" | "http";
+
+export type ProjectMcpCatalogEntry = {
+  name: string;
+  transport: ProjectMcpCatalogTransport;
+};
+
+export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
+
+export type ProjectMcpCatalogList = {
+  status: ProjectMcpCatalogListStatus;
+  servers: ProjectMcpCatalogEntry[];
+};
+
+export type ProjectMcpProbeStatus =
+  | "connected"
+  | "needs_auth"
+  | "connect_failed"
+  | "unresolved_var"
+  | "invalid_config"
+  | "missing_catalog"
+  | "cancelled";
+
+export type ProjectMcpProbeResult = {
+  name: string;
+  status: ProjectMcpProbeStatus;
+  error?: string;
+};
+
+export type ProjectMcpRowStatus =
+  | "not-yet-probed"
+  | "probing"
+  | ProjectMcpProbeStatus;

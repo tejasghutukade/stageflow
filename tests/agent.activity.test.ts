@@ -613,3 +613,136 @@ describe("activity verbose routing", () => {
     expect(extractPartialResultText("raw")).toBe("raw");
   });
 });
+
+describe("passed-server MCP tool activity (AE4)", () => {
+  const MCP_TOOL_NAME = "github__list_issues";
+  const existingActivityEvents = new Set<StageActivityEvent["event"]>([
+    "agent_start",
+    "agent_end",
+    "turn_start",
+    "tool_start",
+    "tool_end",
+    "tool_progress",
+    "message",
+    "operator_prompt",
+    "operator_answer",
+  ]);
+
+  it("maps tool_execution_start with github__list_issues to tool_start", () => {
+    const mapped = mapSessionEventToActivity({
+      type: "tool_execution_start",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      args: { owner: "acme", repo: "app" },
+    });
+    expect(mapped).toEqual({
+      event: "tool_start",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      argsPreview: JSON.stringify({ owner: "acme", repo: "app" }),
+    });
+  });
+
+  it("maps matching tool_execution_end to tool_end with isError and resultPreview", () => {
+    const result = { content: [{ type: "text", text: '[{"number":1}]' }] };
+    const mapped = mapSessionEventToActivity({
+      type: "tool_execution_end",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      isError: false,
+      result,
+    });
+    expect(mapped).toEqual({
+      event: "tool_end",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      isError: false,
+      resultPreview: truncateActivityText(result),
+    });
+
+    const failed = mapSessionEventToActivity({
+      type: "tool_execution_end",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      isError: true,
+      result: "boom",
+    });
+    expect(failed).toEqual({
+      event: "tool_end",
+      toolName: MCP_TOOL_NAME,
+      toolCallId: "mcp-1",
+      isError: true,
+      resultPreview: "boom",
+    });
+  });
+
+  it("truncates passed-server tool previews at ACTIVITY_TEXT_LIMIT", () => {
+    const longQuery = "q".repeat(ACTIVITY_TEXT_LIMIT + 50);
+    const start = mapSessionEventToActivity({
+      type: "tool_execution_start",
+      toolName: MCP_TOOL_NAME,
+      args: { query: longQuery },
+    });
+    expect(start?.event).toBe("tool_start");
+    if (start?.event === "tool_start") {
+      expect(start.toolName).toBe(MCP_TOOL_NAME);
+      expect(start.argsPreview?.endsWith("…")).toBe(true);
+      expect(start.argsPreview?.length).toBe(ACTIVITY_TEXT_LIMIT + 1);
+    }
+
+    const longResult = "r".repeat(ACTIVITY_TEXT_LIMIT + 50);
+    const end = mapSessionEventToActivity({
+      type: "tool_execution_end",
+      toolName: MCP_TOOL_NAME,
+      isError: false,
+      result: longResult,
+    });
+    expect(end?.event).toBe("tool_end");
+    if (end?.event === "tool_end") {
+      expect(end.toolName).toBe(MCP_TOOL_NAME);
+      expect(end.resultPreview?.endsWith("…")).toBe(true);
+      expect(end.resultPreview?.length).toBe(ACTIVITY_TEXT_LIMIT + 1);
+    }
+  });
+
+  it("does not introduce a new activity event name for MCP", () => {
+    const seen: StageActivityEvent[] = [];
+    const observer = createStageActivityObserver({
+      onActivity: (e) => seen.push(e),
+      writeStderr: false,
+    });
+    routeSessionEventToProgress(
+      {
+        type: "tool_execution_start",
+        toolName: MCP_TOOL_NAME,
+        toolCallId: "mcp-1",
+        args: { owner: "acme" },
+      },
+      { observer, verbose: false },
+    );
+    routeSessionEventToProgress(
+      {
+        type: "tool_execution_end",
+        toolName: MCP_TOOL_NAME,
+        toolCallId: "mcp-1",
+        isError: false,
+        result: { content: [{ type: "text", text: '[{"number":1}]' }] },
+      },
+      { observer, verbose: false },
+    );
+    expect(seen.map((e) => e.event)).toEqual(["tool_start", "tool_end"]);
+    for (const e of seen) {
+      expect(existingActivityEvents.has(e.event)).toBe(true);
+      expect(e.event).not.toMatch(/mcp/i);
+    }
+    expect(seen[0]).toMatchObject({
+      event: "tool_start",
+      toolName: MCP_TOOL_NAME,
+    });
+    expect(seen[1]).toMatchObject({
+      event: "tool_end",
+      toolName: MCP_TOOL_NAME,
+      isError: false,
+    });
+  });
+});

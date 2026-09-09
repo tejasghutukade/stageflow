@@ -21,6 +21,7 @@ export const BODY_KEYS = new Set([
   "clone_actions",
   "timeout_ms",
   "skill",
+  "mcp",
 ]);
 
 export function isPipelineStageBodyKey(key: string): boolean {

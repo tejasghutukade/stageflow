@@ -2,6 +2,7 @@ import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { parseStageMcp } from "./loadStage.js";
 import {
   BODY_KEYS,
   isAllowedPipelineStageEntryKey,
@@ -40,7 +41,9 @@ function extractBodyRaw(raw: Record<string, unknown>): Record<string, unknown> {
 }
 
 function hasBodyKey(raw: Record<string, unknown>): boolean {
-  return Object.keys(raw).some((key) => BODY_KEYS.has(key) && key !== "skill");
+  return Object.keys(raw).some(
+    (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp",
+  );
 }
 
 function readSkill(raw: Record<string, unknown>): LoadOutcome<string> | undefined {
@@ -119,6 +122,12 @@ export function normalizePipelineStageEntries(
       return skillOutcome;
     }
     const skill = skillOutcome?.ok ? skillOutcome.value : undefined;
+    const mcpOutcome = parseStageMcp(
+      raw.mcp,
+      `entry at index ${index} in ${declaringPath}`,
+    );
+    if (!mcpOutcome.ok) return mcpOutcome;
+    const mcp = mcpOutcome.value;
 
     if (uses && hasBody) {
       return loadFailure([
@@ -251,6 +260,7 @@ export function normalizePipelineStageEntries(
         ? { replay_safe: raw.replay_safe as boolean }
         : {}),
       ...(skill !== undefined ? { skill } : {}),
+      ...(mcp !== undefined ? { mcp } : {}),
     };
 
     const priorPath = normalized.find((e) => e.id === id)?.declaringPath;

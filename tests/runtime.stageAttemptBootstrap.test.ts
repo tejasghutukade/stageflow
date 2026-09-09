@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
+} from "../src/config/resolveStageMcpServers.js";
+import { attemptArtifactsDir } from "../src/runstore/workspaceLayout.js";
 import {
   appendOperatorAnswer,
   appendOperatorPrompt,
@@ -83,6 +87,17 @@ async function writeSkill(
   const filePath = path.join(skillDir, "SKILL.md");
   await writeFile(filePath, body, "utf8");
   return filePath;
+}
+
+async function writeMcpCatalog(
+  root: string,
+  servers: Record<string, Record<string, unknown>>,
+): Promise<void> {
+  await writeFile(
+    path.join(root, ".mcp.json"),
+    JSON.stringify({ mcpServers: servers }),
+    "utf8",
+  );
 }
 
 describe("openStageAttempt", () => {
@@ -779,5 +794,296 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.priorEnvelopesByStage?.validation).toEqual(validation);
     expect(opened[0]?.priorEnvelopesByStage?.research).toEqual(research);
     expect(result.prior).toBeNull();
+  });
+
+  it("omits resolvedMcpServers when stage.mcp is omitted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-omit-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.resolvedMcpServers).toBeUndefined();
+  });
+
+  it("omits resolvedMcpServers when stage.mcp is empty", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-empty-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: [] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.resolvedMcpServers).toBeUndefined();
+  });
+
+  it("forwards resolved MCP snapshot from factoryCwd catalog onto openStage", async () => {
+    await writeMcpCatalog(factoryCwd, {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+      },
+      notion: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-notion"],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ok-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.resolvedMcpServers).toEqual({
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        cwd: path.resolve(factoryCwd),
+      },
+    });
+  });
+
+  it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR onto resolved MCP args", async () => {
+    await writeMcpCatalog(factoryCwd, {
+      playwright: {
+        command: "npx",
+        args: [
+          "-y",
+          "@playwright/mcp@latest",
+          "--output-dir",
+          `\${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}:-./fallback-mcp-out}`,
+        ],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-art-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["playwright"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.resolvedMcpServers?.playwright.args).toEqual([
+      "-y",
+      "@playwright/mcp@latest",
+      "--output-dir",
+      artifactsDir,
+    ]);
+    await expect(access(artifactsDir)).resolves.toBeUndefined();
+  });
+
+  it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR into the stage system_prompt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-prompt-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: {
+        ...stage("clarify"),
+        system_prompt: `filename \${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}}/page.png`,
+      },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.stage.system_prompt).toBe(`filename ${artifactsDir}/page.png`);
+  });
+
+  it("fails closed without openStage when a catalog variable is unresolved", async () => {
+    const envKey = "STAGEFLOW_TEST_MCP_TOKEN";
+    const previous = process.env[envKey];
+    delete process.env[envKey];
+    await writeMcpCatalog(factoryCwd, {
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: `Bearer \${${envKey}}` },
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-var-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    try {
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("clarify"), mcp: ["github"] },
+        task,
+        dag: rootDag("clarify"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: expect.stringContaining(envKey),
+      });
+      expect(opened).toHaveLength(0);
+    } finally {
+      if (previous === undefined) {
+        delete process.env[envKey];
+      } else {
+        process.env[envKey] = previous;
+      }
+    }
+  });
+
+  it("fails closed without openStage when the allowlisted server is unknown", async () => {
+    await writeMcpCatalog(factoryCwd, {
+      github: { command: "npx" },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-unknown-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["notion"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: expect.stringContaining("notion"),
+    });
+    expect(opened).toHaveLength(0);
+  });
+
+  it("fails closed without openStage when the catalog uses a reserved name", async () => {
+    await writeMcpCatalog(factoryCwd, {
+      stageflow: { command: "npx" },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-reserved-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["stageflow"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/reserved name "stageflow"/),
+    });
+    expect(opened).toHaveLength(0);
+  });
+
+  it("fails closed without openStage when mcp is set and factoryCwd is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-nocwd-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: expect.stringMatching(/MCP catalog.*missing/i),
+    });
+    expect(opened).toHaveLength(0);
   });
 });

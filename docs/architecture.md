@@ -122,4 +122,5 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources
+- [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling

@@ -1,4 +1,7 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
+import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -1819,6 +1822,39 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("GET artifact returns image bytes with image content-type", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-art-png-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join("stages", "screenshot", "attempts", "1", "artifacts", "page.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(
+      path.join(created.workspaceDir, "stages", "screenshot", "attempts", "1", "artifacts"),
+      { recursive: true },
+    );
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const agent = scriptedFakeAgent([]);
+    const { server, base } = await withServer(root, agent, store);
+
+    try {
+      const ok = await fetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/artifact?path=${encodeURIComponent(rel)}`,
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await ok.arrayBuffer())).toEqual(png);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("POST /api/settings updates maxConcurrent, persists, and 400s invalid bodies", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-"));
     const { server, base } = await withServer(
@@ -3336,5 +3372,534 @@ describe("localhost HTTP API", () => {
         });
       }
     });
+  });
+});
+
+describe("project MCP catalog HTTP", () => {
+  const secret = "u1-secret-mcp-token-9f3c2b1a";
+
+  async function writeHostCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  it("lists two servers as names plus transport only", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-ok-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [
+          { name: "local", transport: "stdio" },
+          { name: "github", transport: "http" },
+        ],
+      });
+      for (const row of listed.body.servers as { name: string }[]) {
+        expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns an empty list for empty mcpServers", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-empty-"));
+    await writeHostCatalog(root, {});
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "ok", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns JSON with no env, headers, args, command, URLs, or secrets", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-secrets-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "secret-bin"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+      expect(payload).not.toContain("API_BASE");
+      expect(payload).not.toContain("Authorization");
+      expect(payload).not.toContain("secret-bin");
+      expect(payload).not.toMatch(/"env"/);
+      expect(payload).not.toMatch(/"headers"/);
+      expect(payload).not.toMatch(/"args"/);
+      expect(payload).not.toMatch(/"command"/);
+      expect(payload).not.toMatch(/"url"/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("does not spawn a connect helper or child process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-nospawn-"));
+    await writeHostCatalog(root, {
+      local: { command: "npx", args: ["-y", "should-not-spawn"] },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const resolveSpy = vi.spyOn(resolveStageMcpServers, "resolveStageMcpServers");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      resolveSpy.mockClear();
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body.status).toBe("ok");
+      expect(attachSpy).not.toHaveBeenCalled();
+      expect(resolveSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      resolveSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns missing_catalog when the file is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-missing-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "missing_catalog", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns invalid_config for invalid JSON", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-badjson-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("fails the whole catalog when stageflow is reserved", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-reserved-"));
+    await writeHostCatalog(root, {
+      stageflow: { command: "npx" },
+      github: { url: "https://secret-host.example/mcp" },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("lists from host projectRoot, not a run checkout_root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-root-"));
+    const checkout = path.join(root, "checkout");
+    await mkdir(checkout, { recursive: true });
+    await writeHostCatalog(root, {
+      factory: { command: "npx" },
+    });
+    await writeFile(
+      path.join(checkout, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          decoy: {
+            url: "https://secret-host.example/mcp",
+            headers: { Authorization: `Bearer ${secret}` },
+          },
+        },
+      }),
+    );
+    const store = createRunStore({ rootDir: root });
+    await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+      checkoutRoot: checkout,
+    });
+    const { server, base } = await withServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [{ name: "factory", transport: "stdio" }],
+      });
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain("decoy");
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("project MCP probe HTTP", () => {
+  const secret = "u2-http-probe-secret-4c8a";
+
+  async function writeHostCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  function wrapAttachEmit(status: string) {
+    return vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async (snapshot) => {
+        const eventBus = createEventBus();
+        queueMicrotask(() => {
+          piIsolatedMcp.emitIsolatedMcpStatus(
+            eventBus,
+            Object.keys(snapshot ?? {}).map((name) => ({ name, status })),
+          );
+        });
+        const connecting =
+          status === "connected" || status === "cached"
+            ? Promise.resolve()
+            : Promise.reject(
+                new resolveStageMcpServers.StageMcpError(
+                  `MCP server "github" failed to connect (status: ${status})`,
+                  "connect_failed",
+                ),
+              );
+        void connecting.then(() => undefined, () => undefined);
+        return {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel: vi.fn(),
+        };
+      },
+    );
+  }
+
+  it("does not import openStage or prepareStageSessionWiring", async () => {
+    const source = await readFile(
+      path.join(import.meta.dirname, "../src/server/projectMcpRoutes.ts"),
+      "utf8",
+    );
+    expect(source).not.toMatch(/openStage/);
+    expect(source).not.toMatch(/prepareStageSessionWiring/);
+  });
+
+  it("POST Check returns connected and does not call openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-ok-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const agent = scriptedFakeAgent([]);
+    const openStage = vi.spyOn(agent, "openStage");
+    const attachSpy = wrapAttachEmit("connected");
+    const { server, base } = await withServer(root, agent);
+    try {
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body).toEqual({ name: "github", status: "connected" });
+      expect(openStage).not.toHaveBeenCalled();
+      expect(JSON.stringify(probed.body)).not.toMatch(/"env"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"headers"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"args"/);
+      expect(JSON.stringify(probed.body)).not.toMatch(/"url"/);
+    } finally {
+      attachSpy.mockRestore();
+      openStage.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("maps Pi cached to connected and needs-auth to needs_auth", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-map-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+      oauth: { url: "https://mcp.example.invalid/oauth" },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    const cachedSpy = wrapAttachEmit("cached");
+    try {
+      const cached = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(cached.body).toEqual({ name: "github", status: "connected" });
+      cachedSpy.mockRestore();
+      const authSpy = wrapAttachEmit("needs-auth");
+      const auth = await jsonFetch(`${base}/api/project-mcp/oauth/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(auth.body).toEqual({ name: "oauth", status: "needs_auth" });
+      authSpy.mockRestore();
+    } finally {
+      cachedSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("failed connect is connect_failed with scrubbed text and no resolved blob", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-fail-"));
+    await writeHostCatalog(root, {
+      github: {
+        url: "https://secret-host.example/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+        env: { GITHUB_TOKEN: secret },
+      },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async () => {
+        const eventBus = createEventBus();
+        queueMicrotask(() => {
+          piIsolatedMcp.emitIsolatedMcpStatus(eventBus, [
+            { name: "github", status: "failed" },
+          ]);
+        });
+        const connecting = Promise.reject(
+          new resolveStageMcpServers.StageMcpError(
+            `MCP server "github" failed to connect (status: failed) token=${secret}`,
+            "connect_failed",
+          ),
+        );
+        void connecting.then(() => undefined, () => undefined);
+        return {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel: vi.fn(),
+        };
+      },
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body.status).toBe("connect_failed");
+      const payload = JSON.stringify(probed.body);
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+      expect(probed.body.error).toContain("[redacted]");
+      expect(payload).not.toMatch(/"env"/);
+      expect(payload).not.toMatch(/"headers"/);
+      expect(payload).not.toMatch(/"args"/);
+      expect(payload).not.toMatch(/"url"/);
+      expect(payload).not.toMatch(/"resolved"/);
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("abort yields cancelled and tears down the leftover connect", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-abort-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    let attached: Awaited<ReturnType<typeof piIsolatedMcp.attachIsolatedMcp>> | undefined;
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp").mockImplementation(
+      async () => {
+        const eventBus = createEventBus();
+        let finish: (error?: Error) => void = () => {};
+        const connecting = new Promise<void>((_resolve, reject) => {
+          finish = (error) => {
+            if (error) reject(error);
+          };
+        });
+        const cancel = vi.fn(() => {
+          finish(
+            new resolveStageMcpServers.StageMcpError(
+              "MCP connect wait cancelled",
+              "connect_failed",
+            ),
+          );
+        });
+        void connecting.then(() => undefined, () => undefined);
+        attached = {
+          extensionFactories: [{ name: "stageflow-mcp", factory: () => {} }],
+          eventBus,
+          connecting,
+          cancel,
+        };
+        return attached;
+      },
+    );
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const ac = new AbortController();
+      const pending = fetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: ac.signal,
+      });
+      await waitFor(() => Promise.resolve(attached !== undefined));
+      ac.abort();
+      await pending.catch(() => undefined);
+      await waitFor(() => Promise.resolve(Boolean(attached?.cancel && (attached.cancel as ReturnType<typeof vi.fn>).mock.calls.length > 0)));
+      expect(attached?.cancel).toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("unresolved interpolation is unresolved_var and does not attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-var-"));
+    await writeHostCatalog(root, {
+      github: {
+        url: "https://secret-host.example/${MISSING_PROBE_VAR}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body.status).toBe("unresolved_var");
+      expect(JSON.stringify(probed.body)).not.toContain(secret);
+      expect(JSON.stringify(probed.body)).not.toContain("secret-host.example");
+      expect(probed.body).not.toHaveProperty("resolved");
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("bad catalog is invalid_config without attach", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-bad-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const probed = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      expect(probed.status).toBe(200);
+      expect(probed.body).toEqual({ name: "github", status: "invalid_config" });
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("POST probe is mutating and rejects a non-loopback Origin", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-probe-origin-"));
+    await writeHostCatalog(root, {
+      github: { url: "https://mcp.example.invalid/mcp" },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      const forbidden = await jsonFetch(`${base}/api/project-mcp/github/probe`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example",
+        },
+        body: "{}",
+      });
+      expect(forbidden.status).toBe(403);
+      expect(forbidden.body.error).toMatch(/origin|host/i);
+      expect(attachSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });

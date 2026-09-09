@@ -1,2 +1,2 @@
 export const PACKAGE_NAME = "stageflow";
-export const PACKAGE_VERSION = "0.12.1";
+export const PACKAGE_VERSION = "0.13.0";

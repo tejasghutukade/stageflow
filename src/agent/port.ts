@@ -5,6 +5,7 @@ import type { StageConfig } from "../types/stage.js";
 import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
+import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
 
@@ -61,6 +62,7 @@ export type StageRunInput = {
   priorEnvelopes?: StageEnvelope[];
   priorEnvelopesByStage?: Record<string, TerminalEnvelope | TerminalEnvelope[]>;
   timeoutMs?: number;
+  resolvedMcpServers?: ResolvedMcpServers;
   resumeToken?: StageResumeToken;
   /** Launch/session mode; omitted is treated as `"fresh"`. */
   sessionMode?: StageSessionMode;

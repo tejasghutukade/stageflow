@@ -1,4 +1,5 @@
 import { parseAgentField } from "../agent/agentBackend.js";
+import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import {
   STAGE_GATE_KINDS,
@@ -107,6 +108,72 @@ function parseGateKinds(
     kinds.push(item);
   }
   return loadSuccess(kinds);
+}
+
+export function parseStageMcp(
+  raw: unknown,
+  label: string,
+  stageId?: string,
+): LoadOutcome<string[] | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (!Array.isArray(raw)) {
+    return loadFailure([
+      {
+        code: "stage.invalid_mcp",
+        message: `Invalid stage ${label}: mcp must be an array of server names`,
+        category: "stage",
+        stageId,
+      },
+    ]);
+  }
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      return loadFailure([
+        {
+          code: "stage.invalid_mcp",
+          message: `Invalid stage ${label}: mcp entries must be strings`,
+          category: "stage",
+          stageId,
+        },
+      ]);
+    }
+    const name = item.trim();
+    if (name === "") {
+      return loadFailure([
+        {
+          code: "stage.invalid_mcp",
+          message: `Invalid stage ${label}: mcp entries must be non-empty strings`,
+          category: "stage",
+          stageId,
+        },
+      ]);
+    }
+    if (name === STAGEFLOW_MCP_SERVER_NAME) {
+      return loadFailure([
+        {
+          code: "stage.invalid_mcp",
+          message: `Invalid stage ${label}: mcp must not include reserved name "${STAGEFLOW_MCP_SERVER_NAME}"`,
+          category: "stage",
+          stageId,
+        },
+      ]);
+    }
+    if (seen.has(name)) {
+      return loadFailure([
+        {
+          code: "stage.invalid_mcp",
+          message: `Invalid stage ${label}: mcp contains duplicate name "${name}"`,
+          category: "stage",
+          stageId,
+        },
+      ]);
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return loadSuccess(names);
 }
 
 function parseStageFields(
@@ -256,6 +323,12 @@ function parseStageFields(
       ]);
     }
     stage.skill = raw.skill.trim();
+  }
+
+  const mcpOutcome = parseStageMcp(raw.mcp, label, entryId);
+  if (!mcpOutcome.ok) return mcpOutcome;
+  if (mcpOutcome.value !== undefined) {
+    stage.mcp = mcpOutcome.value;
   }
 
   const agentField = parseAgentField(raw.agent);

@@ -1,0 +1,26 @@
+id: screenshot
+system_prompt: |
+  Open the URL from the task in Playwright MCP, then take a screenshot.
+  Call browser_navigate, then browser_take_screenshot with type png and
+  filename exactly ${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png — copy that
+  path verbatim. Playwright resolves a bare filename like page.png against
+  the project checkout (repo root), not --output-dir. Do not pass filename
+  page.png without the artifacts-directory prefix. Do not write screenshot.md.
+  Do not call write_stage_artifact for the image. Do not call ask_operator.
+
+  When finished, call emit_stage_envelope exactly once with status success,
+  a short summary, payload { "url": "<final page URL>", "screenshot": "page.png" },
+  and artifacts listing the run-relative PNG path this session already names
+  (stages/screenshot/attempts/<n>/artifacts/page.png). summary and payload are
+  handed downstream verbatim. State outcomes and artifact pointers only.
+
+  Your last tool call in this attempt must be emit_stage_envelope.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [url, screenshot]
+  properties:
+    url:
+      type: string
+    screenshot:
+      type: string

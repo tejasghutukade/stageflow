@@ -12,12 +12,17 @@ import {
   handleProviderRoutes,
   providerAuthErrorBody,
 } from "./providerRoutes.js";
+import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
-import { readRunArtifact } from "../mcp/readArtifact.js";
+import {
+  artifactMediaType,
+  readRunArtifact,
+  readRunArtifactBytes,
+} from "../mcp/readArtifact.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -147,7 +152,8 @@ function isMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/logout$/.test(pathname)
+    /^\/api\/providers\/[^/]+\/logout$/.test(pathname) ||
+    /^\/api\/project-mcp\/[^/]+\/probe$/.test(pathname)
   );
 }
 
@@ -281,8 +287,18 @@ export async function startUiServer(
             return true;
           }
           try {
-            const content = await readRunArtifact(store, runId, artifactPath);
-            textPlain(res, 200, content);
+            const mediaType = artifactMediaType(artifactPath);
+            if (mediaType !== undefined) {
+              const bytes = await readRunArtifactBytes(store, runId, artifactPath);
+              res.writeHead(200, {
+                "Content-Type": mediaType,
+                "Content-Length": bytes.length,
+              });
+              res.end(bytes);
+            } else {
+              const content = await readRunArtifact(store, runId, artifactPath);
+              textPlain(res, 200, content);
+            }
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             if (message === "Artifact path denied") {
@@ -636,6 +652,15 @@ export async function startUiServer(
             readJsonBody,
             json,
             providerAuthContext,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleProjectMcpRoutes(req, res, {
+            projectRoot: boot.rootDir,
+            json,
           })
         ) {
           return true;

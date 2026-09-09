@@ -17,7 +17,24 @@ function assertSafeRunId(runId: string): void {
   }
 }
 
-export async function readRunArtifact(
+export function artifactMediaType(relativePath: string): string | undefined {
+  const ext = path.extname(relativePath).toLowerCase();
+  switch (ext) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    default:
+      return undefined;
+  }
+}
+
+async function resolveRunArtifactFile(
   store: RunStore,
   runId: string,
   relativePath: string,
@@ -56,5 +73,23 @@ export async function readRunArtifact(
     throw new Error("path escapes the run workspace");
   }
 
+  return fileReal;
+}
+
+export async function readRunArtifact(
+  store: RunStore,
+  runId: string,
+  relativePath: string,
+): Promise<string> {
+  const fileReal = await resolveRunArtifactFile(store, runId, relativePath);
   return readFile(fileReal, "utf8");
+}
+
+export async function readRunArtifactBytes(
+  store: RunStore,
+  runId: string,
+  relativePath: string,
+): Promise<Buffer> {
+  const fileReal = await resolveRunArtifactFile(store, runId, relativePath);
+  return readFile(fileReal);
 }

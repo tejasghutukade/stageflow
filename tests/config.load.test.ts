@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listPipelines } from "../src/config/listConfig.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
-import { loadStage } from "../src/config/loadStage.js";
+import { loadStage, loadStageOutcome } from "../src/config/loadStage.js";
 import { loadTask, loadTaskFromYaml } from "../src/config/loadTask.js";
 import { areResolvedDagsEquivalent } from "../src/config/resolvePipelineDag.js";
 import {
@@ -398,6 +398,78 @@ checkout: 42
       );
       await expect(loadStage(filePath)).rejects.toThrow(/skill/);
     }
+  });
+
+  it("leaves mcp undefined when the stage file omits the field", async () => {
+    const loaded = await loadStage(path.join(fixtures, "stages", "clarify.yaml"));
+    expect(loaded.mcp).toBeUndefined();
+  });
+
+  it("loads mcp server names from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-mcp-"));
+    const filePath = path.join(dir, "named.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: named",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "mcp:",
+        "  - github",
+        "  - notion",
+        "",
+      ].join("\n"),
+    );
+    expect((await loadStage(filePath)).mcp).toEqual(["github", "notion"]);
+  });
+
+  it("rejects empty, whitespace-only, non-string, mapping, and duplicate mcp names", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-mcp-bad-"));
+    const cases: Array<{ name: string; mcpLines: string }> = [
+      { name: "empty", mcpLines: 'mcp:\n  - ""' },
+      { name: "whitespace", mcpLines: 'mcp:\n  - "   "' },
+      { name: "number", mcpLines: "mcp:\n  - 1" },
+      { name: "mapping", mcpLines: "mcp:\n  github: true" },
+      { name: "duplicate", mcpLines: "mcp:\n  - github\n  - github" },
+    ];
+    for (const { name, mcpLines } of cases) {
+      const filePath = path.join(dir, `${name}.yaml`);
+      await writeFile(
+        filePath,
+        [
+          `id: ${name}`,
+          "system_prompt: x",
+          "model: anthropic/claude-sonnet-4-5",
+          mcpLines,
+          "",
+        ].join("\n"),
+      );
+      const outcome = await loadStageOutcome(filePath);
+      expect(outcome.ok, name).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.issues[0]?.code, name).toBe("stage.invalid_mcp");
+    }
+  });
+
+  it("rejects reserved mcp name stageflow", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-mcp-reserved-"));
+    const filePath = path.join(dir, "reserved.yaml");
+    await writeFile(
+      filePath,
+      [
+        "id: reserved",
+        "system_prompt: x",
+        "model: anthropic/claude-sonnet-4-5",
+        "mcp:",
+        "  - stageflow",
+        "",
+      ].join("\n"),
+    );
+    const outcome = await loadStageOutcome(filePath);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_mcp");
+    expect(outcome.issues[0]?.message).toMatch(/stageflow/);
   });
 
   it("loads optional timeout_ms from stage YAML", async () => {

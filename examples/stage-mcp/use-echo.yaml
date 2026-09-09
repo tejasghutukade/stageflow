@@ -1,0 +1,15 @@
+id: use-echo
+system_prompt: |
+  Call the echo fixture tool with a short text argument. Then call
+  emit_stage_envelope with status success, artifacts [], a short summary,
+  and payload { "echoed": "<the text the echo tool returned>" } so the
+  operator can inspect the handoff. Do not call ask_operator. Do not emit
+  clone_forks. MCP elicitation is unsupported — do not wait for the fixture
+  to ask the operator a question.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [echoed]
+  properties:
+    echoed:
+      type: string

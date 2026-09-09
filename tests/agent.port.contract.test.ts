@@ -150,6 +150,26 @@ describe("AgentPort contract", () => {
     });
   });
 
+  it("resolvedMcpServers is optional on StageRunInput", async () => {
+    const agent = new FakeAgent({
+      type: "emit",
+      envelope: { status: "success", summary: "ok", artifacts: [] },
+    });
+    const omitted: StageRunInput = { ...baseInput };
+    expect(omitted.resolvedMcpServers).toBeUndefined();
+    const handle = agent.openStage(omitted);
+    expect(handle.stageId).toBe("clarify");
+    await handle.close();
+
+    const withSnapshot: StageRunInput = {
+      ...baseInput,
+      resolvedMcpServers: {
+        github: { command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] },
+      },
+    };
+    await expect(agent.runStage(withSnapshot)).resolves.toMatchObject({ ok: true });
+  });
+
   it("priorEnvelopesByStage is accepted on StageRunInput", async () => {
     const agent = new FakeAgent({
       type: "emit",

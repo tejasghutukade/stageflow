@@ -60,6 +60,8 @@ export type { SettingsAppearanceProps } from "./SettingsAppearance";
 
 export { SettingsProviders } from "./SettingsProviders";
 
+export { SettingsProjectMcp } from "./SettingsProjectMcp";
+
 export { ProviderConnectRow } from "./ProviderConnectRow";
 export type { ProviderConnectRowProps } from "./ProviderConnectRow";
 
