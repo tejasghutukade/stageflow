@@ -180,6 +180,45 @@ describe("pipeline completion contracts", () => {
     );
   });
 
+  it("loads a body verify list onto the same DAG completion as the equivalent wrapper", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-completion-verify-"));
+    await writeFile(
+      path.join(dir, "implement.yaml"),
+      [
+        "id: implement",
+        "system_prompt: Implement the requested change.",
+        "model: test/model",
+        "verify:",
+        "  - id: unit-tests",
+        "    type: command",
+        "    run: npm test",
+        "    timeout_ms: 600000",
+        "    when: [after]",
+        "",
+      ].join("\n"),
+    );
+    const pipelinePath = path.join(dir, "verified.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: verified",
+        "stages:",
+        "  - id: implement",
+        "    uses: ./implement.yaml",
+        "",
+      ].join("\n"),
+    );
+
+    const loaded = await loadPipeline(pipelinePath);
+    expect(loaded.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "unit-tests", type: "command", run: "npm test", timeout_ms: 600000 }],
+    });
+    expect(buildPipelineDagSnapshotFromLoaded(loaded).nodes[0]).toMatchObject({
+      completion: loaded.dag.nodes[0]?.completion,
+    });
+  });
+
   it("rejects checkout path fields that are not required string arrays", async () => {
     const pipelinePath = await writePipeline([
       "id: incompatible-checkout",

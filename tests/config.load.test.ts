@@ -597,7 +597,7 @@ describe("YAML dual-read dialect", () => {
     ]);
     expect(outcome.value.dag.nodes[0]?.completion).toEqual({
       mode: "all",
-      checks: [{ id: "report", type: "artifact", path: "report.md" }],
+      checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
     });
     expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
@@ -849,6 +849,223 @@ describe("YAML dual-read dialect", () => {
     expect(legacy.ok).toBe(true);
     if (!legacy.ok) return;
     expect(legacy.value.payload_schema).toMatchObject({ type: "object" });
+  });
+
+  it("rejects type: command with when: [emit]", async () => {
+    const root = await writeTempCatalog({
+      "bad.pipeline.yaml": [
+        "id: bad",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: tests",
+        "        type: command",
+        "        run: npm test",
+        "        when: [emit]",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("bad.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "pipeline.invalid_verify")).toBe(
+      true,
+    );
+    expect(outcome.issues[0]?.message).toMatch(/cannot use when: emit/);
+  });
+
+  it("rejects new-dialect type: artifact with omitted when", async () => {
+    const root = await writeTempCatalog({
+      "bad.pipeline.yaml": [
+        "id: bad",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: report",
+        "        type: artifact",
+        "        path: report.md",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("bad.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "pipeline.invalid_verify")).toBe(
+      true,
+    );
+    expect(outcome.issues[0]?.message).toMatch(/type artifact requires when/);
+  });
+
+  it("defaults omitted when: gate to emit and command to after", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "      - id: tests",
+        "        type: command",
+        "        run: npm test",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
+      { id: "approved", type: "gate", kind: "confirm" },
+    ]);
+    expect(outcome.value.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "tests", type: "command", run: "npm test" }],
+    });
+  });
+
+  it("maps type: artifact when: [emit, after] onto emit basename and after nonempty path", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: report",
+        "        type: artifact",
+        "        basename: report.md",
+        "        when: [emit, after]",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
+      { id: "report", type: "artifact_declared", basename: "report.md" },
+    ]);
+    expect(outcome.value.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
+    });
+  });
+
+  it("does not put after-only checks into pre_emit_checks", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "        when: [emit]",
+        "      - id: tests",
+        "        type: command",
+        "        run: npm test",
+        "        when: [after]",
+        "      - id: files",
+        "        type: checkout_changes",
+        "        when: [after]",
+        "      - id: list",
+        "        type: checklist",
+        "        items: [done]",
+        "        when: [after]",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.stages[0]?.pre_emit_checks).toEqual([
+      { id: "approved", type: "gate", kind: "confirm" },
+    ]);
+    expect(outcome.value.dag.nodes[0]?.completion?.checks.map((check) => check.type)).toEqual([
+      "command",
+      "checkout_changes",
+      "checklist",
+    ]);
+  });
+
+  it("loads equivalent runner inputs from legacy pre_emit_checks + completion and a verify list", async () => {
+    const root = await writeTempCatalog({
+      "legacy.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    pre_emit_checks:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "      - id: report",
+        "        type: artifact_declared",
+        "        basename: report.md",
+        "    completion:",
+        "      checks:",
+        "        - id: tests",
+        "          type: command",
+        "          run: npm test",
+        "        - id: report-file",
+        "          type: artifact",
+        "          path: report.md",
+        "          nonempty: true",
+        "",
+      ].join("\n"),
+      "target.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "        when: [emit]",
+        "      - id: report",
+        "        type: artifact",
+        "        basename: report.md",
+        "        when: [emit]",
+        "      - id: tests",
+        "        type: command",
+        "        run: npm test",
+        "        when: [after]",
+        "      - id: report-file",
+        "        type: artifact",
+        "        path: report.md",
+        "        nonempty: true",
+        "        when: [after]",
+        "",
+      ].join("\n"),
+    });
+    const legacy = await loadPipelineOutcome("legacy.pipeline.yaml", { cwd: root });
+    const target = await loadPipelineOutcome("target.pipeline.yaml", { cwd: root });
+    expect(legacy.ok).toBe(true);
+    expect(target.ok).toBe(true);
+    if (!legacy.ok || !target.ok) return;
+    expect(target.value.stages[0]?.pre_emit_checks).toEqual(
+      legacy.value.stages[0]?.pre_emit_checks,
+    );
+    expect(target.value.dag.nodes[0]?.completion).toEqual(
+      legacy.value.dag.nodes[0]?.completion,
+    );
   });
 });
 

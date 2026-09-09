@@ -310,7 +310,7 @@ describe("normalizePipelineStageEntries", () => {
     ]);
     expect(outcome.value[0]?.completion).toEqual({
       mode: "all",
-      checks: [{ id: "report", type: "artifact", path: "report.md" }],
+      checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
     });
   });
 

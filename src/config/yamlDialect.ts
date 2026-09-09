@@ -266,6 +266,36 @@ function emitArtifactRaw(
   });
 }
 
+function afterArtifactRaw(
+  item: Record<string, unknown>,
+  stageId: string,
+  index: number,
+  category: "pipeline" | "stage",
+): LoadOutcome<Record<string, unknown>> {
+  const artifactPath =
+    typeof item.path === "string" && item.path.trim()
+      ? item.path.trim()
+      : typeof item.basename === "string" && item.basename.trim()
+        ? item.basename.trim()
+        : "";
+  if (!artifactPath) {
+    return invalidVerify(
+      stageId,
+      `[${index}] after artifact requires path or basename`,
+      category,
+    );
+  }
+  if (item.nonempty !== undefined && typeof item.nonempty !== "boolean") {
+    return invalidVerify(stageId, `[${index}].nonempty must be a boolean`, category);
+  }
+  return loadSuccess({
+    id: item.id,
+    type: "artifact",
+    path: artifactPath,
+    nonempty: typeof item.nonempty === "boolean" ? item.nonempty : true,
+  });
+}
+
 function parseVerifyList(
   raw: unknown,
   stageId: string,
@@ -302,7 +332,13 @@ function parseVerifyList(
       }
     }
     if (whenOutcome.value.includes("after")) {
-      afterChecks.push(stripped);
+      if (type === "artifact") {
+        const afterRaw = afterArtifactRaw(item, stageId, index, category);
+        if (!afterRaw.ok) return afterRaw;
+        afterChecks.push(afterRaw.value);
+      } else {
+        afterChecks.push(stripped);
+      }
     }
   }
 

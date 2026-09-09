@@ -255,4 +255,75 @@ describe("loadStageFromObjectOutcome", () => {
     if (outcome.ok) return;
     expect(outcome.issues[0]?.code).toBe("catalog.mixed_yaml_dialect");
   });
+
+  it("rejects type: command with when: [emit]", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        verify: [
+          { id: "tests", type: "command", run: "npm test", when: ["emit"] },
+        ],
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_verify");
+    expect(outcome.issues[0]?.message).toMatch(/cannot use when: emit/);
+  });
+
+  it("rejects type: command with when: [emit, after]", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        verify: [
+          { id: "tests", type: "command", run: "npm test", when: ["emit", "after"] },
+        ],
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_verify");
+    expect(outcome.issues[0]?.message).toMatch(/cannot use when: emit/);
+  });
+
+  it("rejects new-dialect type: artifact with omitted when", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        verify: [{ id: "report", type: "artifact", path: "report.md" }],
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_verify");
+    expect(outcome.issues[0]?.message).toMatch(/type artifact requires when/);
+  });
+
+  it.each(["checkout_changes", "checklist", "payload_schema"] as const)(
+    "rejects type: %s with when: [emit]",
+    (type) => {
+      const check =
+        type === "checklist"
+          ? { id: "list", type, items: ["done"], when: ["emit"] }
+          : { id: "check", type, when: ["emit"] };
+      const outcome = loadStageFromObjectOutcome(
+        {
+          system_prompt: "Do work",
+          model: "anthropic/claude-sonnet-4-5",
+          verify: [check],
+        },
+        { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.issues[0]?.code).toBe("pipeline.invalid_verify");
+      expect(outcome.issues[0]?.message).toMatch(/cannot use when: emit/);
+    },
+  );
 });
