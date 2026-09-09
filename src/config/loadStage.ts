@@ -1,6 +1,7 @@
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
+import type { CompletionContract } from "../types/completion.js";
 import {
   STAGE_GATE_KINDS,
   type StageConfig,
@@ -11,6 +12,21 @@ import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./lo
 import { parseModelField } from "./modelField.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import {
+  applyCompiledBody,
+  classifyYamlDocument,
+  compileTargetContract,
+  dialectFromKeys,
+  dialectWarningForDocument,
+  mixedDialectIssue,
+  STAGE_FILE_WIRING_KEYS,
+} from "./yamlDialect.js";
+
+const afterCompletionByStage = new WeakMap<StageConfig, CompletionContract>();
+
+export function afterCompletionForStage(stage: StageConfig): CompletionContract | undefined {
+  return afterCompletionByStage.get(stage);
+}
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
@@ -366,6 +382,19 @@ export function loadStageFromObjectOutcome(
   ctx: { entryId: string; declaringPath: string },
 ): LoadOutcome<StageConfig> {
   const label = `${ctx.entryId} (${ctx.declaringPath})`;
+  const dialect = dialectFromKeys(Object.keys(raw));
+  if (dialect === "invalid") {
+    return loadFailure([mixedDialectIssue()]);
+  }
+  if (dialect === "target") {
+    const compiled = compileTargetContract(raw, {
+      stageId: ctx.entryId,
+      label,
+      category: "stage",
+    });
+    if (!compiled.ok) return compiled;
+    return parseStageFields(applyCompiledBody(raw, compiled.value), label, ctx.entryId);
+  }
   return parseStageFields(raw, label, ctx.entryId);
 }
 
@@ -394,7 +423,38 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
     ]);
   }
 
-  const outcome = parseStageFields(raw, `file ${filePath}`, raw.id);
+  const dialect = classifyYamlDocument(raw);
+  if (dialect === "invalid") {
+    return loadFailure([mixedDialectIssue()]);
+  }
+  if (dialect === "target") {
+    const wiring = STAGE_FILE_WIRING_KEYS.find((key) => raw[key] !== undefined);
+    if (wiring) {
+      return loadFailure([
+        {
+          code: "stage.invalid_shape",
+          message: `Invalid stage file ${filePath}: new-dialect stage files must not declare wiring key "${wiring}"`,
+          category: "stage",
+          stageId: raw.id,
+        },
+      ]);
+    }
+  }
+
+  let parseRaw = raw;
+  let afterCompletion: CompletionContract | undefined;
+  if (dialect === "target") {
+    const compiled = compileTargetContract(raw, {
+      stageId: raw.id,
+      label: `file ${filePath}`,
+      category: "stage",
+    });
+    if (!compiled.ok) return compiled;
+    parseRaw = applyCompiledBody(raw, compiled.value);
+    afterCompletion = compiled.value.completion;
+  }
+
+  const outcome = parseStageFields(parseRaw, `file ${filePath}`, raw.id);
   if (!outcome.ok) return outcome;
   if (outcome.value.id !== raw.id) {
     return loadFailure([
@@ -406,7 +466,10 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
       },
     ]);
   }
-  return outcome;
+
+  if (afterCompletion) afterCompletionByStage.set(outcome.value, afterCompletion);
+  const warning = dialectWarningForDocument(raw, filePath);
+  return loadSuccess(outcome.value, warning ? [warning] : undefined);
 }
 
 export async function loadStage(filePath: string): Promise<StageConfig> {

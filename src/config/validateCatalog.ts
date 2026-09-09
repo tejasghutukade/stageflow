@@ -36,6 +36,7 @@ export type ValidationFindingCode =
   | "pipeline.include_duplicate_stage"
   | "pipeline.invalid_agent"
   | "pipeline.invalid_model"
+  | "pipeline.invalid_verify"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -48,6 +49,7 @@ export type ValidationFindingCode =
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
   | "stage.invalid_agent"
+  | "stage.invalid_io"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
   | "task.invalid_shape"
@@ -57,7 +59,9 @@ export type ValidationFindingCode =
   | "catalog.manifest_invalid"
   | "catalog.empty_catalog"
   | "catalog.manifest_load_error"
-  | "catalog.invalid_mcp";
+  | "catalog.invalid_mcp"
+  | "catalog.mixed_yaml_dialect"
+  | "catalog.legacy_yaml";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -293,7 +297,9 @@ export function findingsFromLoadIssues(
     if (issue.category === "catalog") {
       const code = issue.code as ValidationFindingCode;
       const severity =
-        code === "catalog.manifest_missing" || code === "catalog.empty_catalog"
+        code === "catalog.manifest_missing" ||
+        code === "catalog.empty_catalog" ||
+        code === "catalog.legacy_yaml"
           ? "warning"
           : "error";
       return [findingCatalog(cwd, absPath, issue.message, code, severity)];
@@ -458,6 +464,10 @@ async function runPipelineValidation(
   if (!outcome.ok) {
     findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
     return { ok: false, findings };
+  }
+
+  if (outcome.issues) {
+    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
   }
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));

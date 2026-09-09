@@ -243,10 +243,16 @@ function parseRecovery(
 export function parseExecutionPolicy(
   raw: Record<string, unknown>,
   stageId: string,
+  options?: { requireCompletionForRecovery?: boolean },
 ): LoadOutcome<ExecutionPolicy> {
   const completion = parseCompletion(raw.completion, stageId);
   if (!completion.ok) return completion;
-  const recovery = parseRecovery(raw.recovery, stageId, completion.value !== undefined);
+  const requireCompletion = options?.requireCompletionForRecovery ?? true;
+  const recovery = parseRecovery(
+    raw.recovery,
+    stageId,
+    requireCompletion ? completion.value !== undefined : true,
+  );
   if (!recovery.ok) return recovery;
   return loadSuccess({
     ...(completion.value !== undefined ? { completion: completion.value } : {}),

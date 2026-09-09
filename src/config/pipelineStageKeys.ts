@@ -7,6 +7,7 @@ export const WIRING_KEYS = new Set([
   "clone_cap",
   "completion",
   "recovery",
+  "on_verify_fail",
   "feedback_loop",
   "replay_safe",
 ]);
@@ -22,6 +23,8 @@ export const BODY_KEYS = new Set([
   "timeout_ms",
   "skill",
   "mcp",
+  "io",
+  "verify",
 ]);
 
 export function isPipelineStageBodyKey(key: string): boolean {

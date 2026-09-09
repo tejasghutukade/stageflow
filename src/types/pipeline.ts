@@ -1,5 +1,5 @@
 import type { CloneAction } from "./forkChoice.js";
-import type { LoadedStageConfig, StageGateKind } from "./stage.js";
+import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
 export type PipelineConfig = {
@@ -58,6 +58,10 @@ export type PipelineStageYamlEntry = PipelineStageRef & {
   clone_actions?: CloneAction[];
   skill?: string;
   mcp?: string[];
+  io?: StageIoYaml;
+  verify?: unknown;
+  on_verify_fail?: RecoveryPolicy;
+  pre_emit_checks?: unknown;
 };
 
 export type PipelineIncludeEntry = {

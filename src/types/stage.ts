@@ -10,6 +10,11 @@ export const STAGE_GATE_KINDS = [
 
 export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 
+export type StageIoYaml = {
+  input?: { schema?: unknown };
+  output?: { schema?: unknown };
+};
+
 export type StageConfig = {
   id: string;
   system_prompt: string;

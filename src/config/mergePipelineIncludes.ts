@@ -1,8 +1,13 @@
 import path from "node:path";
 import { parseAgentField } from "../agent/agentBackend.js";
-import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
+import {
+  classifyYamlDocument,
+  dialectWarningForDocument,
+  mixedDialectIssue,
+} from "./yamlDialect.js";
 
 export type RawMergedEntry = {
   raw: unknown;
@@ -27,6 +32,7 @@ async function visitPipelineFile(
   stack: string[],
   idLocations: Map<string, string>,
   entries: RawMergedEntry[],
+  warnings: LoadIssue[],
 ): Promise<LoadOutcome<void>> {
   const absPath = normalizePath(filePath);
 
@@ -54,6 +60,13 @@ async function visitPipelineFile(
       },
     ]);
   }
+
+  const dialect = classifyYamlDocument(raw);
+  if (dialect === "invalid") {
+    return loadFailure([mixedDialectIssue()]);
+  }
+  const warning = dialectWarningForDocument(raw, absPath);
+  if (warning) warnings.push(warning);
 
   const nextStack = [...stack, absPath];
 
@@ -86,6 +99,7 @@ async function visitPipelineFile(
         nextStack,
         idLocations,
         entries,
+        warnings,
       );
       if (!includeResult.ok) return includeResult;
     }
@@ -125,6 +139,7 @@ export async function mergePipelineStages(
     pipelineId: string;
     agent?: string;
     model?: string;
+    warnings: LoadIssue[];
   }>
 > {
   const absRoot = normalizePath(rootPath);
@@ -193,8 +208,9 @@ export async function mergePipelineStages(
 
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
+  const warnings: LoadIssue[] = [];
 
-  const mergeResult = await visitPipelineFile(absRoot, [], idLocations, entries);
+  const mergeResult = await visitPipelineFile(absRoot, [], idLocations, entries, warnings);
   if (!mergeResult.ok) return mergeResult;
 
   if (entries.length === 0) {
@@ -212,5 +228,6 @@ export async function mergePipelineStages(
     pipelineId,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    warnings,
   });
 }

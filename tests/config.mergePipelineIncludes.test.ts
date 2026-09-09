@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
@@ -68,5 +70,51 @@ describe("mergePipelineStages", () => {
     expect(normalizeOutcome.ok).toBe(false);
     if (normalizeOutcome.ok) return;
     expect(normalizeOutcome.issues[0]?.code).toBe("pipeline.string_stage_ref");
+  });
+
+  it("loads a target pipeline that includes a legacy fragment", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-include-dialect-"));
+    await mkdir(path.join(root, "fragments"), { recursive: true });
+    await writeFile(
+      path.join(root, "fragments/legacy.yaml"),
+      [
+        "stages:",
+        "  - id: gate",
+        "    system_prompt: Gate",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    payload_schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      path.join(root, "main.pipeline.yaml"),
+      [
+        "id: include-dialect",
+        "include:",
+        "  - local: ./fragments/legacy.yaml",
+        "stages:",
+        "  - id: finish",
+        "    system_prompt: Finish",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    needs: [gate]",
+        "    io:",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    );
+
+    const outcome = await loadPipelineOutcome(path.join(root, "main.pipeline.yaml"));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.pipeline.stages).toEqual(["gate", "finish"]);
+    expect(outcome.value.stages.find((stage) => stage.id === "gate")?.payload_schema).toEqual({
+      type: "object",
+    });
+    expect(outcome.value.stages.find((stage) => stage.id === "finish")?.payload_schema).toEqual({
+      type: "object",
+    });
   });
 });

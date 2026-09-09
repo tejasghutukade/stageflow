@@ -62,14 +62,14 @@ export function parsePipelineNeeds(
   if (!Array.isArray(raw)) {
     return {
       ok: false,
-      message: `stage "${stageId}": needs must be a non-empty string or an array of at least two items`,
+      message: `stage "${stageId}": needs must be a non-empty string or a non-empty array`,
     };
   }
 
-  if (raw.length < 2) {
+  if (raw.length < 1) {
     return {
       ok: false,
-      message: `stage "${stageId}": needs array must contain at least two items`,
+      message: `stage "${stageId}": needs array must contain at least one item`,
     };
   }
 

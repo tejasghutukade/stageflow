@@ -5,6 +5,7 @@ import type {
   PipelineConfig,
   PipelineStageSource,
 } from "../types/pipeline.js";
+import type { CompletionContract } from "../types/completion.js";
 import type { StageConfig } from "../types/stage.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { mergePipelineStages } from "./mergePipelineIncludes.js";
@@ -12,7 +13,7 @@ import {
   normalizePipelineStageEntries,
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
-import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
+import { loadStageFromObjectOutcome, loadStageOutcome, afterCompletionForStage } from "./loadStage.js";
 import { materializeStageModels } from "./materializeStageModels.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
@@ -52,8 +53,10 @@ async function loadPipelineFromPath(
     pipelineId,
     agent: pipelineAgent,
     model: pipelineModel,
+    warnings: mergeWarnings,
   } = mergeOutcome.value;
   const ctx = { pipelineId, path: normalizedPipelinePath };
+  const warnings = [...mergeWarnings];
 
   const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
   if (!normalizeOutcome.ok) {
@@ -84,6 +87,7 @@ async function loadPipelineFromPath(
   const entryById = new Map(normalizedEntries.map((entry) => [entry.id, entry]));
   const stageSources: Record<string, PipelineStageSource> = {};
   const stages: StageConfig[] = [];
+  const fileAfterById = new Map<string, CompletionContract>();
 
   for (const stageId of stageIds) {
     const entry = entryById.get(stageId);
@@ -113,6 +117,9 @@ async function loadPipelineFromPath(
 
     const stageOutcome = await loadStageOutcome(entry.body.absolutePath);
     if (!stageOutcome.ok) {
+      if (stageOutcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
+        return loadFailure(stageOutcome.issues);
+      }
       return loadFailure([
         {
           code: "pipeline.missing_stage",
@@ -122,6 +129,22 @@ async function loadPipelineFromPath(
         },
         ...stageOutcome.issues,
       ]);
+    }
+    if (stageOutcome.issues) warnings.push(...stageOutcome.issues);
+
+    const fileAfter = afterCompletionForStage(stageOutcome.value);
+    if (fileAfter && entry.completion) {
+      return loadFailure([
+        {
+          code: "pipeline.invalid_completion",
+          message: `Pipeline ${pipelineId}: stage "${stageId}" after-checks come from both body verify and wrapper completion`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+    if (fileAfter && !entry.completion) {
+      fileAfterById.set(stageId, fileAfter);
     }
 
     if (stageOutcome.value.id !== entry.id) {
@@ -162,19 +185,26 @@ async function loadPipelineFromPath(
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
+  for (const [stageId, after] of fileAfterById) {
+    const node = nodeById.get(stageId);
+    if (node) node.completion = after;
+  }
   for (const stage of loadedStages) {
     const completion = nodeById.get(stage.id)?.completion;
     const completionOutcome = validateCompletionContractForStage(stage, completion);
     if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
   }
 
-  return loadSuccess({
-    pipeline,
-    stages: loadedStages,
-    dag,
-    pipelinePath: normalizedPipelinePath,
-    stageSources,
-  });
+  return loadSuccess(
+    {
+      pipeline,
+      stages: loadedStages,
+      dag,
+      pipelinePath: normalizedPipelinePath,
+      stageSources,
+    },
+    warnings,
+  );
 }
 
 export async function loadPipelineOutcome(
