@@ -113,6 +113,57 @@ export async function loadMcpCatalog(projectRoot: string): Promise<InspectedMcpC
   return { path: catalogPath, servers: parseMcpCatalog(raw, catalogPath) };
 }
 
+export type ProjectMcpCatalogTransport = "stdio" | "http";
+
+export type ProjectMcpCatalogEntry = {
+  name: string;
+  transport: ProjectMcpCatalogTransport;
+};
+
+export type ProjectMcpCatalogListStatus = "ok" | "missing_catalog" | "invalid_config";
+
+export type ProjectMcpCatalogList = {
+  status: ProjectMcpCatalogListStatus;
+  servers: ProjectMcpCatalogEntry[];
+};
+
+function coarseMcpTransport(
+  entry: Record<string, unknown>,
+): ProjectMcpCatalogTransport | undefined {
+  if (Object.hasOwn(entry, "command")) {
+    return "stdio";
+  }
+  if (Object.hasOwn(entry, "url")) {
+    return "http";
+  }
+  return undefined;
+}
+
+export async function listProjectMcpCatalog(
+  projectRoot: string,
+): Promise<ProjectMcpCatalogList> {
+  try {
+    const catalog = await loadMcpCatalog(projectRoot);
+    const servers: ProjectMcpCatalogEntry[] = [];
+    for (const [name, entry] of Object.entries(catalog.servers)) {
+      const transport = coarseMcpTransport(entry);
+      if (transport === undefined) {
+        return { status: "invalid_config", servers: [] };
+      }
+      servers.push({ name, transport });
+    }
+    return { status: "ok", servers };
+  } catch (err) {
+    if (err instanceof StageMcpError) {
+      if (err.code === "missing_catalog") {
+        return { status: "missing_catalog", servers: [] };
+      }
+      return { status: "invalid_config", servers: [] };
+    }
+    throw err;
+  }
+}
+
 export function assertMcpAllowlistKnown(
   servers: McpCatalogServers,
   allowlist: readonly string[],

@@ -1,4 +1,6 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
+import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
 import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -3336,5 +3338,223 @@ describe("localhost HTTP API", () => {
         });
       }
     });
+  });
+});
+
+describe("project MCP catalog HTTP", () => {
+  const secret = "u1-secret-mcp-token-9f3c2b1a";
+
+  async function writeHostCatalog(
+    root: string,
+    servers: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+    );
+  }
+
+  it("lists two servers as names plus transport only", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-ok-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [
+          { name: "local", transport: "stdio" },
+          { name: "github", transport: "http" },
+        ],
+      });
+      for (const row of listed.body.servers as { name: string }[]) {
+        expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns an empty list for empty mcpServers", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-empty-"));
+    await writeHostCatalog(root, {});
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "ok", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns JSON with no env, headers, args, command, URLs, or secrets", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-secrets-"));
+    await writeHostCatalog(root, {
+      local: {
+        command: "npx",
+        args: ["-y", "secret-bin"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+      expect(payload).not.toContain("API_BASE");
+      expect(payload).not.toContain("Authorization");
+      expect(payload).not.toContain("secret-bin");
+      expect(payload).not.toMatch(/"env"/);
+      expect(payload).not.toMatch(/"headers"/);
+      expect(payload).not.toMatch(/"args"/);
+      expect(payload).not.toMatch(/"command"/);
+      expect(payload).not.toMatch(/"url"/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("does not spawn a connect helper or child process", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-nospawn-"));
+    await writeHostCatalog(root, {
+      local: { command: "npx", args: ["-y", "should-not-spawn"] },
+    });
+    const attachSpy = vi.spyOn(piIsolatedMcp, "attachIsolatedMcp");
+    const resolveSpy = vi.spyOn(resolveStageMcpServers, "resolveStageMcpServers");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      attachSpy.mockClear();
+      resolveSpy.mockClear();
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body.status).toBe("ok");
+      expect(attachSpy).not.toHaveBeenCalled();
+      expect(resolveSpy).not.toHaveBeenCalled();
+    } finally {
+      attachSpy.mockRestore();
+      resolveSpy.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns missing_catalog when the file is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-missing-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "missing_catalog", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("returns invalid_config for invalid JSON", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-badjson-"));
+    await writeFile(path.join(root, ".mcp.json"), "{ not json");
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("fails the whole catalog when stageflow is reserved", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-reserved-"));
+    await writeHostCatalog(root, {
+      stageflow: { command: "npx" },
+      github: { url: "https://secret-host.example/mcp" },
+    });
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({ status: "invalid_config", servers: [] });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("lists from host projectRoot, not a run checkout_root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-mcp-list-root-"));
+    const checkout = path.join(root, "checkout");
+    await mkdir(checkout, { recursive: true });
+    await writeHostCatalog(root, {
+      factory: { command: "npx" },
+    });
+    await writeFile(
+      path.join(checkout, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          decoy: {
+            url: "https://secret-host.example/mcp",
+            headers: { Authorization: `Bearer ${secret}` },
+          },
+        },
+      }),
+    );
+    const store = createRunStore({ rootDir: root });
+    await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+      checkoutRoot: checkout,
+    });
+    const { server, base } = await withServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+    try {
+      const listed = await jsonFetch(`${base}/api/project-mcp`);
+      expect(listed.status).toBe(200);
+      expect(listed.body).toEqual({
+        status: "ok",
+        servers: [{ name: "factory", transport: "stdio" }],
+      });
+      const payload = JSON.stringify(listed.body);
+      expect(payload).not.toContain("decoy");
+      expect(payload).not.toContain(secret);
+      expect(payload).not.toContain("secret-host.example");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 });

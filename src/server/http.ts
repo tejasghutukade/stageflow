@@ -12,6 +12,7 @@ import {
   handleProviderRoutes,
   providerAuthErrorBody,
 } from "./providerRoutes.js";
+import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
@@ -636,6 +637,15 @@ export async function startUiServer(
             readJsonBody,
             json,
             providerAuthContext,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleProjectMcpRoutes(req, res, {
+            projectRoot: boot.rootDir,
+            json,
           })
         ) {
           return true;

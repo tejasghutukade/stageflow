@@ -6,6 +6,7 @@ import { STAGEFLOW_MCP_SERVER_NAME } from "../src/agent/claudeTools.js";
 import {
   StageMcpError,
   assertMcpAllowlistKnown,
+  listProjectMcpCatalog,
   loadMcpCatalog,
   mcpCatalogPath,
   parseMcpCatalog,
@@ -546,5 +547,127 @@ describe("resolveStageMcpServers", () => {
       expect((err as StageMcpError).code).toBe("invalid_config");
       expect((err as StageMcpError).message).toMatch(/cwd/);
     }
+  });
+});
+
+describe("listProjectMcpCatalog", () => {
+  const secret = "u1-secret-mcp-token-9f3c2b1a";
+
+  it("lists two servers as names plus stdio/http only", async () => {
+    const root = await writeCatalog({
+      local: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: `https://secret-host.example/\${API_BASE}/mcp`,
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const listed = await listProjectMcpCatalog(root);
+    expect(listed).toEqual({
+      status: "ok",
+      servers: [
+        { name: "local", transport: "stdio" },
+        { name: "github", transport: "http" },
+      ],
+    });
+    for (const row of listed.servers) {
+      expect(Object.keys(row).sort()).toEqual(["name", "transport"]);
+    }
+  });
+
+  it("returns an empty list for empty mcpServers", async () => {
+    const root = await writeCatalog({});
+    await expect(listProjectMcpCatalog(root)).resolves.toEqual({
+      status: "ok",
+      servers: [],
+    });
+  });
+
+  it("omits env, headers, args, command, URLs, and fixture secrets", async () => {
+    const root = await writeCatalog({
+      local: {
+        command: "npx",
+        args: ["-y", "secret-bin"],
+        env: { GITHUB_TOKEN: secret },
+      },
+      github: {
+        url: "https://secret-host.example/${API_BASE}/mcp",
+        headers: { Authorization: `Bearer ${secret}` },
+      },
+    });
+    const listed = await listProjectMcpCatalog(root);
+    const payload = JSON.stringify(listed);
+    expect(payload).not.toContain(secret);
+    expect(payload).not.toContain("secret-host.example");
+    expect(payload).not.toContain("API_BASE");
+    expect(payload).not.toContain("Authorization");
+    expect(payload).not.toContain("secret-bin");
+    expect(payload).not.toMatch(/"env"/);
+    expect(payload).not.toMatch(/"headers"/);
+    expect(payload).not.toMatch(/"args"/);
+    expect(payload).not.toMatch(/"command"/);
+    expect(payload).not.toMatch(/"url"/);
+  });
+
+  it("does not interpolate catalog tokens", async () => {
+    const previous = process.env.API_BASE;
+    process.env.API_BASE = "interpolated.example";
+    try {
+      const root = await writeCatalog({
+        github: {
+          url: "https://secret-host.example/${API_BASE}/mcp",
+        },
+      });
+      const listed = await listProjectMcpCatalog(root);
+      expect(listed).toEqual({
+        status: "ok",
+        servers: [{ name: "github", transport: "http" }],
+      });
+      expect(JSON.stringify(listed)).not.toContain("interpolated.example");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.API_BASE;
+      } else {
+        process.env.API_BASE = previous;
+      }
+    }
+  });
+
+  it("returns missing_catalog when the file is absent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-missing-"));
+    await expect(listProjectMcpCatalog(root)).resolves.toEqual({
+      status: "missing_catalog",
+      servers: [],
+    });
+  });
+
+  it("returns invalid_config for invalid JSON or missing mcpServers", async () => {
+    const invalidJson = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-badjson-"));
+    await writeFile(path.join(invalidJson, ".mcp.json"), "{ not json");
+    await expect(listProjectMcpCatalog(invalidJson)).resolves.toEqual({
+      status: "invalid_config",
+      servers: [],
+    });
+
+    const missingKey = await mkdtemp(path.join(tmpdir(), "sf-mcp-list-nokey-"));
+    await writeFile(path.join(missingKey, ".mcp.json"), JSON.stringify({}));
+    await expect(listProjectMcpCatalog(missingKey)).resolves.toEqual({
+      status: "invalid_config",
+      servers: [],
+    });
+  });
+
+  it("fails the whole catalog with no rows when stageflow is reserved", async () => {
+    const root = await writeCatalog({
+      [STAGEFLOW_MCP_SERVER_NAME]: { command: "npx" },
+      github: { url: "https://secret-host.example/mcp" },
+    });
+    await expect(listProjectMcpCatalog(root)).resolves.toEqual({
+      status: "invalid_config",
+      servers: [],
+    });
   });
 });
