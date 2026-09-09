@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-09
+
+### Added
+
+- Stage `mcp:` allowlists from project `.mcp.json`, resolved and interpolated before the agent session opens
+- Isolated Pi/Claude MCP attach so a stage only receives the servers it names; host MCP files stay out of the session
+- Operator console Settings: list project MCP servers and Check connect without opening a stage
+- `STAGEFLOW_STAGE_ARTIFACTS_DIR` stamped into MCP args and stage `system_prompt` so MCP tools can write into the attempt artifacts directory
+- Image run artifacts (PNG/JPEG/GIF/WebP) served with the matching content type and rendered in the Files pane
+- Walkthroughs: `examples/stage-mcp/`, `examples/playwright-mcp/`, and `examples/context7-mcp/`
+
+### Fixed
+
+- Settings Check uses eager MCP lifecycle so a cached Pi MCP metadata file is not treated as a live connect
+
 ## [0.12.1] - 2026-09-08
 
 ### Changed
@@ -173,7 +188,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/tejasghutukade/stageflow/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/tejasghutukade/stageflow/compare/v0.10.0...v0.11.0
