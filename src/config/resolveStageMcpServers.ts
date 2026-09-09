@@ -26,6 +26,17 @@ export type ResolvedMcpServers = Record<string, ResolvedMcpServerConfig>;
 
 export const MCP_CATALOG_FILENAME = ".mcp.json";
 
+export const STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV = "STAGEFLOW_STAGE_ARTIFACTS_DIR";
+
+const STAGEFLOW_STAGE_ARTIFACTS_DIR_TOKEN = `\${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}}`;
+
+export function stampStagePromptArtifactsDir(
+  prompt: string,
+  artifactsDir: string,
+): string {
+  return prompt.replaceAll(STAGEFLOW_STAGE_ARTIFACTS_DIR_TOKEN, artifactsDir);
+}
+
 export type McpCatalogServers = Record<string, Record<string, unknown>>;
 
 export type InspectedMcpCatalog = {

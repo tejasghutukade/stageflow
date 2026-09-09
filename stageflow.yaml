@@ -3,6 +3,8 @@ catalog:
   pipelines:
     - examples/generic-fan-in
     - examples/stage-mcp
+    - examples/playwright-mcp
+    - examples/context7-mcp
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review
@@ -16,6 +18,8 @@ catalog:
   tasks:
     - examples/generic-fan-in
     - examples/stage-mcp
+    - examples/playwright-mcp
+    - examples/context7-mcp
     - examples/conditional-fork
     - examples/hello-world
     - examples/plan-review

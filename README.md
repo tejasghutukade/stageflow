@@ -221,6 +221,8 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 | [conditional-fork](examples/conditional-fork/) | Exclusive fork routing with operator branch choice |
 | [clonable-fanout](examples/clonable-fanout/) | Clone one successor N times, then join |
 | [stage-mcp](examples/stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture |
+| [playwright-mcp](examples/playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) |
+| [context7-mcp](examples/context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
 | [ci-validate](examples/ci-validate/) | Strict validate in CI |
 

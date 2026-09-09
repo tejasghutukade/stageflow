@@ -43,7 +43,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 For clonable fan-out (clone one successor N times at completion), see [`examples/clonable-fanout/`](../examples/clonable-fanout/) and [YAML catalog — Clonable successors](yaml-catalog.md#clonable-successors). For a diamond join (two named parents into one child, inspect keyed envelopes), see [`examples/generic-fan-in/`](../examples/generic-fan-in/) and [YAML catalog — Generic fan-in](yaml-catalog.md#generic-fan-in).
 
-For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedback-loop/`](../examples/feedback-loop/) and [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops). For stage agents consuming project MCP servers, see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) and [`examples/stage-mcp/`](../examples/stage-mcp/).
+For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedback-loop/`](../examples/feedback-loop/) and [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops). For stage agents consuming project MCP servers, see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp), [`examples/stage-mcp/`](../examples/stage-mcp/), [`examples/playwright-mcp/`](../examples/playwright-mcp/), and [`examples/context7-mcp/`](../examples/context7-mcp/).
 
 ## Canonical YAML examples
 

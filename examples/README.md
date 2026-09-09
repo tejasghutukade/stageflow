@@ -26,6 +26,8 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [clonable-fanout](clonable-fanout/) | Dummy clonable skip / once / parallel / sequential / mix | `sf ui`, then `sf run` |
 | [generic-fan-in](generic-fan-in/) | Dummy diamond join; inspect keyed parent envelopes | `sf ui`, then `sf run` |
 | [stage-mcp](stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture | `sf validate`, then `sf run` from git root |
+| [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
+| [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |
 | [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |

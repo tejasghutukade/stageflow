@@ -33,6 +33,11 @@ function isMarkdown(path: string): boolean {
   return lower.endsWith(".md") || lower.endsWith(".markdown");
 }
 
+export function isImageArtifactPath(path: string): boolean {
+  const name = path.split("/").pop() ?? path;
+  return /\.(png|jpe?g|gif|webp)$/i.test(name);
+}
+
 function sniffLanguage(path: string): string {
   const lower = path.toLowerCase();
   if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
@@ -56,14 +61,21 @@ export function ArtifactReader({
   onHide,
 }: ArtifactReaderProps) {
   const markdown = isMarkdown(path);
-  const [mode, setMode] = useState<ViewMode>(markdown ? "rendered" : "raw");
+  const image = isImageArtifactPath(path);
+  const [mode, setMode] = useState<ViewMode>(
+    markdown || image ? "rendered" : "raw",
+  );
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
 
   useEffect(() => {
-    setMode(isMarkdown(path) ? "rendered" : "raw");
+    setMode(isMarkdown(path) || isImageArtifactPath(path) ? "rendered" : "raw");
   }, [path]);
 
   useEffect(() => {
+    if (isImageArtifactPath(path)) {
+      setLoad({ status: "ready", content: "" });
+      return;
+    }
     let cancelled = false;
     setLoad({ status: "loading" });
     void fetchRunArtifact(runId, path)
@@ -102,14 +114,15 @@ export function ArtifactReader({
           <div className="seg">
           <button
             data-active={mode === "rendered" ? "true" : undefined}
-            disabled={!markdown}
-            onClick={() => { if (markdown) setMode("rendered"); }}
+            disabled={!markdown && !image}
+            onClick={() => { if (markdown || image) setMode("rendered"); }}
           >
             Rendered
           </button>
           <button
             data-active={mode === "raw" ? "true" : undefined}
-            onClick={() => setMode("raw")}
+            disabled={image}
+            onClick={() => { if (!image) setMode("raw"); }}
           >
             Raw
           </button>
@@ -132,7 +145,17 @@ export function ArtifactReader({
         ) : null}
         {load.status === "ready" ? (
           <div className="page">
-            {mode === "rendered" && markdown ? (
+            {image ? (
+              <img
+                src={`/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`}
+                alt={fileName(path)}
+                style={{
+                  maxWidth: "100%",
+                  height: "auto",
+                  display: "block",
+                }}
+              />
+            ) : mode === "rendered" && markdown ? (
               load.content.trim().length === 0 ? (
                 <p className="muted">Empty file.</p>
               ) : (

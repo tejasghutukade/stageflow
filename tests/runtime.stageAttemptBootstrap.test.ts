@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +7,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
+} from "../src/config/resolveStageMcpServers.js";
+import { attemptArtifactsDir } from "../src/runstore/workspaceLayout.js";
 import {
   appendOperatorAnswer,
   appendOperatorPrompt,
@@ -881,6 +885,76 @@ describe("openStageAttempt", () => {
         cwd: path.resolve(factoryCwd),
       },
     });
+  });
+
+  it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR onto resolved MCP args", async () => {
+    await writeMcpCatalog(factoryCwd, {
+      playwright: {
+        command: "npx",
+        args: [
+          "-y",
+          "@playwright/mcp@latest",
+          "--output-dir",
+          `\${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}:-./fallback-mcp-out}`,
+        ],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-art-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["playwright"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.resolvedMcpServers?.playwright.args).toEqual([
+      "-y",
+      "@playwright/mcp@latest",
+      "--output-dir",
+      artifactsDir,
+    ]);
+    await expect(access(artifactsDir)).resolves.toBeUndefined();
+  });
+
+  it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR into the stage system_prompt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-prompt-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: {
+        ...stage("clarify"),
+        system_prompt: `filename \${${STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV}}/page.png`,
+      },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+    });
+
+    const artifactsDir = attemptArtifactsDir(run.workspaceDir, "clarify", 1);
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.stage.system_prompt).toBe(`filename ${artifactsDir}/page.png`);
   });
 
   it("fails closed without openStage when a catalog variable is unresolved", async () => {

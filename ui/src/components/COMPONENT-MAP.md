@@ -30,7 +30,7 @@ Inventory mapping prototype concepts to React modules.
 | ArtifactAside | `components/ArtifactAside.tsx` | wired | Run-wide file list + Input footer. `onSelect` opens `ArtifactReader`. |
 | EnvelopeDrawer | `components/EnvelopeDrawer.tsx` | wired | Native `.drawer` bottom sheet from track wire. “Open full record” navigates to envelope workspace. |
 | EnvelopeFields / EnvelopeRecord | `components/EnvelopeFields.tsx` | wired | Shared `.drawer__grid` + `.kv` body; full record is a run-shell workspace (`#/runs/:id/stages/:stageId/envelope`). Owns the reader header (clone-aware `from → to`, ← Transcript, Hide). |
-| ArtifactReader | `components/ArtifactReader.tsx` | wired | Center-column markdown/code viewer. Owns the reader bar (name, ← Transcript, Hide, Rendered/Raw). Diff disabled. Hash `#/runs/:id/artifacts?path=`. |
+| ArtifactReader | `components/ArtifactReader.tsx` | wired | Center-column markdown/code viewer, plus PNG/JPEG/GIF/WebP as `<img>` from the artifact API. Owns the reader bar (name, ← Transcript, Hide, Rendered/Raw). Diff disabled. Hash `#/runs/:id/artifacts?path=`. |
 | DecidePanel / ArtifactDecideColumn | `components/DecidePanel.tsx` | wired | Sticky accept/reject + notes, history, inbound context for `artifact_backed` review. |
 | FeedbackLoopPanel | `components/FeedbackLoopPanel.tsx` | wired | Replay budget, source→target route, replay timeline, superseded fork note. Mounted above `SpatialRunMap` when an active loop or history exists. |
 | FeedbackDecidePanel | `components/FeedbackDecidePanel.tsx` | wired | Extend / Continue / Abandon + optional reason when `waiting_kind === feedback_loop_decision`. Decide column on `RunDetailPage`. |

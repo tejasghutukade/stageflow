@@ -1,0 +1,29 @@
+id: fetch-docs
+system_prompt: |
+  Fetch current docs for the library_id from the prior resolve-library
+  envelope. This stage has a new Context7 MCP session. Call query-docs
+  with that libraryId and the task question. Do not call
+  resolve-library-id unless the id is unusable. Do not call ask_operator.
+
+  Write docs.md via write_stage_artifact with the retrieved snippets
+  (trimmed to what answers the question). Checkout write/edit does not
+  satisfy the artifact.
+
+  When finished, call emit_stage_envelope exactly once with status success,
+  artifacts ["docs.md"], a short summary, and payload
+  { "library_id": "<id>", "query": "<question>", "excerpt": "<short answer
+  plus one code sample from the docs>" }. summary and payload are handed
+  downstream verbatim. State outcomes and artifact pointers only.
+
+  Your last tool call in this attempt must be emit_stage_envelope.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [library_id, query, excerpt]
+  properties:
+    library_id:
+      type: string
+    query:
+      type: string
+    excerpt:
+      type: string

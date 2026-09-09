@@ -1822,6 +1822,39 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("GET artifact returns image bytes with image content-type", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-art-png-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join("stages", "screenshot", "attempts", "1", "artifacts", "page.png");
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(
+      path.join(created.workspaceDir, "stages", "screenshot", "attempts", "1", "artifacts"),
+      { recursive: true },
+    );
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const agent = scriptedFakeAgent([]);
+    const { server, base } = await withServer(root, agent, store);
+
+    try {
+      const ok = await fetch(
+        `${base}/api/runs/${encodeURIComponent(created.runId)}/artifact?path=${encodeURIComponent(rel)}`,
+      );
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await ok.arrayBuffer())).toEqual(png);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("POST /api/settings updates maxConcurrent, persists, and 400s invalid bodies", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-"));
     const { server, base } = await withServer(

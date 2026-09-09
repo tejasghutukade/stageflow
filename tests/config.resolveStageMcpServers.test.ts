@@ -11,6 +11,7 @@ import {
   mcpCatalogPath,
   parseMcpCatalog,
   resolveStageMcpServers,
+  stampStagePromptArtifactsDir,
   type ResolvedMcpServerConfig,
   type ResolvedMcpServers,
 } from "../src/config/resolveStageMcpServers.js";
@@ -165,6 +166,23 @@ describe("MCP catalog reader", () => {
     expect(() =>
       assertMcpAllowlistKnown({ github: { command: "npx" } }, ["github"]),
     ).not.toThrow();
+  });
+});
+
+describe("stampStagePromptArtifactsDir", () => {
+  it("substitutes STAGEFLOW_STAGE_ARTIFACTS_DIR in the prompt", () => {
+    expect(
+      stampStagePromptArtifactsDir(
+        "save ${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png",
+        "/tmp/run/artifacts",
+      ),
+    ).toBe("save /tmp/run/artifacts/page.png");
+  });
+
+  it("leaves prompts without the token unchanged", () => {
+    expect(stampStagePromptArtifactsDir("no token here", "/tmp/run/artifacts")).toBe(
+      "no token here",
+    );
   });
 });
 

@@ -427,7 +427,7 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Behavior | Detail |
 |----------|--------|
 | Catalog | `.mcp.json` `{ "mcpServers": { "<name>": { … } } }` at the project root that holds `stageflow.yaml` |
-| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd` |
+| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
 | Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
 | Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
@@ -445,7 +445,7 @@ If `.mcp.json` is present, validate checks its shape and reserved names even whe
 
 GitHub, Notion, or a company MCP use the same authoring shape when those servers exist in `.mcp.json`.
 
-Pi and Claude both receive the servers named on the stage; transports and protocol features may differ. Walkthrough: [`examples/stage-mcp/`](../examples/stage-mcp/).
+Pi and Claude both receive the servers named on the stage; transports and protocol features may differ. Walkthroughs: [`examples/stage-mcp/`](../examples/stage-mcp/), [`examples/playwright-mcp/`](../examples/playwright-mcp/) (open a page and save a PNG screenshot; pass `${STAGEFLOW_STAGE_ARTIFACTS_DIR}/page.png` because Playwright named `filename` values resolve against the project checkout, not `--output-dir`), [`examples/context7-mcp/`](../examples/context7-mcp/) (resolve a library, fetch docs, write a brief).
 
 MCP elicitation is unsupported — a passed server cannot ask the operator a question through Stageflow.
 

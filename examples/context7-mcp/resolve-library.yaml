@@ -1,0 +1,24 @@
+id: resolve-library
+system_prompt: |
+  Resolve the library named in the task with Context7 MCP. Call
+  resolve-library-id with libraryName and the task question as query.
+  Pick one libraryId (prefer an official high-reputation match). Do not
+  call query-docs. Do not call ask_operator.
+
+  When finished, call emit_stage_envelope exactly once with status success,
+  artifacts [], a short summary, and payload
+  { "library_id": "<id like /org/project>", "library_name": "<name>" }.
+  summary and payload are handed to the next stage verbatim. State outcomes
+  only.
+
+  Your last tool call in this attempt must be emit_stage_envelope.
+  The next stage starts a fresh MCP session — pass the id in the envelope.
+model: cursor/auto
+payload_schema:
+  type: object
+  required: [library_id, library_name]
+  properties:
+    library_id:
+      type: string
+    library_name:
+      type: string

@@ -7,12 +7,16 @@ import type {
   StageSessionMode,
 } from "../agent/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
+import { mkdir } from "node:fs/promises";
 import {
   MCP_CATALOG_FILENAME,
+  STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
   StageMcpError,
   resolveStageMcpServers,
+  stampStagePromptArtifactsDir,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
+import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
@@ -89,6 +93,7 @@ async function resolveStageSkillForRun(
 async function resolveAttemptMcpServers(
   allowlist: readonly string[] | undefined,
   factoryCwd: string | undefined,
+  artifactsDir: string,
 ): Promise<ResolvedMcpServers | undefined> {
   const names = allowlist ?? [];
   if (names.length === 0) return undefined;
@@ -98,10 +103,14 @@ async function resolveAttemptMcpServers(
       "missing_catalog",
     );
   }
+  await mkdir(artifactsDir, { recursive: true });
   const resolved = await resolveStageMcpServers({
     projectRoot: factoryCwd,
     allowlist: names,
-    env: process.env,
+    env: {
+      ...process.env,
+      [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
+    },
   });
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
@@ -109,14 +118,19 @@ async function resolveAttemptMcpServers(
 async function openStageWithOperatorCatalog(
   agent: Pick<AgentPort, "openStage">,
   input: Omit<StageRunInput, "skillFilePath">,
-  catalog?: OperatorCatalog,
-  factoryCwd?: string,
+  catalog: OperatorCatalog | undefined,
+  factoryCwd: string | undefined,
+  artifactsDir: string,
 ): Promise<OpenStageWithOperatorCatalogResult> {
   const skill = await resolveStageSkillForRun(input.stage, catalog);
   if (!skill.ok) return skill;
   let resolvedMcpServers: ResolvedMcpServers | undefined;
   try {
-    resolvedMcpServers = await resolveAttemptMcpServers(input.stage.mcp, factoryCwd);
+    resolvedMcpServers = await resolveAttemptMcpServers(
+      input.stage.mcp,
+      factoryCwd,
+      artifactsDir,
+    );
   } catch (err) {
     if (err instanceof StageMcpError) {
       return { ok: false, reason: err.message };
@@ -126,6 +140,13 @@ async function openStageWithOperatorCatalog(
   try {
     const handle = agent.openStage({
       ...input,
+      stage: {
+        ...input.stage,
+        system_prompt: stampStagePromptArtifactsDir(
+          input.stage.system_prompt,
+          artifactsDir,
+        ),
+      },
       ...(skill.skillFilePath !== undefined
         ? { skillFilePath: skill.skillFilePath }
         : {}),
@@ -304,6 +325,7 @@ export async function openStageAttempt(
     },
     input.operatorCatalog,
     input.factoryCwd,
+    attemptArtifactsDir(input.workspaceDir, stageId, attempt),
   );
   if (!opened.ok) return opened;
   return {
