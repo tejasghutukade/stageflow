@@ -1,5 +1,6 @@
 import path from "node:path";
 import { parseAgentField } from "../agent/agentBackend.js";
+import type { PayloadSchemaMap } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
@@ -67,6 +68,17 @@ async function visitPipelineFile(
   }
   const warning = dialectWarningForDocument(raw, absPath);
   if (warning) warnings.push(warning);
+
+  const isFragment = stack.length > 0;
+  if (isFragment && raw.schemas !== undefined) {
+    return loadFailure([
+      {
+        code: "pipeline.include_invalid",
+        message: `Invalid include in ${absPath}: schemas is only allowed on the pipeline file, not on include fragments`,
+        category: "pipeline",
+      },
+    ]);
+  }
 
   const nextStack = [...stack, absPath];
 
@@ -139,6 +151,7 @@ export async function mergePipelineStages(
     pipelineId: string;
     agent?: string;
     model?: string;
+    schemas?: PayloadSchemaMap;
     warnings: LoadIssue[];
   }>
 > {
@@ -206,6 +219,10 @@ export async function mergePipelineStages(
   }
   const model = modelField.value;
 
+  const schemasOutcome = parsePipelineSchemas(raw.schemas, absRoot, pipelineId);
+  if (!schemasOutcome.ok) return schemasOutcome;
+  const schemas = schemasOutcome.value;
+
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
   const warnings: LoadIssue[] = [];
@@ -228,6 +245,40 @@ export async function mergePipelineStages(
     pipelineId,
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
+    ...(schemas !== undefined ? { schemas } : {}),
     warnings,
   });
+}
+
+function parsePipelineSchemas(
+  raw: unknown,
+  absPath: string,
+  pipelineId: string,
+): LoadOutcome<PayloadSchemaMap | undefined> {
+  if (raw === undefined) return loadSuccess(undefined);
+  if (!isPlainObject(raw)) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_shape",
+        message: `Invalid pipeline ${absPath}: schemas must be an object`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const schemas: PayloadSchemaMap = {};
+  for (const [name, value] of Object.entries(raw)) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      return loadFailure([
+        {
+          code: "pipeline.invalid_shape",
+          message: `Invalid pipeline ${absPath}: schemas.${name} must be an object`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+    schemas[name] = value;
+  }
+  return loadSuccess(schemas);
 }

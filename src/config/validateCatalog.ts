@@ -37,11 +37,13 @@ export type ValidationFindingCode =
   | "pipeline.invalid_agent"
   | "pipeline.invalid_model"
   | "pipeline.invalid_verify"
+  | "pipeline.io_incompatible"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
   | "stage.invalid_payload_schema"
   | "stage.invalid_clone_input_schema"
+  | "stage.unresolved_schema_ref"
   | "stage.invalid_clone_actions"
   | "stage.invalid_gate_kinds"
   | "stage.invalid_pre_emit_checks"
@@ -475,7 +477,10 @@ async function runPipelineValidation(
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {
       if (source.kind === "file") {
-        findings.push(...(await validateStageFile(cwd, source.path)));
+        const extra = await validateStageFile(cwd, source.path);
+        findings.push(
+          ...extra.filter((finding) => finding.code !== "stage.unresolved_schema_ref"),
+        );
       }
     }
   }

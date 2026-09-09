@@ -1,5 +1,8 @@
 import path from "node:path";
-import { compilePayloadSchema } from "../envelope/payloadSchema.js";
+import {
+  compilePayloadSchema,
+  UnresolvedSchemaRefError,
+} from "../envelope/payloadSchema.js";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
@@ -118,6 +121,7 @@ function parseIo(
   raw: unknown,
   label: string,
   stageId: string,
+  deferSchemaRefs: boolean,
 ): LoadOutcome<{ payload_schema?: unknown; clone_input_schema?: unknown }> {
   if (raw === undefined) return loadSuccess({});
   if (!isPlainObject(raw)) {
@@ -152,6 +156,21 @@ function parseIo(
     try {
       compilePayloadSchema(side.schema);
     } catch (err) {
+      if (err instanceof UnresolvedSchemaRefError) {
+        if (deferSchemaRefs) {
+          if (target === "payload_schema") result.payload_schema = side.schema;
+          else result.clone_input_schema = side.schema;
+          continue;
+        }
+        return loadFailure([
+          {
+            code: "stage.unresolved_schema_ref",
+            message: `Invalid stage ${label}: ${err.message}`,
+            category: "stage",
+            stageId,
+          },
+        ]);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return invalidIo(label, `invalid io.${field}.schema: ${message}`, stageId);
     }
@@ -295,9 +314,14 @@ function parseVerifyList(
 
 export function compileTargetContract(
   raw: Record<string, unknown>,
-  ctx: { stageId: string; label: string; category: "pipeline" | "stage" },
+  ctx: {
+    stageId: string;
+    label: string;
+    category: "pipeline" | "stage";
+    deferSchemaRefs?: boolean;
+  },
 ): LoadOutcome<CompiledTargetContract> {
-  const ioOutcome = parseIo(raw.io, ctx.label, ctx.stageId);
+  const ioOutcome = parseIo(raw.io, ctx.label, ctx.stageId, ctx.deferSchemaRefs === true);
   if (!ioOutcome.ok) return ioOutcome;
 
   const verifyOutcome = parseVerifyList(raw.verify, ctx.stageId, ctx.category);

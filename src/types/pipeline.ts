@@ -9,6 +9,8 @@ export type PipelineConfig = {
   agent?: string;
   /** Default LLM model id for every stage in this pipeline; overrides the global default. */
   model?: string;
+  /** Pipeline-file `$ref` root (`#/schemas/<name>`). */
+  schemas?: Record<string, unknown>;
 };
 
 export type PipelineForkConfig = {

@@ -7,7 +7,7 @@ import {
   type StageConfig,
   type StageGateKind,
 } from "../types/stage.js";
-import { compilePayloadSchema } from "../envelope/payloadSchema.js";
+import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseModelField } from "./modelField.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
@@ -197,6 +197,7 @@ function parseStageFields(
   raw: Record<string, unknown>,
   label: string,
   entryId: string,
+  deferSchemaRefs: boolean,
 ): LoadOutcome<StageConfig> {
   if (typeof raw.system_prompt !== "string") {
     return loadFailure([
@@ -247,15 +248,28 @@ function parseStageFields(
     try {
       compilePayloadSchema(raw.payload_schema);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return loadFailure([
-        {
-          code: "stage.invalid_payload_schema",
-          message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
+      if (err instanceof UnresolvedSchemaRefError) {
+        if (!deferSchemaRefs) {
+          return loadFailure([
+            {
+              code: "stage.unresolved_schema_ref",
+              message: `Invalid stage ${label}: ${err.message}`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+        }
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        return loadFailure([
+          {
+            code: "stage.invalid_payload_schema",
+            message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
     }
     stage.payload_schema = raw.payload_schema;
   }
@@ -278,15 +292,28 @@ function parseStageFields(
     try {
       compilePayloadSchema(raw.clone_input_schema);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return loadFailure([
-        {
-          code: "stage.invalid_clone_input_schema",
-          message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
+      if (err instanceof UnresolvedSchemaRefError) {
+        if (!deferSchemaRefs) {
+          return loadFailure([
+            {
+              code: "stage.unresolved_schema_ref",
+              message: `Invalid stage ${label}: ${err.message}`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+        }
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        return loadFailure([
+          {
+            code: "stage.invalid_clone_input_schema",
+            message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
     }
     stage.clone_input_schema = raw.clone_input_schema;
   }
@@ -377,11 +404,16 @@ function parseStageFields(
   return loadSuccess(stage);
 }
 
+export type LoadStageOptions = {
+  deferSchemaRefs?: boolean;
+};
+
 export function loadStageFromObjectOutcome(
   raw: Record<string, unknown>,
-  ctx: { entryId: string; declaringPath: string },
+  ctx: { entryId: string; declaringPath: string; deferSchemaRefs?: boolean },
 ): LoadOutcome<StageConfig> {
   const label = `${ctx.entryId} (${ctx.declaringPath})`;
+  const deferSchemaRefs = ctx.deferSchemaRefs === true;
   const dialect = dialectFromKeys(Object.keys(raw));
   if (dialect === "invalid") {
     return loadFailure([mixedDialectIssue()]);
@@ -391,14 +423,23 @@ export function loadStageFromObjectOutcome(
       stageId: ctx.entryId,
       label,
       category: "stage",
+      deferSchemaRefs,
     });
     if (!compiled.ok) return compiled;
-    return parseStageFields(applyCompiledBody(raw, compiled.value), label, ctx.entryId);
+    return parseStageFields(
+      applyCompiledBody(raw, compiled.value),
+      label,
+      ctx.entryId,
+      deferSchemaRefs,
+    );
   }
-  return parseStageFields(raw, label, ctx.entryId);
+  return parseStageFields(raw, label, ctx.entryId, deferSchemaRefs);
 }
 
-export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<StageConfig>> {
+export async function loadStageOutcome(
+  filePath: string,
+  options: LoadStageOptions = {},
+): Promise<LoadOutcome<StageConfig>> {
   let raw: Record<string, unknown>;
   try {
     raw = await readYamlObject(filePath);
@@ -443,18 +484,20 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
 
   let parseRaw = raw;
   let afterCompletion: CompletionContract | undefined;
+  const deferSchemaRefs = options.deferSchemaRefs === true;
   if (dialect === "target") {
     const compiled = compileTargetContract(raw, {
       stageId: raw.id,
       label: `file ${filePath}`,
       category: "stage",
+      deferSchemaRefs,
     });
     if (!compiled.ok) return compiled;
     parseRaw = applyCompiledBody(raw, compiled.value);
     afterCompletion = compiled.value.completion;
   }
 
-  const outcome = parseStageFields(parseRaw, `file ${filePath}`, raw.id);
+  const outcome = parseStageFields(parseRaw, `file ${filePath}`, raw.id, deferSchemaRefs);
   if (!outcome.ok) return outcome;
   if (outcome.value.id !== raw.id) {
     return loadFailure([

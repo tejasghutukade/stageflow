@@ -11,6 +11,7 @@ import {
   assertCloneAssignmentPayload,
   assertEnvelopePayload,
   compilePayloadSchema,
+  isPayloadSchemaSubset,
 } from "../src/envelope/payloadSchema.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { EnvelopeError } from "../src/types/envelope.js";
@@ -569,6 +570,128 @@ describe("payload_schema", () => {
       payload: { label: "not-an-email" },
     });
     expect(() => assertEnvelopePayload(ok, schema)).not.toThrow();
+  });
+
+  const storySliceSchema = {
+    type: "object",
+    required: ["title"],
+    properties: {
+      title: { type: "string" },
+    },
+  };
+
+  it("does not ignore $ref: $ref-only nodes fail without a resolver", () => {
+    expect(() =>
+      compilePayloadSchema({ $ref: "#/schemas/story-slice" }),
+    ).toThrow(/unresolved|\$ref/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: {
+          label: { type: "string", $ref: "#/schemas/missing" },
+        },
+      }),
+    ).toThrow(/unresolved|\$ref/);
+  });
+
+  it("compiles $ref-only nodes against a pipeline schemas map", () => {
+    const compiled = compilePayloadSchema(
+      { $ref: "#/schemas/story-slice" },
+      { schemas: { "story-slice": storySliceSchema } },
+    );
+    expect(compiled).toBeDefined();
+    const ok = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: { title: "slice-1" },
+    });
+    expect(() =>
+      assertEnvelopePayload(ok, { $ref: "#/schemas/story-slice" }, {
+        schemas: { "story-slice": storySliceSchema },
+      }),
+    ).not.toThrow();
+    const missing = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: {},
+    });
+    expect(() =>
+      assertEnvelopePayload(missing, { $ref: "#/schemas/story-slice" }, {
+        schemas: { "story-slice": storySliceSchema },
+      }),
+    ).toThrow(EnvelopeError);
+  });
+
+  it("rejects $ref cycles", () => {
+    expect(() =>
+      compilePayloadSchema(
+        { $ref: "#/schemas/a" },
+        {
+          schemas: {
+            a: { $ref: "#/schemas/b" },
+            b: { $ref: "#/schemas/a" },
+          },
+        },
+      ),
+    ).toThrow(/cycle/i);
+  });
+
+  it("treats consumer input as a structural subset of producer output after resolve", () => {
+    const schemas = {
+      produced: {
+        type: "object",
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      consumed: {
+        type: "object",
+        required: ["title", "extra"],
+        properties: {
+          title: { type: "string" },
+          extra: { type: "string" },
+        },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/produced" },
+        { $ref: "#/schemas/produced" },
+        { schemas },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          required: ["title", "body"],
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/consumed" },
+        { $ref: "#/schemas/produced" },
+        { schemas },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/produced" },
+        { $ref: "#/schemas/consumed" },
+        { schemas },
+      ),
+    ).toBe(true);
   });
 
   it("failure envelopes skip enum and minItems checks", () => {

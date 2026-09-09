@@ -4,10 +4,18 @@ import type {
   LoadedPipeline,
   PipelineConfig,
   PipelineStageSource,
+  ResolvedPipelineDag,
 } from "../types/pipeline.js";
 import type { CompletionContract } from "../types/completion.js";
 import type { StageConfig } from "../types/stage.js";
-import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import {
+  compilePayloadSchema,
+  expandPayloadSchemaRefs,
+  isPayloadSchemaSubset,
+  UnresolvedSchemaRefError,
+  type PayloadSchemaMap,
+} from "../envelope/payloadSchema.js";
+import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { mergePipelineStages } from "./mergePipelineIncludes.js";
 import {
   normalizePipelineStageEntries,
@@ -15,11 +23,97 @@ import {
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome, afterCompletionForStage } from "./loadStage.js";
 import { materializeStageModels } from "./materializeStageModels.js";
+import { predecessorEdges } from "./pipelineNeeds.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
+
+function schemaCompileIssue(
+  stageId: string,
+  field: "payload_schema" | "clone_input_schema",
+  err: unknown,
+  pipelineId: string,
+): LoadIssue {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof UnresolvedSchemaRefError) {
+    return {
+      code: "stage.unresolved_schema_ref",
+      message: `Pipeline ${pipelineId}: stage "${stageId}" ${field}: ${message}`,
+      category: "stage",
+      stageId,
+    };
+  }
+  return {
+    code: field === "payload_schema" ? "stage.invalid_payload_schema" : "stage.invalid_clone_input_schema",
+    message: `Pipeline ${pipelineId}: stage "${stageId}" ${field}: ${message}`,
+    category: "stage",
+    stageId,
+  };
+}
+
+function attachPipelineSchemas(
+  stages: StageConfig[],
+  schemas: PayloadSchemaMap | undefined,
+  pipelineId: string,
+): LoadOutcome<void> {
+  const options = schemas !== undefined ? { schemas } : undefined;
+  for (const stage of stages) {
+    if (stage.payload_schema !== undefined) {
+      try {
+        compilePayloadSchema(stage.payload_schema, options);
+        stage.payload_schema = expandPayloadSchemaRefs(stage.payload_schema, options);
+      } catch (err) {
+        return loadFailure([schemaCompileIssue(stage.id, "payload_schema", err, pipelineId)]);
+      }
+    }
+    if (stage.clone_input_schema !== undefined) {
+      try {
+        compilePayloadSchema(stage.clone_input_schema, options);
+        stage.clone_input_schema = expandPayloadSchemaRefs(stage.clone_input_schema, options);
+      } catch (err) {
+        return loadFailure([schemaCompileIssue(stage.id, "clone_input_schema", err, pipelineId)]);
+      }
+    }
+  }
+  return loadSuccess(undefined);
+}
+
+function checkSequentialIoCompatibility(
+  stages: StageConfig[],
+  dag: ResolvedPipelineDag,
+  pipelineId: string,
+  schemas: PayloadSchemaMap | undefined,
+): LoadOutcome<void> {
+  const stageById = new Map(stages.map((stage) => [stage.id, stage]));
+  const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
+  const options = schemas !== undefined ? { schemas } : undefined;
+
+  for (const child of stages) {
+    const node = nodeById.get(child.id);
+    if (!node) continue;
+    const parents = predecessorEdges(node);
+    if (parents.length !== 1) continue;
+    const parentNode = nodeById.get(parents[0].id);
+    if (parentNode?.clonable) continue;
+    const parent = stageById.get(parents[0].id);
+    if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
+    if (
+      !isPayloadSchemaSubset(child.clone_input_schema, parent.payload_schema, options)
+    ) {
+      return loadFailure([
+        {
+          code: "pipeline.io_incompatible",
+          message: `Pipeline ${pipelineId}: stage "${child.id}" io.input is not a structural subset of "${parent.id}" io.output`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+  }
+  return loadSuccess(undefined);
+}
 
 export async function resolvePipelinePath(
   pipelinePath: string,
@@ -53,6 +147,7 @@ async function loadPipelineFromPath(
     pipelineId,
     agent: pipelineAgent,
     model: pipelineModel,
+    schemas: pipelineSchemas,
     warnings: mergeWarnings,
   } = mergeOutcome.value;
   const ctx = { pipelineId, path: normalizedPipelinePath };
@@ -106,6 +201,7 @@ async function loadPipelineFromPath(
       const inlineOutcome = loadStageFromObjectOutcome(entry.body.raw, {
         entryId: entry.id,
         declaringPath: entry.declaringPath,
+        deferSchemaRefs: true,
       });
       if (!inlineOutcome.ok) {
         return loadFailure(inlineOutcome.issues);
@@ -115,7 +211,9 @@ async function loadPipelineFromPath(
       continue;
     }
 
-    const stageOutcome = await loadStageOutcome(entry.body.absolutePath);
+    const stageOutcome = await loadStageOutcome(entry.body.absolutePath, {
+      deferSchemaRefs: true,
+    });
     if (!stageOutcome.ok) {
       if (stageOutcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
         return loadFailure(stageOutcome.issues);
@@ -167,6 +265,12 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
+  const schemaOutcome = attachPipelineSchemas(stages, pipelineSchemas, pipelineId);
+  if (!schemaOutcome.ok) return schemaOutcome;
+
+  const ioOutcome = checkSequentialIoCompatibility(stages, dag, pipelineId, pipelineSchemas);
+  if (!ioOutcome.ok) return ioOutcome;
+
   const materializeOutcome = await materializeStageModels(stages, {
     pipelineModel,
     pipelineId,
@@ -182,6 +286,7 @@ async function loadPipelineFromPath(
     stages: stageIds,
     ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
     ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
+    ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
