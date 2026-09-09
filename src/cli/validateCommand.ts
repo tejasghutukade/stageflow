@@ -85,6 +85,7 @@ export async function runValidateCommand(
   args: string[],
   options: {
     cwd?: string;
+    projectRoot?: string;
     io?: Partial<ValidateCommandIo>;
     validateCatalog?: (
       options: Parameters<typeof defaultValidateCatalog>[0],
@@ -92,6 +93,7 @@ export async function runValidateCommand(
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const out: ValidateCommandIo = { ...defaultIo, ...options.io };
   const validateCatalogFn = options.validateCatalog ?? defaultValidateCatalog;
 
@@ -107,6 +109,7 @@ export async function runValidateCommand(
     const result = await validateCatalogFn({
       scope,
       cwd,
+      projectRoot,
       pipeline: parsed.pipeline,
       task: parsed.task,
       strict: parsed.strict,

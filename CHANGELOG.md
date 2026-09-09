@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-09
+
+### Added
+
+- Optional `model` defaults on `stageflow.yaml` and `*.pipeline.yaml`; stages may omit `model` when a higher tier fills it
+- Resolution at pipeline load: `stage.model ?? pipeline.model ?? stageflow.yaml model`, failing with `stage.missing_model` when unset (no silent hardcoded model)
+- `LoadedStageConfig` / `materializeStageModels` so loaded stages carry a required effective model
+- Operator console New Stage: inherit default model; blank custom “Other” is rejected
+- Fixtures under `tests/fixtures/model-hierarchy/` and docs for model defaults vs `agent` backend selection
+
+### Changed
+
+- Invalid present `stageflow.yaml` fails pipeline load with catalog/manifest errors instead of being skipped as “no global model”
+- Create stage/pipeline APIs reject empty/whitespace `model` instead of coercing to inherit
+
 ## [0.13.0] - 2026-09-09
 
 ### Added
@@ -188,7 +203,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/tejasghutukade/stageflow/compare/v0.11.0...v0.12.0

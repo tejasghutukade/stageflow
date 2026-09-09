@@ -1,7 +1,7 @@
 import type { StageEnvelope, TerminalEnvelope } from "../types/envelope.js";
 import type { CompletionContract } from "../types/completion.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
-import type { StageConfig } from "../types/stage.js";
+import type { LoadedStageConfig } from "../types/stage.js";
 import type { FeedbackLoopConfig } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
@@ -54,7 +54,7 @@ export type FeedbackLoopContext = {
 
 export type StageRunInput = {
   roots: StageRoots;
-  stage: StageConfig;
+  stage: LoadedStageConfig;
   /** Runtime instance id (`work~2`). Defaults to `stage.id` when omitted. */
   stageId?: string;
   task: TaskFile;

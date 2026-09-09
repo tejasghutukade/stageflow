@@ -1,5 +1,5 @@
 import type { CloneAction } from "./forkChoice.js";
-import type { StageConfig, StageGateKind } from "./stage.js";
+import type { LoadedStageConfig, StageGateKind } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
 export type PipelineConfig = {
@@ -7,6 +7,8 @@ export type PipelineConfig = {
   stages: string[];
   /** Selects the AgentPort backend for every stage in this pipeline; overrides the global default. */
   agent?: string;
+  /** Default LLM model id for every stage in this pipeline; overrides the global default. */
+  model?: string;
 };
 
 export type PipelineForkConfig = {
@@ -113,7 +115,7 @@ export type ResolvedPipelineDag = {
 
 export type LoadedPipeline = {
   pipeline: PipelineConfig;
-  stages: StageConfig[];
+  stages: LoadedStageConfig[];
   dag: ResolvedPipelineDag;
   pipelinePath: string;
   stageSources?: Record<string, PipelineStageSource>;

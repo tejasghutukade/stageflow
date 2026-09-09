@@ -1,0 +1,3 @@
+id: explicit
+system_prompt: Stage model wins over pipeline and global defaults.
+model: test/stage-model

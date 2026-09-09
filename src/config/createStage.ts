@@ -5,6 +5,7 @@ import {
   type StageGateKind,
 } from "../types/stage.js";
 import { loadStage } from "./loadStage.js";
+import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
 
 export const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -14,7 +15,7 @@ export type CreateStageInput = {
   filename: string;
   id: string;
   system_prompt: string;
-  model: string;
+  model?: string;
   gate_kinds?: StageGateKind[];
 };
 
@@ -101,9 +102,11 @@ export function parseCreateStageBody(
     return { ok: false, status: 400, error: "system_prompt is required" };
   }
 
-  if (typeof body.model !== "string" || body.model.length === 0) {
-    return { ok: false, status: 400, error: "model is required" };
+  const modelField = parseModelField(body.model);
+  if (!modelField.ok) {
+    return { ok: false, status: 400, error: modelField.message };
   }
+  const model = modelField.value;
 
   const gateKinds = parseGateKinds(body.gate_kinds);
   if (gateKinds === "invalid") {
@@ -119,7 +122,7 @@ export function parseCreateStageBody(
     filename,
     id: body.id,
     system_prompt: body.system_prompt,
-    model: body.model,
+    ...(model !== undefined ? { model } : {}),
     ...(gateKinds !== undefined ? { gate_kinds: gateKinds } : {}),
   };
 }
@@ -158,7 +161,9 @@ export function stageConfigToYaml(stage: Omit<CreateStageInput, "pipeline_direct
   } else {
     lines.push(`system_prompt: ${formatInlineYamlScalar(stage.system_prompt)}`);
   }
-  lines.push(`model: ${formatInlineYamlScalar(stage.model)}`);
+  if (stage.model !== undefined && stage.model.length > 0) {
+    lines.push(`model: ${formatInlineYamlScalar(stage.model)}`);
+  }
   lines.push("");
   return lines.join("\n");
 }
@@ -254,7 +259,7 @@ export async function createStage(
       stageConfigToYaml({
         id: input.id,
         system_prompt: input.system_prompt,
-        model: input.model,
+        ...(input.model !== undefined && input.model.length > 0 ? { model: input.model } : {}),
         ...(input.gate_kinds !== undefined ? { gate_kinds: input.gate_kinds } : {}),
       }),
       "utf8",

@@ -18,7 +18,7 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, clone instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
 | Stage runtime | Build attempt context, open the agent, validate handoff and optional completion checks, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
-| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts` |
+| Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
 | Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
 | Claude adapter | Translate Stageflow stage execution into Claude Agent SDK sessions and tools | `src/agent/claudeAdapter.ts`, `claudeTools.ts`, `claudeActivity.ts`, `claudeSession.ts` |
 | Persistence | Store run metadata, DAG snapshots, attempts, events, envelopes, artifacts, and projections | `src/runstore/` |
@@ -94,7 +94,7 @@ Workflow topology and stage configuration live with the consuming project, where
 
 ### Orchestration behind ports
 
-`AgentPort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveAgentPort()` and never affecting a stage that doesn't opt in. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `AgentPort` already redeemed that promise once.
+`AgentPort` keeps scheduling and persistence code independent of any one adapter's session mechanics — proven out by a second production implementation (Claude Agent SDK) alongside Pi, chosen via `resolveAgentPort()` and never affecting a stage that doesn't opt in. Model resolution (`resolveModel`) picks the LLM id string on a separate path from that backend choice. `RunStore` similarly keeps runtime call sites behind a persistence contract, even though SQLite is currently the only live adapter. These boundaries are extension seams, not promises that additional backends already exist — `AgentPort` already redeemed that promise once.
 
 ### Two backends, one contract
 

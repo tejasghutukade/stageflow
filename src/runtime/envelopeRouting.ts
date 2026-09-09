@@ -14,7 +14,7 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
-import type { StageConfig } from "../types/stage.js";
+import type { LoadedStageConfig } from "../types/stage.js";
 import {
   activeCohortFromCloneIds,
   filterJoinInputs,
@@ -89,8 +89,8 @@ export async function buildCompletedEnvelopesFromRun(
 
 export function buildStageConfigById(
   loaded: LoadedPipeline,
-): Map<string, StageConfig> {
-  const map = new Map<string, StageConfig>();
+): Map<string, LoadedStageConfig> {
+  const map = new Map<string, LoadedStageConfig>();
   for (const stage of loaded.stages) {
     map.set(stage.id, stage);
   }

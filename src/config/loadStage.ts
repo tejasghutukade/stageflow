@@ -8,6 +8,7 @@ import {
 } from "../types/stage.js";
 import { compilePayloadSchema } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import { parseModelField } from "./modelField.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 
@@ -181,14 +182,11 @@ function parseStageFields(
   label: string,
   entryId: string,
 ): LoadOutcome<StageConfig> {
-  if (
-    typeof raw.system_prompt !== "string" ||
-    typeof raw.model !== "string"
-  ) {
+  if (typeof raw.system_prompt !== "string") {
     return loadFailure([
       {
         code: "stage.invalid_shape",
-        message: `Invalid stage ${label}: system_prompt and model are required strings`,
+        message: `Invalid stage ${label}: system_prompt is a required string`,
         category: "stage",
         stageId: entryId,
       },
@@ -198,8 +196,22 @@ function parseStageFields(
   const stage: StageConfig = {
     id: entryId,
     system_prompt: raw.system_prompt,
-    model: raw.model,
   };
+
+  const modelField = parseModelField(raw.model);
+  if (!modelField.ok) {
+    return loadFailure([
+      {
+        code: "stage.invalid_model",
+        message: `Invalid stage ${label}: ${modelField.message}`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+  if (modelField.value !== undefined) {
+    stage.model = modelField.value;
+  }
 
   if (raw.payload_schema !== undefined) {
     if (
@@ -376,7 +388,7 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
     return loadFailure([
       {
         code: "stage.invalid_shape",
-        message: `Invalid stage file ${filePath}: id, system_prompt, and model are required strings`,
+        message: `Invalid stage file ${filePath}: id and system_prompt are required strings`,
         category: "stage",
       },
     ]);

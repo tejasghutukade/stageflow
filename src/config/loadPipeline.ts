@@ -13,6 +13,7 @@ import {
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
 import { loadStageFromObjectOutcome, loadStageOutcome } from "./loadStage.js";
+import { materializeStageModels } from "./materializeStageModels.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
@@ -36,6 +37,8 @@ export async function resolvePipelinePath(
 
 async function loadPipelineFromPath(
   pipelinePath: string,
+  cwd: string,
+  projectRoot: string = cwd,
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
 
@@ -44,7 +47,12 @@ async function loadPipelineFromPath(
     return loadFailure(mergeOutcome.issues);
   }
 
-  const { entries: rawEntries, pipelineId, agent: pipelineAgent } = mergeOutcome.value;
+  const {
+    entries: rawEntries,
+    pipelineId,
+    agent: pipelineAgent,
+    model: pipelineModel,
+  } = mergeOutcome.value;
   const ctx = { pipelineId, path: normalizedPipelinePath };
 
   const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
@@ -136,14 +144,25 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
+  const materializeOutcome = await materializeStageModels(stages, {
+    pipelineModel,
+    pipelineId,
+    projectRoot,
+  });
+  if (!materializeOutcome.ok) {
+    return loadFailure(materializeOutcome.issues);
+  }
+  const loadedStages = materializeOutcome.value;
+
   const pipeline: PipelineConfig = {
     id: pipelineId,
     stages: stageIds,
     ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
+    ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
   };
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
-  for (const stage of stages) {
+  for (const stage of loadedStages) {
     const completion = nodeById.get(stage.id)?.completion;
     const completionOutcome = validateCompletionContractForStage(stage, completion);
     if (!completionOutcome.ok) return loadFailure(completionOutcome.issues);
@@ -151,7 +170,7 @@ async function loadPipelineFromPath(
 
   return loadSuccess({
     pipeline,
-    stages,
+    stages: loadedStages,
     dag,
     pipelinePath: normalizedPipelinePath,
     stageSources,
@@ -160,9 +179,10 @@ async function loadPipelineFromPath(
 
 export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; projectRoot?: string } = {},
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
   try {
@@ -178,12 +198,12 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  return loadPipelineFromPath(pipelinePath);
+  return loadPipelineFromPath(pipelinePath, cwd, projectRoot);
 }
 
 export async function loadPipeline(
   nameOrPath: string,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; projectRoot?: string } = {},
 ): Promise<LoadedPipeline> {
   const outcome = await loadPipelineOutcome(nameOrPath, options);
   if (!outcome.ok) {

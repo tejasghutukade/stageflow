@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPipeline,
@@ -140,6 +140,70 @@ describe("parseCreatePipelineBody", () => {
     });
   });
 
+  it("accepts inline stage without model", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            system_prompt: "Say hello.",
+          },
+        ],
+      }),
+    ).toEqual({
+      directory: "pipelines",
+      id: "hello",
+      stages: [
+        {
+          id: "hello",
+          inline: {
+            system_prompt: "Say hello.",
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects present-but-empty inline model", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            system_prompt: "Say hello.",
+            model: "",
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "stages[0].model must be a non-empty string",
+    });
+
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            system_prompt: "Say hello.",
+            model: "   ",
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "stages[0].model must be a non-empty string",
+    });
+  });
+
   it("accepts mixed multi-parent needs arrays", () => {
     expect(
       parseCreatePipelineBody({
@@ -247,6 +311,33 @@ describe("pipelineConfigToYaml", () => {
       { format: "dag" },
     );
     expect(omitted).not.toMatch(/gate_kinds/);
+  });
+
+  it("omits inline model when unset", () => {
+    const yaml = pipelineConfigToYaml(
+      {
+        id: "inherit",
+        stages: [
+          {
+            id: "hello",
+            inline: {
+              system_prompt: "Say hello.",
+            },
+          },
+        ],
+      },
+      { format: "dag" },
+    );
+    expect(yaml).toBe(
+      [
+        "id: inherit",
+        "stages:",
+        "  - id: hello",
+        "    system_prompt: Say hello.",
+        "",
+      ].join("\n"),
+    );
+    expect(yaml).not.toMatch(/^    model:/m);
   });
 
   it("writes object-form DAG YAML with per-stage needs", () => {
@@ -409,6 +500,84 @@ describe("createPipeline", () => {
       if (missing.ok) return;
       expect(missing.status).toBe(422);
       expect(missing.error).toContain("missing stage file");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("creates inline stage without model when global default exists", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+
+    try {
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "model: anthropic/claude-sonnet-4-5",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
+          "",
+        ].join("\n"),
+      );
+
+      const created = await createPipeline(root, {
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            inline: {
+              system_prompt: "Say hello.",
+            },
+          },
+        ],
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const yaml = await readFile(
+        path.join(root, "pipelines/hello.pipeline.yaml"),
+        "utf8",
+      );
+      expect(yaml).not.toMatch(/^    model:/m);
+
+      await expect(
+        loadPipeline(path.join(root, "pipelines/hello.pipeline.yaml"), { cwd: root }),
+      ).resolves.toMatchObject({
+        pipeline: { id: "hello", stages: ["hello"] },
+      });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects inline stage without model when no defaults exist", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+
+    try {
+      const created = await createPipeline(root, {
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            inline: {
+              system_prompt: "Say hello.",
+            },
+          },
+        ],
+      });
+      expect(created.ok).toBe(false);
+      if (created.ok) return;
+      expect(created.status).toBe(422);
+      expect(created.error).toMatch(/model is required/i);
+
+      await expect(
+        access(path.join(root, "pipelines/hello.pipeline.yaml")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await cleanup();
     }

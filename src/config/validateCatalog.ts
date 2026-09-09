@@ -35,7 +35,10 @@ export type ValidationFindingCode =
   | "pipeline.include_invalid"
   | "pipeline.include_duplicate_stage"
   | "pipeline.invalid_agent"
+  | "pipeline.invalid_model"
   | "stage.invalid_shape"
+  | "stage.invalid_model"
+  | "stage.missing_model"
   | "stage.invalid_payload_schema"
   | "stage.invalid_clone_input_schema"
   | "stage.invalid_clone_actions"
@@ -70,6 +73,7 @@ export type ValidationScope = "full" | "pipeline" | "task";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
+  projectRoot?: string;
   scope: ValidationScope;
   pipeline?: string;
   task?: string;
@@ -426,9 +430,10 @@ type PipelineValidationCoreResult =
 
 async function runPipelineValidation(
   nameOrPath: string,
-  options: { cwd: string; validateStages: boolean },
+  options: { cwd: string; projectRoot?: string; validateStages: boolean },
 ): Promise<PipelineValidationCoreResult> {
   const { cwd, validateStages } = options;
+  const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
   try {
@@ -447,7 +452,7 @@ async function runPipelineValidation(
     };
   }
 
-  const outcome = await loadPipelineOutcome(pipelinePath, { cwd });
+  const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
   const findings: ValidationFinding[] = [];
 
   if (!outcome.ok) {
@@ -474,6 +479,7 @@ async function runPipelineValidation(
 
 export type ValidatePipelineOptions = {
   cwd?: string;
+  projectRoot?: string;
   validateStages?: boolean;
   strict?: boolean;
 };
@@ -483,9 +489,14 @@ export async function validatePipeline(
   options: ValidatePipelineOptions = {},
 ): Promise<ValidationResult> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const validateStages = options.validateStages ?? true;
   const strict = options.strict ?? false;
-  const core = await runPipelineValidation(nameOrPath, { cwd, validateStages });
+  const core = await runPipelineValidation(nameOrPath, {
+    cwd,
+    projectRoot,
+    validateStages,
+  });
   return buildValidationResult("pipeline", core.findings, strict);
 }
 
@@ -495,11 +506,16 @@ export type LoadPipelineValidatedResult =
 
 export async function loadPipelineValidated(
   nameOrPath: string,
-  options: { cwd?: string; validateStages?: boolean } = {},
+  options: { cwd?: string; projectRoot?: string; validateStages?: boolean } = {},
 ): Promise<LoadPipelineValidatedResult> {
   const cwd = options.cwd ?? process.cwd();
+  const projectRoot = options.projectRoot ?? cwd;
   const validateStages = options.validateStages ?? true;
-  const core = await runPipelineValidation(nameOrPath, { cwd, validateStages });
+  const core = await runPipelineValidation(nameOrPath, {
+    cwd,
+    projectRoot,
+    validateStages,
+  });
   if (core.ok) {
     return { ok: true, loaded: core.loaded };
   }
@@ -690,6 +706,7 @@ export async function validateCatalog(
   if (options.scope === "pipeline") {
     return validatePipeline(options.pipeline!, {
       cwd,
+      projectRoot: options.projectRoot ?? cwd,
       validateStages: true,
       strict,
     });

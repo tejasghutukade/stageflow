@@ -13,7 +13,7 @@ export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 export type StageConfig = {
   id: string;
   system_prompt: string;
-  model: string;
+  model?: string;
   /** Optional JSON Schema (subset) for envelope.payload on success. */
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */
@@ -32,3 +32,5 @@ export type StageConfig = {
    */
   agent?: string;
 };
+
+export type LoadedStageConfig = StageConfig & { model: string };

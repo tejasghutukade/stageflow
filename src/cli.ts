@@ -307,7 +307,10 @@ async function main(argv: string[]): Promise<number> {
     }
 
     if (parsed.command === "validate") {
-      return runValidateCommand(argv.slice(3), { cwd: ctx.invocationCwd });
+      return runValidateCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
     }
 
     if (parsed.command === "run") {

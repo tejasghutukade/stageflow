@@ -8,6 +8,7 @@ import type {
   StageflowManifestCatalog,
 } from "../types/stageflowManifest.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import { parseModelField } from "./modelField.js";
 
 const DEFAULT_PIPELINE_PATTERN = "*.pipeline.yaml";
 const DEFAULT_TASK_PATTERN = "*.task.yaml";
@@ -167,6 +168,14 @@ export function parseStageflowManifestOutcome(
     agent = agentField.value;
   }
 
+  let model: string | undefined;
+  const modelField = parseModelField(record.model);
+  if (!modelField.ok) {
+    issues.push(catalogIssue("catalog.manifest_invalid", modelField.message));
+  } else {
+    model = modelField.value;
+  }
+
   if (issues.length > 0) {
     return loadFailure(issues);
   }
@@ -193,6 +202,7 @@ export function parseStageflowManifestOutcome(
     version: 1,
     catalog,
     ...(agent !== undefined ? { agent } : {}),
+    ...(model !== undefined ? { model } : {}),
   };
   return loadSuccess({
     path: manifestPath,
