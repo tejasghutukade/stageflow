@@ -20,7 +20,7 @@ CI helpers: `scripts/release-range.mjs` resolves previous from published GitHub 
 ## Prerequisites
 
 - Node.js ≥ 20, Stageflow installed
-- **OpenAI** provider (stages use `openai/gpt-5.3-codex`) — set `OPENAI_API_KEY`
+- **Cursor** (`cursor/composer-2-5`) — set `CURSOR_API_KEY` and install `pi-cursor-sdk` (`pi install npm:pi-cursor-sdk`, or `npm i --prefix ~/.pi/agent/npm pi-cursor-sdk`)
 - **`gh` CLI** and `GH_TOKEN` or `GITHUB_TOKEN` for publish stage
 - Git checkout of the Stageflow repo (stages read version/tags from the bound checkout)
 
@@ -34,7 +34,7 @@ From the **repository git root**:
 
 ```bash
 sf validate --strict
-export OPENAI_API_KEY=…
+export CURSOR_API_KEY=…
 export GH_TOKEN=…
 CURRENT="$(node -p "require('./package.json').version")"
 PREVIOUS="$(node scripts/release-range.mjs previous --current "$CURRENT")"

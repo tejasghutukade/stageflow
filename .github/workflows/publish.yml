@@ -102,13 +102,13 @@ jobs:
           echo "Stageflow should draft notes and publish ${TAG} using stageflow@${CURRENT} from npm"
           echo "release=true" >> "${GITHUB_OUTPUT}"
 
-      - name: Require OPENAI_API_KEY
+      - name: Require CURSOR_API_KEY
         if: steps.gate.outputs.release == 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          if [ -z "${OPENAI_API_KEY}" ]; then
-            echo "OPENAI_API_KEY is empty. Add it as a repository Actions secret (Settings → Secrets and variables → Actions)."
+          if [ -z "${CURSOR_API_KEY}" ]; then
+            echo "CURSOR_API_KEY is empty. Add it as a repository Actions secret (Settings → Secrets and variables → Actions)."
             exit 1
           fi
 
@@ -142,10 +142,16 @@ jobs:
           fi
           command -v sf
 
+      - name: Install pi-cursor-sdk
+        if: steps.gate.outputs.release == 'true'
+        run: |
+          mkdir -p "$HOME/.pi/agent/npm"
+          npm i --prefix "$HOME/.pi/agent/npm" pi-cursor-sdk
+
       - name: Generate notes and publish GitHub Release via Stageflow
         if: steps.gate.outputs.release == 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.gate.outputs.version }}
@@ -159,7 +165,6 @@ jobs:
             node scripts/release-range.mjs changelog --through "${RELEASE_VERSION}" --file CHANGELOG.md > "${SLICE}"
           fi
           export RELEASE_CHANGELOG_SLICE="${SLICE}"
-          sf providers login openai --type api_key --api-key-env OPENAI_API_KEY
           sf validate --strict --json
           set +e
           sf run \
