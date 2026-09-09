@@ -19,7 +19,7 @@ export function createStageGateKindsPayload(
 
 const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 export const MODEL_INHERIT = "__inherit__";
-const MODEL_OTHER = "__other__";
+export const MODEL_OTHER = "__other__";
 
 const GATE_KINDS: StageGateKind[] = [
   "free_text",
@@ -41,6 +41,8 @@ export function validateFields(values: {
   id: string;
   model: string;
   system_prompt: string;
+  modelSelect?: string;
+  useDropdown?: boolean;
 }): FieldErrors {
   const errors: FieldErrors = {};
   const id = values.id.trim();
@@ -48,6 +50,13 @@ export function validateFields(values: {
     errors.id = "Id is required.";
   } else if (id.length > 64 || !STAGE_ID_PATTERN.test(id)) {
     errors.id = "Id must be lowercase kebab-case.";
+  }
+  if (
+    values.useDropdown &&
+    values.modelSelect === MODEL_OTHER &&
+    !values.model.trim()
+  ) {
+    errors.model = "Model is required when Other is selected.";
   }
   if (!values.system_prompt.trim()) {
     errors.system_prompt = "System prompt is required.";
@@ -164,7 +173,11 @@ export function NewStagePanel({
       system_prompt: form.system_prompt,
       model,
     };
-    const errors = validateFields(payload);
+    const errors = validateFields({
+      ...payload,
+      useDropdown,
+      modelSelect: form.modelSelect,
+    });
     setFieldErrors(errors);
     setFormBanner(null);
     if (Object.keys(errors).length > 0) return;

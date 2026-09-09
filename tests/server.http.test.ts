@@ -533,6 +533,22 @@ describe("localhost HTTP API", () => {
         "utf8",
       );
       expect(inheritedYaml).not.toMatch(/^model:/m);
+
+      const emptyModel = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline_directory: "pipelines",
+          filename: "empty-model.yaml",
+          id: "empty-model",
+          system_prompt: "Present but empty model.",
+          model: "",
+        }),
+      });
+      expect(emptyModel.status).toBe(400);
+      expect(emptyModel.body).toEqual({
+        error: "model must be a non-empty string",
+      });
     } finally {
       clearFindProjectRootCacheForTests();
       await new Promise<void>((resolve, reject) => {

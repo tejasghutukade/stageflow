@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createStageGateKindsPayload,
   MODEL_INHERIT,
+  MODEL_OTHER,
   resolveCreateStageModel,
   validateFields,
 } from "./NewStagePanel";
@@ -19,14 +20,42 @@ describe("NewStagePanel three-state gate_kinds", () => {
 });
 
 describe("NewStagePanel optional model", () => {
-  it("validateFields does not error when model is empty", () => {
+  it("validateFields does not error when model is empty for inherit", () => {
     expect(
       validateFields({
         id: "hello",
         model: "",
         system_prompt: "Say hello.",
+        useDropdown: true,
+        modelSelect: MODEL_INHERIT,
       }),
     ).toEqual({});
+  });
+
+  it("validateFields errors when Other is selected and custom model is blank", () => {
+    expect(
+      validateFields({
+        id: "hello",
+        model: "",
+        system_prompt: "Say hello.",
+        useDropdown: true,
+        modelSelect: MODEL_OTHER,
+      }),
+    ).toEqual({
+      model: "Model is required when Other is selected.",
+    });
+
+    expect(
+      validateFields({
+        id: "hello",
+        model: "   ",
+        system_prompt: "Say hello.",
+        useDropdown: true,
+        modelSelect: MODEL_OTHER,
+      }),
+    ).toEqual({
+      model: "Model is required when Other is selected.",
+    });
   });
 
   it("resolveCreateStageModel returns empty for inherit sentinel", () => {

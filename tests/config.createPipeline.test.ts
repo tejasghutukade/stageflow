@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPipeline,
@@ -163,6 +163,44 @@ describe("parseCreatePipelineBody", () => {
           },
         },
       ],
+    });
+  });
+
+  it("rejects present-but-empty inline model", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            system_prompt: "Say hello.",
+            model: "",
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "stages[0].model must be a non-empty string",
+    });
+
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            system_prompt: "Say hello.",
+            model: "   ",
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "stages[0].model must be a non-empty string",
     });
   });
 
@@ -511,6 +549,35 @@ describe("createPipeline", () => {
       ).resolves.toMatchObject({
         pipeline: { id: "hello", stages: ["hello"] },
       });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("rejects inline stage without model when no defaults exist", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+
+    try {
+      const created = await createPipeline(root, {
+        directory: "pipelines",
+        id: "hello",
+        stages: [
+          {
+            id: "hello",
+            inline: {
+              system_prompt: "Say hello.",
+            },
+          },
+        ],
+      });
+      expect(created.ok).toBe(false);
+      if (created.ok) return;
+      expect(created.status).toBe(422);
+      expect(created.error).toMatch(/model is required/i);
+
+      await expect(
+        access(path.join(root, "pipelines/hello.pipeline.yaml")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await cleanup();
     }

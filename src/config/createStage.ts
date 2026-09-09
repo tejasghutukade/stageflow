@@ -5,6 +5,7 @@ import {
   type StageGateKind,
 } from "../types/stage.js";
 import { loadStage } from "./loadStage.js";
+import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
 
 export const STAGE_ID_PATTERN = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -101,16 +102,11 @@ export function parseCreateStageBody(
     return { ok: false, status: 400, error: "system_prompt is required" };
   }
 
-  let model: string | undefined;
-  if (body.model !== undefined) {
-    if (typeof body.model !== "string") {
-      return { ok: false, status: 400, error: "model must be a string" };
-    }
-    const trimmed = body.model.trim();
-    if (trimmed.length > 0) {
-      model = trimmed;
-    }
+  const modelField = parseModelField(body.model);
+  if (!modelField.ok) {
+    return { ok: false, status: 400, error: modelField.message };
   }
+  const model = modelField.value;
 
   const gateKinds = parseGateKinds(body.gate_kinds);
   if (gateKinds === "invalid") {

@@ -122,6 +122,33 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     expect(outcome.value.stages[0]?.model).toBe("test/stage-model");
   });
 
+  it("canonical pipeline-default fixture fills from pipeline model", async () => {
+    const fixtureRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/model-hierarchy/pipeline-default",
+    );
+    const outcome = await loadPipelineOutcome("fill.pipeline.yaml", {
+      cwd: fixtureRoot,
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.pipeline.model).toBe("test/pipeline-model");
+    expect(outcome.value.stages[0]?.model).toBe("test/pipeline-model");
+  });
+
+  it("canonical missing-all fixture fails with stage.missing_model", async () => {
+    const fixtureRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/model-hierarchy/missing-all",
+    );
+    const outcome = await loadPipelineOutcome("fail.pipeline.yaml", {
+      cwd: fixtureRoot,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((i) => i.code === "stage.missing_model")).toBe(true);
+  });
+
   it("stage model overrides pipeline and global", async () => {
     const root = await writePipelineRoot({
       "stageflow.yaml": [
@@ -148,7 +175,7 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     expect(outcome.value.stages[0]?.model).toBe("google/gemini-2.5-pro");
   });
 
-  it("all three omit → stage.missing_model", async () => {
+  it("absent stageflow.yaml + no stage/pipeline model → stage.missing_model", async () => {
     const root = await writePipelineRoot({
       "demo.pipeline.yaml": [
         "id: demo",
@@ -162,6 +189,9 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues.some((i) => i.code === "stage.missing_model")).toBe(true);
+    expect(outcome.issues.some((i) => i.code.startsWith("catalog.manifest_"))).toBe(
+      false,
+    );
   });
 
   it("invalid empty pipeline model → pipeline.invalid_model", async () => {
@@ -182,7 +212,7 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     expect(outcome.issues.some((i) => i.code === "pipeline.invalid_model")).toBe(true);
   });
 
-  it("invalid empty manifest model → catalog.manifest_invalid (skips global tier)", async () => {
+  it("invalid empty manifest model → catalog.manifest_invalid", async () => {
     const root = await writePipelineRoot({
       "stageflow.yaml": [
         "version: 1",
@@ -203,7 +233,32 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    // Invalid manifest → globalModel undefined → stage.missing_model (pipeline+stage omit)
-    expect(outcome.issues.some((i) => i.code === "stage.missing_model")).toBe(true);
+    expect(outcome.issues.some((i) => i.code === "catalog.manifest_invalid")).toBe(true);
+    expect(outcome.issues.some((i) => i.code === "stage.missing_model")).toBe(false);
+  });
+
+  it("invalid manifest fails even when stage declares model", async () => {
+    const root = await writePipelineRoot({
+      "stageflow.yaml": [
+        "version: 1",
+        'model: ""',
+        "catalog:",
+        "  pipelines: []",
+        "  tasks: []",
+        "",
+      ].join("\n"),
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: openai/gpt-4o",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((i) => i.code === "catalog.manifest_invalid")).toBe(true);
   });
 });

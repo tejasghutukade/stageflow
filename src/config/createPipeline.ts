@@ -11,6 +11,7 @@ import {
   normalizePipelineStageEntries,
   toWiringRefs,
 } from "./normalizePipelineStageEntry.js";
+import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { validatePipeline } from "./validateCatalog.js";
@@ -166,16 +167,16 @@ function parseInlineBody(
     system_prompt: entry.system_prompt,
   };
   if (entry.model !== undefined) {
-    if (typeof entry.model !== "string") {
+    const modelField = parseModelField(entry.model);
+    if (!modelField.ok) {
       return {
         ok: false,
         status: 400,
-        error: `stages[${index}].model must be a string`,
+        error: `stages[${index}].${modelField.message}`,
       };
     }
-    const trimmed = entry.model.trim();
-    if (trimmed.length > 0) {
-      inline.model = trimmed;
+    if (modelField.value !== undefined) {
+      inline.model = modelField.value;
     }
   }
   if (entry.gate_kinds !== undefined) {

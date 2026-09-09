@@ -88,8 +88,12 @@ stage.model ?? pipeline.model ?? stageflow.yaml model
 | Tier | Source | Wins when |
 |------|--------|-----------|
 | Stage | Inline body or external stage YAML | Stage sets `model` |
-| Pipeline | Top-level `model` on `*.pipeline.yaml` | Stage omits `model` |
+| Pipeline | Top-level `model` on the **root** `*.pipeline.yaml` | Stage omits `model` |
 | Global | Top-level `model` on `stageflow.yaml` | Stage and pipeline omit `model` |
+
+Pipeline `model` is read only from the **root** pipeline file (the path passed to load/validate). Top-level `model` on [included fragments](#pipeline-fragments-include) is ignored — same pattern as pipeline `agent`.
+
+Global tier: **absence** of `stageflow.yaml` means no global default. A **present but invalid** `stageflow.yaml` (bad shape, empty `model`, etc.) fails pipeline load with catalog/manifest errors — it is not treated as “no global.”
 
 If the chain still leaves `model` unset, load/run **fails with a clear error**. There is **no** silent hardcoded model string (unlike backend selection, which falls back to `"pi"`).
 
@@ -269,7 +273,7 @@ stages:
     needs: gate
 ```
 
-Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory.
+Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory. Top-level `model` / `agent` on a fragment are ignored; only the root pipeline file supplies those defaults (see [Model defaults and precedence](#model-defaults-and-precedence)).
 
 Nested `include:` is allowed. Cycles and duplicate stage ids across files are rejected. Includes merge before the declaring file's own `stages`.
 

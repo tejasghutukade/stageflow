@@ -58,6 +58,38 @@ describe("resolveModelOutcome — precedence", () => {
     if (!outcome.ok) return;
     expect(outcome.value).toBe("anthropic/claude-opus-4");
   });
+
+  it("rejects empty and whitespace-only effective models", () => {
+    for (const empty of ["", "   "]) {
+      const outcome = resolveModelOutcome({ stage: empty }, ctx);
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) continue;
+      expect(outcome.issues[0]?.code).toBe("stage.invalid_model");
+      expect(outcome.issues[0]?.message).toMatch(/non-empty string/);
+    }
+
+    const fromPipeline = resolveModelOutcome({ pipeline: "" }, ctx);
+    expect(fromPipeline.ok).toBe(false);
+    if (!fromPipeline.ok) {
+      expect(fromPipeline.issues[0]?.code).toBe("stage.invalid_model");
+    }
+
+    const fromGlobal = resolveModelOutcome({ global: "  " }, ctx);
+    expect(fromGlobal.ok).toBe(false);
+    if (!fromGlobal.ok) {
+      expect(fromGlobal.issues[0]?.code).toBe("stage.invalid_model");
+    }
+  });
+
+  it("trims a valid effective model", () => {
+    const outcome = resolveModelOutcome(
+      { stage: "  anthropic/claude-sonnet-4-5  " },
+      ctx,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value).toBe("anthropic/claude-sonnet-4-5");
+  });
 });
 
 describe("parseModelField", () => {

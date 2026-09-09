@@ -62,7 +62,7 @@ describe("parseCreateStageBody", () => {
     });
   });
 
-  it("accepts omitted model and rejects non-string model", () => {
+  it("accepts omitted model and rejects empty or non-string model", () => {
     expect(
       parseCreateStageBody({
         pipeline_directory: "pipelines",
@@ -80,6 +80,34 @@ describe("parseCreateStageBody", () => {
     expect(
       parseCreateStageBody({
         pipeline_directory: "pipelines",
+        filename: "empty-model.yaml",
+        id: "empty-model",
+        system_prompt: "x",
+        model: "",
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "model must be a non-empty string",
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
+        filename: "ws-model.yaml",
+        id: "ws-model",
+        system_prompt: "x",
+        model: "   ",
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: "model must be a non-empty string",
+    });
+
+    expect(
+      parseCreateStageBody({
+        pipeline_directory: "pipelines",
         filename: "bad-model.yaml",
         id: "bad-model",
         system_prompt: "x",
@@ -88,7 +116,7 @@ describe("parseCreateStageBody", () => {
     ).toEqual({
       ok: false,
       status: 400,
-      error: "model must be a string",
+      error: "model must be a non-empty string",
     });
   });
 

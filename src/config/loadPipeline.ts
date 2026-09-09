@@ -7,7 +7,10 @@ import type {
 } from "../types/pipeline.js";
 import type { StageConfig } from "../types/stage.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
-import { loadStageflowManifestOutcome } from "./loadStageflowManifest.js";
+import {
+  loadStageflowManifestOutcome,
+  manifestPathForProject,
+} from "./loadStageflowManifest.js";
 import { mergePipelineStages } from "./mergePipelineIncludes.js";
 import {
   normalizePipelineStageEntries,
@@ -145,10 +148,21 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
-  const manifestOutcome = await loadStageflowManifestOutcome(projectRoot);
-  const globalModel = manifestOutcome.ok
-    ? globalModelFromManifest(manifestOutcome.value)
-    : undefined;
+  let globalModel: string | undefined;
+  const manifestPath = manifestPathForProject(projectRoot);
+  let manifestExists = true;
+  try {
+    await access(manifestPath);
+  } catch {
+    manifestExists = false;
+  }
+  if (manifestExists) {
+    const manifestOutcome = await loadStageflowManifestOutcome(projectRoot);
+    if (!manifestOutcome.ok) {
+      return loadFailure(manifestOutcome.issues);
+    }
+    globalModel = globalModelFromManifest(manifestOutcome.value);
+  }
 
   for (const stage of stages) {
     const modelOutcome = resolveModelOutcome(
