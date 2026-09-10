@@ -273,6 +273,20 @@ async function loadPipelineFromPath(
   const ioOutcome = checkSequentialIoCompatibility(stages, dag, pipelineId, pipelineSchemas);
   if (!ioOutcome.ok) return ioOutcome;
 
+  if (pipelineModel !== undefined) {
+    const inheritingIds = stages
+      .filter((stage) => stage.model === undefined)
+      .map((stage) => stage.id);
+    if (inheritingIds.length > 0) {
+      warnings.push({
+        code: "pipeline.model_applies",
+        message: `Pipeline ${pipelineId}: pipeline-root model now applies to stages that omit model (${inheritingIds.join(", ")})`,
+        category: "pipeline",
+        pipelineId,
+      });
+    }
+  }
+
   const materializeOutcome = await materializeStageModels(stages, {
     pipelineModel,
     pipelineId,

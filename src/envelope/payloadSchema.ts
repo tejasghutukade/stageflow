@@ -375,7 +375,57 @@ function readProperties(schema: JsonSchemaNode): Record<string, unknown> {
 
 function typesCompatible(consumerType: string, producerType: string): boolean {
   if (consumerType === producerType) return true;
-  return consumerType === "integer" && producerType === "number";
+  return consumerType === "number" && producerType === "integer";
+}
+
+function readEnumValues(schema: JsonSchemaNode): readonly unknown[] | undefined {
+  if (!Array.isArray(schema.enum) || schema.enum.length === 0) return undefined;
+  return schema.enum;
+}
+
+function enumCompatible(
+  consumer: JsonSchemaNode,
+  producer: JsonSchemaNode,
+  type: string,
+): boolean {
+  if (type !== "string" && type !== "integer") return true;
+  const consumerEnum = readEnumValues(consumer);
+  const producerEnum = readEnumValues(producer);
+  if (consumerEnum === undefined) return true;
+  if (producerEnum === undefined) return false;
+  const allowed = new Set(consumerEnum);
+  return producerEnum.every((value) => allowed.has(value));
+}
+
+function patternCompatible(consumer: JsonSchemaNode, producer: JsonSchemaNode): boolean {
+  const consumerPattern =
+    typeof consumer.pattern === "string" ? consumer.pattern : undefined;
+  const producerPattern =
+    typeof producer.pattern === "string" ? producer.pattern : undefined;
+  if (consumerPattern === undefined) return true;
+  if (producerPattern === undefined) return false;
+  return consumerPattern === producerPattern;
+}
+
+function numericBound(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value;
+}
+
+function minBoundFits(consumerBound: unknown, producerBound: unknown): boolean {
+  const consumer = numericBound(consumerBound);
+  if (consumer === undefined) return true;
+  const producer = numericBound(producerBound);
+  if (producer === undefined) return false;
+  return producer >= consumer;
+}
+
+function maxBoundFits(consumerBound: unknown, producerBound: unknown): boolean {
+  const consumer = numericBound(consumerBound);
+  if (consumer === undefined) return true;
+  const producer = numericBound(producerBound);
+  if (producer === undefined) return false;
+  return producer <= consumer;
 }
 
 function isSubsetNode(
@@ -395,49 +445,94 @@ function isSubsetNode(
     return false;
   }
 
+  if (producerNode.nullable === true && consumerNode.nullable !== true) {
+    return false;
+  }
+
   if (consumerNode.type === "array") {
     if (consumerNode.items === undefined || producerNode.items === undefined) {
       return false;
     }
-    return isSubsetNode(consumerNode.items, producerNode.items, `${path}.items`, {
-      schemas: ctx.schemas,
-      stack: consumerDeref.stack,
-    });
-  }
-
-  if (consumerNode.type !== "object") {
-    return true;
-  }
-
-  const consumerRequired = readRequiredKeys(consumerNode);
-  const producerRequired = new Set(readRequiredKeys(producerNode));
-  const producerProps = readProperties(producerNode);
-  const consumerProps = readProperties(consumerNode);
-
-  for (const key of consumerRequired) {
-    if (!(key in producerProps) || !producerRequired.has(key)) {
-      return false;
-    }
-  }
-
-  for (const [key, consumerProp] of Object.entries(consumerProps)) {
-    if (producerProps[key] === undefined) continue;
     if (
-      !isSubsetNode(consumerProp, producerProps[key], `${path}.properties.${key}`, {
+      !isSubsetNode(consumerNode.items, producerNode.items, `${path}.items`, {
         schemas: ctx.schemas,
         stack: consumerDeref.stack,
       })
     ) {
       return false;
     }
+    return minBoundFits(consumerNode.minItems, producerNode.minItems);
+  }
+
+  if (consumerNode.type === "object") {
+    const consumerRequired = readRequiredKeys(consumerNode);
+    const producerRequired = new Set(readRequiredKeys(producerNode));
+    const producerProps = readProperties(producerNode);
+    const consumerProps = readProperties(consumerNode);
+
+    for (const key of consumerRequired) {
+      if (!(key in producerProps) || !producerRequired.has(key)) {
+        return false;
+      }
+    }
+
+    for (const [key, consumerProp] of Object.entries(consumerProps)) {
+      if (producerProps[key] === undefined) continue;
+      if (
+        !isSubsetNode(consumerProp, producerProps[key], `${path}.properties.${key}`, {
+          schemas: ctx.schemas,
+          stack: consumerDeref.stack,
+        })
+      ) {
+        return false;
+      }
+    }
+
+    if (consumerNode.additionalProperties === false) {
+      if (producerNode.additionalProperties !== false) {
+        return false;
+      }
+      for (const key of Object.keys(producerProps)) {
+        if (!(key in consumerProps)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  }
+
+  if (!enumCompatible(consumerNode, producerNode, consumerNode.type)) {
+    return false;
+  }
+
+  if (consumerNode.type === "string") {
+    if (!patternCompatible(consumerNode, producerNode)) return false;
+    if (!minBoundFits(consumerNode.minLength, producerNode.minLength)) return false;
+    if (!maxBoundFits(consumerNode.maxLength, producerNode.maxLength)) return false;
+  }
+
+  if (consumerNode.type === "number" || consumerNode.type === "integer") {
+    if (!minBoundFits(consumerNode.minimum, producerNode.minimum)) return false;
+    if (!maxBoundFits(consumerNode.maximum, producerNode.maximum)) return false;
   }
 
   return true;
 }
 
 /**
- * After `$ref` resolve, true when every consumer required field exists
- * on the producer with a compatible type. Extra producer fields are allowed.
+ * After `$ref` resolve, true when every success payload that satisfies the
+ * producer schema also satisfies the consumer schema (producer output
+ * assignable to consumer input). Extra producer fields are allowed unless
+ * the consumer sets `additionalProperties: false`, which also requires the
+ * producer to close extras. A number consumer accepts an integer producer;
+ * the reverse is incompatible. Producer enums must be subsets of consumer
+ * enums; a consumer enum with an unconstrained producer is incompatible.
+ * String `pattern` values must be identical when the consumer sets one.
+ * Producer `minimum`/`maximum`, `minLength`/`maxLength`, and array `minItems`
+ * must fit inside the consumer bounds (a consumer bound with an omitted
+ * producer bound is incompatible). A nullable producer is incompatible unless
+ * the consumer is also nullable.
  */
 export function isPayloadSchemaSubset(
   consumer: unknown,
@@ -547,15 +642,15 @@ export function assertCloneAssignmentPayload(
   const pathLead = itemPath ? `${itemPath}: ` : "";
   if (envelope.payload === undefined) {
     throw new EnvelopeError(
-      `${pathLead}clone assignment payload is required by clone_input_schema for ${successorId}`,
+      `${pathLead}clone assignment payload is required by io.input.schema for ${successorId}`,
     );
   }
   if (!Value.Check(schema, envelope.payload)) {
     const details = payloadSchemaMismatchDetails(schema, envelope.payload);
     throw new EnvelopeError(
       details
-        ? `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}: ${details}`
-        : `${pathLead}clone assignment payload does not match clone_input_schema for ${successorId}`,
+        ? `${pathLead}clone assignment payload does not match io.input.schema for ${successorId}: ${details}`
+        : `${pathLead}clone assignment payload does not match io.input.schema for ${successorId}`,
     );
   }
 }

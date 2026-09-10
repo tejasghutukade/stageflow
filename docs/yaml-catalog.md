@@ -103,7 +103,7 @@ stage.model ?? pipeline.model ?? stageflow.yaml model
 | Pipeline | Top-level `model` on the **root** `*.pipeline.yaml` | Stage omits `model` |
 | Global | Top-level `model` on `stageflow.yaml` | Stage and pipeline omit `model` |
 
-Pipeline `model` is read only from the **root** pipeline file (the path passed to load/validate). Top-level `model` on [included fragments](#pipeline-fragments-include) is ignored — same pattern as pipeline `agent`.
+Pipeline `model` is read only from the **root** pipeline file (the path passed to load/validate). Top-level `model` on [included fragments](#pipeline-fragments-include) is ignored — same pattern as pipeline `agent`. When that root `model` fills one or more stages that omit `model`, `sf validate` emits warning `pipeline.model_applies` (not an error; `--strict` does not promote it).
 
 Global tier: **absence** of `stageflow.yaml` means no global default. A **present but invalid** `stageflow.yaml` (bad shape, empty `model`, etc.) fails pipeline load with catalog/manifest errors — it is not treated as “no global.”
 

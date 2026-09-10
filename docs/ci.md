@@ -69,6 +69,26 @@ One document per invocation with `--json`:
 }
 ```
 
+When start-run pairing produces warnings, the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). `task.entry_input_unmet` is a warning and does not fail the run (`ok` / `outcome` / exit stay as today):
+
+```json
+{
+  "ok": true,
+  "outcome": "succeeded",
+  "runId": "…",
+  "runDir": ".stageflow/runs/…",
+  "findings": [
+    {
+      "severity": "warning",
+      "code": "task.entry_input_unmet",
+      "file": "tasks/sample.task.yaml",
+      "message": "Task has no input; entry stage \"intake\" requires io.input",
+      "category": "task"
+    }
+  ]
+}
+```
+
 **Waiting:**
 
 ```json

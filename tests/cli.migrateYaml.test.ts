@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { runMigrateYamlCommand } from "../src/cli/migrateYamlCommand.js";
+import { applyMigrateYamlPlan, planMigrateYaml } from "../src/config/migrateYaml.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { validatePipeline } from "../src/config/validateCatalog.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
@@ -76,6 +78,11 @@ const workPipelineYaml = [
   "      include_failed_checks: true",
   "",
 ].join("\n");
+
+async function tmpNamesIn(dir: string): Promise<string[]> {
+  const names = await readdir(dir);
+  return names.filter((name) => name.endsWith(".tmp"));
+}
 
 async function writeUsesCatalog(
   catalogRoot: string,
@@ -345,6 +352,75 @@ describe("sf migrate-yaml", () => {
     }
   });
 
+  it("does not poison a sibling parent when migrating one pipeline that shares a uses file", async () => {
+    const { root: catalogRoot, cleanup } = await initTempGitRepo();
+    try {
+      const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot);
+      await writeFile(
+        path.join(catalogRoot, "pipelines", "other.pipeline.yaml"),
+        [
+          "id: other-pipe",
+          "stages:",
+          "  - id: work",
+          "    uses: ../stages/work.yaml",
+          "    completion:",
+          "      mode: all",
+          "      checks:",
+          "        - id: lint",
+          "          type: command",
+          "          run: npm run lint",
+          "",
+        ].join("\n"),
+      );
+      await commitAll(catalogRoot, "two parents");
+      const beforeStage = await readFile(stagePath, "utf8");
+      const cap = captureIo();
+      const code = await runMigrateYamlCommand(["--write", "--json", pipelinePath], {
+        cwd: catalogRoot,
+        io: cap.io,
+      });
+      expect(code).toBe(1);
+      expect(await readFile(stagePath, "utf8")).toBe(beforeStage);
+      const out = [...cap.logs, ...cap.errors].join("\n");
+      expect(out).toMatch(/work\.yaml/);
+      expect(out).toMatch(/other-pipe/);
+      expect(out).not.toMatch(/type: command[\s\S]*npm run lint/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("migrates a standalone stage YAML in a directory with no pipeline file", async () => {
+    const { root: catalogRoot, cleanup } = await initTempGitRepo();
+    try {
+      const stagesDir = path.join(catalogRoot, "stages");
+      await mkdir(stagesDir, { recursive: true });
+      const stagePath = path.join(stagesDir, "orphan.yaml");
+      await writeFile(stagePath, workStageYaml);
+      await commitAll(catalogRoot, "standalone stage");
+      const cap = captureIo();
+      expect(
+        await runMigrateYamlCommand(["--write", "--json", catalogRoot], {
+          cwd: catalogRoot,
+          io: cap.io,
+        }),
+      ).toBe(0);
+      const parsed = JSON.parse(cap.logs[0]!) as {
+        ok: boolean;
+        written?: string[];
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.written?.some((file) => file.includes("orphan.yaml"))).toBe(true);
+      const after = await readFile(stagePath, "utf8");
+      expect(after).toMatch(/io:/);
+      expect(after).toMatch(/verify:/);
+      expect(after).not.toMatch(/payload_schema:/);
+      expect(after).not.toMatch(/pre_emit_checks:/);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("does not rewrite .stageflow snapshots", async () => {
     const { root: catalogRoot, cleanup } = await initTempGitRepo();
     try {
@@ -375,6 +451,131 @@ describe("sf migrate-yaml", () => {
       expect(mentioned.some((file) => file.includes(".stageflow"))).toBe(false);
       expect(await readFile(snapshotPath, "utf8")).toBe(snapshot);
       expect(await readFile(pipelinePath, "utf8")).toMatch(/on_verify_fail:/);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("mid-batch apply failure leaves the catalog unchanged", async () => {
+    const { root: catalogRoot, cleanup } = await initTempGitRepo();
+    try {
+      const { pipelinePath } = await writeUsesCatalog(catalogRoot);
+      await commitAll(catalogRoot, "catalog");
+      const plan = await planMigrateYaml(pipelinePath, { cwd: catalogRoot });
+      expect(plan.errors).toEqual([]);
+      expect(plan.writes.length).toBeGreaterThanOrEqual(2);
+      const first = plan.writes[0]!;
+      const second = plan.writes[1]!;
+      const firstBefore = await readFile(first.absPath, "utf8");
+      await expect(
+        applyMigrateYamlPlan(plan, {
+          beforeRename: async () => {
+            await rm(second.absPath);
+            await mkdir(second.absPath);
+          },
+        }),
+      ).rejects.toThrow(/Failed to restore/);
+      expect(await readFile(first.absPath, "utf8")).toBe(firstBefore);
+      expect(await tmpNamesIn(path.dirname(first.absPath))).toEqual([]);
+      expect(await tmpNamesIn(path.dirname(second.absPath))).toEqual([]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("refuses --write outside a git checkout without --force", async () => {
+    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-migrate-nongit-"));
+    try {
+      const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot);
+      const beforePipeline = await readFile(pipelinePath, "utf8");
+      const beforeStage = await readFile(stagePath, "utf8");
+      const refused = captureIo();
+      const refusedCode = await runMigrateYamlCommand(["--write", "--json", pipelinePath], {
+        cwd: catalogRoot,
+        io: refused.io,
+      });
+      expect(refusedCode).toBe(1);
+      const refusedOut = [...refused.logs, ...refused.errors].join("\n");
+      expect(refusedOut).toMatch(/uncommitted|--force/i);
+      expect(await readFile(pipelinePath, "utf8")).toBe(beforePipeline);
+      expect(await readFile(stagePath, "utf8")).toBe(beforeStage);
+
+      const forced = captureIo();
+      expect(
+        await runMigrateYamlCommand(["--write", "--force", "--json", pipelinePath], {
+          cwd: catalogRoot,
+          io: forced.io,
+        }),
+      ).toBe(0);
+      const parsed = JSON.parse(forced.logs[0]!) as { ok: boolean; written?: string[] };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.written?.length).toBeGreaterThan(0);
+      expect(await readFile(stagePath, "utf8")).toMatch(/io:/);
+      expect(await readFile(pipelinePath, "utf8")).not.toBe(beforePipeline);
+    } finally {
+      await rm(catalogRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves payload_schema $ref instead of inlining pipeline schemas", async () => {
+    const { root: catalogRoot, cleanup } = await initTempGitRepo();
+    try {
+      const stageYaml = [
+        "id: work",
+        "system_prompt: do the work",
+        `model: ${MODEL}`,
+        "payload_schema:",
+        "  $ref: '#/schemas/story'",
+        "pre_emit_checks:",
+        "  - id: declared",
+        "    type: artifact_declared",
+        "    basename: report.md",
+        "",
+      ].join("\n");
+      const pipelineYaml = [
+        "id: work-pipe",
+        "schemas:",
+        "  story:",
+        "    type: object",
+        "    required: [title]",
+        "    properties:",
+        "      title:",
+        "        type: string",
+        "stages:",
+        "  - id: work",
+        "    uses: ../stages/work.yaml",
+        "    completion:",
+        "      mode: all",
+        "      checks:",
+        "        - id: tests",
+        "          type: command",
+        "          run: npm test",
+        "",
+      ].join("\n");
+      const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot, {
+        pipelineYaml,
+        stageYaml,
+      });
+      await commitAll(catalogRoot, "catalog");
+      const cap = captureIo();
+      expect(
+        await runMigrateYamlCommand(["--write", pipelinePath], {
+          cwd: catalogRoot,
+          io: cap.io,
+        }),
+      ).toBe(0);
+      const afterStage = await readFile(stagePath, "utf8");
+      expect(afterStage).toMatch(/\$ref:\s*['"]?#\/schemas\/story['"]?/);
+      expect(afterStage).not.toMatch(/properties:/);
+      expect(afterStage).not.toMatch(/title:/);
+      expect(afterStage).toMatch(/verify:/);
+      expect(afterStage).toMatch(/type: command/);
+      const afterPipeline = await readFile(pipelinePath, "utf8");
+      expect(afterPipeline).toMatch(/schemas:/);
+      expect(afterPipeline).not.toMatch(/payload_schema:/);
+      expect(await tmpNamesIn(path.dirname(stagePath))).toEqual([]);
+      expect(await tmpNamesIn(path.dirname(pipelinePath))).toEqual([]);
+      await loadPipeline(pipelinePath, { cwd: catalogRoot });
     } finally {
       await cleanup();
     }

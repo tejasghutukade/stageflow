@@ -736,6 +736,339 @@ describe("payload_schema", () => {
     ).toBe(true);
   });
 
+  it("rejects extra producer properties when consumer sets additionalProperties false", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            extra: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts number consumer of integer producer and rejects integer consumer of number producer", () => {
+    const numberField = {
+      type: "object",
+      properties: { n: { type: "number" } },
+    };
+    const integerField = {
+      type: "object",
+      properties: { n: { type: "integer" } },
+    };
+    expect(isPayloadSchemaSubset(numberField, integerField)).toBe(true);
+    expect(isPayloadSchemaSubset(integerField, numberField)).toBe(false);
+  });
+
+  it("requires producer minItems to fit the consumer array bound", () => {
+    const consumer = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" }, minItems: 2 },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" }, minItems: 2 },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" }, minItems: 1 },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" } },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts the same or fewer producer properties when consumer sets additionalProperties false", () => {
+    const consumer = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        note: { type: "string" },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: false,
+        properties: { title: { type: "string" }, note: { type: "string" } },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: false,
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an open producer when the consumer sets additionalProperties false", () => {
+    const consumer = {
+      type: "object",
+      additionalProperties: false,
+      properties: { title: { type: "string" } },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: true,
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a nullable producer when the consumer is not nullable", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: {
+            tags: { type: "array", items: { type: "string" } },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            tags: { type: "array", nullable: true, items: { type: "string" } },
+          },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: {
+            meta: { type: "object", properties: { title: { type: "string" } } },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            meta: {
+              type: "object",
+              nullable: true,
+              properties: { title: { type: "string" } },
+            },
+          },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("allows extra producer fields when consumer omits additionalProperties false", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            extra: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("treats producer enum as compatible only when every value is accepted by the consumer", () => {
+    const passFail = {
+      type: "object",
+      properties: { result: { type: "string", enum: ["pass", "fail"] } },
+    };
+    const passOnly = {
+      type: "object",
+      properties: { result: { type: "string", enum: ["pass"] } },
+    };
+    const unconstrained = {
+      type: "object",
+      properties: { result: { type: "string" } },
+    };
+    expect(isPayloadSchemaSubset(passFail, passOnly)).toBe(true);
+    expect(isPayloadSchemaSubset(passOnly, passFail)).toBe(false);
+    expect(isPayloadSchemaSubset(unconstrained, passOnly)).toBe(true);
+    expect(isPayloadSchemaSubset(passOnly, unconstrained)).toBe(false);
+  });
+
+  it("requires identical string patterns when the consumer constrains pattern", () => {
+    const codePattern = "^[a-z]{2,4}$";
+    const patterned = {
+      type: "object",
+      properties: { code: { type: "string", pattern: codePattern } },
+    };
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string", pattern: codePattern } },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string", pattern: "^[a-z]+$" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+        patterned,
+      ),
+    ).toBe(true);
+  });
+
+  it("requires producer min/max and minLength/maxLength to fit inside consumer bounds", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 2, maximum: 8 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer" } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer" } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "number", minimum: 0, maximum: 5 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "number", minimum: -1, maximum: 5 } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 3, maxLength: 6 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("failure envelopes skip enum and minItems checks", () => {
     const schema = {
       type: "object",
@@ -786,6 +1119,6 @@ describe("payload_schema", () => {
         "author-diagrams",
         "clone_forks[0].envelope",
       ),
-    ).toThrow(/clone_forks\[0\]\.envelope/);
+    ).toThrow(/clone_forks\[0\]\.envelope: clone assignment payload is required by io\.input\.schema/);
   });
 });

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import { afterCompletionForStage, loadStageOutcome } from "./loadStage.js";
@@ -7,7 +8,7 @@ import { readYamlObject } from "./readYamlObject.js";
 import { relPath } from "./validateCatalog.js";
 import {
   buildVerifyItems,
-  ioFromSchemas,
+  ioFromRawDocument,
   rewriteCatalogDocument,
   rewritePipelineStageEntry,
   rewriteStageDocument,
@@ -134,7 +135,6 @@ function verifyFingerprint(items: Record<string, unknown>[]): string {
 
 type UsesCompile = {
   verify: Record<string, unknown>[];
-  io?: ReturnType<typeof ioFromSchemas>;
   pipelineIds: string[];
 };
 
@@ -152,7 +152,7 @@ function gitToplevel(cwd: string): string | null {
 
 export function fileDirtyVsHead(absPath: string): boolean {
   const top = gitToplevel(path.dirname(absPath));
-  if (top === null) return false;
+  if (top === null) return true;
   try {
     const status = execFileSync("git", ["status", "--porcelain", "--", absPath], {
       cwd: top,
@@ -182,8 +182,23 @@ async function discoverScope(
   const extras: string[] = [];
 
   if (info.isDirectory()) {
-    pipelines.push(...(await walkFiles(abs, (name) => name.endsWith(".pipeline.yaml"))));
-    tasks.push(...(await walkFiles(abs, (name) => name.endsWith(".task.yaml"))));
+    const yamlFiles = await walkFiles(
+      abs,
+      (name) => name.endsWith(".yaml") || name.endsWith(".yml"),
+    );
+    for (const file of yamlFiles) {
+      if (isStageflowPath(file)) continue;
+      try {
+        const raw = await readYamlObject(file);
+        const kind = catalogKind(raw, file);
+        if (kind === "pipeline") pipelines.push(file);
+        else if (kind === "stage") stages.push(file);
+        else if (kind === "task") tasks.push(file);
+        else extras.push(file);
+      } catch {
+        extras.push(file);
+      }
+    }
   } else if (info.isFile()) {
     if (isStageflowPath(abs)) {
       throw new Error("sf migrate-yaml does not rewrite .stageflow run snapshots");
@@ -248,7 +263,7 @@ async function rewriteUsesFile(
 ): Promise<string> {
   const raw = await readYamlObject(absPath);
   const next = rewriteStageDocument(raw, {
-    io: compiled.io,
+    io: ioFromRawDocument(raw),
     verify: compiled.verify,
   });
   return stringifyTargetYaml(next);
@@ -277,7 +292,7 @@ async function rewriteDeclaringFile(
       throw new Error(verify.error);
     }
     return rewritePipelineStageEntry(entry, {
-      io: ioFromSchemas(stage),
+      io: ioFromRawDocument(entry),
       verify: verify.items,
       on_verify_fail: node.recovery,
     });
@@ -308,12 +323,10 @@ async function collectUsesCompile(
       errors.push(`${relPath(cwd, abs)}: ${verify.error}`);
       continue;
     }
-    const io = ioFromSchemas(stage);
     const existing = byPath.get(abs);
     if (!existing) {
       byPath.set(abs, {
         verify: verify.items,
-        io,
         pipelineIds: [loaded.pipeline.id],
       });
       continue;
@@ -328,6 +341,77 @@ async function collectUsesCompile(
       continue;
     }
     existing.pipelineIds.push(loaded.pipeline.id);
+  }
+}
+
+function verifyHasAfter(items: Record<string, unknown>[]): boolean {
+  return items.some((item) => Array.isArray(item.when) && item.when.includes("after"));
+}
+
+async function catalogPipelinePaths(root: string): Promise<string[]> {
+  return (await walkFiles(root, (name) => name.endsWith(".pipeline.yaml")))
+    .map(normalizeAbs)
+    .filter((file) => !isStageflowPath(file));
+}
+
+async function pipelineUsesPath(pipelinePath: string, usesAbs: string): Promise<boolean> {
+  const declaring = [pipelinePath, ...(await collectIncludes(pipelinePath, new Set()))];
+  for (const file of declaring) {
+    let raw: Record<string, unknown>;
+    try {
+      raw = await readYamlObject(file);
+    } catch {
+      continue;
+    }
+    if (usesFromDocument(raw, file).includes(usesAbs)) return true;
+  }
+  return false;
+}
+
+async function refuseOutOfScopeUsesFolds(
+  usesCompile: Map<string, UsesCompile>,
+  scopePipelines: string[],
+  catalogRoot: string,
+  cwd: string,
+  projectRoot: string,
+  errors: string[],
+): Promise<void> {
+  const inScope = new Set(scopePipelines.map(normalizeAbs));
+  const catalogPipelines = await catalogPipelinePaths(catalogRoot);
+  for (const [usesAbs, compiled] of usesCompile) {
+    if (!verifyHasAfter(compiled.verify)) continue;
+    for (const pipelinePath of catalogPipelines) {
+      if (inScope.has(pipelinePath)) continue;
+      if (!(await pipelineUsesPath(pipelinePath, usesAbs))) continue;
+      let outsideId: string | undefined;
+      try {
+        const raw = await readYamlObject(pipelinePath);
+        outsideId = typeof raw.id === "string" && raw.id.length > 0 ? raw.id : undefined;
+      } catch {
+        outsideId = undefined;
+      }
+      const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+      if (outcome.ok) {
+        const other = new Map<string, UsesCompile>();
+        const otherErrors: string[] = [];
+        await collectUsesCompile(outcome.value, cwd, other, otherErrors);
+        const otherCompiled = other.get(usesAbs);
+        if (
+          otherCompiled &&
+          verifyFingerprint(compiled.verify) !== verifyFingerprint(otherCompiled.verify)
+        ) {
+          const first = compiled.pipelineIds[0] ?? "unknown";
+          const second = outsideId ?? outcome.value.pipeline.id;
+          errors.push(
+            `uses file ${relPath(cwd, usesAbs)} has different compiled verify lists from pipelines "${first}" and "${second}"`,
+          );
+          continue;
+        }
+      }
+      errors.push(
+        `uses file ${relPath(cwd, usesAbs)} is also used by pipeline "${outsideId ?? relPath(cwd, pipelinePath)}" outside the migrate target`,
+      );
+    }
   }
 }
 
@@ -413,6 +497,15 @@ export async function planMigrateYaml(
       declaringFiles.set(normalizeAbs(includePath), outcome.value);
     }
   }
+
+  await refuseOutOfScopeUsesFolds(
+    usesCompile,
+    scope.pipelines,
+    projectRoot,
+    cwd,
+    projectRoot,
+    errors,
+  );
 
   if (errors.length > 0) {
     return { writes: [], skipped: [...skipped].sort(), errors };
@@ -523,7 +616,7 @@ export async function planMigrateYaml(
     const raw = await readYamlObject(stagePath);
     const content = stringifyTargetYaml(
       rewriteStageDocument(raw, {
-        io: ioFromSchemas(outcome.value),
+        io: ioFromRawDocument(raw),
         verify: verify.items,
       }),
     );
@@ -558,8 +651,71 @@ export async function planMigrateYaml(
   return { writes, skipped: skippedSorted, errors: [] };
 }
 
-export async function applyMigrateYamlPlan(plan: MigrateYamlPlan): Promise<void> {
-  for (const write of plan.writes) {
-    await writeFile(write.absPath, write.content);
+function siblingTempPath(absPath: string): string {
+  return path.join(
+    path.dirname(absPath),
+    `${path.basename(absPath)}.${randomBytes(8).toString("hex")}.tmp`,
+  );
+}
+
+async function restoreSnapshots(snapshots: Map<string, Buffer>): Promise<string[]> {
+  const restoreErrors: string[] = [];
+  const restoreTemps: string[] = [];
+  for (const [absPath, bytes] of snapshots) {
+    const tmp = siblingTempPath(absPath);
+    try {
+      await writeFile(tmp, bytes);
+      restoreTemps.push(tmp);
+      await rename(tmp, absPath);
+    } catch {
+      restoreErrors.push(absPath);
+    }
+  }
+  await deleteTemps(restoreTemps);
+  return restoreErrors;
+}
+
+async function deleteTemps(temps: string[]): Promise<void> {
+  for (const tmp of temps) {
+    try {
+      await unlink(tmp);
+    } catch {
+      // leftover cleanup
+    }
+  }
+}
+
+export async function applyMigrateYamlPlan(
+  plan: MigrateYamlPlan,
+  testOnly?: { beforeRename?: () => Promise<void> },
+): Promise<void> {
+  if (plan.writes.length === 0) return;
+
+  const snapshots = new Map<string, Buffer>();
+  const temps: string[] = [];
+
+  try {
+    for (const write of plan.writes) {
+      snapshots.set(write.absPath, await readFile(write.absPath));
+    }
+    for (const write of plan.writes) {
+      const tmp = siblingTempPath(write.absPath);
+      await writeFile(tmp, write.content);
+      temps.push(tmp);
+    }
+    await testOnly?.beforeRename?.();
+    for (let i = 0; i < plan.writes.length; i++) {
+      await rename(temps[i]!, plan.writes[i]!.absPath);
+    }
+  } catch (err) {
+    const restoreErrors = await restoreSnapshots(snapshots);
+    await deleteTemps(temps);
+    if (restoreErrors.length > 0) {
+      const original = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Failed to restore ${restoreErrors.join(", ")} after apply error: ${original}`,
+      );
+    }
+    throw err;
   }
 }

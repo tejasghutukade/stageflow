@@ -38,6 +38,7 @@ export type ValidationFindingCode =
   | "pipeline.invalid_model"
   | "pipeline.invalid_verify"
   | "pipeline.io_incompatible"
+  | "pipeline.model_applies"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -266,6 +267,21 @@ export function findingsFromLoadIssues(
 ): ValidationFinding[] {
   return issues.flatMap((issue) => {
     if (issue.category === "pipeline") {
+      if (issue.code === "pipeline.model_applies") {
+        return [
+          baseFinding(
+            {
+              cwd,
+              absPath,
+              message: issue.message,
+              code: issue.code,
+              category: "pipeline",
+              pipelineId: issue.pipelineId,
+            },
+            "warning",
+          ),
+        ];
+      }
       return [
         findingPipelineError(
           cwd,
@@ -517,7 +533,7 @@ export async function validatePipeline(
 }
 
 export type LoadPipelineValidatedResult =
-  | { ok: true; loaded: LoadedPipeline }
+  | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
   | { ok: false; findings: ValidationFinding[] };
 
 export async function loadPipelineValidated(
@@ -533,7 +549,7 @@ export async function loadPipelineValidated(
     validateStages,
   });
   if (core.ok) {
-    return { ok: true, loaded: core.loaded };
+    return { ok: true, loaded: core.loaded, findings: core.findings };
   }
   return { ok: false, findings: core.findings };
 }

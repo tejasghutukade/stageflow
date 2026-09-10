@@ -140,6 +140,9 @@ describe("U6 task input pairing", () => {
       });
       const result = await started.done;
       expect(result.ok).toBe(true);
+      expect(result.findings?.some((f) => f.code === "task.entry_input_unmet")).toBe(
+        true,
+      );
     } finally {
       spy.mockRestore();
     }

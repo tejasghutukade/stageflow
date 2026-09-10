@@ -85,7 +85,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 
 Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout leased).
 
-Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). See [CI / headless](ci.md#json-stdout).
+Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `task.entry_input_unmet`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. See [CI / headless](ci.md#json-stdout).
 
 Example:
 
@@ -449,11 +449,11 @@ sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
 | Flag | Description |
 |------|-------------|
 | positional path / `--root` | Pipeline, stage, task, or catalog root. Use at most one. Default: current directory. |
-| `--write` | Apply planned writes. Omit for dry-run. |
+| `--write` | Apply planned writes atomically. Omit for dry-run. |
 | `--json` | Machine-readable plan (`ok`, `write`, `planned`, `written`, `skipped`, `errors`) |
-| `--force` | Overwrite files that have uncommitted git changes |
+| `--force` | Overwrite files that have uncommitted git changes, or files outside a git checkout |
 
-Dry-run lists planned writes and prints `Dry-run; pass --write to apply.` `--write` without `--force` refuses dirty git paths. Files already on the target dialect are skipped. Mixed-key files are not rewritten; `sf validate` still errors. Idempotent: apply then apply again is a no-op.
+Dry-run lists planned writes and prints `Dry-run; pass --write to apply.` `--write` without `--force` refuses dirty git paths and paths outside a git checkout. `--write` applies the full plan or leaves the catalog unchanged. Files already on the target dialect are skipped. Mixed-key files are not rewritten; `sf validate` still errors. Idempotent: apply then apply again is a no-op.
 
 **Exit codes:** `0` success, `1` fail.
 

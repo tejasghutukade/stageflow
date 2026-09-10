@@ -309,7 +309,7 @@ function afterArtifactRaw(
     id: item.id,
     type: "artifact",
     path: artifactPath,
-    nonempty: typeof item.nonempty === "boolean" ? item.nonempty : true,
+    ...(typeof item.nonempty === "boolean" ? { nonempty: item.nonempty } : {}),
   });
 }
 

@@ -1,9 +1,12 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort } from "../agent/port.js";
-import { loadPipelineValidated } from "../config/validateCatalog.js";
+import {
+  buildValidationResult,
+  loadPipelineValidated,
+  type ValidationFinding,
+} from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
-import { buildValidationResult } from "../config/validateCatalog.js";
 import type { RunStore } from "../runstore/port.js";
 import { resolveAndValidateCheckout } from "./stageRoots.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -33,6 +36,7 @@ export type PipelineRunResult = {
   runDir: string;
   runId: string;
   reason?: string;
+  findings?: ValidationFinding[];
 };
 
 export type StartedPipeline = {
@@ -55,6 +59,7 @@ export type PreparedPipeline = {
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  findings?: ValidationFinding[];
 };
 
 let defaultStageProcessLauncher: StageProcessLauncher | undefined;
@@ -123,10 +128,12 @@ async function preparePipeline(options: {
       buildValidationResult("pipeline", pairing, false),
     );
   }
-  for (const finding of pairing) {
-    if (finding.severity === "warning") {
-      console.error(`${finding.code}: ${finding.message}`);
-    }
+  const warningFindings = [
+    ...loadResult.findings.filter((finding) => finding.severity === "warning"),
+    ...pairing.filter((finding) => finding.severity === "warning"),
+  ];
+  for (const finding of warningFindings) {
+    console.error(`${finding.code}: ${finding.message}`);
   }
 
   const checkoutRoot = await resolveAndValidateCheckout(
@@ -178,6 +185,7 @@ async function preparePipeline(options: {
     stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
+    ...(warningFindings.length > 0 ? { findings: warningFindings } : {}),
   };
 }
 
@@ -207,7 +215,7 @@ export async function executeStages(
     executionMode,
     options?.stageProcessLauncher ?? prepared.stageProcessLauncher,
   );
-  return runPipelineDag({
+  const result = await runPipelineDag({
     prepared,
     maxActiveStagesPerRun,
     resumeFromStageId: options?.resumeFromStageId,
@@ -216,6 +224,10 @@ export async function executeStages(
     executionMode,
     stageProcessLauncher,
   });
+  if (prepared.findings !== undefined && prepared.findings.length > 0) {
+    return { ...result, findings: prepared.findings };
+  }
+  return result;
 }
 
 export async function runPipeline(options: {

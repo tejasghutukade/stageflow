@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
+import { loadPipelineValidated, validatePipeline } from "../src/config/validateCatalog.js";
 
 async function writePipelineRoot(
   files: Record<string, string>,
@@ -260,5 +261,115 @@ describe("loadPipelineOutcome — model hierarchy", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues.some((i) => i.code === "catalog.manifest_invalid")).toBe(true);
+  });
+
+  it("pipeline model plus inline stage omitting model → pipeline.model_applies", async () => {
+    const root = await writePipelineRoot({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "model: openai/gpt-4o",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.issues?.some((i) => i.code === "pipeline.model_applies")).toBe(true);
+    expect(outcome.issues?.find((i) => i.code === "pipeline.model_applies")?.message).toMatch(
+      /plan/,
+    );
+  });
+
+  it("validatePipeline reports pipeline.model_applies as a warning, including --strict", async () => {
+    const root = await writePipelineRoot({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "model: openai/gpt-4o",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "",
+      ].join("\n"),
+    });
+    const result = await validatePipeline("demo.pipeline.yaml", { cwd: root });
+    expect(result.ok).toBe(true);
+    const warning = result.findings.find((f) => f.code === "pipeline.model_applies");
+    expect(warning).toBeDefined();
+    expect(warning?.severity).toBe("warning");
+    expect(result.summary.errors).toBe(0);
+
+    const strict = await validatePipeline("demo.pipeline.yaml", {
+      cwd: root,
+      strict: true,
+    });
+    expect(strict.ok).toBe(true);
+    expect(strict.summary.errors).toBe(0);
+    expect(
+      strict.findings.some(
+        (f) => f.code === "pipeline.model_applies" && f.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  it("loadPipelineValidated success includes pipeline.model_applies findings", async () => {
+    const root = await writePipelineRoot({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "model: openai/gpt-4o",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "",
+      ].join("\n"),
+    });
+    const result = await loadPipelineValidated("demo.pipeline.yaml", { cwd: root });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.findings.some((f) => f.code === "pipeline.model_applies")).toBe(true);
+  });
+
+  it("pipeline model with every stage setting model → no pipeline.model_applies", async () => {
+    const root = await writePipelineRoot({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "model: openai/gpt-4o",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: google/gemini-2.5-pro",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.issues?.some((i) => i.code === "pipeline.model_applies")).toBeFalsy();
+  });
+
+  it("no pipeline model → no pipeline.model_applies", async () => {
+    const root = await writePipelineRoot({
+      "stageflow.yaml": [
+        "version: 1",
+        "model: anthropic/claude-sonnet-4-5",
+        "catalog:",
+        "  pipelines: []",
+        "  tasks: []",
+        "",
+      ].join("\n"),
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.issues?.some((i) => i.code === "pipeline.model_applies")).toBeFalsy();
   });
 });

@@ -58,7 +58,7 @@ describe("YAML dual-read dialect", () => {
     ]);
     expect(outcome.value.dag.nodes[0]?.completion).toEqual({
       mode: "all",
-      checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
+      checks: [{ id: "report", type: "artifact", path: "report.md" }],
     });
     expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
@@ -176,6 +176,34 @@ describe("YAML dual-read dialect", () => {
     if (bare.ok) return;
     expect(bare.issues[0]?.code).toBe("pipeline.invalid_recovery");
     expect(bare.issues[0]?.message).toMatch(/requires a completion contract/);
+  });
+
+  it("rejects inline on_verify_fail when verify is emit-phase only", async () => {
+    const root = await writeTempCatalog({
+      "emit-only.pipeline.yaml": [
+        "id: emit-only",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "        when: [emit]",
+        "    on_verify_fail:",
+        "      mode: repair",
+        "      max_attempts: 2",
+        "      retry_safety: idempotent",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("emit-only.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("pipeline.invalid_recovery");
+    expect(outcome.issues[0]?.message).toMatch(/requires a completion contract/);
   });
 
   it("rejects mixed payload_schema and io.output on one entry", async () => {
@@ -478,8 +506,80 @@ describe("YAML dual-read dialect", () => {
     ]);
     expect(outcome.value.dag.nodes[0]?.completion).toEqual({
       mode: "all",
-      checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
+      checks: [{ id: "report", type: "artifact", path: "report.md" }],
     });
+  });
+
+  it("keeps after-artifact nonempty only when the YAML boolean is present", async () => {
+    const root = await writeTempCatalog({
+      "omit.pipeline.yaml": [
+        "id: omit",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: report",
+        "        type: artifact",
+        "        path: report.md",
+        "        when: [after]",
+        "",
+      ].join("\n"),
+      "false.pipeline.yaml": [
+        "id: nonempty-false",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: report",
+        "        type: artifact",
+        "        path: report.md",
+        "        nonempty: false",
+        "        when: [after]",
+        "",
+      ].join("\n"),
+    });
+    const omitted = await loadPipelineOutcome("omit.pipeline.yaml", { cwd: root });
+    expect(omitted.ok).toBe(true);
+    if (!omitted.ok) return;
+    expect(omitted.value.dag.nodes[0]?.completion?.checks[0]).toEqual({
+      id: "report",
+      type: "artifact",
+      path: "report.md",
+    });
+    const explicit = await loadPipelineOutcome("false.pipeline.yaml", { cwd: root });
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) return;
+    expect(explicit.value.dag.nodes[0]?.completion?.checks[0]).toEqual({
+      id: "report",
+      type: "artifact",
+      path: "report.md",
+      nonempty: false,
+    });
+  });
+
+  it("fails load when emit-default verify gate kind is missing from gate_kinds", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(
+      /gate check "approved" requires gate_kinds to include "confirm"/,
+    );
   });
 
   it("does not put after-only checks into pre_emit_checks", async () => {

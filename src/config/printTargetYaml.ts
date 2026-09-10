@@ -132,6 +132,14 @@ export function ioFromSchemas(stage: {
   return io.input !== undefined || io.output !== undefined ? io : undefined;
 }
 
+export function ioFromRawDocument(raw: Record<string, unknown>): StageIoYaml | undefined {
+  if (isPlainObject(raw.io)) return raw.io as StageIoYaml;
+  return ioFromSchemas({
+    payload_schema: raw.payload_schema,
+    clone_input_schema: raw.clone_input_schema,
+  });
+}
+
 function dropContractKeys(raw: Record<string, unknown>): Record<string, unknown> {
   const next: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {

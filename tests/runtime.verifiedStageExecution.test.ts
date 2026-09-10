@@ -192,6 +192,7 @@ describe("verified stage execution", () => {
         "      - id: report",
         "        type: artifact",
         "        basename: report.md",
+        "        nonempty: true",
         "        when: [emit, after]",
         "",
       ].join("\n"),
