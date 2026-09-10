@@ -24,6 +24,7 @@ import { EnvelopeDrawer } from "../components/EnvelopeDrawer";
 import { EnvelopeRecord } from "../components/EnvelopeFields";
 import { FeedbackDecidePanel } from "../components/FeedbackDecidePanel";
 import { FeedbackLoopPanel } from "../components/FeedbackLoopPanel";
+import { LogPanel } from "../components/LogPanel";
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
@@ -482,6 +483,7 @@ export function RunDetailPage({
     const streamStageId = workspace.selectedStageId;
     const stageToken = stage ? cssStatusToken(stage.status) : undefined;
     center = (
+      <div className="center-split">
       <TranscriptStream
         stageName={
           workspace.trackStages.find((s) => s.id === streamStageId)?.label ??
@@ -544,6 +546,10 @@ export function RunDetailPage({
           onStop={stage ? () => void stopStageRecovery(stage.stage_id) : undefined}
         />
       </TranscriptStream>
+      <div className="center-split__logs">
+        <LogPanel events={stage?.events ?? []} />
+      </div>
+      </div>
     );
   }
 
