@@ -44,6 +44,13 @@ docs/*
 !docs/providers/
 docs/providers/*
 !docs/providers/*.md
+!docs/specs/
+docs/specs/*
+!docs/specs/*.md
+!docs/tickets/
+docs/tickets/*
+!docs/tickets/**/
+!docs/tickets/**/*.md
 docs/compare-conductor.md
 docs/migrate-real-oss-issue-pipeline.md
 CONTEXT.md
