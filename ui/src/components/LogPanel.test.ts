@@ -106,6 +106,75 @@ describe("buildLogPanelSteps", () => {
     expect(steps.map((s) => s.label)).toEqual(["Stage started", "Agent started"]);
   });
 
+  it("labels a Read tool call with just the filename, and hides its result content", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/src/index.ts"}' },
+      { event: "tool_end", toolName: "Read", toolCallId: "c1", resultPreview: "export function main() {}" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ label: "Read index.ts", status: "succeeded" });
+    expect(steps[0].detail).toBeUndefined();
+  });
+
+  it("still surfaces the error detail for a failed Read call", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/missing.ts"}' },
+      { event: "tool_end", toolName: "Read", toolCallId: "c1", isError: true, resultPreview: "ENOENT: no such file" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({
+      label: "Read missing.ts",
+      status: "failed",
+      detail: "ENOENT: no such file",
+    });
+  });
+
+  it("labels a Bash tool call with the full command", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: '{"command":"npm test"}' },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ label: "Bash npm test", detail: "ok" });
+  });
+
+  it("labels a Write tool call with just the filename", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Write", toolCallId: "c1", argsPreview: '{"file_path":"/repo/notes.md"}' },
+      { event: "tool_end", toolName: "Write", toolCallId: "c1", resultPreview: "wrote 12 lines" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ label: "Write notes.md" });
+  });
+
+  it("falls back to the raw tool name for an unrecognized tool", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "context7_resolve-library-id", toolCallId: "c1", argsPreview: '{"libraryName":"Express"}' },
+      { event: "tool_end", toolName: "context7_resolve-library-id", toolCallId: "c1", resultPreview: "found it" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0].label).toBe("context7_resolve-library-id");
+  });
+
+  it("falls back to the raw tool name when argsPreview isn't valid JSON", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: "not json" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0].label).toBe("Bash");
+  });
+
+  it("falls back to the raw tool name when the expected argument is missing", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: "{}" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0].label).toBe("Bash");
+  });
+
   it("keeps steps in chronological order across mixed event types", () => {
     const events: StageLogEvent[] = [
       { event: "started" },

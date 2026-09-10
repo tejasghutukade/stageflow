@@ -30,12 +30,51 @@ function toolCallStatus(call: ToolCallView): LogStepStatus {
   return "succeeded";
 }
 
+// Tool name -> which argument holds the thing worth showing in the label,
+// and whether that argument is a path (shown as just its basename) or
+// free-form text (shown in full).
+const TOOL_LABEL_ARG: Record<string, { key: string; isPath: boolean }> = {
+  Read: { key: "file_path", isPath: true },
+  Write: { key: "file_path", isPath: true },
+  Edit: { key: "file_path", isPath: true },
+  NotebookEdit: { key: "notebook_path", isPath: true },
+  Bash: { key: "command", isPath: false },
+  Grep: { key: "pattern", isPath: false },
+  Glob: { key: "pattern", isPath: false },
+  WebFetch: { key: "url", isPath: false },
+  WebSearch: { key: "query", isPath: false },
+};
+
+// Tools whose successful result is the content of a file rather than a
+// summary of what happened — never surface that content in the log panel.
+const SUPPRESS_RESULT_ON_SUCCESS = new Set(["Read"]);
+
+function parseArgsPreview(argsPreview: string | undefined): Record<string, unknown> | undefined {
+  if (!argsPreview) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(argsPreview);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function basename(value: string): string {
+  return value.split("/").pop() || value;
+}
+
 function toolCallLabel(call: ToolCallView): string {
-  return call.name;
+  const mapping = TOOL_LABEL_ARG[call.name];
+  if (!mapping) return call.name;
+  const value = parseArgsPreview(call.args)?.[mapping.key];
+  if (typeof value !== "string" || !value.trim()) return call.name;
+  return `${call.name} ${mapping.isPath ? basename(value) : value}`;
 }
 
 function toolCallDetail(call: ToolCallView): string | undefined {
-  return call.status === "running" ? call.progressPreview : call.result;
+  if (call.status === "running") return call.progressPreview;
+  if (call.status === "complete" && SUPPRESS_RESULT_ON_SUCCESS.has(call.name)) return undefined;
+  return call.result;
 }
 
 function toolCallToStep(call: ToolCallView, id: string): LogStep {
