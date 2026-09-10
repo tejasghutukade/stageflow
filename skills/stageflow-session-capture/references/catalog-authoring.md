@@ -10,7 +10,7 @@ Resolve collision-safe ids with `scripts/resolve-catalog-id.mjs` (`--text`, `--d
 
 ## External stage file
 
-Required fields: `id`, `system_prompt`, `model`. Filename stem must match `id` (`research.yaml` → `id: research`).
+Required fields: `id`, `system_prompt`. Filename stem must match `id` (`research.yaml` → `id: research`). `model` is optional when the pipeline or manifest supplies it.
 
 Every `system_prompt` ends with a mandatory `emit_stage_envelope` footer, for example:
 
@@ -28,7 +28,7 @@ Worked example: `assets/example-pipeline/research.yaml` and `assets/example-pipe
 
 ## Pipeline file
 
-`id` plus `stages:` entries with `id`, `uses:` (path relative to the pipeline file), and `needs:` for every non-root stage. Linear chain: each stage `needs` the previous id.
+`id` plus `stages:` entries with `id`, `uses:` (path relative to the pipeline file), and `needs:` for every non-root stage. Linear chain: each stage `needs` the previous id (scalar or a one-item array). Optional pipeline-root `model` fills stages that omit `model`. Put body contracts (`io`, `verify`) on stage files; put `on_verify_fail` on the pipeline entry when after-phase verify should repair or wait for an operator.
 
 Worked example: `assets/example-pipeline/example.pipeline.yaml`.
 

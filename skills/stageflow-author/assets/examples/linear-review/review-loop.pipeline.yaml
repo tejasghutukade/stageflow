@@ -1,10 +1,19 @@
 id: review-loop
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: draft
     uses: ./draft.yaml
   - id: review
     uses: ./review.yaml
-    needs: draft
+    needs: [draft]
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: publish
     uses: ./publish.yaml
-    needs: review
+    needs: [review]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

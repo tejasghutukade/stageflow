@@ -292,7 +292,8 @@ Start a pipeline run using a **filesystem pipeline path** and either a catalog t
     "goal": "…",
     "context": "optional",
     "constraints": "optional",
-    "checkout": "optional"
+    "checkout": "optional",
+    "input": { "ticket_id": "OSS-123" }
   }
 }
 ```
@@ -308,7 +309,7 @@ Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus
 | Capacity full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds` |
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout` |
 
-Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`).
+Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run warns (`task.entry_input_unmet`) and continues.
 
 ### `get_run`
 
@@ -404,7 +405,7 @@ List persisted stage log events (lifecycle/activity). Optional `attempt` scopes 
 
 ### `get_stage_verification`
 
-Read the completion-check history for one stage. Each attempt contains its verification
+Read the after-phase verify history for one stage. Each attempt contains its verification
 disposition, check statuses, and persisted evidence, including command output where
 configured.
 
@@ -418,7 +419,7 @@ unknown.
 
 ### `recover_manual_stage`
 
-Explicitly authorize a new attempt after a `recovery.mode: manual` completion
+Explicitly authorize a new attempt after an `on_verify_fail.mode: manual` after-phase
 verification failure. Optional `guidance` (up to 4,000 characters) is persisted and
 supplied to the agent along with the failed-check capsule.
 

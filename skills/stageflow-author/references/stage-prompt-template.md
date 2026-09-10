@@ -1,6 +1,6 @@
 # Stage prompt template
 
-Every external stage file has `id`, `system_prompt`, and `model`. Filename stem matches `id`. Default `model` is `anthropic/claude-sonnet-4-5`. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after a fork should use the same configured model family unless the human asks otherwise.
+Every external stage file has `id` and `system_prompt`. Filename stem matches `id`. `model` is optional when the pipeline or `stageflow.yaml` supplies it — otherwise set it on the stage. Default when writing a concrete string is `anthropic/claude-sonnet-4-5`. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after a fork should use the same configured model family unless the human asks otherwise.
 
 ## Base
 
@@ -22,11 +22,11 @@ model: anthropic/claude-sonnet-4-5
 
 The prompt has no `ask_operator` line. It ends on the `emit_stage_envelope` instruction. Call `emit_stage_envelope` once per attempt.
 
-When the pipeline entry will carry `completion.checks` with `type: artifact`, add this line after the goal:
+When the pipeline entry will carry after-phase `verify` with `type: artifact`, add this line after the goal:
 
 ```
 Required files must be created with write_stage_artifact. Checkout write/edit
-does not satisfy completion checks.
+does not satisfy after-phase verify.
 ```
 
 When the stage must change the project checkout (implement, patch, edit source), add:
@@ -54,7 +54,7 @@ artifact pointers only. Do not repeat this stage's prohibitions in summary —
 downstream will obey them literally.
 ```
 
-When `payload_schema` is on the stage file, name the required fields in the prompt so the emit matches.
+When `io.output.schema` is on the stage file, name the required fields in the prompt so the emit matches.
 
 ## Gated
 
@@ -108,7 +108,7 @@ When a successor is `clonable: true`, the parent success emit uses `clone_forks`
 ```
 On success, include clone_forks covering every clonable successor exactly once.
 Each clone entry is a full envelope with status, summary, artifacts, and payload
-matching that successor's clone_input_schema — not a stub object.
+matching that successor's io.input.schema — not a stub object.
 ```
 
 Clonable child stages use the base (or gated) prompt. Remind them they are one clone among others and must emit independently.

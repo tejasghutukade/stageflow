@@ -127,7 +127,7 @@ sf runs rerun --run <runId> [--json]
 |------------|------|
 | `list` | Stored runs (same filters as MCP `list_runs`) |
 | `show` | Live `projectRun` for any run status (not the `export-run` completeness gate) |
-| `verify` | Completion-check attempts, verification dispositions, and evidence for one stage |
+| `verify` | After-phase verify attempts, verification dispositions, and evidence for one stage |
 | `recover` | Explicitly retry or stop a manual-recovery stage |
 | `waiting` | Waiting gates with `pending_prompt` |
 | `wait` | Block until waiting, terminal, or timeout |
@@ -207,7 +207,7 @@ When a feedback loop is active or waiting, `--json` includes `active_feedback_lo
 | `--stage` | Stage id (required) |
 | `--json` | Attempt-scoped verification dispositions, checks, and stored evidence |
 
-Use this to see whether verification ran, why a completion check failed, and what an
+Use this to see whether verification ran, why an after-phase verify item failed, and what an
 automatic repair later changed. It is intentionally stage-scoped, so run listings do
 not carry command output.
 
@@ -221,7 +221,7 @@ not carry command output.
 | `--stop` | Record the decision to leave the stage failed; cannot be combined with `--guidance` |
 | `--json` | Completion JSON after retry, or the recorded stop decision |
 
-Only a stage with `recovery.mode: manual` that failed completion verification is
+Only a stage with `on_verify_fail.mode: manual` that failed after-phase verification is
 eligible. A recovery retry starts a fresh attempt; a stop is terminal for that stage
 in this run.
 
@@ -423,7 +423,7 @@ With no flags, validates **all pipelines and tasks** declared in `stageflow.yaml
 |------|-------------|
 | `--pipeline` | Validate that pipeline file and its stages (`uses:` / `include:` transitively). Does not validate all tasks. |
 | `--task` | Validate that task file only |
-| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors |
+| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors. Does not promote `catalog.legacy_yaml`. |
 | `--json` | Machine-readable findings |
 
 Use at most one of `--pipeline` or `--task`. The CLI rejects both.
@@ -437,6 +437,34 @@ Example:
 ```bash
 sf validate --strict --json
 ```
+
+## `sf migrate-yaml` {#sf-migrate-yaml}
+
+Convert legacy catalog YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots.
+
+```bash
+sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
+```
+
+| Flag | Description |
+|------|-------------|
+| positional path / `--root` | Pipeline, stage, task, or catalog root. Use at most one. Default: current directory. |
+| `--write` | Apply planned writes. Omit for dry-run. |
+| `--json` | Machine-readable plan (`ok`, `write`, `planned`, `written`, `skipped`, `errors`) |
+| `--force` | Overwrite files that have uncommitted git changes |
+
+Dry-run lists planned writes and prints `Dry-run; pass --write to apply.` `--write` without `--force` refuses dirty git paths. Files already on the target dialect are skipped. Mixed-key files are not rewritten; `sf validate` still errors. Idempotent: apply then apply again is a no-op.
+
+**Exit codes:** `0` success, `1` fail.
+
+Example:
+
+```bash
+sf migrate-yaml examples/hello-world --json
+sf migrate-yaml examples/hello-world --write
+```
+
+See [CI / headless](ci.md) for `catalog.legacy_yaml` (not promoted by `--strict` this release).
 
 ## `sf ui`
 

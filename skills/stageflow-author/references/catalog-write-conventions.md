@@ -18,9 +18,9 @@ One directory (or the project root) holds:
 | File | Required fields |
 |---|---|
 | `<pipeline-id>.pipeline.yaml` | `id` matching the filename stem; `stages:` object entries |
-| `<stage-id>.yaml` | `id`, `system_prompt`, `model`; `gate_kinds` when the step is gated |
+| `<stage-id>.yaml` | `id`, `system_prompt`; `model` when not inherited; `io` / `verify` / `gate_kinds` when the step needs them |
 
-Each pipeline stage entry has `id` and `uses: ./<id>.yaml` (path relative to the pipeline file). Non-root stages add `needs: <parent-id>`, or `needs:` as an array of at least two parent ids (strings or `{ id, on }`) when the stage waits for several parents. A deciding stage adds `fork:`. Filename stem matches `id` on every file.
+Each pipeline stage entry has `id` and `uses: ./<id>.yaml` (path relative to the pipeline file). Non-root stages add `needs: <parent-id>` or `needs: [<parent-id>, …]` (length ≥ 1; strings or `{ id, on }`). A deciding stage adds `fork:`. Put `on_verify_fail` on the pipeline entry when after-phase `verify` should repair or wait for an operator. Filename stem matches `id` on every file. Optional pipeline-root `model` fills stages that omit `model`.
 
 ## Collisions
 

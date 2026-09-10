@@ -36,7 +36,7 @@ type FeedbackLoopAction =
 | `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage skips successors whose `needs` do not accept `failed` (legacy scalar `needs` accepts `succeeded` only). A [generic fan-in](yaml-catalog.md#generic-fan-in) join that lists `failed` in that parent's `on` set continues. A parallel clone failure lets sibling clones finish and skips the clone-list join and its descendants |
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
-| `payload` | no | Structured data for downstream stages; required on success when the stage declares `payload_schema` |
+| `payload` | no | Structured data for downstream stages; required on success when the stage declares `io.output.schema` |
 | `fork_choice` | no* | Non-clonable immediate successor ids to run; required on success when the stage has a `fork` field and at least one non-clonable child |
 | `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
 | `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares `feedback_loop` policy |
@@ -67,7 +67,7 @@ Example success emit (conceptual):
 
 On `status: "failure"`, the envelope is accepted. A named-stage failure skips paths whose dependency contract rejects `failed`. Independent siblings and [generic fan-in](yaml-catalog.md#generic-fan-in) joins that list `failed` in that parent's `on` set continue. A parallel clone failure does not stop sibling clones; the clone-list join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the clone-list join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
 
-If the stage declares `payload_schema` in YAML, `payload` is validated against that JSON Schema subset on success — see [payload_schema](#payload-schema).
+If the stage declares `io.output.schema` in YAML, `payload` is validated against that JSON Schema subset on success — see [io schemas](#io-schemas).
 
 ### Fork stages
 
@@ -93,7 +93,7 @@ Unchosen successors are `skipped` — the same status used when a parent fails. 
 
 If any immediate successor is `clonable: true`, the success emit **must** include `clone_forks`. Tokens are `skip` | `once` | `fanout` unless the parent declares `clone_actions` (a non-empty subset). Omit `clone_actions` to keep all three. `once` is not fan-out of 1; `fanout` N is 2 through `clone_cap`. See [YAML catalog](yaml-catalog.md#clonable-successors).
 
-The user prompt and emit tool both name the legal successor ids, clone caps, allowed actions, and each successor's assignment schema. `successor_id` is an enum of those ids. Invented ids, an empty `clone_forks` list, a disallowed action, or an assignment payload that fails `clone_input_schema` stay in-session (`isError`, no `terminate`).
+The user prompt and emit tool both name the legal successor ids, clone caps, allowed actions, and each successor's assignment schema. `successor_id` is an enum of those ids. Invented ids, an empty `clone_forks` list, a disallowed action, or an assignment payload that fails `io.input.schema` stay in-session (`isError`, no `terminate`).
 
 Item shape (exact coverage of every clonable successor):
 
@@ -124,7 +124,7 @@ Nested `clone_forks[i].envelope` (for `once`) and `clones[j].envelope` (for `fan
 }
 ```
 
-Illegal items are rejected by emit. A successor may declare `clone_input_schema` (same JSON Schema subset as `payload_schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `payload_schema`. `skip` does not need an assignment payload.
+Illegal items are rejected by emit. A successor may declare `io.input.schema` (same JSON Schema subset as `io.output.schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `io.output.schema`. `skip` does not need an assignment payload.
 
 Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
 
@@ -168,28 +168,27 @@ After `max_replays`, behavior follows `on_max_replays` (`require_continue` or `w
 
 Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
 
-### payload_schema {#payload-schema}
+### io schemas {#io-schemas}
 
-When a stage declares `payload_schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored.
+When a stage declares `io.output.schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for clone assignment payloads and (when both exist) matching optional task `input` on entry stages. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
-### pre_emit_checks {#pre-emit-checks}
+### Emit-phase verify {#verify-emit}
 
-A stage may declare `pre_emit_checks` (`src/types/preEmitCheck.ts`) — a small,
-in-session gate `emit_stage_envelope` itself enforces on every **success** emit,
-this attempt, before a candidate envelope is even captured:
+A stage may declare emit-phase items on body `verify` — a small, in-session gate `emit_stage_envelope` itself enforces on every **success** emit, this attempt, before a candidate envelope is even captured:
 
 ```yaml
 id: approve-plan
 gate_kinds: [artifact_backed]
-pre_emit_checks:
+verify:
   - id: plan-approved
     type: gate
     kind: artifact_backed          # last artifact_backed exchange this attempt must be accept
   - id: plan-artifact-present
-    type: artifact_declared
+    type: artifact
     basename: implementation-plan.md  # must appear in envelope.artifacts (suffix match, no disk I/O)
+    when: [emit]
 system_prompt: |
   Review the plan artifact. Ask the operator to accept it, then emit success.
 model: anthropic/claude-sonnet-4-5
@@ -197,24 +196,12 @@ model: anthropic/claude-sonnet-4-5
 
 | Check type | Required fields | Semantics |
 | --- | --- | --- |
-| `gate` | `id`, `kind` | The *last* `ask_operator` exchange of this kind **in this attempt** must satisfy it: `confirm`/`artifact_backed` need `decision: "accept"`; `free_text`/`multi_question` need any completed (answered) exchange. |
-| `artifact_declared` | `id`, `basename` | `basename` must appear in the emitted `artifacts` list, either verbatim or as a `/<basename>` path suffix. Purely a list check — no filesystem access. |
+| `gate` | `id`, `kind` | The *last* `ask_operator` exchange of this kind **in this attempt** must satisfy it: `confirm`/`artifact_backed` need `decision: "accept"`; `free_text`/`multi_question` need any completed (answered) exchange. Default `when` is `[emit]`. |
+| `artifact` with `when` including `emit` | `id`, `when`, `basename` or `path` | `basename` (or the basename of `path`) must appear in the emitted `artifacts` list, either verbatim or as a `/<basename>` path suffix. Purely a list check — no filesystem access. `type: artifact` requires `when`. |
 
-A failing check rejects the emit (`isError: true`, no `terminate`) so the agent can
-retry in the same turn; it never fails the stage outright. Checks run in declaration
-order and stop at the first failure. `pre_emit_checks` is skipped entirely on
-`status: "failure"` emits, and omitted/empty `pre_emit_checks` is a no-op — existing
-stages are unaffected.
+A failing emit-phase check rejects the emit (`isError: true`, no `terminate`) so the agent can retry in the same turn; it never fails the stage outright. Checks run in declaration order and stop at the first failure. Emit-phase `verify` is skipped entirely on `status: "failure"` emits, and omitted/empty `verify` is a no-op — existing stages are unaffected.
 
-**Not the same as `completion`.** [`completion`](verified-stage-execution.md) is a
-pipeline-wiring field that runs **after** a candidate envelope has already been
-captured (via repair/manual recovery), and its `gate`/`artifact` check types are
-disk- and history-aware (`completion`'s `gate` accepts *any* accepted decision over
-the run so far; its `artifact` type does a real on-disk `lstat`/`sha256` check).
-`pre_emit_checks` is a stage-body field the agent's own `emit_stage_envelope` call
-enforces synchronously, mid-turn, with no disk access — a different mechanism for a
-different moment. A stage may declare both; they are allowed to look at overlapping
-facts (defense in depth), never the same field or the same check runner.
+**Not the same as after-phase `verify`.** After-phase items (`when` includes `after`) run **after** a candidate envelope has already been captured (via repair/manual recovery), and `gate`/`artifact` there are disk- and history-aware (after-phase `gate` accepts *any* accepted decision over the run so far; after-phase `artifact` does a real on-disk `lstat`/`sha256` check). See [Verified Stage Execution](verified-stage-execution.md). Emit and after may look at overlapping facts (defense in depth) as items on the same `verify` list.
 
 ## Artifacts
 
@@ -287,8 +274,8 @@ Full recipe: [CI / headless](ci.md#handoff-envelope-extraction) · CLI flags: [`
 
 ## See also
 
-- [YAML catalog](yaml-catalog.md) — `payload_schema` on stage bodies
+- [YAML catalog](yaml-catalog.md) — `io` on stage bodies
 - [HITL](hitl.md) — gates before emit
-- [Verified Stage Execution](verified-stage-execution.md) — the post-hoc `completion` contract `pre_emit_checks` is distinct from
+- [Verified Stage Execution](verified-stage-execution.md) — after-phase `verify` (`when` includes `after`) is distinct from emit-phase items
 - [CLI reference](cli-reference.md) — `sf envelope get`, handoff format
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — stages that exercise emit + artifacts

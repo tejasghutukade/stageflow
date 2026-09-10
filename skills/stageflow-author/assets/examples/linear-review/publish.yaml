@@ -7,4 +7,19 @@ system_prompt: |
 
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload describing what you produced.
-model: anthropic/claude-sonnet-4-5
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - published
+      properties:
+        published:
+          type: boolean
+verify:
+  - id: published-artifact
+    type: artifact
+    path: published.md
+    nonempty: true
+    when:
+      - after

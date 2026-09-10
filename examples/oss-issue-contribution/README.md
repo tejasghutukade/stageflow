@@ -99,7 +99,7 @@ The two planner stages restrict `clone_actions` so they cannot select `skip`.
 pipeline.
 
 Clone successors `oss-investigate-area` and `oss-review-change` declare
-`clone_input_schema` so the planner's fanout assignment payloads are validated
+`io.input.schema` so the planner's fanout assignment payloads are validated
 at emit against a required shape (`area_id`/`objective`/`paths`/`questions`/
 `constraints` or the review equivalent).
 

@@ -51,6 +51,7 @@ Optional top-level fields:
 |-------|------|-------------|
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
+| `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/<name>"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
 
 Bare string stage refs are rejected.
 
@@ -65,15 +66,26 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `clonable`, `clone_cap`, `skill`, `mcp`, `completion`, `recovery`, `feedback_loop`, `replay_safe`.
+**Wiring** (any entry, including `uses:`): `needs`, `fork`, `uses`, `clonable`, `clone_cap`, `on_verify_fail`, `feedback_loop`, `replay_safe`. `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms`, `skill`, `mcp`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). The JSON Schema subset for `payload_schema` and `clone_input_schema` is in [Envelopes](envelopes.md#payload-schema). `pre_emit_checks` is an in-session gate `emit_stage_envelope` enforces on success emits — see [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks); it is distinct from the pipeline-wiring `completion` field below. Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `skill` and `mcp` are body keys that may also sit on a `uses:` wrapper — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io`, `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`, `clone_actions`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start (clone assignment is the strong case). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). Presence of `io.output.schema` still implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
-`completion` and `recovery` are pipeline-stage execution policy. They may sit beside
-`uses:` because a reusable stage can require different proof or recovery behavior in
-different pipelines.
+`on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
+
+### Dual-read (this release)
+
+This release still **loads** catalogs that use the previous field names. Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings.
+
+| Today | Target |
+|-------|--------|
+| `payload_schema` | `io.output.schema` |
+| `clone_input_schema` | `io.input.schema` |
+| `pre_emit_checks` | `verify` (when includes `emit`) |
+| `completion` | `verify` (when includes `after`) |
+| `recovery` | `on_verify_fail` |
+| `artifact_declared` | `type: artifact` + `emit` |
 
 ### Model defaults and precedence
 
@@ -106,46 +118,91 @@ Canonical fixtures:
 | Stage overrides pipeline and global | [`tests/fixtures/model-hierarchy/stage-override/`](../tests/fixtures/model-hierarchy/stage-override/) |
 | All three tiers empty (must fail) | [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/) |
 
-### Completion and recovery
+### Verify {#verify}
 
-`completion` declares the checks Stageflow runs after an agent emits a successful
-envelope. It is optional; without it, normal envelope validation remains the stage's
-success condition.
+`verify` is a body list of checks. Written `when` is `[emit]`, `[after]`, or both. Omitted `when` is allowed except on `type: artifact`, which must set `when` explicitly.
+
+| Default when `when` is omitted | Types |
+| --- | --- |
+| `[emit]` | `gate` |
+| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (the check type) |
+
+Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
 
 ```yaml
-completion:
-  mode: all
-  checks:
-    - id: tests
-      type: command
-      run: npm test
+verify:
+  - id: plan-accepted
+    type: gate
+    kind: artifact_backed
+  - id: plan-declared
+    type: artifact
+    basename: plan.md
+    when: [emit]
+  - id: plan-on-disk
+    type: artifact
+    path: plan.md
+    nonempty: true
+    when: [after]
+  - id: tests
+    type: command
+    run: npm test
 ```
 
-| Check type | Required fields | Optional fields |
-| --- | --- | --- |
-| `command` | `id`, `run` | `cwd`, `timeout_ms` |
-| `artifact` | `id`, `path` | `nonempty` |
-| `checklist` | `id`, `items` | — |
-| `payload_schema` | `id` | — |
-| `gate` | `id`, `kind` | — |
-| `checkout_changes` | `id` | `path_fields` |
+Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on `type: gate`.
 
-`mode` is currently `all`, so every check must pass. Check IDs are unique within
-the stage. `artifact.path` is relative to the stage attempt's artifact directory.
-`gate.kind` must also appear in the reusable stage's `gate_kinds`. Each
-`checkout_changes.path_fields` entry must name a required array-of-strings field in
-the reusable stage's `payload_schema`.
+| Check type | Required fields | Optional fields | Legal `when` |
+| --- | --- | --- | --- |
+| `gate` | `id`, `kind` | — | `emit` (default), `after`, or both |
+| `artifact` | `id`, `when` | `basename` (emit), `path` / `nonempty` (after) | `emit`, `after`, or both — **required** |
+| `command` | `id`, `run` | `cwd`, `timeout_ms` | `after` only |
+| `checklist` | `id`, `items` | — | `after` only |
+| `payload_schema` | `id` | — | `after` only; requires `io.output.schema` |
+| `checkout_changes` | `id` | `path_fields` | `after` only |
 
-`recovery` is optional and applies only after a completion verification failure:
+Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds`. Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema`; emit-time payload validation already runs when that schema is present.
+
+### `on_verify_fail` {#on-verify-fail}
+
+`on_verify_fail` is wiring and applies only after an **after-phase** verify failure. It requires at least one after-phase `verify` item on the resolved stage.
 
 | Mode | Required fields | Behavior |
 | --- | --- | --- |
 | `repair` | `max_attempts`, `retry_safety: idempotent`, `include_failed_checks` | Stageflow starts fresh attempts until the limit, carrying failed-check evidence when configured. |
 | `manual` | `retry_safety` | An operator explicitly starts a new attempt with optional guidance or stops recovery for that run. |
 
-Use `manual` for side-effecting work such as publishing or payments. See
-[Verified Stage Execution](verified-stage-execution.md) for evidence semantics,
-recovery behavior, and examples.
+Use `manual` for side-effecting work such as publishing or payments. Operator commands keep their names: [`sf runs recover`](cli-reference.md#sf-runs-recover) / [`sf runs verify`](cli-reference.md#sf-runs-verify), MCP [`recover_manual_stage`](mcp.md#recover_manual_stage), HTTP `/api/runs/:id/stages/:id/recovery`. See [Verified Stage Execution](verified-stage-execution.md).
+
+### Pipeline schemas {#pipeline-schemas}
+
+Optional pipeline-file `schemas:` is the `$ref` root for this release. Refs are JSON Pointer `#/schemas/<name>`. Cycles fail load. `schemas:` on an include fragment fails load. Isolated stage validate of a `$ref`-only schema fails with `stage.unresolved_schema_ref`; pipeline validate resolves after attach.
+
+Sequential single-parent non-clone edges: if both sides have schemas, consumer `io.input` must be a structural subset of producer `io.output`. Clone edges and multi-parent joins do not run that subset check — the child's `io.input` is the assignment or join contract.
+
+```yaml
+id: story-handoff
+model: anthropic/claude-sonnet-4-5
+schemas:
+  story-slice:
+    type: object
+    required: [title]
+    properties:
+      title:
+        type: string
+stages:
+  - id: draft
+    system_prompt: Draft the slice and emit a success envelope.
+    io:
+      output:
+        schema:
+          $ref: "#/schemas/story-slice"
+  - id: review
+    system_prompt: Review the slice.
+    needs: [draft]
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/story-slice"
+```
 
 **`uses:` paths are relative to the pipeline file's directory.**
 
@@ -204,7 +261,7 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`needs` is either a single parent stage id (string) or an array of at least two parents. Parallel fan-out is multiple children with the same parent. Keyed generic fan-in is one child with a `needs` array — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+`needs` is either a single parent stage id (string) or a non-empty array (length ≥ 1). A one-item array is the same graph as a scalar. Parallel fan-out is multiple children with the same parent. Keyed generic fan-in is one child with a `needs` array of two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
 
 ### Generic fan-in {#generic-fan-in}
 
@@ -212,8 +269,8 @@ A stage may wait for two or more catalog parents. `needs` takes one of two forms
 
 | Form | Shape | When |
 |------|-------|------|
-| Scalar | `needs: <stage-id>` | One parent. The accepted terminal is `succeeded` only (legacy form). |
-| Array | `needs: [ … ]` with length ≥ 2 | Keyed generic fan-in. A one-item array is rejected. |
+| Scalar | `needs: <stage-id>` | One parent. The accepted terminal is `succeeded` only. |
+| Array | `needs: [ … ]` with length ≥ 1 | One or more parents. Length 1 is the same graph as a scalar. Length ≥ 2 is keyed generic fan-in. |
 
 Array items may be mixed. A string id defaults to `on: [succeeded]`. `{ id, on }` declares a non-empty unique subset of `succeeded` \| `failed` \| `skipped`. Duplicate ids, unknown keys, unknown parents, empty `on`, and cycles are rejected.
 
@@ -518,7 +575,7 @@ Optional when a pipeline or manifest default can fill it:
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
 
-Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `gate_kinds`, `pre_emit_checks`, `payload_schema`, `clone_input_schema`, `clone_actions`, `timeout_ms` — see [Envelopes](envelopes.md#payload-schema) and [Envelopes — pre_emit_checks](envelopes.md#pre-emit-checks). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `clone_input_schema` is the successor assignment contract (not the child's later output `payload_schema`). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `io`, `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`needs`, `on_verify_fail`, `fork`, `clonable`) are errors on a new-dialect stage file. `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -531,6 +588,9 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 | `context` | no | Background for agents |
 | `constraints` | no | Boundaries |
 | `checkout` | no | Relative or absolute path to working tree |
+| `input` | no | Structured object; when present must match each entry stage's `io.input` |
+
+Prose-only tasks (no `input`) stay valid. If an entry stage declares `io.input` and the task has no `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` emit a `task.entry_input_unmet` warning and continue. Non-entry stages still receive the full task in the agent prompt.
 
 See [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
@@ -569,9 +629,11 @@ Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (wi
 sf validate --strict                    # manifest-all: pipelines, stages, and tasks from git root
 sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and its stages
 sf validate --task path/to/x.task.yaml --strict           # that task
+sf migrate-yaml                         # dry-run convert legacy keys to io / verify / on_verify_fail
+sf migrate-yaml --write                 # apply
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect.
+Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `--strict` does not promote `catalog.legacy_yaml` or `task.entry_input_unmet`. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml).
 
 ## CLI run
 
