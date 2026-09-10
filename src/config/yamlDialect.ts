@@ -17,6 +17,23 @@ export const LEGACY_CONTRACT_KEYS = new Set([
 
 export const TARGET_CONTRACT_KEYS = new Set(["io", "verify", "on_verify_fail"]);
 
+export const LEGACY_KEY_REPLACEMENTS: Record<string, string> = {
+  payload_schema: "io.output.schema",
+  clone_input_schema: "io.input.schema",
+  pre_emit_checks: "verify items with when including emit",
+  completion: "verify items with when including after",
+  recovery: "on_verify_fail",
+};
+
+export function formatLegacyReplacements(keys: string[]): string {
+  return keys
+    .map((key) => {
+      const replacement = LEGACY_KEY_REPLACEMENTS[key];
+      return replacement ? `${key} → ${replacement}` : key;
+    })
+    .join(", ");
+}
+
 export const STAGE_FILE_WIRING_KEYS = [
   "needs",
   "on_verify_fail",
@@ -87,7 +104,7 @@ export function mixedDialectIssue(message?: string): LoadIssue {
 export function legacyYamlIssue(fileLabel: string, keys: string[]): LoadIssue {
   return {
     code: "catalog.legacy_yaml",
-    message: `${fileLabel} uses legacy YAML keys (${keys.join(", ")}); rewrite to io / verify / on_verify_fail`,
+    message: `${fileLabel} uses legacy YAML keys (${formatLegacyReplacements(keys)})`,
     category: "catalog",
   };
 }

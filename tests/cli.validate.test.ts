@@ -476,6 +476,67 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
   });
 });
 
+describe("catalog.legacy_yaml findings", () => {
+  const legacyInline = [
+    "id: legacy-inline",
+    "stages:",
+    "  - id: work",
+    "    system_prompt: do the work",
+    "    model: anthropic/claude-sonnet-4-5",
+    "    payload_schema:",
+    "      type: object",
+    "",
+  ].join("\n");
+
+  it("CLI --json validate of a legacy file includes catalog.legacy_yaml and stays ok", async () => {
+    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-legacy-"));
+    const pipelinePath = path.join(catalogRoot, "legacy.pipeline.yaml");
+    await writeFile(pipelinePath, legacyInline);
+    const logs: string[] = [];
+    const code = await runValidateCommand(["--pipeline", pipelinePath, "--json"], {
+      cwd: catalogRoot,
+      io: { log: (line) => logs.push(line), error: () => undefined },
+    });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logs[0]!) as {
+      ok: boolean;
+      findings: Array<{ code: string; file: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    const legacy = parsed.findings.find((finding) => finding.code === "catalog.legacy_yaml");
+    expect(legacy).toBeDefined();
+    expect(legacy?.file).toMatch(/legacy\.pipeline\.yaml/);
+    expect(legacy?.message).toMatch(/payload_schema → io\.output\.schema/);
+  });
+
+  it("--strict does not fail catalog.legacy_yaml", async () => {
+    const catalogRoot = await mkdtemp(path.join(tmpdir(), "sf-validate-legacy-strict-"));
+    const pipelinePath = path.join(catalogRoot, "legacy.pipeline.yaml");
+    await writeFile(pipelinePath, legacyInline);
+    const logs: string[] = [];
+    const code = await runValidateCommand(
+      ["--pipeline", pipelinePath, "--strict", "--json"],
+      {
+        cwd: catalogRoot,
+        io: { log: (line) => logs.push(line), error: () => undefined },
+      },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(logs[0]!) as {
+      ok: boolean;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; severity: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.summary.errors).toBe(0);
+    expect(
+      parsed.findings.some(
+        (finding) => finding.code === "catalog.legacy_yaml" && finding.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("validateCommand module boundaries", () => {
   it("does not import run store or pipeline runner modules", async () => {
     const source = await import("node:fs/promises").then(({ readFile }) =>
