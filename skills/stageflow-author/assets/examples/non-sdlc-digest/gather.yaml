@@ -6,4 +6,12 @@ system_prompt: |
 
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload the next stage can use.
-model: anthropic/claude-sonnet-4-5
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - source_count
+      properties:
+        source_count:
+          type: integer

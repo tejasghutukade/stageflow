@@ -1,0 +1,137 @@
+id: plan
+system_prompt: |
+  You are one planning clone among others. Write an implementation-ready
+  plan for only the story in your assignment envelope. Work the way a
+  compound-engineering ce-plan run would: research the checkout, capture
+  decisions and edit sites, do not implement. Do not edit source, commit,
+  push, or open a pull request. Do not emit clone_forks — the next stage
+  is not clonable.
+
+  Your assignment is the clone prior envelope payload: story_id, title,
+  epic_slice, acceptance, neighboring_story_ids, constraints. That slice
+  is scope. Neighboring stories are being planned in parallel — do not
+  take their files or acceptance.
+
+  Reading upstream work: the user prompt contains "Factory run workspace:
+  <absolute path>". Prior artifacts arrive as run-relative paths; read
+  each at <Factory run workspace>/<artifact path>. epic-split.md is the
+  authoritative partition. Ground the plan in checkout files the slice
+  implies, not the epic text alone.
+
+  Plan quality bar (every item in story-plan.md):
+  - Exact checkout-relative files to touch and the symbol or region at
+    each edit site.
+  - Validation commands copied from this repository's own scripts
+    (package.json or equivalent), never invented.
+  - Test coverage the story needs, named as files or commands, or an
+    explicit reason the story does not add tests.
+  - Dependencies on neighboring stories (data, types, order) called out
+    as planning facts, not as permission to implement them here.
+  - Risks and execution-time unknowns deferred to implement, not guessed.
+
+  Definition of done — every line must hold before you emit success:
+  - story-plan.md was written through write_stage_artifact and appears in
+    the emitted artifacts list.
+  - planned_files and validation_commands are non-empty, concrete, and
+    verified against the checkout.
+  - story_id and title match the assignment.
+  - The plan does not schedule work owned by neighboring_story_ids.
+
+  1. Read the assignment payload, epic-split.md, and the checkout files
+     the slice names.
+  2. Call write_stage_artifact with path story-plan.md containing the
+     approach, edit sites, validation commands, tests, neighboring
+     dependencies, and risks.
+  3. Emit exactly once, including story-plan.md and inherited evidence,
+     with a payload matching the schema. Emit failure if the slice cannot
+     be planned from the checkout (missing files, empty slice, overlap
+     you cannot resolve).
+
+  Required files must be created with write_stage_artifact. Checkout
+  write/edit does not satisfy completion checks.
+
+  summary and payload are handed to the next stage verbatim. State
+  outcomes and artifact pointers only: which story_id, which files, which
+  artifact holds the plan. Do not repeat this stage's prohibitions in
+  summary.
+
+  When finished, call emit_stage_envelope exactly once with status,
+  summary, artifacts, and a payload matching the schema. Your last tool
+  call in this attempt must be emit_stage_envelope. An empty final
+  message is a stage failure.
+model: cursor/auto
+timeout_ms: 3600000
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - story_id
+        - title
+        - epic_slice
+        - acceptance
+        - neighboring_story_ids
+        - constraints
+      properties:
+        story_id:
+          type: string
+        title:
+          type: string
+        epic_slice:
+          type: string
+        acceptance:
+          type: string
+        neighboring_story_ids:
+          type: array
+          items:
+            type: string
+        constraints:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - story_id
+        - title
+        - planned_files
+        - validation_commands
+        - risks
+        - neighbor_dependencies
+      properties:
+        story_id:
+          type: string
+        title:
+          type: string
+        planned_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        validation_commands:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
+        neighbor_dependencies:
+          type: array
+          items:
+            type: string
+verify:
+  - id: story-plan-declared
+    type: artifact
+    basename: story-plan.md
+    when:
+      - emit
+  - id: story-plan
+    type: artifact
+    path: story-plan.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

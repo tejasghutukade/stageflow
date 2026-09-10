@@ -9,7 +9,8 @@ import {
   loadTaskOutcome,
   parseTaskFile,
 } from "../src/config/loadTask.js";
-import { isTaskFile, resolveStartTaskInput } from "../src/runtime/taskInput.js";
+import { isTaskFile, resolveStartTaskInput, taskFileToYaml } from "../src/runtime/taskInput.js";
+import { validateCatalog } from "../src/config/validateCatalog.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const samplePath = SAMPLE_TASK;
@@ -74,6 +75,7 @@ describe("task load seam outcomes", () => {
 describe("taskInput uses the load parse", () => {
   it("isTaskFile wraps parseTaskFile", () => {
     expect(isTaskFile({ id: "t", goal: "g" })).toBe(true);
+    expect(isTaskFile({ id: "t", goal: "g", input: { title: "x" } })).toBe(true);
     expect(isTaskFile({ id: "t" })).toBe(false);
     expect(isTaskFile("tasks/sample.task.yaml")).toBe(false);
     expect(parseTaskFile({ id: "t", goal: "g", checkout: 42 }, "task").ok).toBe(true);
@@ -95,6 +97,91 @@ describe("taskInput uses the load parse", () => {
   it("non-object task fails with the start-input error", () => {
     expect(() => resolveStartTaskInput({ task: 1 as unknown as string }, fixtures)).toThrow(
       /task path, task object, or taskYaml is required/,
+    );
+  });
+});
+
+describe("optional task input", () => {
+  it("parses a structured input object", () => {
+    const outcome = parseTaskFile({
+      id: "t",
+      goal: "g",
+      extra_unknown: "ignored",
+      input: { title: "Calendar", count: 3 },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.input).toEqual({ title: "Calendar", count: 3 });
+    expect(outcome.value).not.toHaveProperty("extra_unknown");
+  });
+
+  it("rejects a non-object input at task load", () => {
+    const outcome = parseTaskFile({ id: "t", goal: "g", input: "not-an-object" });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("task.invalid_shape");
+    expect(outcome.issues[0]?.message).toMatch(/input must be an object/);
+  });
+
+  it("rejects array input at task load", () => {
+    const outcome = parseTaskFile({ id: "t", goal: "g", input: ["x"] });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("task.invalid_shape");
+  });
+
+  it("persists structured input through taskFileToYaml", () => {
+    const outcome = parseTaskFile({
+      id: "t",
+      goal: "g",
+      input: { title: "Calendar" },
+    });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const yaml = taskFileToYaml(outcome.value);
+    expect(yaml).toMatch(/input:/);
+    expect(yaml).toMatch(/title: Calendar/);
+    const reloaded = loadTaskFromYaml(yaml);
+    expect(reloaded.input).toEqual({ title: "Calendar" });
+  });
+
+  it("MCP/HTTP start-run object with input round-trips into stored task YAML", () => {
+    const resolved = resolveStartTaskInput(
+      {
+        task: {
+          id: "inline",
+          goal: "prove input",
+          input: { title: "From start-run" },
+        },
+      },
+      fixtures,
+    );
+    expect(resolved.kind).toBe("yaml");
+    if (resolved.kind !== "yaml") return;
+    expect(resolved.taskYaml).toMatch(/title: From start-run/);
+    const stored = loadTaskFromYaml(resolved.taskYaml);
+    expect(stored.input).toEqual({ title: "From start-run" });
+  });
+
+  it("AE5: sample.task.yaml still validates alone without task.entry_input_unmet", async () => {
+    const result = await validateCatalog({
+      scope: "task",
+      task: samplePath,
+      cwd: fixtures,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.findings.some((f) => f.code === "task.entry_input_unmet")).toBe(
+      false,
+    );
+  });
+
+  it("MCP taskFileSchema includes optional input", async () => {
+    const source = await readFile(
+      path.join(root, "src", "mcp", "catalogTools.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /input:\s*z\.record\(z\.string\(\),\s*z\.unknown\(\)\)\.optional\(\)/,
     );
   });
 });

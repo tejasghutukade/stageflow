@@ -1,5 +1,4 @@
 id: oss-explain-issue
-gate_kinds: []
 system_prompt: |
   Produce one self-contained teaching artifact, issue-explainer.html, that
   explains this issue from the real checkout. This stage is a side teaching
@@ -70,10 +69,21 @@ system_prompt: |
   the summary verbatim and will misread "do not edit the checkout" as an
   instruction to themselves.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [topic]
-  additionalProperties: false
-  properties:
-    topic:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - topic
+      additionalProperties: false
+      properties:
+        topic:
+          type: string
+verify:
+  - id: issue-explainer
+    type: artifact
+    path: issue-explainer.html
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

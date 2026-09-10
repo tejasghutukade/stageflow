@@ -25,31 +25,40 @@ system_prompt: |
   - Copy from priorEnvelopesByStage only. Do not use a single priorEnvelope.
   - Do not emit clone_forks.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [received]
-  properties:
-    received:
+io:
+  output:
+    schema:
       type: object
-      required: [research, validation]
+      required:
+        - received
       properties:
-        research:
+        received:
           type: object
-          required: [status, summary]
+          required:
+            - research
+            - validation
           properties:
-            status:
-              type: string
-            summary:
-              type: string
-            finding:
-              type: string
-        validation:
-          type: object
-          required: [status, summary]
-          properties:
-            status:
-              type: string
-            summary:
-              type: string
-            finding:
-              type: string
+            research:
+              type: object
+              required:
+                - status
+                - summary
+              properties:
+                status:
+                  type: string
+                summary:
+                  type: string
+                finding:
+                  type: string
+            validation:
+              type: object
+              required:
+                - status
+                - summary
+              properties:
+                status:
+                  type: string
+                summary:
+                  type: string
+                finding:
+                  type: string

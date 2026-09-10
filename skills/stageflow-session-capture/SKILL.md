@@ -74,7 +74,7 @@ Read [`references/catalog-authoring.md`](references/catalog-authoring.md) before
    `node scripts/resolve-catalog-id.mjs --text "<phrase>" --dir <write-dir> --kind pipeline|stage`
 
    Use the printed `{"id":"..."}`.
-3. Write one external stage YAML per phase (`id`, `system_prompt`, `model`). End every `system_prompt` with an `emit_stage_envelope` footer. Omit `gate_kinds`. Filename stem must match `id`.
+3. Write one external stage YAML per phase (`id`, `system_prompt`, optional `model`). End every `system_prompt` with an `emit_stage_envelope` footer. Omit `gate_kinds`. Filename stem must match `id`.
 4. Write one pipeline YAML that wires the stages with `uses:` and `needs:` in dependency order.
 
 Do not write a `*.task.yaml`.

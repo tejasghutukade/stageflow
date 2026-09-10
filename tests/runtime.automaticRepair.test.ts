@@ -191,4 +191,85 @@ describe("automatic completion repair", () => {
       store.getLatestStageExecution(result.runId, "implement"),
     ).resolves.toMatchObject({ verification_outcome: "not_run" });
   });
+
+  it("on_verify_fail repair schedules a new attempt while attempts are under max_attempts", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-on-verify-fail-repair-"));
+    await writeFile(
+      path.join(root, "implement.yaml"),
+      [
+        "id: implement",
+        "system_prompt: Implement the approved work.",
+        "model: anthropic/claude-sonnet-4-5",
+        "verify:",
+        "  - id: self-review",
+        "    type: checklist",
+        "    items: [Tests pass]",
+        "    when: [after]",
+        "",
+      ].join("\n"),
+    );
+    const pipeline = path.join(root, "repair.pipeline.yaml");
+    await writeFile(
+      pipeline,
+      [
+        "id: repair-demo",
+        "stages:",
+        "  - id: implement",
+        "    uses: ./implement.yaml",
+        "    on_verify_fail:",
+        "      mode: repair",
+        "      max_attempts: 2",
+        "      retry_safety: idempotent",
+        "      include_failed_checks: true",
+        "",
+      ].join("\n"),
+    );
+    const store = createRunStore({ rootDir: root });
+    const base = scriptedFakeAgent([
+      { type: "emit", envelope: { status: "success", summary: "first candidate", artifacts: [] } },
+      {
+        type: "emit",
+        envelope: {
+          status: "success",
+          summary: "repaired candidate",
+          artifacts: [],
+          checklist_attestations: [{ check_id: "self-review", items: ["Tests pass"] }],
+        },
+      },
+    ]);
+    const inputs: StageRunInput[] = [];
+    const agent = {
+      openStage(input: StageRunInput) {
+        inputs.push(input);
+        return base.openStage(input);
+      },
+      runStage(input: StageRunInput) {
+        return base.runStage(input);
+      },
+    };
+
+    const result = await runPipeline({
+      agent,
+      store,
+      taskYaml: "id: t\ngoal: g\n",
+      pipeline,
+      cwd: root,
+      executionMode: "inprocess",
+    });
+
+    expect(result).toMatchObject({ ok: true, outcome: "succeeded" });
+    expect(inputs).toHaveLength(2);
+    expect(inputs[1]?.repairContext).toMatchObject({
+      prior_attempt: 1,
+      failed_checks: [{ id: "self-review", type: "checklist" }],
+    });
+    await expect(store.countStageAttempts(result.runId, "implement")).resolves.toBe(2);
+    const snapshot = (await store.readRunMeta(result.runId)).pipeline_dag;
+    expect(snapshot?.nodes[0]?.recovery).toMatchObject({
+      mode: "repair",
+      max_attempts: 2,
+    });
+    expect(JSON.stringify(snapshot)).toContain('"recovery"');
+    expect(JSON.stringify(snapshot)).not.toContain("on_verify_fail");
+  });
 });

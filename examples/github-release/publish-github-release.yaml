@@ -26,11 +26,19 @@ system_prompt: |
   Call emit_stage_envelope exactly once with status, that artifact path,
   a one-sentence summary, and a payload matching the stage schema.
 model: cursor/composer-2-5
-payload_schema:
-  type: object
-  required: [tag, published, html_url]
-  properties:
-    tag: { type: string }
-    published: { type: boolean }
-    html_url: { type: string }
-  additionalProperties: false
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - tag
+        - published
+        - html_url
+      properties:
+        tag:
+          type: string
+        published:
+          type: boolean
+        html_url:
+          type: string
+      additionalProperties: false

@@ -1,11 +1,4 @@
 id: oss-approve-plan
-timeout_ms: 3600000
-gate_kinds:
-  - artifact_backed
-pre_emit_checks:
-  - id: plan-approved
-    type: gate
-    kind: artifact_backed
 system_prompt: |
   Write implementation-plan.md as a mechanical checklist the implement stage can
   execute, and get explicit operator approval of it before any source edit.
@@ -70,23 +63,46 @@ system_prompt: |
   stage's prohibitions or scope limits in it — in particular, no "no source
   edits" language, which applies here and not downstream.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [approved, scope_summary, planned_files, validation_commands, publication_blockers]
-  properties:
-    approved:
-      type: boolean
-    scope_summary:
-      type: string
-    planned_files:
-      type: array
-      items:
-        type: string
-    validation_commands:
-      type: array
-      items:
-        type: string
-    publication_blockers:
-      type: array
-      items:
-        type: string
+timeout_ms: 3600000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - approved
+        - scope_summary
+        - planned_files
+        - validation_commands
+        - publication_blockers
+      properties:
+        approved:
+          type: boolean
+        scope_summary:
+          type: string
+        planned_files:
+          type: array
+          items:
+            type: string
+        validation_commands:
+          type: array
+          items:
+            type: string
+        publication_blockers:
+          type: array
+          items:
+            type: string
+verify:
+  - id: plan-approved
+    type: gate
+    kind: artifact_backed
+    when:
+      - emit
+      - after
+  - id: implementation-plan
+    type: artifact
+    path: implementation-plan.md
+    nonempty: true
+    when:
+      - after
+gate_kinds:
+  - artifact_backed

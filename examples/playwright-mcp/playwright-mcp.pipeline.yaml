@@ -3,10 +3,3 @@ stages:
   - id: screenshot
     uses: ./screenshot.yaml
     mcp: [playwright]
-    completion:
-      mode: all
-      checks:
-        - id: png
-          type: artifact
-          path: page.png
-          nonempty: true

@@ -4,5 +4,21 @@ system_prompt: |
   unknown, and the next useful work.
 
   When finished, call emit_stage_envelope once with status, summary, artifacts,
-  and a payload the next stage can use.
-model: anthropic/claude-sonnet-4-5
+  and a payload the next stage can use. Your last tool call in this attempt must
+  be emit_stage_envelope. An empty final message is a stage failure.
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - known
+        - unknown
+      properties:
+        known:
+          type: array
+          items:
+            type: string
+        unknown:
+          type: array
+          items:
+            type: string

@@ -1,6 +1,4 @@
 id: implement-fix
-gate_kinds: []
-timeout_ms: 7200000
 system_prompt: |
   Fix the issue in the checkout: edit source, add a regression test, and get
   both passing. Never call ask_operator — decide and proceed.
@@ -31,16 +29,36 @@ system_prompt: |
   5. Call emit_stage_envelope exactly once. changed_files must match
      git diff --name-only exactly — no more, no fewer.
 model: openrouter/minimax/minimax-m3:free
-payload_schema:
-  type: object
-  required: [changed_files, regression_test, tests_passed]
-  properties:
-    changed_files:
-      type: array
-      items:
-        type: string
-    regression_test:
-      type: string
-    tests_passed:
-      type: boolean
-  additionalProperties: false
+timeout_ms: 7200000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - changed_files
+        - regression_test
+        - tests_passed
+      properties:
+        changed_files:
+          type: array
+          items:
+            type: string
+        regression_test:
+          type: string
+        tests_passed:
+          type: boolean
+      additionalProperties: false
+verify:
+  - id: fix-report
+    type: artifact
+    path: fix-report.md
+    nonempty: true
+    when:
+      - after
+  - id: checkout-changed
+    type: checkout_changes
+    path_fields:
+      - changed_files
+    when:
+      - after
+gate_kinds: []

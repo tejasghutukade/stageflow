@@ -1,6 +1,4 @@
 id: oss-write-regression-test
-gate_kinds: []
-timeout_ms: 2400000
 system_prompt: |
   Add the narrow regression test named in the approved plan, and only that
   test. Do not touch source files. Modified test files under "Project checkout
@@ -71,20 +69,41 @@ system_prompt: |
   own instructions, so never restate this stage's prohibitions or scope limits
   in it.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [test_files, test_node_id, red_evidence, commands_run]
-  properties:
-    test_files:
-      type: array
-      minItems: 1
-      items:
-        type: string
-    test_node_id:
-      type: string
-    red_evidence:
-      type: string
-    commands_run:
-      type: array
-      items:
-        type: string
+timeout_ms: 2400000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - test_files
+        - test_node_id
+        - red_evidence
+        - commands_run
+      properties:
+        test_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        test_node_id:
+          type: string
+        red_evidence:
+          type: string
+        commands_run:
+          type: array
+          items:
+            type: string
+verify:
+  - id: regression-test-report
+    type: artifact
+    path: regression-test-report.md
+    nonempty: true
+    when:
+      - after
+  - id: checkout-changed
+    type: checkout_changes
+    path_fields:
+      - test_files
+    when:
+      - after
+gate_kinds: []

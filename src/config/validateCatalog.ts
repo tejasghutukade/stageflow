@@ -36,11 +36,15 @@ export type ValidationFindingCode =
   | "pipeline.include_duplicate_stage"
   | "pipeline.invalid_agent"
   | "pipeline.invalid_model"
+  | "pipeline.invalid_verify"
+  | "pipeline.io_incompatible"
+  | "pipeline.model_applies"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
   | "stage.invalid_payload_schema"
   | "stage.invalid_clone_input_schema"
+  | "stage.unresolved_schema_ref"
   | "stage.invalid_clone_actions"
   | "stage.invalid_gate_kinds"
   | "stage.invalid_pre_emit_checks"
@@ -48,16 +52,20 @@ export type ValidationFindingCode =
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
   | "stage.invalid_agent"
+  | "stage.invalid_io"
   | "stage.load_error"
   | "stage.id_filename_mismatch"
   | "task.invalid_shape"
   | "task.load_error"
+  | "task.entry_input_unmet"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
   | "catalog.empty_catalog"
   | "catalog.manifest_load_error"
-  | "catalog.invalid_mcp";
+  | "catalog.invalid_mcp"
+  | "catalog.mixed_yaml_dialect"
+  | "catalog.legacy_yaml";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -259,6 +267,21 @@ export function findingsFromLoadIssues(
 ): ValidationFinding[] {
   return issues.flatMap((issue) => {
     if (issue.category === "pipeline") {
+      if (issue.code === "pipeline.model_applies") {
+        return [
+          baseFinding(
+            {
+              cwd,
+              absPath,
+              message: issue.message,
+              code: issue.code,
+              category: "pipeline",
+              pipelineId: issue.pipelineId,
+            },
+            "warning",
+          ),
+        ];
+      }
       return [
         findingPipelineError(
           cwd,
@@ -293,7 +316,9 @@ export function findingsFromLoadIssues(
     if (issue.category === "catalog") {
       const code = issue.code as ValidationFindingCode;
       const severity =
-        code === "catalog.manifest_missing" || code === "catalog.empty_catalog"
+        code === "catalog.manifest_missing" ||
+        code === "catalog.empty_catalog" ||
+        code === "catalog.legacy_yaml"
           ? "warning"
           : "error";
       return [findingCatalog(cwd, absPath, issue.message, code, severity)];
@@ -460,12 +485,19 @@ async function runPipelineValidation(
     return { ok: false, findings };
   }
 
+  if (outcome.issues) {
+    findings.push(...findingsFromLoadIssues(cwd, pipelinePath, outcome.issues));
+  }
+
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {
       if (source.kind === "file") {
-        findings.push(...(await validateStageFile(cwd, source.path)));
+        const extra = await validateStageFile(cwd, source.path);
+        findings.push(
+          ...extra.filter((finding) => finding.code !== "stage.unresolved_schema_ref"),
+        );
       }
     }
   }
@@ -501,7 +533,7 @@ export async function validatePipeline(
 }
 
 export type LoadPipelineValidatedResult =
-  | { ok: true; loaded: LoadedPipeline }
+  | { ok: true; loaded: LoadedPipeline; findings: ValidationFinding[] }
   | { ok: false; findings: ValidationFinding[] };
 
 export async function loadPipelineValidated(
@@ -517,7 +549,7 @@ export async function loadPipelineValidated(
     validateStages,
   });
   if (core.ok) {
-    return { ok: true, loaded: core.loaded };
+    return { ok: true, loaded: core.loaded, findings: core.findings };
   }
   return { ok: false, findings: core.findings };
 }

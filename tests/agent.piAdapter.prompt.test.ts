@@ -10,7 +10,7 @@ import type { CloneEmitContext } from "../src/types/forkChoice.js";
 import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 
 const CLONE_FORESIGHT =
-  'Each once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). clone_input_schema fields belong in envelope.payload, not at the top level of the clone_forks item.';
+  'Each once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). io.input.schema fields belong in envelope.payload, not at the top level of the clone_forks item.';
 
 const AREA_ASSIGNMENT_SCHEMA = {
   type: "object",
@@ -90,7 +90,9 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
     expect(prompt).toContain("summary");
     expect(prompt).toContain("artifacts");
     expect(prompt).toContain("envelope.payload");
+    expect(prompt).toContain("Assignment schema (io.input.schema):");
     expect(prompt).toContain(CLONE_FORESIGHT);
+    expect(prompt).not.toContain("clone_input_schema");
   });
 
   it("Cursor emitToolHint override still appends clone foresight", () => {
@@ -103,6 +105,8 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
     expect(prompt).toContain("Clonable successors");
     expect(prompt).toContain(CLONE_FORESIGHT);
     expect(prompt).toContain("envelope.payload");
+    expect(prompt).toContain("Assignment schema (io.input.schema):");
+    expect(prompt).not.toContain("clone_input_schema");
   });
 
   it("cloneEmitContext absent → foresight sentence absent", () => {

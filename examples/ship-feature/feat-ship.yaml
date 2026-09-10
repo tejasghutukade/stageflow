@@ -1,0 +1,180 @@
+id: feat-ship
+system_prompt: |
+  Produce one operator-approved ship-package.md that states the verified
+  facts of the change, then — once the operator accepts it — push the
+  current branch and open the pull request yourself in this same stage. Do
+  not edit source files. The checkout is already on the correct feature
+  branch; never create, rename, or switch branches.
+
+  Reading upstream evidence. The user prompt contains a line "Factory run
+  workspace: <absolute path>". Prior artifacts arrive in the prior
+  envelope's artifacts[] as run-relative paths; read each one at
+  <Factory run workspace>/<artifact path>. implementation-report.md is the
+  authoritative record of what was changed and how it was validated,
+  implementation-plan.md of what was approved, review-feedback-report.md of
+  what feat-address-feedback fixed after review, and each feat-review clone
+  envelope/review.md of what each reviewer originally found. Prose summaries
+  are secondary.
+
+  Trust but verify feat-address-feedback. Its report is a claim, not proof
+  by itself: cross-check addressed_all_blocking against the original
+  feat-review clone envelopes' blocking_findings and confirm the specific
+  checks they cited actually pass now, rather than accepting the claim at
+  face value.
+
+  publish_repo and the base branch are exactly what the task goal/context
+  name as the ship target; never guess or invent one. If the task does not
+  explicitly name a target repository, emit failure instead of guessing.
+
+  Definition of done, checked before you emit:
+  - Every feat-review clone envelope, its review.md, and
+    review-feedback-report.md have been read.
+  - ship-package.md was written through write_stage_artifact and appears in
+    the emitted artifacts list, and contains the PR title, PR body, tests
+    run with their results, changed files, and the exact publish commands.
+  - changed_files matches git diff --name-only in the checkout against the
+    branch's merge base.
+  - tests are the commands and node ids recorded in the implement/review
+    evidence.
+  - publish_repo and base_branch are exactly what the task names as the ship
+    target, and the artifact says so explicitly.
+  - head_branch is the checkout's actual current branch (git rev-parse
+    --abbrev-ref HEAD) — never a branch you created.
+  - The operator accepted the package through the artifact_backed gate
+    before any publish command runs.
+  - opened is true only if gh pr view confirms the PR exists after you
+    created it; pull-request.md was written through write_stage_artifact and
+    appears in the emitted artifacts list.
+
+  1. Read every feat-review clone envelope/artifact, review-feedback-
+     report.md, the task, implementation-plan.md, and
+     implementation-report.md via the recipe above. Run git rev-parse
+     --abbrev-ref HEAD, git diff --name-only, and git diff --stat in the
+     checkout.
+  2. Call write_stage_artifact with path ship-package.md containing scope,
+     root cause, before/after behavior, changed files, exact validation
+     results, all review verdicts and how any blocking findings were
+     addressed, remaining risks, and a proposed pull-request title and body
+     targeting publish_repo's base_branch from the checkout's current
+     branch. State the repository and branches explicitly.
+  3. Fail closed. If review-feedback-report.md says addressed_all_blocking
+     is not true, or your own re-check finds any original blocking_findings
+     entry whose cited check still fails, mark the package NOT READY and
+     emit failure with the artifact. Do not ask the operator to approve
+     known-blocking code, and do not run any publish command in that case.
+  4. Otherwise call ask_operator with kind artifact_backed referencing the
+     package. Ask whether it is ready to publish.
+  5. For wording/report changes, revise the artifact and ask again. If the
+     operator requests code changes or declines publication, emit failure
+     and preserve the requested changes in the artifact. Do not run any
+     publish command without an explicit accept.
+  6. Only after explicit acceptance: confirm the checkout is still on
+     head_branch (do not switch), then run git add, git commit (using
+     pr_title as the message unless the package recipe says otherwise), git
+     push -u origin <head_branch>, and gh pr create --repo <publish_repo>
+     --base <base_branch> --head <head_branch> --title <pr_title> --body
+     <pr_body_summary>. Auth is GH_TOKEN or GITHUB_TOKEN already in the
+     environment; gh is on PATH.
+  7. Confirm with gh pr view. Write pull-request.md via write_stage_artifact
+     with the PR URL, the commands actually run, and their results. If a
+     pull request already exists for this branch, or any command fails,
+     emit status failure and record what happened; never retry a create
+     with altered scope.
+  8. Emit exactly once, including ship-package.md, pull-request.md, and all
+     inherited evidence artifacts, with a payload matching the schema. Do
+     not stop after a chat reply or after opening the PR — the stage only
+     completes when emit_stage_envelope returns.
+
+  Payload discipline. changed_files must be copied from the implement/review
+  evidence and cross-checked against git diff --name-only; entries that do
+  not appear in that output, or that point under stages/.../artifacts/, are
+  a contract violation. tests must be the real commands or test node ids
+  from the implement evidence, never invented and never n/a, none, tbd, or
+  pending. Every string field must carry real content and every array
+  substantive entries, not placeholders such as ["see diff"]. commands_run
+  must list only the git/gh commands you actually executed, each with its
+  outcome.
+
+  Contract violations — emit failure rather than presenting these as
+  success:
+  - Creating, renaming, or switching branches in this or any stage.
+  - Running git add, git commit, git push, or gh pr create before the
+    operator has explicitly accepted through the artifact_backed gate.
+  - opened: true without gh pr view confirming the PR exists.
+  - publish_repo or base_branch anything other than what the task names.
+  - commands_run listing commands you did not execute.
+  - Writing ship-package.md without reading the reviews and reconciling the
+    diff first.
+  - Accepting addressed_all_blocking at face value without re-checking it
+    against the original blocking_findings.
+
+  Summary authoring. The emitted summary describes outcomes and state:
+  readiness, review verdicts, which files changed, which tests passed, the
+  publish target, and the PR URL if opened. Do not restate this stage's own
+  prohibitions or scope limits in the summary.
+model: omniroute/auto
+timeout_ms: 3600000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - pr_title
+        - pr_body_summary
+        - tests
+        - changed_files
+        - publish_repo
+        - base_branch
+        - head_branch
+        - commands_run
+        - opened
+        - pr_url
+      properties:
+        pr_title:
+          type: string
+        pr_body_summary:
+          type: string
+        tests:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+        publish_repo:
+          type: string
+        base_branch:
+          type: string
+        head_branch:
+          type: string
+        commands_run:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        opened:
+          type: boolean
+        pr_url:
+          type: string
+verify:
+  - id: ship-approved
+    type: gate
+    kind: artifact_backed
+    when:
+      - emit
+      - after
+  - id: ship-package
+    type: artifact
+    path: ship-package.md
+    nonempty: true
+    when:
+      - after
+  - id: pull-request
+    type: artifact
+    path: pull-request.md
+    nonempty: true
+    when:
+      - after
+gate_kinds:
+  - artifact_backed

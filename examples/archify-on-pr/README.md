@@ -71,9 +71,9 @@ the `sf-run` step. detect-changes copies `relevant_files` into
 
 Both pipeline stages read this file — agents do not use `GITHUB_SHA` or run
 their own git diff. detect-changes does not re-derive types; it only copies and
-emits. The pipeline enforces that with `pre_emit_checks` (artifact declared:
-`changes.json`), `completion` (on-disk artifact + payload schema +
-`node scripts/validate-detect-envelope.mjs`), and `recovery: repair`.
+emits. The pipeline enforces that with body `verify` (`type: artifact` on
+`changes.json` at emit and after, plus after-phase payload and command checks)
+and wiring `on_verify_fail: repair`.
 
 Local dry-run:
 

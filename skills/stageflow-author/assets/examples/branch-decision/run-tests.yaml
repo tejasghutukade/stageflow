@@ -10,4 +10,12 @@ system_prompt: |
   On a success emit, include fork_choice naming immediate successor id(s) that
   should run. Name only ids listed as this stage's children. select: one →
   exactly one id: hotfix when the results fail, ship when they pass.
-model: anthropic/claude-sonnet-4-5
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - ready
+      properties:
+        ready:
+          type: boolean

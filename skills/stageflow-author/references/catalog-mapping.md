@@ -16,7 +16,7 @@ Collision handling lives in [`catalog-write-conventions.md`](catalog-write-conve
 
 ## Sequencing
 
-`needs` is a single parent stage id, or an array of at least two parent ids when one step waits for several earlier steps. Strings default to `on: [succeeded]`. `{ id, on }` accepts a non-empty unique subset of `succeeded` | `failed` | `skipped`.
+`needs` is a parent stage id, or a non-empty array (length ≥ 1). Strings default to `on: [succeeded]`. `{ id, on }` accepts a non-empty unique subset of `succeeded` | `failed` | `skipped`.
 
 | Human says | Pipeline shape |
 |---|---|
@@ -42,19 +42,19 @@ When the human wants a review that can demand changes, then a later approve/ship
 
 Do not wire approve/ship as the immediate child of review. Pipelines are forward-only; without an address-feedback stage, blocking findings have nowhere to land. The address-feedback stage is the only post-review editor; the approve stage is the backstop.
 
-## Completion and recovery
+## Verify and on_verify_fail
 
-Put `completion` / `recovery` on the **pipeline** stage entry (the `uses:` wrapper), not on the stage body. Use when the human needs a hard gate before advance:
+Put `verify` on the **stage body** (the `uses:` file or inline entry). Put `on_verify_fail` on the **pipeline** stage entry (the `uses:` wrapper). Use when the human needs a hard gate before advance:
 
-| Need | Pipeline wiring |
+| Need | Catalog |
 |---|---|
-| Required file under the attempt artifact dir | `completion.checks` with `type: artifact`, `path`, usually `nonempty: true` |
-| HITL must complete | `type: gate` with `kind` that appears in the stage's `gate_kinds` |
-| Implement must change the checkout | `type: checkout_changes` with `path_fields` naming required arrays in `payload_schema` |
-| Auto-retry after verification fail | `recovery: { mode: repair, max_attempts: N, retry_safety: idempotent, include_failed_checks: true }` |
-| Side-effecting publish / ship | `recovery: { mode: manual, retry_safety: side_effecting }` |
+| Required file under the attempt artifact dir | `verify` with `type: artifact`, `path`, usually `nonempty: true`, `when: [after]` |
+| HITL must complete this attempt | `type: gate` with `kind` that appears in the stage's `gate_kinds` (default `when: [emit]`) |
+| Implement must change the checkout | `type: checkout_changes` with `path_fields` naming required arrays in `io.output.schema` |
+| Auto-retry when after-phase verify fails | `on_verify_fail: { mode: repair, max_attempts: N, retry_safety: idempotent, include_failed_checks: true }` |
+| Side-effecting publish / ship | `on_verify_fail: { mode: manual, retry_safety: side_effecting }` |
 
-`completion.mode` is `all`. Check `id` values must be unique within the stage. Wire these for writer stages and final gates; prompts alone do not enforce them.
+`on_verify_fail` requires at least one after-phase `verify` item. Check `id` values must be unique within the stage. Check discriminator is `type:` (gate widgets still use `kind:`). Wire these for writer stages and final gates; prompts alone do not enforce them.
 
 ## Clonable successors
 
@@ -64,7 +64,7 @@ When the human explicitly wants N parallel instances of **one** successor catalo
 
 - On that successor pipeline entry: `clonable: true` and `clone_cap` (integer ≥ 2).
 - That successor must have at least one child (a join / address-feedback / collect stage). It cannot be a DAG leaf.
-- Parent success emit uses `clone_forks` for that successor (not `fork_choice`). Each clone assignment is a full envelope; validate assignments with `clone_input_schema` on the clonable stage body.
+- Parent success emit uses `clone_forks` for that successor (not `fork_choice`). Each clone assignment is a full envelope; validate assignments with `io.input.schema` on the clonable stage body.
 - Join stages that wait on the clonable parent read clone-list `priorEnvelopes`, not `priorEnvelopesByStage`.
 
 `fork` + `fork_choice` picks which **branch stage ids** run. `clone_forks` spawns **N instances** of one successor id.
@@ -81,18 +81,19 @@ Three sequential steps; the middle one is a sign-off. Reject/revise stays inside
 
 ```yaml
 id: review-loop
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: draft
     uses: ./draft.yaml
   - id: review
     uses: ./review.yaml
-    needs: draft
+    needs: [draft]
   - id: publish
     uses: ./publish.yaml
-    needs: review
+    needs: [review]
 ```
 
-`review` carries `gate_kinds: [artifact_backed]`. Full set: [`../assets/examples/linear-review/`](../assets/examples/linear-review/).
+`review` carries `gate_kinds: [artifact_backed]` and emit-phase `verify` `type: gate`. Full set: [`../assets/examples/linear-review/`](../assets/examples/linear-review/).
 
 ### Review with separate fix stage
 
@@ -104,16 +105,17 @@ stages:
     uses: ./implement.yaml
   - id: review
     uses: ./review.yaml
-    needs: implement
+    needs: [implement]
   - id: address-feedback
     uses: ./address-feedback.yaml
-    needs: review
+    needs: [review]
   - id: approve
     uses: ./approve.yaml
-    needs: address-feedback
+    needs: [address-feedback]
 ```
 
 Do not make `approve` / `ship` `needs: review` when blockers are expected.
+
 ### Release gate (fork, select one)
 
 One deciding step, then exactly one successor.
@@ -127,10 +129,10 @@ stages:
       select: one
   - id: hotfix
     uses: ./hotfix.yaml
-    needs: run-tests
+    needs: [run-tests]
   - id: ship
     uses: ./ship.yaml
-    needs: run-tests
+    needs: [run-tests]
 ```
 
 Full set: [`../assets/examples/branch-decision/`](../assets/examples/branch-decision/).
@@ -146,10 +148,10 @@ stages:
     uses: ./gather.yaml
   - id: summarize
     uses: ./summarize.yaml
-    needs: gather
+    needs: [gather]
   - id: send
     uses: ./send.yaml
-    needs: summarize
+    needs: [summarize]
 ```
 
 Full set: [`../assets/examples/non-sdlc-digest/`](../assets/examples/non-sdlc-digest/).
@@ -164,10 +166,10 @@ stages:
     uses: ./intake.yaml
   - id: collect-quotes
     uses: ./collect-quotes.yaml
-    needs: intake
+    needs: [intake]
   - id: collect-notes
     uses: ./collect-notes.yaml
-    needs: intake
+    needs: [intake]
 ```
 
 No `fork` field. Both siblings run.
@@ -182,10 +184,10 @@ stages:
     uses: ./clarify.yaml
   - id: research
     uses: ./research.yaml
-    needs: clarify
+    needs: [clarify]
   - id: validation
     uses: ./validation.yaml
-    needs: clarify
+    needs: [clarify]
   - id: synthesize
     uses: ./synthesize.yaml
     needs:
@@ -193,7 +195,7 @@ stages:
       - validation
 ```
 
-`needs` array length is ≥ 2. The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`.
+`needs` array length ≥ 2 is keyed fan-in. The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`.
 
 ### Fork, select subset
 
@@ -207,10 +209,10 @@ stages:
       select: subset
   - id: email
     uses: ./email.yaml
-    needs: choose-channels
+    needs: [choose-channels]
   - id: post
     uses: ./post.yaml
-    needs: choose-channels
+    needs: [choose-channels]
 ```
 
 The success emit names one or more of those successor ids in `fork_choice`.

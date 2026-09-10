@@ -28,13 +28,16 @@ export type LoadIssue =
     };
 
 export type LoadOutcome<T> =
-  | { ok: true; value: T }
+  | { ok: true; value: T; issues?: LoadIssue[] }
   | { ok: false; issues: LoadIssue[] };
 
 export function loadFailure<T>(issues: LoadIssue[]): LoadOutcome<T> {
   return { ok: false, issues };
 }
 
-export function loadSuccess<T>(value: T): LoadOutcome<T> {
+export function loadSuccess<T>(value: T, issues?: LoadIssue[]): LoadOutcome<T> {
+  if (issues && issues.length > 0) {
+    return { ok: true, value, issues };
+  }
   return { ok: true, value };
 }

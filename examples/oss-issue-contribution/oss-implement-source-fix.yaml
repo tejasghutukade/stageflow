@@ -1,6 +1,4 @@
 id: oss-implement-source-fix
-gate_kinds: []
-timeout_ms: 3600000
 system_prompt: |
   Edit source files in the task checkout so the accepted plan is fully
   implemented and every one of its validation_commands passes — not just the
@@ -102,27 +100,50 @@ system_prompt: |
   for their own instructions, so never restate this stage's prohibitions or
   scope limits in it.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [changed_files, regression_test, implementation_summary, assumptions, commands_run, all_passed]
-  properties:
-    changed_files:
-      type: array
-      minItems: 1
-      items:
-        type: string
-    regression_test:
-      type: string
-    implementation_summary:
-      type: string
-    assumptions:
-      type: array
-      items:
-        type: string
-    commands_run:
-      type: array
-      minItems: 1
-      items:
-        type: string
-    all_passed:
-      type: boolean
+timeout_ms: 3600000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - changed_files
+        - regression_test
+        - implementation_summary
+        - assumptions
+        - commands_run
+        - all_passed
+      properties:
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        regression_test:
+          type: string
+        implementation_summary:
+          type: string
+        assumptions:
+          type: array
+          items:
+            type: string
+        commands_run:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        all_passed:
+          type: boolean
+verify:
+  - id: implementation-report
+    type: artifact
+    path: implementation-report.md
+    nonempty: true
+    when:
+      - after
+  - id: checkout-changed
+    type: checkout_changes
+    path_fields:
+      - changed_files
+    when:
+      - after
+gate_kinds: []

@@ -22,37 +22,63 @@ system_prompt: |
 
   Do not call ask_operator. Do not stop after a chat reply. Do not select types yourself.
 model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-pre_emit_checks:
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - pr_number
+        - base_ref
+        - head_sha
+        - changed_files
+        - diagram_types
+        - change_summary
+        - content_hash
+      properties:
+        pr_number:
+          type: string
+        base_ref:
+          type: string
+        head_sha:
+          type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+        diagram_types:
+          type: array
+          items:
+            type: string
+            enum:
+              - architecture
+              - workflow
+              - sequence
+              - dataflow
+              - lifecycle
+        change_summary:
+          type: string
+        content_hash:
+          type: string
+      additionalProperties: false
+verify:
   - id: changes-json-declared
-    type: artifact_declared
+    type: artifact
     basename: changes.json
-payload_schema:
-  type: object
-  required:
-    - pr_number
-    - base_ref
-    - head_sha
-    - changed_files
-    - diagram_types
-    - change_summary
-    - content_hash
-  properties:
-    pr_number: { type: string }
-    base_ref: { type: string }
-    head_sha: { type: string }
-    changed_files:
-      type: array
-      items: { type: string }
-    diagram_types:
-      type: array
-      items:
-        type: string
-        enum:
-          - architecture
-          - workflow
-          - sequence
-          - dataflow
-          - lifecycle
-    change_summary: { type: string }
-    content_hash: { type: string }
-  additionalProperties: false
+    when:
+      - emit
+  - id: changes-on-disk
+    type: artifact
+    path: changes.json
+    nonempty: true
+    when:
+      - after
+  - id: payload-ok
+    type: payload_schema
+    when:
+      - after
+  - id: matches-ci-context
+    type: command
+    run: node scripts/validate-detect-envelope.mjs
+    timeout_ms: 30000
+    when:
+      - after

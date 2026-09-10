@@ -1,5 +1,4 @@
 id: oss-explain-fix
-gate_kinds: []
 system_prompt: |
   Compose fix-explainer.html teaching the operator how the verified working-tree
   change fixes the issue, grounded in real quoted diff lines. This stage is a
@@ -63,10 +62,21 @@ system_prompt: |
   verbatim and can mistake it for their own instructions, so never restate this
   stage's prohibitions or scope limits in it.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [topic]
-  additionalProperties: false
-  properties:
-    topic:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - topic
+      additionalProperties: false
+      properties:
+        topic:
+          type: string
+verify:
+  - id: fix-explainer
+    type: artifact
+    path: fix-explainer.html
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

@@ -4,5 +4,16 @@ system_prompt: |
   there. Prefer what already worked in the source session.
 
   When finished, call emit_stage_envelope once with status, summary, artifacts,
-  and a payload describing what you produced.
-model: anthropic/claude-sonnet-4-5
+  and a payload describing what you produced. Your last tool call in this
+  attempt must be emit_stage_envelope. An empty final message is a stage failure.
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - changed_files
+      properties:
+        changed_files:
+          type: array
+          items:
+            type: string

@@ -1,0 +1,77 @@
+id: ship-feature-richer-payload-schema
+goal: >
+  Extend the JSON Schema subset used for payload_schema / clone_input_schema
+  (src/envelope/payloadSchema.ts) to additionally support, for type: string
+  nodes: pattern (a regex string, validated as a valid RegExp at compile
+  time), minLength, and maxLength (non-negative integers, checked at compile
+  time). Also add a nullable: true keyword usable on any node type, compiling
+  to a union of that type with null. Ship the change as an operator-approved
+  pull request opened against tejasghutukade/stageflow.
+context: |
+  This repository is Stageflow itself (tejasghutukade/stageflow). The
+  checkout for this run is a dedicated git worktree already on branch
+  demo/richer-payload-schema-constraints, tracking origin/main, in a clean
+  state with npm install already run.
+
+  Compiler to extend: src/envelope/payloadSchema.ts (~250 lines). Read its
+  current JsonSchemaNode type, the compileNode switch statement (especially
+  case "string"), and the exported doc-comment above compilePayloadSchema
+  that lists supported keywords — that comment must stay accurate once the
+  new keywords land. nullable most likely wraps compileNode's return with
+  Type.Union([schema, Type.Null()]) from the typebox package already used
+  elsewhere in this file, rather than living inside any single type's case.
+
+  Existing tests to extend: tests/envelope.payloadSchema.test.ts, which uses
+  compilePayloadSchema, assertEnvelopePayload, and
+  assertCloneAssignmentPayload. New tests should follow the file's existing
+  describe/it style — the existing "rejects integers outside minimum and
+  maximum" test is a good template for a new "rejects strings outside
+  pattern/minLength/maxLength" test, and there should be a nullable test that
+  allows null in addition to the node's base type (and continues to reject
+  values of neither).
+
+  Public docs to update: docs/envelopes.md, section "### payload_schema
+  {#payload-schema}" (around line 129), which lists supported keywords in
+  one prose sentence — pattern, minLength, maxLength, and nullable need to
+  join that list.
+
+  Backlog tracker to update as part of this same change, once the capability
+  actually works end-to-end: docs/future-roadmap/conductor-parity-tracker.md,
+  the "Richer payload-schema constraints" item under "## Quality,
+  interaction, and resiliency". That file has its own "How to update this
+  tracker" section at the bottom — follow those instructions exactly (flip
+  [ ] to [x], add links to the fixture/test/doc/example) rather than only
+  deleting the checkbox text. Do not touch any other backlog item in that
+  file. This tracker file is gitignored (a local-only planning artifact, like
+  docs/plans/ and docs/ideation/) — editing it on disk is still worthwhile
+  for the operator's own tracking, but it will never appear in `git diff` or
+  `git status`, so never list it in changed_files/fixed_files (those must
+  match tracked, committable changes) and never expect it to show up in the
+  shipped diff or the pull request.
+
+  Known-good validation commands in this repository (verify against
+  package.json before relying on any command name, do not assume): npm run
+  typecheck, npx vitest run tests/envelope.payloadSchema.test.ts, and npm
+  test for the full suite.
+
+  Ship target: open the pull request against tejasghutukade/stageflow, base
+  branch main, from the checkout's current branch
+  (demo/richer-payload-schema-constraints) — push to origin on that same
+  repository, not a fork.
+constraints: |
+  Do not create, rename, or switch branches in any stage — the checkout is
+  already on the correct branch, demo/richer-payload-schema-constraints,
+  tracking origin/main.
+  Do not touch .gitignore.
+  Do not commit, push, or open a pull request in any stage except feat-ship,
+  and feat-ship may do so only after the operator has explicitly accepted
+  the ship package through its artifact_backed gate.
+  Keep the change limited to the four new keywords (pattern, minLength,
+  maxLength, nullable) and their tests and docs; do not refactor unrelated
+  parts of payloadSchema.ts or change existing supported-keyword semantics.
+  A regex that fails to compile as a RegExp, or a negative/non-integer
+  minLength or maxLength, must be a compile-time error consistent with how
+  this file already rejects invalid minItems/minimum/maximum.
+  Source and test edits belong in the checkout working tree and must never
+  be replaced by a Stageflow artifact or report describing the change.
+checkout: /Users/tejasghutukade/Projects/stageflow-demo-worktree

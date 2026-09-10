@@ -1,6 +1,4 @@
 id: understand-issue
-gate_kinds: []
-timeout_ms: 7200000
 system_prompt: |
   Understand the reported issue well enough to fix it, then write
   investigation.md as the durable record downstream stages read instead of
@@ -34,18 +32,33 @@ system_prompt: |
   need to find out and why you couldn't, and still record what you did
   verify.
 model: openrouter/minimax/minimax-m3:free
-payload_schema:
-  type: object
-  required: [root_cause, target_files, repro_confirmed, fix_approach]
-  properties:
-    root_cause:
-      type: string
-    target_files:
-      type: array
-      items:
-        type: string
-    repro_confirmed:
-      type: boolean
-    fix_approach:
-      type: string
-  additionalProperties: false
+timeout_ms: 7200000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - root_cause
+        - target_files
+        - repro_confirmed
+        - fix_approach
+      properties:
+        root_cause:
+          type: string
+        target_files:
+          type: array
+          items:
+            type: string
+        repro_confirmed:
+          type: boolean
+        fix_approach:
+          type: string
+      additionalProperties: false
+verify:
+  - id: investigation
+    type: artifact
+    path: investigation.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

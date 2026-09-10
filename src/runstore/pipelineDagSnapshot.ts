@@ -7,6 +7,8 @@ import { mintCloneInstanceIds } from "./stageInstanceId.js";
 export function buildPipelineDagSnapshotFromLoaded(
   loaded: LoadedPipeline,
 ): RunPipelineDagSnapshot {
+  // Snapshot JSON keeps IR keys (`completion`, `recovery`, `clone_input_schema`).
+  // Do not rewrite these from target YAML names. Resume hydrates this shape.
   const gate_kinds: Record<string, StageGateKind[]> = {};
   const clone_input_schema: Record<string, unknown> = {};
   for (const stage of loaded.stages) {

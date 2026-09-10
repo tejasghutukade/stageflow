@@ -16,11 +16,22 @@ system_prompt: |
 
   Your last tool call in this attempt must be emit_stage_envelope.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [url, screenshot]
-  properties:
-    url:
-      type: string
-    screenshot:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - url
+        - screenshot
+      properties:
+        url:
+          type: string
+        screenshot:
+          type: string
+verify:
+  - id: png
+    type: artifact
+    path: page.png
+    nonempty: true
+    when:
+      - after

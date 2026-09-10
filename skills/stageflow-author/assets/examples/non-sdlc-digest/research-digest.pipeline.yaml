@@ -1,10 +1,14 @@
 id: research-digest
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: gather
     uses: ./gather.yaml
   - id: summarize
     uses: ./summarize.yaml
-    needs: gather
+    needs: [gather]
   - id: send
     uses: ./send.yaml
-    needs: summarize
+    needs: [summarize]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

@@ -1,6 +1,4 @@
 id: work
-gate_kinds:
-  - free_text
 system_prompt: |
   You are a dummy work stage. You may be a single run-once instance or one clone
   of several. Follow these steps exactly:
@@ -36,9 +34,14 @@ system_prompt: |
   - Do not emit clone_forks. The next stage is not clonable.
   - Do not call ask_operator more than once.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [codeword]
-  properties:
-    codeword:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - codeword
+      properties:
+        codeword:
+          type: string
+gate_kinds:
+  - free_text

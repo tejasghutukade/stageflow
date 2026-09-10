@@ -87,6 +87,17 @@ describe("pipeline-owned loader", () => {
     expect(outcome.issues[0]?.message).toMatch(/bare string stage refs/i);
   });
 
+  it("mixed-dialect negative fails closed with catalog.mixed_yaml_dialect", async () => {
+    const outcome = await loadPipelineOutcome(
+      path.join(owned, "negative/mixed-dialect.pipeline.yaml"),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")).toBe(
+      true,
+    );
+  });
+
   it("AE8: infer-id loads with inferred decide id", async () => {
     const loaded = await loadPipeline(
       path.join(owned, "infer-id/infer.pipeline.yaml"),

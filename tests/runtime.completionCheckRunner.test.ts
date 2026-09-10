@@ -173,6 +173,27 @@ describe("runCompletionContract", () => {
     });
   });
 
+  it("after-phase artifact with nonempty fails on an empty file", async () => {
+    const artifactsDir = await mkdtemp(path.join(tmpdir(), "sf-completion-empty-"));
+    await writeFile(path.join(artifactsDir, "report.md"), "");
+    const outcome = await runCompletionContract({
+      contract: {
+        mode: "all",
+        checks: [{ id: "report", type: "artifact", path: "report.md", nonempty: true }],
+      },
+      envelope: envelope(),
+      artifactsDir,
+    });
+    expect(outcome).toMatchObject({
+      outcome: "failed",
+      failed_check_ids: ["report"],
+    });
+    expect(outcome.checks[0]).toMatchObject({
+      outcome: "failed",
+      message: "artifact is empty",
+    });
+  });
+
   it("rejects symlink artifacts, including symlinked parent directories, and reports missing runtime capabilities as errors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-completion-links-"));
     const artifactsDir = path.join(root, "artifacts");

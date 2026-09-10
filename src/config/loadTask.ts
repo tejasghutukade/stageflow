@@ -3,6 +3,10 @@ import { parse as parseYaml } from "yaml";
 import type { TaskFile } from "../types/task.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
   const record = raw as Record<string, unknown> | null | undefined;
   if (typeof record?.id !== "string" || typeof record?.goal !== "string") {
@@ -15,12 +19,23 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
       },
     ]);
   }
+  if (record.input !== undefined && !isPlainObject(record.input)) {
+    return loadFailure([
+      {
+        code: "task.invalid_shape",
+        message: `Invalid ${source}: input must be an object`,
+        category: "task",
+        taskId: record.id,
+      },
+    ]);
+  }
   return loadSuccess({
     id: record.id,
     goal: record.goal,
     context: typeof record.context === "string" ? record.context : undefined,
     constraints: typeof record.constraints === "string" ? record.constraints : undefined,
     checkout: typeof record.checkout === "string" ? record.checkout : undefined,
+    ...(record.input !== undefined ? { input: record.input } : {}),
   });
 }
 
