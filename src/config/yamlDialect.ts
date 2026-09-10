@@ -1,3 +1,23 @@
+/**
+ * Target YAML dialect compiler.
+ *
+ * Catalog files (and new catalog fields) use `io`, `verify`, and `on_verify_fail`.
+ * Runtime, DAG snapshots, emit, and VSE still speak the IR names this module
+ * writes. Dual-read of old YAML keys (`payload_schema`, `pre_emit_checks`,
+ * `completion`, `recovery`) is `legacyYaml.ts` — not this compiler.
+ *
+ * YAML → IR
+ *   io.output.schema              → StageConfig.payload_schema
+ *   io.input.schema               → StageConfig.clone_input_schema
+ *   verify when includes emit     → StageConfig.pre_emit_checks
+ *   verify when includes after     → DAG node.completion
+ *   on_verify_fail                → DAG node.recovery
+ *
+ * `type: payload_schema` on a verify item is a check kind, not the legacy
+ * authoring key. Adding a catalog contract: extend TARGET_CONTRACT_KEYS and
+ * compileTargetContract (and printTargetYaml for migrate). Do not add a new
+ * LEGACY_CONTRACT_KEYS entry.
+ */
 import path from "node:path";
 import {
   compilePayloadSchema,
@@ -6,34 +26,21 @@ import {
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { LEGACY_CONTRACT_KEYS } from "./legacyYaml.js";
 
-export const LEGACY_CONTRACT_KEYS = new Set([
-  "payload_schema",
-  "clone_input_schema",
-  "pre_emit_checks",
-  "completion",
-  "recovery",
-]);
+export {
+  LEGACY_CONTRACT_KEYS,
+  LEGACY_KEY_REPLACEMENTS,
+  dialectWarningForDocument,
+  formatLegacyReplacements,
+  legacyYamlIssue,
+  presentLegacyKeys,
+} from "./legacyYaml.js";
 
+/** Target authoring keys. New catalog contracts belong here, not on the IR field names. */
 export const TARGET_CONTRACT_KEYS = new Set(["io", "verify", "on_verify_fail"]);
 
-export const LEGACY_KEY_REPLACEMENTS: Record<string, string> = {
-  payload_schema: "io.output.schema",
-  clone_input_schema: "io.input.schema",
-  pre_emit_checks: "verify items with when including emit",
-  completion: "verify items with when including after",
-  recovery: "on_verify_fail",
-};
-
-export function formatLegacyReplacements(keys: string[]): string {
-  return keys
-    .map((key) => {
-      const replacement = LEGACY_KEY_REPLACEMENTS[key];
-      return replacement ? `${key} → ${replacement}` : key;
-    })
-    .join(", ");
-}
-
+/** Target wiring on a stage *file* is forbidden (`on_verify_fail`). `completion`/`recovery` are IR/legacy keys. */
 export const STAGE_FILE_WIRING_KEYS = [
   "needs",
   "on_verify_fail",
@@ -45,6 +52,7 @@ export const STAGE_FILE_WIRING_KEYS = [
 
 export type YamlDialect = "legacy" | "target" | "invalid" | "neutral";
 
+/** Target YAML compiled onto IR field names (see file comment). */
 export type CompiledTargetContract = {
   payload_schema?: unknown;
   clone_input_schema?: unknown;
@@ -86,25 +94,12 @@ export function classifyYamlDocument(raw: Record<string, unknown>): YamlDialect 
   return dialectFromKeys(collectDocumentKeys(raw));
 }
 
-export function presentLegacyKeys(keys: Iterable<string>): string[] {
-  const set = keys instanceof Set ? keys : new Set(keys);
-  return [...LEGACY_CONTRACT_KEYS].filter((key) => set.has(key));
-}
-
 export function mixedDialectIssue(message?: string): LoadIssue {
   return {
     code: "catalog.mixed_yaml_dialect",
     message:
       message ??
       "YAML mixes legacy and target contract keys; use one dialect per file",
-    category: "catalog",
-  };
-}
-
-export function legacyYamlIssue(fileLabel: string, keys: string[]): LoadIssue {
-  return {
-    code: "catalog.legacy_yaml",
-    message: `${fileLabel} uses legacy YAML keys (${formatLegacyReplacements(keys)})`,
     category: "catalog",
   };
 }
@@ -365,6 +360,7 @@ function parseVerifyList(
   });
 }
 
+/** Compile target YAML (`io` / `verify` / `on_verify_fail`) onto IR fields. */
 export function compileTargetContract(
   raw: Record<string, unknown>,
   ctx: {
@@ -404,6 +400,7 @@ export function compileTargetContract(
   });
 }
 
+/** Strip target YAML keys and stamp IR `payload_schema` / `clone_input_schema` / `pre_emit_checks`. */
 export function applyCompiledBody(
   raw: Record<string, unknown>,
   compiled: CompiledTargetContract,
@@ -419,15 +416,4 @@ export function applyCompiledBody(
   }
   if (compiled.pre_emit_raw !== undefined) next.pre_emit_checks = compiled.pre_emit_raw;
   return next;
-}
-
-export function dialectWarningForDocument(
-  raw: Record<string, unknown>,
-  fileLabel: string,
-): LoadIssue | undefined {
-  const keys = collectDocumentKeys(raw);
-  if (dialectFromKeys(keys) !== "legacy") return undefined;
-  const legacyKeys = presentLegacyKeys(keys);
-  if (legacyKeys.length === 0) return undefined;
-  return legacyYamlIssue(fileLabel, legacyKeys);
 }

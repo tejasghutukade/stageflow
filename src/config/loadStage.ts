@@ -10,6 +10,12 @@ import {
 import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseModelField } from "./modelField.js";
+import {
+  allowLegacyYamlAuthoring,
+  dialectWarningForDocument,
+  legacyAuthoringRejected,
+  presentLegacyKeys,
+} from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 import {
@@ -17,13 +23,13 @@ import {
   classifyYamlDocument,
   compileTargetContract,
   dialectFromKeys,
-  dialectWarningForDocument,
   mixedDialectIssue,
   STAGE_FILE_WIRING_KEYS,
 } from "./yamlDialect.js";
 
 const afterCompletionByStage = new WeakMap<StageConfig, CompletionContract>();
 
+/** After-phase IR from target `verify` (`when` includes after). Stamped onto DAG `completion`. */
 export function afterCompletionForStage(stage: StageConfig): CompletionContract | undefined {
   return afterCompletionByStage.get(stage);
 }
@@ -199,6 +205,8 @@ function parseStageFields(
   entryId: string,
   deferSchemaRefs: boolean,
 ): LoadOutcome<StageConfig> {
+  // Reads IR field names. Target YAML must already be compiled via
+  // applyCompiledBody; legacy YAML uses these keys as authoring.
   if (typeof raw.system_prompt !== "string") {
     return loadFailure([
       {
@@ -418,6 +426,12 @@ export function loadStageFromObjectOutcome(
   if (dialect === "invalid") {
     return loadFailure([mixedDialectIssue()]);
   }
+  const rejected = legacyAuthoringRejected(
+    dialect,
+    label,
+    presentLegacyKeys(Object.keys(raw)),
+  );
+  if (rejected) return loadFailure([rejected]);
   if (dialect === "target") {
     const compiled = compileTargetContract(raw, {
       stageId: ctx.entryId,
@@ -468,6 +482,12 @@ export async function loadStageOutcome(
   if (dialect === "invalid") {
     return loadFailure([mixedDialectIssue()]);
   }
+  const rejected = legacyAuthoringRejected(
+    dialect,
+    filePath,
+    presentLegacyKeys(Object.keys(raw)),
+  );
+  if (rejected) return loadFailure([rejected]);
   if (dialect === "target") {
     const wiring = STAGE_FILE_WIRING_KEYS.find((key) => raw[key] !== undefined);
     if (wiring) {
@@ -511,7 +531,9 @@ export async function loadStageOutcome(
   }
 
   if (afterCompletion) afterCompletionByStage.set(outcome.value, afterCompletion);
-  const warning = dialectWarningForDocument(raw, filePath);
+  const warning = allowLegacyYamlAuthoring()
+    ? dialectWarningForDocument(raw, filePath)
+    : undefined;
   return loadSuccess(outcome.value, warning ? [warning] : undefined);
 }
 

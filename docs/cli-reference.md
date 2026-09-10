@@ -440,7 +440,7 @@ sf validate --strict --json
 
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
-Convert legacy catalog YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots.
+Convert legacy catalog YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
 
 ```bash
 sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]

@@ -1,3 +1,8 @@
+/**
+ * Parse IR `completion` / `recovery` objects (DAG wiring after compile, or
+ * legacy YAML keys). Target YAML `on_verify_fail` / after-phase `verify` are
+ * compiled onto these shapes in yamlDialect.ts before this parser runs.
+ */
 import path from "node:path";
 import type {
   CompletionCheck,

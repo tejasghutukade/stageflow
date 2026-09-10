@@ -1,8 +1,13 @@
+/**
+ * Print target YAML (`io` / `verify` / `on_verify_fail`) from compiled IR.
+ * Used by `sf migrate-yaml`. IR field names stay payload_schema / completion.
+ */
 import { stringify as stringifyYaml } from "yaml";
 import type { CompletionCheck } from "../types/completion.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";
 import type { StageIoYaml } from "../types/stage.js";
-import { LEGACY_CONTRACT_KEYS, STAGE_FILE_WIRING_KEYS, TARGET_CONTRACT_KEYS } from "./yamlDialect.js";
+import { LEGACY_CONTRACT_KEYS } from "./legacyYaml.js";
+import { STAGE_FILE_WIRING_KEYS, TARGET_CONTRACT_KEYS } from "./yamlDialect.js";
 
 export type VerifyPhase = "emit" | "after";
 

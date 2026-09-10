@@ -326,7 +326,8 @@ function compileNode(node: unknown, path: string, ctx: CompileCtx): TSchema {
 }
 
 /**
- * Compile a JSON Schema subset used for stage payload_schema.
+ * Compile a JSON Schema subset for IR `payload_schema` / `clone_input_schema`
+ * (YAML: `io.output.schema` / `io.input.schema`).
  * Supported: type object/string/number/integer/boolean/array,
  * properties, required, items, additionalProperties (boolean),
  * minItems, enum, minimum, maximum. String nodes also accept
@@ -628,6 +629,10 @@ export function assertEnvelopePayload(
   }
 }
 
+/**
+ * Validate clone/fan-out assignment against the successor's IR
+ * `clone_input_schema` (YAML: `io.input.schema`).
+ */
 export function assertCloneAssignmentPayload(
   envelope: StageEnvelope,
   cloneInputSchema: unknown,

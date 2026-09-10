@@ -4,6 +4,7 @@ import { readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/prom
 import path from "node:path";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import { afterCompletionForStage, loadStageOutcome } from "./loadStage.js";
+import { withLegacyYamlAllowedAsync } from "./legacyYaml.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { relPath } from "./validateCatalog.js";
 import {
@@ -456,6 +457,13 @@ async function usesPathHasLegacyWrapper(
 export async function planMigrateYaml(
   targetPath: string,
   options: { cwd: string; projectRoot?: string } = { cwd: process.cwd() },
+): Promise<MigrateYamlPlan> {
+  return withLegacyYamlAllowedAsync(() => planMigrateYamlInner(targetPath, options));
+}
+
+async function planMigrateYamlInner(
+  targetPath: string,
+  options: { cwd: string; projectRoot?: string },
 ): Promise<MigrateYamlPlan> {
   const cwd = options.cwd;
   const projectRoot = options.projectRoot ?? cwd;

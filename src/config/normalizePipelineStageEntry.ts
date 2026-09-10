@@ -1,8 +1,14 @@
+/**
+ * Normalize a pipeline `stages:` entry. Target YAML (`io` / `verify` /
+ * `on_verify_fail`) compiles onto IR `completion` / `recovery` / body
+ * `payload_schema`. Legacy YAML keys are dual-read via legacyYaml.ts.
+ */
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
+import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
 import {
   applyCompiledBody,
   compileTargetContract,
@@ -202,6 +208,12 @@ export function normalizePipelineStageEntries(
         compiledBody = applyCompiledBody(extractBodyRaw(raw), compiled.value);
       }
     } else {
+      const rejected = legacyAuthoringRejected(
+        dialect,
+        `stage "${id}" in ${declaringPath}`,
+        presentLegacyKeys(Object.keys(raw)),
+      );
+      if (rejected) return loadFailure([rejected]);
       policyOutcome = parseExecutionPolicy(raw, id);
     }
     if (!policyOutcome.ok) return policyOutcome;

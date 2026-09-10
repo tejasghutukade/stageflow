@@ -32,6 +32,7 @@ export function taskFileToYaml(task: TaskFile): string {
   return stringifyYaml(doc);
 }
 
+/** Validate optional `task.input` against entry-stage IR `clone_input_schema` (YAML: `io.input.schema`). */
 export function checkTaskEntryInput(
   task: TaskFile,
   loaded: LoadedPipeline,

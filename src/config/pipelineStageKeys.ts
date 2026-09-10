@@ -1,3 +1,13 @@
+/**
+ * Allowed keys on a pipeline stage YAML entry.
+ *
+ * Target authoring: `io`, `verify`, `on_verify_fail`.
+ * IR / legacy YAML (same strings): `payload_schema`, `pre_emit_checks`,
+ * `completion`, `recovery`, `clone_input_schema`.
+ *
+ * New catalog fields go on the target keys (and compileTargetContract). Dual-read
+ * still lists the IR names so old files load.
+ */
 export const WIRING_KEYS = new Set([
   "id",
   "needs",
@@ -12,6 +22,7 @@ export const WIRING_KEYS = new Set([
   "replay_safe",
 ]);
 
+/** Stage body keys. Target: `io` / `verify`. IR/legacy: `payload_schema`, `pre_emit_checks`, `clone_input_schema`. */
 export const BODY_KEYS = new Set([
   "system_prompt",
   "model",

@@ -2,11 +2,17 @@ import path from "node:path";
 import { parseAgentField } from "../agent/agentBackend.js";
 import type { PayloadSchemaMap } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
+import {
+  allowLegacyYamlAuthoring,
+  dialectWarningForDocument,
+  legacyAuthoringRejected,
+  presentLegacyKeys,
+} from "./legacyYaml.js";
 import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
 import {
   classifyYamlDocument,
-  dialectWarningForDocument,
+  collectDocumentKeys,
   mixedDialectIssue,
 } from "./yamlDialect.js";
 
@@ -66,8 +72,16 @@ async function visitPipelineFile(
   if (dialect === "invalid") {
     return loadFailure([mixedDialectIssue()]);
   }
-  const warning = dialectWarningForDocument(raw, absPath);
-  if (warning) warnings.push(warning);
+  const rejected = legacyAuthoringRejected(
+    dialect,
+    absPath,
+    presentLegacyKeys(collectDocumentKeys(raw)),
+  );
+  if (rejected) return loadFailure([rejected]);
+  if (allowLegacyYamlAuthoring()) {
+    const warning = dialectWarningForDocument(raw, absPath);
+    if (warning) warnings.push(warning);
+  }
 
   const isFragment = stack.length > 0;
   if (isFragment && raw.schemas !== undefined) {

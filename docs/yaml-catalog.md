@@ -76,7 +76,9 @@ Each stage is an object with one of:
 
 ### Dual-read (this release)
 
-This release still **loads** catalogs that use the previous field names. Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings.
+This release still **loads** catalogs that use the previous field names. Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings. **New catalog fields belong in the Target column** — compile them in `src/config/yamlDialect.ts`. Runtime, snapshots, emit, and VSE keep the Today-column names as TypeScript/JSON.
+
+Dual-read is the load adapter for those previous names (on by default). Turn it off with `STAGEFLOW_LEGACY_YAML=0`. Dropping it later is deleting [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts) plus the migrator — not renaming runtime IR (`payload_schema` / `pre_emit_checks` / `completion` / `recovery`).
 
 | Today | Target |
 |-------|--------|

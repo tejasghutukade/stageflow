@@ -3,6 +3,11 @@ import type { StageGateKind } from "./stage.js";
 export const COMPLETION_VERIFICATION_FAILURE_PREFIX =
   "Completion verification failed:";
 
+/**
+ * After-phase check IR (`DAG node.completion`). YAML: `verify` items whose
+ * `when` includes `after`. `type: payload_schema` here is a check kind (re-check
+ * the success payload after emit), not the old YAML authoring key.
+ */
 export type CompletionCheck =
   | {
       id: string;
@@ -27,6 +32,7 @@ export type CompletionContract = {
   checks: CompletionCheck[];
 };
 
+/** IR recovery on the DAG node. YAML: `on_verify_fail`. */
 export type RecoveryPolicy =
   | {
       mode: "repair";
