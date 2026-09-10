@@ -21,6 +21,7 @@ import {
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { PipelineValidationError } from "./pipelineValidationError.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { checkTaskEntryInput } from "./taskInput.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
@@ -113,6 +114,20 @@ async function preparePipeline(options: {
         })());
   const label = options.taskPath ?? "task.yaml";
   const task = loadTaskFromYaml(taskYaml, `task file ${label}`);
+  const pairing = checkTaskEntryInput(task, loaded, {
+    cwd: options.cwd,
+    taskPath: options.taskPath,
+  });
+  if (pairing.some((finding) => finding.severity === "error")) {
+    throw new PipelineValidationError(
+      buildValidationResult("pipeline", pairing, false),
+    );
+  }
+  for (const finding of pairing) {
+    if (finding.severity === "warning") {
+      console.error(`${finding.code}: ${finding.message}`);
+    }
+  }
 
   const checkoutRoot = await resolveAndValidateCheckout(
     task,

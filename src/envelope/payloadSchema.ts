@@ -497,6 +497,16 @@ function payloadSchemaMismatchDetails(
     .join("; ");
 }
 
+export function payloadInstanceMismatch(
+  instance: unknown,
+  payloadSchema: unknown,
+  options?: CompilePayloadSchemaOptions,
+): string | undefined {
+  const schema = compilePayloadSchema(payloadSchema, options);
+  if (Value.Check(schema, instance)) return undefined;
+  return payloadSchemaMismatchDetails(schema, instance);
+}
+
 export function assertEnvelopePayload(
   envelope: StageEnvelope,
   payloadSchema: unknown | undefined,

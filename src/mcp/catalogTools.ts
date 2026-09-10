@@ -15,6 +15,7 @@ const taskFileSchema = z.object({
   context: z.string().optional(),
   constraints: z.string().optional(),
   checkout: z.string().optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
 });
 
 const startRunSchema = z

@@ -56,6 +56,7 @@ export type ValidationFindingCode =
   | "stage.id_filename_mismatch"
   | "task.invalid_shape"
   | "task.load_error"
+  | "task.entry_input_unmet"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"

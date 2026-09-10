@@ -564,6 +564,9 @@ function buildUserPrompt(
     `Goal: ${input.task.goal}`,
     input.task.context ? `Context: ${input.task.context}` : "",
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
+    input.task.input !== undefined
+      ? `Input: ${JSON.stringify(input.task.input, null, 2)}`
+      : "",
     formatPriorEnvelope(
       input.priorEnvelope,
       input.priorEnvelopes,
