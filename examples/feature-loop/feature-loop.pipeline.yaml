@@ -1,4 +1,31 @@
 id: feature-loop
+schemas:
+  story-assignment:
+    type: object
+    required:
+      - story_id
+      - title
+      - epic_slice
+      - acceptance
+      - neighboring_story_ids
+      - constraints
+    properties:
+      story_id:
+        type: string
+      title:
+        type: string
+      epic_slice:
+        type: string
+      acceptance:
+        type: string
+      neighboring_story_ids:
+        type: array
+        items:
+          type: string
+      constraints:
+        type: array
+        items:
+          type: string
 stages:
   - id: decompose
     uses: ./decompose.yaml

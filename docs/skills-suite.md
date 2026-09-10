@@ -73,6 +73,8 @@ Five harnesses collapse to three physical copy targets used by `install-suite.sh
 | Pi | `.agents/skills/<name>/` |
 | OpenCode | `.agents/skills/<name>/` |
 
+Those paths are **install output** copied from the published `skills/` tree — not a second source of truth. After you change the suite, re-run `skills/install-suite.sh` (or `npx skills add`) so local copies match. Author catalog dialect for new pipelines is `io` / `verify` / `on_verify_fail` (see [YAML catalog](yaml-catalog.md)).
+
 `npx skills add` writes each selected agent's native path instead (Cursor, Codex, and OpenCode use `.agents/skills/`; Claude Code uses `.claude/skills/`; Pi uses `.pi/skills/`). Cursor loads both `.agents/skills/` and `.cursor/skills/`.
 
 ## Non-goals

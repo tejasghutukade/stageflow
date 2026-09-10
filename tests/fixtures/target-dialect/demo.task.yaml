@@ -1,0 +1,6 @@
+id: target-dialect-demo
+goal: Draft a one-page brief on the given topic
+context: Target-dialect fixture for io / verify / schemas / task.input
+constraints: Docs only; no implementation code
+input:
+  topic: Calendar apps for personal productivity

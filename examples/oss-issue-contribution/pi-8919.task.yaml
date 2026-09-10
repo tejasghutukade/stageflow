@@ -17,10 +17,10 @@ context: |
   only; the upstream PR is a separate, explicitly-authorized step.
 
   This run's primary purpose is validating the migrated
-  oss-issue-contribution pipeline's Verified Stage Execution completion
-  contracts (artifact checks, checkout_changes checks, gate + pre_emit_checks
-  on the approval stages) against a real run, not a genuine race to land
-  this specific fix upstream.
+  oss-issue-contribution pipeline's Verified Stage Execution verify
+  contracts (artifact checks, checkout_changes checks, and gate checks on
+  emit and after for the approval stages) against a real run, not a genuine
+  race to land this specific fix upstream.
 
   Reported behavior: in fullscreen TUI mode, a custom footer
   (`pi.ui.setFooter`) that renders zero rows still occupies one blank line;

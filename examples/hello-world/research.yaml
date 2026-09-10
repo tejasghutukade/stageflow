@@ -1,3 +1,15 @@
 id: research
-system_prompt: Summarize the task goal and list open questions.
+system_prompt: |
+  Summarize the task goal for the given topic and list open questions.
+  The topic arrives as task input (and as this stage's io.input payload).
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - topic
+      properties:
+        topic:
+          type: string
+      additionalProperties: false

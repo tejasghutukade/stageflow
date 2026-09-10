@@ -45,16 +45,11 @@ the only gate between "package written" and "PR opened."
 Several stages opt into Stageflow runtime contracts that make the pipeline fail
 closed when a stage skips its deliverable.
 
-The two writer stages (`oss-write-regression-test`, `oss-implement-source-fix`)
-and both explainers (`oss-explain-issue`, `oss-explain-fix`) declare
-`gate_kinds: []`, which unregisters the `ask_operator` tool entirely. They
-cannot pause for operator input or offer to substitute a report for real
-work.
-
-`oss-issue-intake`, `oss-reproduce-issue`, `oss-verify-fix`, and
-`oss-address-review-feedback` also declare `gate_kinds: []`; every stage that
-produces evidence or a mechanical fixup rather than a decision runs without
-`ask_operator`.
+Every stage except the two approval stages declares `gate_kinds: []`, which
+unregisters the `ask_operator` tool entirely. Those stages cannot pause for
+operator input or offer to substitute a report for real work. Only
+`oss-approve-plan` and `oss-approve-contribution` keep
+`gate_kinds: [artifact_backed]`.
 
 ### Review feedback has no way back upstream
 
@@ -73,25 +68,27 @@ see [docs/cli-reference.md](../../docs/cli-reference.md) for `sf runs retry`,
 which can retry a succeeded stage in place and reset everything downstream.
 Automatic loop-back is future work, not something this example papers over.
 
-Every stage declares `required_artifacts`, so a success emit is rejected unless
-the named file appears in the envelope's artifact list:
+Every stage declares `verify` with at least one `type: artifact` check, so a
+success emit is rejected unless the named file appears in the envelope's
+artifact list. Writer stages add `type: checkout_changes` with `path_fields`;
+approval stages also declare a `type: gate` check (`kind: artifact_backed`).
 
-| Stage | `gate_kinds` | `required_artifacts` | `clone_actions` | `require_checkout_diff` | `checkout_path_fields` |
-|-------|--------------|----------------------|-----------------|-------------------------|------------------------|
-| `oss-issue-intake` | `[]` | `issue-intake.md` | — | — | — |
-| `oss-explain-issue` | `[]` | `issue-explainer.html` | — | — | — |
-| `oss-reproduce-issue` | `[]` | `reproduction.md` | — | — | — |
-| `oss-plan-investigation` | default | `investigation-map.md` | `[once, fanout]` | — | — |
-| `oss-investigate-area` | default | `investigation.md` | — | — | — |
-| `oss-approve-plan` | `[artifact_backed]` | `implementation-plan.md` | — | — | — |
-| `oss-write-regression-test` | `[]` | `regression-test-report.md` | — | `true` | `[test_files]` |
-| `oss-implement-source-fix` | `[]` | `implementation-report.md` | — | `true` | `[changed_files]` |
-| `oss-verify-fix` | `[]` | `verification.md` | — | `true` | `[changed_files]` |
-| `oss-explain-fix` | `[]` | `fix-explainer.html` | — | — | — |
-| `oss-plan-review` | default | `review-plan.md` | `[fanout]` | — | — |
-| `oss-review-change` | default | `review.md` | — | — | — |
-| `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — | — | — |
-| `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — | — | — |
+| Stage | `gate_kinds` | `verify` artifacts | `clone_actions` | `checkout_changes` `path_fields` |
+|-------|--------------|--------------------|-----------------|----------------------------------|
+| `oss-issue-intake` | `[]` | `issue-intake.md` | — | — |
+| `oss-explain-issue` | `[]` | `issue-explainer.html` | — | — |
+| `oss-reproduce-issue` | `[]` | `reproduction.md` | — | — |
+| `oss-plan-investigation` | `[]` | `investigation-map.md` | `[once, fanout]` | — |
+| `oss-investigate-area` | `[]` | `investigation.md` | — | — |
+| `oss-approve-plan` | `[artifact_backed]` | `implementation-plan.md` | — | — |
+| `oss-write-regression-test` | `[]` | `regression-test-report.md` | — | `[test_files]` |
+| `oss-implement-source-fix` | `[]` | `implementation-report.md` | — | `[changed_files]` |
+| `oss-verify-fix` | `[]` | `verification.md` | — | — |
+| `oss-explain-fix` | `[]` | `fix-explainer.html` | — | — |
+| `oss-plan-review` | `[]` | `review-plan.md` | `[fanout]` | — |
+| `oss-review-change` | `[]` | `review.md` | — | — |
+| `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — | — |
+| `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — | — |
 
 The two planner stages restrict `clone_actions` so they cannot select `skip`.
 `oss-plan-investigation` allows `once` or `fanout`; `oss-plan-review` allows
@@ -107,21 +104,20 @@ Plan approval (`oss-approve-plan`) and contribution approval
 (`oss-approve-contribution`) use `artifact_backed` HITL and cannot self-approve;
 the runtime checks the QA trail before accepting a success emit.
 
-`oss-write-regression-test`, `oss-implement-source-fix`, and `oss-verify-fix`
-all require an array field (`test_files` or `changed_files`) with
-`minItems: 1`. That constraint only checks the array is non-empty — it does
-not verify the entries are real edits in the checkout, and a Stageflow
-artifact path satisfies it. A run that never touched the checkout has passed
-this way before.
+`oss-write-regression-test` and `oss-implement-source-fix` require an array
+field (`test_files` or `changed_files`) with `minItems: 1` on `io.output.schema`.
+That constraint only checks the array is non-empty — it does not verify the
+entries are real edits in the checkout, and a Stageflow artifact path satisfies
+it. A run that never touched the checkout has passed this way before.
 
-All three stages therefore also declare `require_checkout_diff: true` and a
-`checkout_path_fields` entry naming that array field, so the runtime enforces
-at emit what the prompts alone could not:
+Both writer stages therefore also declare a `verify` check of
+`type: checkout_changes` with `path_fields` naming that array field, so the
+runtime enforces after the stage what the prompts alone could not:
 
-- `require_checkout_diff: true` rejects a success emit when
+- `type: checkout_changes` rejects a success outcome when
   `git status --porcelain` in the bound task checkout is empty.
-- `checkout_path_fields: [changed_files]` rejects a success emit when any
-  `changed_files` entry is not a path inside the checkout — including the
+- `path_fields: [changed_files]` (or `[test_files]`) rejects a success outcome
+  when any listed entry is not a path inside the checkout — including the
   `stages/<id>/attempts/<n>/artifacts/...` paths returned by
   `write_stage_artifact`.
 

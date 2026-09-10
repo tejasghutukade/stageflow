@@ -8,12 +8,12 @@ for GHA to deliver as HTML.
 
 | Path | Role |
 |------|------|
-| `archify-on-pr.pipeline.yaml` | detect-changes fork → author-diagrams; completion + recovery on detect |
+| `archify-on-pr.pipeline.yaml` | detect-changes fork → author-diagrams; `verify` + `on_verify_fail` on detect |
 | `detect-changes.yaml` | Thin copy/emit from `ci-context.json` → `changes.json` + envelope |
 | `author-diagrams.yaml` | Writes `{type}.spec.json` per selected type (skill: archify on pipeline entry) |
 | `archify-on-pr.task.yaml` | Task bound at run time |
 | `../../scripts/prepare-ci-context.sh` | Deterministic PR/git context + diagram type selection before `sf run` |
-| `../../scripts/validate-detect-envelope.mjs` | Completion check: `changes.json` / envelope match `ci-context.json` |
+| `../../scripts/validate-detect-envelope.mjs` | Verify helper: `changes.json` / envelope match `ci-context.json` |
 
 ## Diagram types
 

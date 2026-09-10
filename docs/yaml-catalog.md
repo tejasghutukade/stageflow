@@ -76,12 +76,12 @@ Each stage is an object with one of:
 
 ### Dual-read (this release)
 
-This release still **loads** catalogs that use the previous field names. Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings. **New catalog fields belong in the Target column** — compile them in `src/config/yamlDialect.ts`. Runtime, snapshots, emit, and VSE keep the Today-column names as TypeScript/JSON.
+**Author** `io` / `verify` / `on_verify_fail`. This release still **loads** catalogs that use the previous field names (left column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings. **New catalog fields belong in the Author YAML column** — compile them in `src/config/yamlDialect.ts`. Runtime, snapshots, emit, and VSE keep the Runtime IR names as TypeScript/JSON.
 
-Dual-read is the load adapter for those previous names (on by default). Turn it off with `STAGEFLOW_LEGACY_YAML=0`. Dropping it later is deleting [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts) plus the migrator — not renaming runtime IR (`payload_schema` / `pre_emit_checks` / `completion` / `recovery`).
+Dual-read is the load adapter for those previous names (on by default). Turn it off with `STAGEFLOW_LEGACY_YAML=0` (rejects legacy authoring keys; `sf migrate-yaml` still reads legacy). Dropping dual-read later is deleting [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts) plus the migrator — not renaming runtime IR (`payload_schema` / `pre_emit_checks` / `completion` / `recovery`).
 
-| Today | Target |
-|-------|--------|
+| Runtime IR (dual-read YAML) | Author YAML |
+|-----------------------------|-------------|
 | `payload_schema` | `io.output.schema` |
 | `clone_input_schema` | `io.input.schema` |
 | `pre_emit_checks` | `verify` (when includes `emit`) |
@@ -205,6 +205,8 @@ stages:
         schema:
           $ref: "#/schemas/story-slice"
 ```
+
+Runnable demo with `uses:` stages: [`examples/feature-loop/`](../examples/feature-loop/) (`schemas.story-assignment` → `plan` `io.input.schema`).
 
 **`uses:` paths are relative to the pipeline file's directory.**
 
@@ -594,7 +596,7 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 
 Prose-only tasks (no `input`) stay valid. If an entry stage declares `io.input` and the task has no `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` emit a `task.entry_input_unmet` warning and continue. Non-entry stages still receive the full task in the agent prompt.
 
-See [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
+Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
 ## Manifest (`stageflow.yaml`)
 

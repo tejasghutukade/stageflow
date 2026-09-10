@@ -8,7 +8,7 @@ context: |
   diagram_types, change_summary, expected_fork_choice, and verified_paths.
   Diagram type selection is deterministic in prepare-ci-context — detect-changes only
   copies those fields into the envelope. CI uses OpenRouter (OPENROUTER_API_KEY).
-  Stage 1 emits the detect handoff (completion-checked). Stage 2 writes one spec
+  Stage 1 emits the detect handoff (after-phase verify). Stage 2 writes one spec
   artifact per selected type for GHA to deliver as HTML outside the agent.
 constraints: |
   No HITL. Do not call ask_operator. Stages use OpenRouter models; ensure

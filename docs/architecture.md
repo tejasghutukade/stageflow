@@ -108,7 +108,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 - A stage becomes ready only when its required predecessors reach compatible terminal states.
 - A successor consumes validated envelopes, not arbitrary predecessor transcripts.
-- A completion contract accepts a successful handoff only after every declared check passes.
+- A completion contract accepts a successful handoff only after every declared check passes (author YAML: after-phase `verify`; fail policy: `on_verify_fail`).
 - Run and stage lifecycle state is persisted before it is projected to operator surfaces.
 - Waiting is a first-class state and is distinct from failure.
 - Retries create new attempts and recompute affected downstream execution rather than rewriting prior history.
@@ -118,7 +118,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 - [YAML catalog](yaml-catalog.md) — pipeline, stage, task, fork, and clone configuration
 - [Envelopes](envelopes.md) — handoff schema, payload validation, and artifact rules
-- [Verified Stage Execution](verified-stage-execution.md) — completion checks, evidence, and recovery policy
+- [Verified Stage Execution](verified-stage-execution.md) — `verify` / `on_verify_fail`, evidence, and repair policy
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources
