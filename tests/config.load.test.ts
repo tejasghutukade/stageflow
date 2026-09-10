@@ -608,6 +608,11 @@ describe("YAML dual-read dialect", () => {
         "id: worker",
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
+        "verify:",
+        "  - id: self-review",
+        "    type: checklist",
+        "    items: [Tests pass]",
+        "    when: [after]",
         "",
       ].join("\n"),
       "ok.pipeline.yaml": [
@@ -636,6 +641,10 @@ describe("YAML dual-read dialect", () => {
     const ok = await loadPipelineOutcome("ok.pipeline.yaml", { cwd: root });
     expect(ok.ok).toBe(true);
     if (!ok.ok) return;
+    expect(ok.value.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "self-review", type: "checklist", items: ["Tests pass"] }],
+    });
     expect(ok.value.dag.nodes[0]?.recovery).toEqual({
       mode: "repair",
       max_attempts: 2,
@@ -647,6 +656,65 @@ describe("YAML dual-read dialect", () => {
     expect(conflict.ok).toBe(false);
     if (conflict.ok) return;
     expect(conflict.issues[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
+  });
+
+  it("rejects on_verify_fail when resolved after-phase checks are missing", async () => {
+    const root = await writeTempCatalog({
+      "worker.yaml": [
+        "id: worker",
+        "system_prompt: Do work",
+        "model: anthropic/claude-sonnet-4-5",
+        "gate_kinds: [confirm]",
+        "verify:",
+        "  - id: approved",
+        "    type: gate",
+        "    kind: confirm",
+        "    when: [emit]",
+        "",
+      ].join("\n"),
+      "emit-only.pipeline.yaml": [
+        "id: emit-only",
+        "stages:",
+        "  - id: worker",
+        "    uses: ./worker.yaml",
+        "    on_verify_fail:",
+        "      mode: repair",
+        "      max_attempts: 2",
+        "      retry_safety: idempotent",
+        "",
+      ].join("\n"),
+      "bare.pipeline.yaml": [
+        "id: bare",
+        "stages:",
+        "  - id: worker",
+        "    uses: ./worker.yaml",
+        "    on_verify_fail:",
+        "      mode: repair",
+        "      max_attempts: 2",
+        "      retry_safety: idempotent",
+        "",
+      ].join("\n"),
+    });
+    const emitOnly = await loadPipelineOutcome("emit-only.pipeline.yaml", { cwd: root });
+    expect(emitOnly.ok).toBe(false);
+    if (emitOnly.ok) return;
+    expect(emitOnly.issues[0]?.code).toBe("pipeline.invalid_recovery");
+    expect(emitOnly.issues[0]?.message).toMatch(/requires a completion contract/);
+
+    await writeFile(
+      path.join(root, "worker.yaml"),
+      [
+        "id: worker",
+        "system_prompt: Do work",
+        "model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+    );
+    const bare = await loadPipelineOutcome("bare.pipeline.yaml", { cwd: root });
+    expect(bare.ok).toBe(false);
+    if (bare.ok) return;
+    expect(bare.issues[0]?.code).toBe("pipeline.invalid_recovery");
+    expect(bare.issues[0]?.message).toMatch(/requires a completion contract/);
   });
 
   it("rejects mixed payload_schema and io.output on one entry", async () => {
@@ -692,9 +760,6 @@ describe("YAML dual-read dialect", () => {
         "stages:",
         "  - id: worker",
         "    uses: ./worker.yaml",
-        "    on_verify_fail:",
-        "      mode: manual",
-        "      retry_safety: idempotent",
         "",
       ].join("\n"),
     });
@@ -702,10 +767,7 @@ describe("YAML dual-read dialect", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.value.stages[0]?.payload_schema).toMatchObject({ type: "object" });
-    expect(outcome.value.dag.nodes[0]?.recovery).toMatchObject({
-      mode: "manual",
-      retry_safety: "idempotent",
-    });
+    expect(outcome.value.dag.nodes[0]?.recovery).toBeUndefined();
   });
 
   it("treats a uses-only entry as dialect-neutral with no catalog.legacy_yaml", async () => {

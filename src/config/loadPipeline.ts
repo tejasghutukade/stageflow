@@ -25,6 +25,7 @@ import { loadStageFromObjectOutcome, loadStageOutcome, afterCompletionForStage }
 import { materializeStageModels } from "./materializeStageModels.js";
 import { predecessorEdges } from "./pipelineNeeds.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
+import { recoveryRequiresCompletionIssue } from "./parseCompletionContract.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
@@ -293,6 +294,11 @@ async function loadPipelineFromPath(
   for (const [stageId, after] of fileAfterById) {
     const node = nodeById.get(stageId);
     if (node) node.completion = after;
+  }
+  for (const node of dag.nodes) {
+    if (node.recovery !== undefined && node.completion === undefined) {
+      return loadFailure([recoveryRequiresCompletionIssue(node.id)]);
+    }
   }
   for (const stage of loadedStages) {
     const completion = nodeById.get(stage.id)?.completion;

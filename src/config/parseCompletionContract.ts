@@ -5,7 +5,7 @@ import type {
   RecoveryPolicy,
 } from "../types/completion.js";
 import { STAGE_GATE_KINDS, type StageGateKind } from "../types/stage.js";
-import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 
 type ExecutionPolicy = {
   completion?: CompletionContract;
@@ -42,6 +42,14 @@ function hasOnlyKeys(
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function recoveryRequiresCompletionIssue(stageId: string): LoadIssue {
+  return {
+    code: "pipeline.invalid_recovery",
+    message: `Stage "${stageId}" recovery: requires a completion contract`,
+    category: "pipeline",
+  };
 }
 
 function isGateKind(value: unknown): value is StageGateKind {
@@ -204,7 +212,7 @@ function parseRecovery(
   hasCompletion: boolean,
 ): LoadOutcome<RecoveryPolicy | undefined> {
   if (raw === undefined) return loadSuccess(undefined);
-  if (!hasCompletion) return failure(stageId, "recovery", "requires a completion contract");
+  if (!hasCompletion) return loadFailure([recoveryRequiresCompletionIssue(stageId)]);
   if (!isPlainObject(raw)) return failure(stageId, "recovery", "must be an object");
   const unknown = hasOnlyKeys(raw, ["mode", "max_attempts", "retry_safety", "include_failed_checks"]);
   if (unknown) return failure(stageId, "recovery", `unknown key "${unknown}"`);
