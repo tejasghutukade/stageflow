@@ -38,7 +38,7 @@
  * environment/auth (ANTHROPIC_API_KEY or a logged-in session) — the same
  * story as running `claude` by hand.
  */
-import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type ModelUsage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import type { EmitCapture } from "../tools/emitStageEnvelope.js";
 import {
@@ -57,6 +57,7 @@ import {
   type AskOperatorCapture,
 } from "./claudeTools.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
+import { readActivityVerbose } from "./activity.js";
 import { composeStageUserPrompt } from "./piAdapter.js";
 import {
   claudeSessionMarkerPath,
@@ -77,6 +78,7 @@ import {
   type StageRunResult,
 } from "./port.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
+import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 
 /** Built-in tool allowlist, mirroring Pi's sealed-session base set (read/bash/write/edit). */
 const CLAUDE_BUILTIN_TOOLS = ["Read", "Write", "Edit", "Bash"];
@@ -148,6 +150,78 @@ type ClaudeTurnOutcome =
   | { kind: "waiting"; sessionId: string; request: AskOperatorPrompt }
   | { kind: "completed"; result: StageRunResult };
 
+/** Merge one query() call's per-model totals (this call's own turns only) into the stage-level accumulator. */
+function mergeClaudeModelUsage(usage: StageUsage, modelUsage: Record<string, ModelUsage> | undefined): void {
+  if (!modelUsage) return;
+  for (const [key, entry] of Object.entries(modelUsage)) {
+    addModelUsage(usage, entry.canonicalModel ?? key, {
+      inputTokens: entry.inputTokens,
+      outputTokens: entry.outputTokens,
+      cacheReadInputTokens: entry.cacheReadInputTokens,
+      cacheCreationInputTokens: entry.cacheCreationInputTokens,
+      costUsd: entry.costUSD,
+    });
+  }
+}
+
+const TRAILING_RESULT_WAIT_MS = 2000;
+
+/**
+ * emit_stage_envelope's tool_result lands on a "user" message, which the
+ * caller interrupts and breaks on immediately (never-let-it-go-dangling) —
+ * well before the SDK's own "result" message (the one carrying cost/token
+ * totals) would naturally arrive. There can be more than one trailing frame
+ * after the interrupted tool-result (observed: another "user" frame before
+ * "result"), so this drains messages in a loop, bounded by one overall time
+ * budget rather than a single peek. By the docstring above, `interrupt()`
+ * resolving means the CLI subprocess has already exited, so its trailing
+ * frames are normally already queued or arrive within milliseconds — this
+ * claims them without risking a real hang.
+ */
+async function drainTrailingResultUsage(
+  stream: AsyncGenerator<unknown, void>,
+  usage: StageUsage,
+): Promise<void> {
+  const debug = readActivityVerbose();
+  const deadline = Date.now() + TRAILING_RESULT_WAIT_MS;
+  try {
+    while (Date.now() < deadline) {
+      const next = await Promise.race([
+        stream.next(),
+        new Promise<{ done: true; value: undefined }>((resolve) =>
+          setTimeout(() => resolve({ done: true, value: undefined }), deadline - Date.now()),
+        ),
+      ]);
+      if (debug) {
+        console.error(
+          `[claudeAdapter] drainTrailingResultUsage: done=${next.done} type=${
+            !next.done ? (next.value as { type?: string })?.type : "n/a"
+          }`,
+        );
+      }
+      if (next.done) return;
+      const message = next.value as { type?: string; modelUsage?: Record<string, ModelUsage> };
+      if (message.type === "result") {
+        if (debug) {
+          console.error(
+            `[claudeAdapter] drainTrailingResultUsage: modelUsage=${JSON.stringify(message.modelUsage)}`,
+          );
+        }
+        mergeClaudeModelUsage(usage, message.modelUsage);
+        return;
+      }
+      // not "result" yet (e.g. another "user"/"system" frame) — keep draining within the budget
+    }
+  } catch (err) {
+    if (debug) {
+      console.error(
+        `[claudeAdapter] drainTrailingResultUsage: threw ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    // best-effort; a natural stop may already have ended the turn
+  }
+}
+
 async function* singleUserMessage(text: string): AsyncGenerator<SDKUserMessage> {
   yield {
     type: "user",
@@ -163,6 +237,7 @@ async function runTurn(
   markerPath: string,
   promptText: string,
   resumeSessionId: string | undefined,
+  usage: StageUsage,
 ): Promise<ClaudeTurnOutcome> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_STAGE_TIMEOUT_MS;
   const controller = new AbortController();
@@ -252,15 +327,27 @@ async function runTurn(
         message.type === "user" &&
         (emitCapture.envelope !== undefined || askCapture.prompt !== undefined)
       ) {
+        if (readActivityVerbose()) {
+          console.error(`[claudeAdapter] interrupting on user tool-result frame`);
+        }
         try {
           await stream.interrupt();
         } catch {
           // best-effort backstop; a natural stop may have already ended the turn
         }
+        await drainTrailingResultUsage(stream, usage);
         break;
       }
 
       if (message.type === "result") {
+        if (readActivityVerbose()) {
+          console.error(
+            `[claudeAdapter] main loop saw result: modelUsage=${JSON.stringify(
+              (message as { modelUsage?: unknown }).modelUsage,
+            )}`,
+          );
+        }
+        mergeClaudeModelUsage(usage, message.modelUsage);
         break;
       }
     }
@@ -270,26 +357,27 @@ async function runTurn(
       if (resolvedSessionId === undefined) {
         return {
           kind: "completed",
-          result: { ok: false, reason: "ask_operator called but no session_id was observed" },
+          result: { ok: false, reason: "ask_operator called but no session_id was observed", usage },
         };
       }
       await writeClaudeSessionMarker(markerPath, {
         sessionId: resolvedSessionId,
         prompt: askCapture.prompt,
+        usage,
       });
       return { kind: "waiting", sessionId: resolvedSessionId, request: askCapture.prompt };
     }
 
     await clearClaudeSessionMarker(markerPath);
-    return { kind: "completed", result: resultFromCapture(emitCapture) };
+    return { kind: "completed", result: { ...resultFromCapture(emitCapture), usage } };
   } catch (err) {
     if (askCapture.prompt !== undefined && sessionId !== undefined) {
-      await writeClaudeSessionMarker(markerPath, { sessionId, prompt: askCapture.prompt });
+      await writeClaudeSessionMarker(markerPath, { sessionId, prompt: askCapture.prompt, usage });
       return { kind: "waiting", sessionId, request: askCapture.prompt };
     }
     if (emitCapture.envelope && isAdvancingEnvelope(emitCapture.envelope)) {
       await clearClaudeSessionMarker(markerPath);
-      return { kind: "completed", result: { ok: true, envelope: emitCapture.envelope } };
+      return { kind: "completed", result: { ok: true, envelope: emitCapture.envelope, usage } };
     }
     return {
       kind: "completed",
@@ -297,6 +385,7 @@ async function runTurn(
         ok: false,
         reason: err instanceof Error ? err.message : String(err),
         envelope: emitCapture.envelope,
+        usage,
       },
     };
   } finally {
@@ -322,6 +411,7 @@ export class ClaudeAgentAdapter implements AgentPort {
     let bootstrapped = false;
     let waiting: { sessionId: string; prompt: AskOperatorPrompt } | undefined;
     let pendingAnswer: OpaqueAnswer | undefined;
+    const usage: StageUsage = emptyStageUsage();
 
     const applyOutcome = (outcome: ClaudeTurnOutcome): StageHandleEvent => {
       if (outcome.kind === "waiting") {
@@ -345,6 +435,11 @@ export class ClaudeAgentAdapter implements AgentPort {
           const marker = await readClaudeSessionMarker(markerPath);
           if (marker?.prompt !== undefined) {
             waiting = { sessionId: marker.sessionId, prompt: marker.prompt };
+          }
+          if (marker?.usage) {
+            for (const [model, breakdown] of Object.entries(marker.usage.models)) {
+              addModelUsage(usage, model, breakdown);
+            }
           }
         }
 
@@ -380,6 +475,7 @@ export class ClaudeAgentAdapter implements AgentPort {
             markerPath,
             resumePromptText(parsedAnswer),
             sessionId,
+            usage,
           );
           return applyOutcome(outcome);
         }
@@ -399,6 +495,7 @@ export class ClaudeAgentAdapter implements AgentPort {
             WRITE_STAGE_ARTIFACT_TOOL_NAME,
           ),
           undefined,
+          usage,
         );
         return applyOutcome(outcome);
       },

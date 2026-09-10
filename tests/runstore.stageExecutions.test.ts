@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { access, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
+import type { StageUsage } from "../src/types/usage.js";
 import { SqliteRunStore } from "../src/runstore/sqlite/SqliteRunStore.js";
 import {
   attemptAgentDir,
@@ -309,6 +311,88 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     expect(detail.stages[0]?.status).toBe("succeeded");
     expect(detail.stages[0]?.envelope?.summary).toBe("ok");
   });
+
+  it("persists cost_usd/usage and aggregates them into readRun", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const usage: StageUsage = {
+      costUsd: 0.0123,
+      models: { "claude-opus-4-7": {
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        costUsd: 0.0123,
+      } },
+    };
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 1 });
+    await store.appendStageEvent(run.runId, "build", { event: "succeeded" }, { attempt: 1 });
+    await store.updateStageExecution(run.runId, "build", 1, {
+      status: "succeeded",
+      cost_usd: usage.costUsd,
+      usage,
+    });
+
+    const execution = await store.getStageExecution(run.runId, "build", 1);
+    expect(execution.cost_usd).toBe(0.0123);
+    expect(execution.usage).toEqual(usage);
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBe(0.0123);
+    expect(detail.total_cost_usd).toBe(0.0123);
+  });
+
+  it("sums cost across retried attempts into the stage and run totals", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-sum-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 1 });
+    await store.appendStageEvent(run.runId, "build", { event: "failed", reason: "x" }, { attempt: 1 });
+    await store.updateStageExecution(run.runId, "build", 1, {
+      status: "failed",
+      cost_usd: 0.01,
+    });
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(run.runId, "build", { event: "started" }, { attempt: 2 });
+    await store.appendStageEvent(run.runId, "build", { event: "succeeded" }, { attempt: 2 });
+    await store.updateStageExecution(run.runId, "build", 2, {
+      status: "succeeded",
+      cost_usd: 0.02,
+    });
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBeCloseTo(0.03, 10);
+    expect(detail.total_cost_usd).toBeCloseTo(0.03, 10);
+  });
+
+  it("omits cost_usd/total_cost_usd when no attempt reported usage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-cost-none-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    const detail = await store.readRun(run.runId);
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.cost_usd).toBeUndefined();
+    expect(detail.total_cost_usd).toBeUndefined();
+  });
 });
 
 describe("stage executions (sqlite import)", () => {
@@ -404,5 +488,49 @@ describe("stage executions (sqlite import)", () => {
     expect(executions[0]?.attempt).toBe(1);
     expect(executions[0]?.status).toBe("succeeded");
     expect(executions[0]?.envelope?.summary).toBe("from disk");
+  });
+
+  it("migrates a pre-existing db missing cost_usd/usage_json columns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-exec-migrate-cost-"));
+    const dbPath = path.join(root, "state.db");
+    const raw = new Database(dbPath);
+    raw.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE stage_executions (
+  run_id TEXT NOT NULL,
+  stage_id TEXT NOT NULL,
+  attempt INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
+  started_at TEXT,
+  finished_at TEXT,
+  envelope_json TEXT,
+  PRIMARY KEY (run_id, stage_id, attempt)
+);
+`);
+    raw.close();
+
+    const store = new SqliteRunStore(root);
+    await store.ready();
+    const cols = new Database(dbPath)
+      .prepare(`PRAGMA table_info(stage_executions)`)
+      .all() as { name: string }[];
+    expect(cols.some((c) => c.name === "cost_usd")).toBe(true);
+    expect(cols.some((c) => c.name === "usage_json")).toBe(true);
+
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const execution = await store.createStageExecution(run.runId, "build");
+    expect(execution.cost_usd).toBeUndefined();
   });
 });

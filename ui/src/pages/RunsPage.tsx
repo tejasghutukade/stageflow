@@ -8,6 +8,7 @@ import {
 } from "../catalog/views";
 import { miniTrackLabel, relativeTime } from "../catalogJoin";
 import { MiniTrack } from "../components/MiniTrack";
+import { CostBadge } from "../components/CostBadge";
 import { cssStatusToken, runDisplayStatus } from "../status/runStatus";
 
 type StatusFilter = "all" | "waiting" | "running" | "failed" | "finished";
@@ -87,6 +88,7 @@ export function RunsPage({
               <span className="rrow__pipe">{runLocatorSubtitle(run)} · {run.run_id.slice(0, 8)}</span>
             </span>
             <span className="rrow__right">
+              <CostBadge costUsd={run.total_cost_usd} />
               <span className={`status${token && token !== "running" ? ` status--${token}` : ""}`}>
                 <span className={`dot${token ? ` dot--${token}` : ""}`}></span> {relativeTime(run.updated_at ?? run.created_at)}
               </span>

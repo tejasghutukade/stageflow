@@ -1,4 +1,5 @@
 import type { StageEnvelope } from "../types/envelope.js";
+import type { StageUsage } from "../types/usage.js";
 import type { StageLogEvent, StageSnapshot } from "./port.js";
 import { stageStatusFromEvents } from "./port.js";
 
@@ -7,6 +8,8 @@ export type StageExecutionPatch = {
   started_at?: string;
   finished_at?: string;
   envelope?: StageEnvelope | null;
+  cost_usd?: number;
+  usage?: StageUsage;
 };
 
 export function executionStatusFromEvents(
@@ -31,9 +34,13 @@ export function deriveExecutionPatchFromEvent(
     if (!current.started_at) patch.started_at = at;
   } else if (eventName === "waiting_for_input") {
     patch.status = "waiting_for_input";
-  } else if (eventName === "succeeded" || eventName === "failed") {
-    patch.status = eventName;
+  } else if (event.event === "succeeded" || event.event === "failed") {
+    patch.status = event.event;
     patch.finished_at = at;
+    if (event.usage) {
+      patch.cost_usd = event.usage.costUsd;
+      patch.usage = event.usage;
+    }
   }
   return patch;
 }

@@ -16,10 +16,13 @@ import path from "node:path";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageRunInput } from "./port.js";
 import { runtimeStageId } from "./port.js";
+import type { StageUsage } from "../types/usage.js";
 
 export type ClaudeSessionMarker = {
   sessionId: string;
   prompt?: AskOperatorPrompt;
+  /** Cost/tokens accumulated by turns run so far, so a restart resuming this stage doesn't lose prior spend. */
+  usage?: StageUsage;
 };
 
 /**

@@ -16,6 +16,24 @@ function stringify(payload: Record<string, unknown>): string {
   return JSON.stringify(payload, null, 2);
 }
 
+function formatUsd(amount: number): string {
+  return `$${amount.toFixed(4)}`;
+}
+
+/** Best-effort total cost for a run; undefined (not thrown) on any read failure or when no stage reported usage. */
+async function tryReadTotalCostUsd(
+  store: RunStore | undefined,
+  runId: string,
+): Promise<number | undefined> {
+  if (!store) return undefined;
+  try {
+    const detail = await store.readRun(runId);
+    return detail.total_cost_usd;
+  } catch {
+    return undefined;
+  }
+}
+
 function isBusyCode(code: string | undefined): code is BusyCode {
   return code === "busy_capacity" || code === "busy_checkout";
 }
@@ -95,8 +113,15 @@ function baseRunCompletionPayload(
   return payload;
 }
 
-function formatRunCompletionJson(result: PipelineRunResult): string {
-  return stringify(baseRunCompletionPayload(result));
+async function formatRunCompletionJsonWithCost(
+  result: PipelineRunResult,
+  store: RunStore | undefined,
+): Promise<string> {
+  const totalCostUsd = await tryReadTotalCostUsd(store, result.runId);
+  return stringify({
+    ...baseRunCompletionPayload(result),
+    ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
+  });
 }
 
 async function formatRunCompletionJsonWithStages(
@@ -107,6 +132,7 @@ async function formatRunCompletionJsonWithStages(
   const projection = projectRun(detail);
   return stringify({
     ...baseRunCompletionPayload(result),
+    ...(detail.total_cost_usd !== undefined ? { total_cost_usd: detail.total_cost_usd } : {}),
     stages: projection.stages,
   });
 }
@@ -128,20 +154,24 @@ function writeStartFailureHuman(
 function writeCompletionHuman(
   result: PipelineRunResult,
   io: CliRunReportIo,
+  totalCostUsd: number | undefined,
 ): void {
   switch (result.outcome) {
     case "waiting":
       io.error(
         `Pipeline waiting. Run folder: ${result.runDir} (${result.runId})`,
       );
-      return;
+      break;
     case "failed":
       io.error(`Pipeline failed: ${result.reason}`);
       io.error(`Run folder: ${result.runDir}`);
-      return;
+      break;
     case "succeeded":
       io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
-      return;
+      break;
+  }
+  if (totalCostUsd !== undefined) {
+    io.error(`Cost: ${formatUsd(totalCostUsd)}`);
   }
 }
 
@@ -193,10 +223,11 @@ export async function reportCliRun(
         return 1;
       }
     } else {
-      options.io.log(formatRunCompletionJson(event.result));
+      options.io.log(await formatRunCompletionJsonWithCost(event.result, options.store));
     }
   } else {
-    writeCompletionHuman(event.result, options.io);
+    const totalCostUsd = await tryReadTotalCostUsd(options.store, event.result.runId);
+    writeCompletionHuman(event.result, options.io, totalCostUsd);
   }
   return exitCodeForRunOutcome(event.result.outcome);
 }

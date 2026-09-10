@@ -16,6 +16,7 @@ import { useRunCatalogHandle } from "../catalog/useRunCatalog";
 import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
+import { CostBadge, formatCostUsd } from "../components/CostBadge";
 import { ArtifactAside } from "../components/ArtifactAside";
 import { ArtifactReader } from "../components/ArtifactReader";
 import { ArtifactDecideColumn } from "../components/DecidePanel";
@@ -500,6 +501,7 @@ export function RunDetailPage({
               </span>
             )}
             {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
+            {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
             {sessionChipEl(workspace.sessionChip)}
             {stage && canRetry(stage.status) && manualRecovery === undefined ? (
               <button
@@ -568,6 +570,11 @@ export function RunDetailPage({
               <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
                 <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
                 {" "}{statusCopy(run.status)}
+              </span>
+            ) : null}
+            {run && formatCostUsd(run.total_cost_usd) ? (
+              <span className="topbar__sub" title="Total cost across every stage in this run">
+                {formatCostUsd(run.total_cost_usd)}
               </span>
             ) : null}
             <span className="topbar__spacer"></span>

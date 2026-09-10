@@ -19,6 +19,7 @@ export type CompactStage = {
   id: string;
   status: StageSnapshot["status"];
   attempt_count: number;
+  cost_usd?: number;
 };
 
 export type StageGateKind =
@@ -195,6 +196,7 @@ export type RunSummary = {
   failed_stage_id?: string;
   failed_reason?: string;
   active_feedback_loop?: FeedbackLoopRecord;
+  total_cost_usd?: number;
 };
 
 export type StageEnvelopeView = {
@@ -275,6 +277,7 @@ export type StageSnapshot = {
   last_at?: string;
   pending_prompt?: PendingPrompt;
   attempt_count: number;
+  cost_usd?: number;
 };
 
 export type VerificationCheckStatus =
