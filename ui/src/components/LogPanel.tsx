@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import type { StageLogEvent } from "../api";
 import {
@@ -270,7 +270,13 @@ function jumpToFailingStep(stepId: string) {
   window.setTimeout(() => el.classList.remove("logstep--highlight"), 1500);
 }
 
-export function LogPanel({ events }: { events: StageLogEvent[] }) {
+export function LogPanel({
+  events,
+  headerAction,
+}: {
+  events: StageLogEvent[];
+  headerAction?: ReactNode;
+}) {
   const steps = buildLogPanelSteps(events);
   const now = Date.now();
   const failingStepId = findFailingStepId(steps);
@@ -280,6 +286,12 @@ export function LogPanel({ events }: { events: StageLogEvent[] }) {
     <div className="stream" style={{ height: "100%" }}>
       <header className="stream__head">
         <h3 className="stream__name">Logs</h3>
+        {headerAction ? (
+          <>
+            <span className="topbar__spacer"></span>
+            <div className="stream__head-trail">{headerAction}</div>
+          </>
+        ) : null}
       </header>
       <div className="stream__body">
         {steps.length === 0 ? (
