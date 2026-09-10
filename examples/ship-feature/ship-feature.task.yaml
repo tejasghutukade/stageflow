@@ -1,12 +1,13 @@
 id: ship-feature-richer-payload-schema
 goal: >
-  Extend the JSON Schema subset used for payload_schema / clone_input_schema
-  (src/envelope/payloadSchema.ts) to additionally support, for type: string
-  nodes: pattern (a regex string, validated as a valid RegExp at compile
-  time), minLength, and maxLength (non-negative integers, checked at compile
-  time). Also add a nullable: true keyword usable on any node type, compiling
-  to a union of that type with null. Ship the change as an operator-approved
-  pull request opened against tejasghutukade/stageflow.
+  Extend the JSON Schema subset used for io.input.schema / io.output.schema
+  (and verify type: payload_schema checks) in src/envelope/payloadSchema.ts
+  to additionally support, for type: string nodes: pattern (a regex string,
+  validated as a valid RegExp at compile time), minLength, and maxLength
+  (non-negative integers, checked at compile time). Also add a nullable:
+  true keyword usable on any node type, compiling to a union of that type
+  with null. Ship the change as an operator-approved pull request opened
+  against tejasghutukade/stageflow.
 context: |
   This repository is Stageflow itself (tejasghutukade/stageflow). The
   checkout for this run is a dedicated git worktree already on branch

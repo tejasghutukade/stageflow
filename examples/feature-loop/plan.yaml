@@ -48,7 +48,7 @@ system_prompt: |
      you cannot resolve).
 
   Required files must be created with write_stage_artifact. Checkout
-  write/edit does not satisfy completion checks.
+  write/edit does not satisfy after-phase verify.
 
   summary and payload are handed to the next stage verbatim. State
   outcomes and artifact pointers only: which story_id, which files, which
@@ -64,31 +64,7 @@ timeout_ms: 3600000
 io:
   input:
     schema:
-      type: object
-      required:
-        - story_id
-        - title
-        - epic_slice
-        - acceptance
-        - neighboring_story_ids
-        - constraints
-      properties:
-        story_id:
-          type: string
-        title:
-          type: string
-        epic_slice:
-          type: string
-        acceptance:
-          type: string
-        neighboring_story_ids:
-          type: array
-          items:
-            type: string
-        constraints:
-          type: array
-          items:
-            type: string
+      $ref: "#/schemas/story-assignment"
   output:
     schema:
       type: object

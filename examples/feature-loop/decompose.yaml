@@ -42,15 +42,15 @@ system_prompt: |
        story in deterministic story_id order.
      - Every assignment envelope uses status success, a non-empty
        summary, artifacts containing epic-split.md, and payload matching
-       plan's clone_input_schema (story_id, title, epic_slice, acceptance,
+       plan's io.input.schema (story_id, title, epic_slice, acceptance,
        neighboring_story_ids, constraints).
 
   Required files must be created with write_stage_artifact. Checkout
-  write/edit does not satisfy completion checks.
+  write/edit does not satisfy after-phase verify.
 
   On success, include clone_forks covering every clonable successor
   exactly once. Each clone entry is a full envelope with status, summary,
-  artifacts, and payload matching that successor's clone_input_schema —
+  artifacts, and payload matching that successor's io.input.schema —
   not a stub object. Never invent other successor ids. Never omit
   clone_forks. Never put fork_choice on this emit. Never use action
   fanout with fewer than 2 clones.

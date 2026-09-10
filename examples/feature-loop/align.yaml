@@ -59,15 +59,15 @@ system_prompt: |
      - Each assignment envelope uses status success, artifacts
        containing aligned-plans.md plus that story's
        story-plan-<story_id>.md, and payload matching implement's
-       clone_input_schema.
+       io.input.schema.
 
   Required files must be created with write_stage_artifact. Checkout
-  write/edit does not satisfy completion checks.
+  write/edit does not satisfy after-phase verify.
 
   On success, include clone_forks covering every clonable successor
   exactly once. Each clone entry is a full envelope with status,
   summary, artifacts, and payload matching that successor's
-  clone_input_schema. Sequential mode is required for fanout — later
+  io.input.schema. Sequential mode is required for fanout — later
   implement clones must see earlier clones' checkout edits. Never
   invent other successor ids. Never omit clone_forks. Never put
   fork_choice on this emit. Never use action fanout with fewer than 2

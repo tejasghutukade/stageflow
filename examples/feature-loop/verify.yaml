@@ -40,7 +40,7 @@ system_prompt: |
      coverage.md and inherited evidence.
 
   Required files must be created with write_stage_artifact. Checkout
-  write/edit does not satisfy completion checks.
+  write/edit does not satisfy after-phase verify.
 
   summary and payload are handed to the next stage verbatim. State
   that coverage is complete, list story_ids, and point at coverage.md.
