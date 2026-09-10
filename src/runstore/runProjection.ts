@@ -54,7 +54,14 @@ function compactStages(stages: StageSnapshot[]): CompactStage[] {
     status: s.status,
     attempt_count: s.attempt_count,
     ...(s.definition_id !== undefined ? { definition_id: s.definition_id } : {}),
+    ...(s.cost_usd !== undefined ? { cost_usd: s.cost_usd } : {}),
   }));
+}
+
+function totalCostUsd(stages: StageSnapshot[]): number | undefined {
+  const costs = stages.map((s) => s.cost_usd).filter((c): c is number => c !== undefined);
+  if (costs.length === 0) return undefined;
+  return costs.reduce((sum, c) => sum + c, 0);
 }
 
 function waitingSummaryFromPrompt(
@@ -142,6 +149,7 @@ export function projectRunSummary(
 ): RunSummary {
   const dag = meta.pipeline_dag;
   const waiting = waitingFieldsFromStages(stages);
+  const cost = totalCostUsd(stages);
   if (
     feedback?.active_feedback_loop?.state === "waiting_for_human" &&
     waiting.waiting_stage_id !== undefined &&
@@ -169,6 +177,7 @@ export function projectRunSummary(
     ...(feedback?.active_feedback_loop !== undefined
       ? { active_feedback_loop: feedback.active_feedback_loop }
       : {}),
+    ...(cost !== undefined ? { total_cost_usd: cost } : {}),
   };
 }
 

@@ -142,7 +142,7 @@ async function finalizeStageResult(options: {
       store,
       runId,
       stageId,
-      event: { event: "failed", reason: result.reason },
+      event: { event: "failed", reason: result.reason, usage: result.usage },
       attemptCtx,
     });
     console.error(`Stage ${stageId} failed: ${result.reason}`);
@@ -153,7 +153,7 @@ async function finalizeStageResult(options: {
     store,
     runId,
     stageId,
-    event: { event: "succeeded" },
+    event: { event: "succeeded", usage: result.usage },
     attemptCtx,
   });
   console.error(`Stage ${stageId} succeeded.`);

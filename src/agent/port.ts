@@ -8,6 +8,7 @@ import type { StageActivityEvent } from "./activity.js";
 import type { ResolvedMcpServers } from "../config/resolveStageMcpServers.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import type { QaExchange } from "../hitl/qaTrail.js";
+import type { StageUsage } from "../types/usage.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
@@ -88,8 +89,8 @@ export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">):
 }
 
 export type StageRunResult =
-  | { ok: true; envelope: StageEnvelope }
-  | { ok: false; reason: string; envelope?: StageEnvelope };
+  | { ok: true; envelope: StageEnvelope; usage?: StageUsage }
+  | { ok: false; reason: string; envelope?: StageEnvelope; usage?: StageUsage };
 
 /** Opaque wait-request blob; T2 owns concrete prompt shapes later. */
 export type OpaqueWaitRequest = unknown;

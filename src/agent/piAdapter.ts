@@ -86,6 +86,7 @@ import type {
 } from "./port.js";
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 import type { StageGateKind } from "../types/stage.js";
+import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 
 /**
  * Stage tool allowlist for sealed Pi sessions.
@@ -394,7 +395,31 @@ export function extractPartialResultText(partialResult: unknown): string {
 export type RouteSessionEventToProgressOptions = {
   observer: StageActivityObserver;
   verbose: boolean;
+  usage?: StageUsage;
 };
+
+type PiAssistantUsage = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+};
+
+/** Merge one assistant message's usage/cost (as reported by pi-ai) into the stage-level accumulator. */
+function mergePiAssistantUsage(usage: StageUsage, message: unknown): void {
+  if (!message || typeof message !== "object") return;
+  const msg = message as { role?: unknown; model?: unknown; usage?: unknown };
+  if (msg.role !== "assistant" || typeof msg.model !== "string" || !msg.usage) return;
+  const u = msg.usage as PiAssistantUsage;
+  addModelUsage(usage, msg.model, {
+    inputTokens: u.input,
+    outputTokens: u.output,
+    cacheReadInputTokens: u.cacheRead,
+    cacheCreationInputTokens: u.cacheWrite,
+    costUsd: u.cost?.total ?? 0,
+  });
+}
 
 /**
  * Adapter-edge routing: stream deltas to the observer, map milestones to
@@ -405,7 +430,7 @@ export function routeSessionEventToProgress(
   event: Record<string, unknown>,
   options: RouteSessionEventToProgressOptions,
 ): void {
-  const { observer, verbose } = options;
+  const { observer, verbose, usage } = options;
 
   if (event.type === "message_update") {
     const ame = event.assistantMessageEvent;
@@ -436,6 +461,9 @@ export function routeSessionEventToProgress(
 
   if (event.type === "message_end" || event.type === "agent_end") {
     observer.onStreamBoundary();
+    if (usage && event.type === "message_end") {
+      mergePiAssistantUsage(usage, event.message);
+    }
   }
 
   if (
@@ -460,6 +488,7 @@ export function routeSessionEventToProgress(
 function attachStageProgress(
   session: AgentSession,
   onActivity?: (event: StageActivityEvent) => void,
+  usage?: StageUsage,
 ): () => void {
   const observer = createStageActivityObserver({ onActivity, writeStderr: true });
   const verbose = readActivityVerbose();
@@ -468,6 +497,7 @@ function attachStageProgress(
     routeSessionEventToProgress(event as unknown as Record<string, unknown>, {
       observer,
       verbose,
+      usage,
     });
   });
 
@@ -999,6 +1029,7 @@ type StageSessionWiring = {
   providerEmitHint?: string;
   restoreProvider?: () => void;
   capture: EmitCapture;
+  usage: StageUsage;
   askWaitChannel: AskOperatorWaitChannel;
   connecting?: Promise<void>;
   cancelConnecting?: () => void;
@@ -1012,6 +1043,7 @@ async function prepareStageSessionWiring(
   const { roots } = input;
   const provider = findProviderSupport(input.stage.model);
   const capture: EmitCapture = {};
+  const usage: StageUsage = emptyStageUsage();
   const askWaitChannel = existingAskWaitChannel ?? new AskOperatorWaitChannel();
 
   const emitDef = createEmitStageEnvelopeTool(
@@ -1154,6 +1186,7 @@ async function prepareStageSessionWiring(
       providerEmitHint: provider?.emitToolHint?.(emitDef.name),
       restoreProvider,
       capture,
+      usage,
       askWaitChannel,
       connecting: attached.connecting,
       cancelConnecting: attached.cancel,
@@ -1450,7 +1483,7 @@ export class PiAgentAdapter implements AgentPort {
         return;
       }
       session = bound;
-      unsubscribeProgress = attachStageProgress(session, input.onActivity);
+      unsubscribeProgress = attachStageProgress(session, input.onActivity, wiring.usage);
     })();
 
     const runWithTimeout = async (
@@ -1472,15 +1505,16 @@ export class PiAgentAdapter implements AgentPort {
           });
         });
         await Promise.race([workPromise, abortPromise]);
-        return resultFromCapture(wiring.capture);
+        return { ...resultFromCapture(wiring.capture), usage: wiring.usage };
       } catch (err) {
         if (wiring.capture.envelope && isAdvancingEnvelope(wiring.capture.envelope)) {
-          return { ok: true, envelope: wiring.capture.envelope };
+          return { ok: true, envelope: wiring.capture.envelope, usage: wiring.usage };
         }
         return {
           ok: false,
           reason: err instanceof Error ? err.message : String(err),
           envelope: wiring.capture.envelope,
+          usage: wiring.usage,
         };
       } finally {
         clearTimeout(timer);

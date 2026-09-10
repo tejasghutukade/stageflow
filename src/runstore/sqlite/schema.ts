@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   started_at TEXT,
   finished_at TEXT,
   envelope_json TEXT,
+  cost_usd REAL,
+  usage_json TEXT,
   PRIMARY KEY (run_id, stage_id, attempt),
   FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );

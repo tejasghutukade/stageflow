@@ -8,6 +8,7 @@ import type {
 } from "../types/pipeline.js";
 import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
+import type { StageUsage } from "../types/usage.js";
 
 export type RunStatus = "created" | "running" | "succeeded" | "failed";
 
@@ -95,6 +96,8 @@ export type StageSnapshot = {
   last_at?: string;
   pending_prompt?: AskOperatorPrompt;
   attempt_count: number;
+  /** Total $ spent on this stage across every attempt; omitted when no attempt reported usage. */
+  cost_usd?: number;
 };
 
 export type StageExecution = {
@@ -106,6 +109,8 @@ export type StageExecution = {
   started_at?: string;
   finished_at?: string;
   envelope: StageEnvelope | null;
+  cost_usd?: number;
+  usage?: StageUsage;
 };
 
 export type StageExecutionPatch = {
@@ -114,6 +119,8 @@ export type StageExecutionPatch = {
   started_at?: string;
   finished_at?: string;
   envelope?: StageEnvelope | null;
+  cost_usd?: number;
+  usage?: StageUsage;
 };
 
 /** The durable disposition of completion verification for one stage attempt. */
@@ -313,6 +320,7 @@ export type CompactStage = {
   status: StageSnapshot["status"];
   attempt_count: number;
   definition_id?: string;
+  cost_usd?: number;
 };
 
 export type RunSummary = {
@@ -340,6 +348,8 @@ export type RunSummary = {
   failed_reason?: string;
   /** The active loop, when a run is currently replaying or awaiting a decision. */
   active_feedback_loop?: FeedbackLoopRecord;
+  /** Sum of every stage's cost_usd; omitted when no stage reported usage. */
+  total_cost_usd?: number;
 };
 
 export type RunDetail = Omit<RunSummary, "stages"> & {

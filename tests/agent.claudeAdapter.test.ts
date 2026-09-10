@@ -269,6 +269,127 @@ describe("ClaudeAgentAdapter — run loop", () => {
     if (result.ok) expect(result.envelope.summary).toBe("done");
   });
 
+  it("captures cost/tokens from the result message's modelUsage onto the completed result", async () => {
+    queryImpl = async function* (options) {
+      const emitTool = findTool(options, "emit_stage_envelope");
+      await emitTool.handler(
+        { status: "success", summary: "done", artifacts: [] },
+        undefined,
+      );
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.0042,
+        modelUsage: {
+          "claude-sonnet-4-5": {
+            inputTokens: 120,
+            outputTokens: 30,
+            cacheReadInputTokens: 5,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.0042,
+            contextWindow: 200000,
+            maxOutputTokens: 8192,
+          },
+        },
+      };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage(baseInput());
+    expect(result.ok).toBe(true);
+    expect(result.usage?.costUsd).toBeCloseTo(0.0042, 10);
+    expect(result.usage?.models["claude-sonnet-4-5"]).toMatchObject({
+      inputTokens: 120,
+      outputTokens: 30,
+      cacheReadInputTokens: 5,
+      costUsd: 0.0042,
+    });
+  });
+
+  it("still captures cost when the tool_result 'user' frame (the real SDK order) precedes 'result'", async () => {
+    // Real query() sequence: emit_stage_envelope's tool_result lands on a
+    // "user" message BEFORE the turn-summary "result" message. The adapter
+    // interrupts and breaks as soon as it sees that "user" frame — this
+    // reproduces that ordering to prove usage still gets captured despite
+    // the early break (regression: it previously never reached "result").
+    queryImpl = async function* (options) {
+      const emitTool = findTool(options, "emit_stage_envelope");
+      await emitTool.handler(
+        { status: "success", summary: "done", artifacts: [] },
+        undefined,
+      );
+      yield userToolResultMessage("tool-1", "ok");
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.0099,
+        modelUsage: {
+          "claude-sonnet-4-5": {
+            inputTokens: 200,
+            outputTokens: 60,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.0099,
+            contextWindow: 200000,
+            maxOutputTokens: 8192,
+          },
+        },
+      };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage(baseInput());
+    expect(result.ok).toBe(true);
+    expect(result.usage?.costUsd).toBeCloseTo(0.0099, 10);
+    expect(result.usage?.models["claude-sonnet-4-5"]).toMatchObject({
+      inputTokens: 200,
+      outputTokens: 60,
+      costUsd: 0.0099,
+    });
+  });
+
+  it("still captures cost when an extra trailing 'user' frame lands between the tool-result and 'result'", async () => {
+    // Observed in production: after interrupt(), the stream can emit
+    // *another* "user" frame before the turn-summary "result" arrives —
+    // a single bounded peek isn't enough; draining must loop within budget.
+    queryImpl = async function* (options) {
+      const emitTool = findTool(options, "emit_stage_envelope");
+      await emitTool.handler(
+        { status: "success", summary: "done", artifacts: [] },
+        undefined,
+      );
+      yield userToolResultMessage("tool-1", "ok");
+      yield userToolResultMessage("tool-2", "also ok");
+      yield {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.0055,
+        modelUsage: {
+          "claude-sonnet-4-5": {
+            inputTokens: 90,
+            outputTokens: 20,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.0055,
+            contextWindow: 200000,
+            maxOutputTokens: 8192,
+          },
+        },
+      };
+    };
+    const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
+    const adapter = new ClaudeAgentAdapter();
+    const result = await adapter.runStage(baseInput());
+    expect(result.ok).toBe(true);
+    expect(result.usage?.costUsd).toBeCloseTo(0.0055, 10);
+  });
+
   it("returns ok:false status:failure envelope when emit_stage_envelope is called with status=failure", async () => {
     queryImpl = async function* (options) {
       const emitTool = findTool(options, "emit_stage_envelope");

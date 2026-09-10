@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
+import type { StageUsage } from "../../types/usage.js";
 import type { FeedbackLoopConfig } from "../../types/pipeline.js";
 import type { StageLogLine } from "../../agent/activity.js";
 import { derivePendingPrompt } from "../../hitl/qaTrail.js";
@@ -93,6 +94,8 @@ type ExecutionRow = {
   started_at: string | null;
   finished_at: string | null;
   envelope_json: string | null;
+  cost_usd: number | null;
+  usage_json: string | null;
 };
 
 type VerificationCheckResultRow = {
@@ -243,6 +246,19 @@ function ensureStageExecutionVerificationOutcomeColumn(db: Database.Database): v
   }
 }
 
+function ensureStageExecutionCostColumns(db: Database.Database): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(stage_executions)`)
+    .all() as { name: string }[];
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has("cost_usd")) {
+    db.exec(`ALTER TABLE stage_executions ADD COLUMN cost_usd REAL`);
+  }
+  if (!names.has("usage_json")) {
+    db.exec(`ALTER TABLE stage_executions ADD COLUMN usage_json TEXT`);
+  }
+}
+
 function backfillVerificationOutcomes(db: Database.Database): void {
   db.exec(`
 UPDATE stage_executions
@@ -360,6 +376,8 @@ function executionFromRow(row: ExecutionRow): StageExecution {
     envelope: row.envelope_json
       ? (JSON.parse(row.envelope_json) as StageExecution["envelope"])
       : null,
+    ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
+    ...(row.usage_json != null ? { usage: JSON.parse(row.usage_json) as StageUsage } : {}),
   };
 }
 
@@ -481,6 +499,7 @@ export class SqliteRunStore implements RunStore {
     ensureRunLocatorColumns(this.db);
     ensureStageExecutionsTable(this.db);
     ensureStageExecutionVerificationOutcomeColumn(this.db);
+    ensureStageExecutionCostColumns(this.db);
     ensureStageEventsAttemptColumn(this.db);
     ensureVerificationCheckResultsTable(this.db);
     ensureFeedbackReplayStagePassEnvelopeColumn(this.db);
@@ -657,7 +676,7 @@ export class SqliteRunStore implements RunStore {
         });
       const row = this.db
         .prepare(
-          `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
+          `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
            FROM stage_executions
            WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
         )
@@ -673,7 +692,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt ASC`,
@@ -689,7 +708,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt DESC
@@ -718,7 +737,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json
+        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
       )
@@ -764,6 +783,14 @@ export class SqliteRunStore implements RunStore {
       sets.push("envelope_json = @envelope_json");
       params.envelope_json =
         patch.envelope != null ? JSON.stringify(patch.envelope) : null;
+    }
+    if (patch.cost_usd !== undefined) {
+      sets.push("cost_usd = @cost_usd");
+      params.cost_usd = patch.cost_usd;
+    }
+    if (patch.usage !== undefined) {
+      sets.push("usage_json = @usage_json");
+      params.usage_json = JSON.stringify(patch.usage);
     }
     if (sets.length === 0) return;
     const result = this.db

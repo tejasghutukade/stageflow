@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-10
+
+### Added
+
+- Per-stage and per-run LLM cost/token tracking, sourced from the Claude Agent SDK's and pi-ai's own per-turn accounting — no separate pricing table
+- `stage_executions.cost_usd` / `usage_json`, summed across attempts into `StageSnapshot.cost_usd` and across stages into `RunSummary.total_cost_usd`
+- `sf run` prints a `Cost:` line in human output and `total_cost_usd` in `--json`
+- Cost badges in the UI on the runs list, run detail header, and each stage
+
+### Fixed
+
+- `claudeAdapter`: the interrupt-on-tool-result path could break out of the turn before the SDK's cost-bearing `result` message arrived, silently losing usage data on every successful Claude-backed stage
+
 ## [0.15.0] - 2026-09-10
 
 ### Added

@@ -15,6 +15,7 @@ import type {
   AskOperatorAnswer,
   AskOperatorPrompt,
 } from "../tools/askOperator.js";
+import type { StageUsage } from "../types/usage.js";
 
 export const ACTIVITY_TEXT_LIMIT = 2000;
 
@@ -117,8 +118,8 @@ export type StageLifecycleEvent =
   | { event: "started" }
   | { event: "waiting_for_input" }
   | { event: "resumed" }
-  | { event: "succeeded" }
-  | { event: "failed"; reason: string }
+  | { event: "succeeded"; usage?: StageUsage }
+  | { event: "failed"; reason: string; usage?: StageUsage }
   | { event: "skipped" }
   /** Operator explicitly authorized a new attempt after verified failure. */
   | { event: "manual_recovery_requested"; guidance?: string }

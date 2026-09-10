@@ -23,6 +23,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { deriveStatusFromStages } from "../src/runstore/port.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { runStage } from "../src/runtime/stageRunner.js";
+import { emptyStageUsage } from "../src/types/usage.js";
 
 function captureStderr() {
   const chunks: string[] = [];
@@ -400,6 +401,42 @@ describe("activity verbose routing", () => {
     expect(stderr.text()).not.toContain("partial");
     expect(seen).toEqual([]);
     stderr.restore();
+  });
+
+  it("merges an assistant message's usage/cost from message_end into the accumulator", () => {
+    const observer = createStageActivityObserver({ writeStderr: true });
+    const usage = emptyStageUsage();
+    routeSessionEventToProgress(
+      {
+        type: "message_end",
+        message: {
+          role: "assistant",
+          model: "claude-opus-4-7",
+          usage: {
+            input: 80,
+            output: 40,
+            cacheRead: 5,
+            cacheWrite: 0,
+            totalTokens: 120,
+            cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0, total: 0.031 },
+          },
+        },
+      },
+      { observer, verbose: false, usage },
+    );
+    // a non-assistant message (e.g. a tool result) must not contribute usage
+    routeSessionEventToProgress(
+      { type: "message_end", message: { role: "toolResult", toolCallId: "1" } },
+      { observer, verbose: false, usage },
+    );
+    expect(usage.costUsd).toBeCloseTo(0.031, 10);
+    expect(usage.models["claude-opus-4-7"]).toMatchObject({
+      inputTokens: 80,
+      outputTokens: 40,
+      cacheReadInputTokens: 5,
+      cacheCreationInputTokens: 0,
+      costUsd: 0.031,
+    });
   });
 
   it("verbose on streams thinking with distinct prefix and coalesces persist", () => {
