@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { StageLogEvent } from "../api/types";
-import { buildLogPanelSteps, formatDuration, stepDurationMs } from "./LogPanel";
+import {
+  buildLogPanelSteps,
+  findFailingStepId,
+  formatDuration,
+  stepDurationMs,
+} from "./LogPanel";
 
 describe("buildLogPanelSteps", () => {
   it("turns a completed tool call into one succeeded step", () => {
@@ -63,6 +68,7 @@ describe("buildLogPanelSteps", () => {
         status: "succeeded",
         detail: "here is the answer",
         at: undefined,
+        defaultExpanded: false,
       },
     ]);
   });
@@ -95,6 +101,7 @@ describe("buildLogPanelSteps", () => {
         status: "failed",
         detail: "tool error",
         at: undefined,
+        defaultExpanded: true,
       },
     ]);
   });
@@ -206,6 +213,63 @@ describe("buildLogPanelSteps", () => {
     const steps = buildLogPanelSteps(events);
     expect(steps.map((s) => s.kind)).toEqual(["system", "message", "tool", "message"]);
     expect(steps.map((s) => s.id)).toEqual(["step-0", "step-1", "step-2", "step-3"]);
+  });
+});
+
+describe("default expand/collapse", () => {
+  it("defaults the running step to expanded and finished non-failed steps to collapsed", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"a.ts"}' },
+      { event: "tool_end", toolName: "Read", toolCallId: "c1", resultPreview: "ok" },
+      { event: "tool_start", toolName: "Bash", toolCallId: "c2" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ status: "succeeded", defaultExpanded: false });
+    expect(steps[1]).toMatchObject({ status: "running", defaultExpanded: true });
+  });
+
+  it("defaults the failing tool step to expanded when there is no terminal failed marker yet", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ status: "failed", defaultExpanded: true });
+  });
+
+  it("prefers the terminal Stage failed marker over the tool call that caused it", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
+      { event: "failed", reason: "boom" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ kind: "tool", status: "failed", defaultExpanded: false });
+    expect(steps[1]).toMatchObject({ kind: "system", status: "failed", defaultExpanded: true });
+  });
+});
+
+describe("findFailingStepId", () => {
+  it("returns undefined when nothing failed", () => {
+    const steps = buildLogPanelSteps([{ event: "started" }]);
+    expect(findFailingStepId(steps)).toBeUndefined();
+  });
+
+  it("picks the terminal system failure over an earlier tool failure", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true },
+      { event: "failed", reason: "boom" },
+    ]);
+    expect(findFailingStepId(steps)).toBe(steps[1].id);
+  });
+
+  it("falls back to the failing tool call when there is no terminal system failure", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true },
+    ]);
+    expect(findFailingStepId(steps)).toBe(steps[0].id);
   });
 });
 

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import type { StageLogEvent } from "../api";
 import {
@@ -24,7 +25,21 @@ export type LogStep = {
   at?: string;
   startedAt?: string;
   finishedAt?: string;
+  defaultExpanded: boolean;
 };
+
+// The step whose detail best explains a stage failure: the terminal
+// "Stage failed" marker if one has landed yet, otherwise the tool call
+// that most recently errored.
+export function findFailingStepId(steps: LogStep[]): string | undefined {
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].kind === "system" && steps[i].status === "failed") return steps[i].id;
+  }
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].kind === "tool" && steps[i].status === "failed") return steps[i].id;
+  }
+  return undefined;
+}
 
 export function formatDuration(ms: number): string {
   if (ms < 1000) return "<1s";
@@ -109,6 +124,7 @@ function toolCallToStep(call: ToolCallView, id: string): LogStep {
     at: call.at,
     startedAt: call.startedAt,
     finishedAt: call.status === "running" ? undefined : call.at,
+    defaultExpanded: false,
   };
 }
 
@@ -120,6 +136,7 @@ function messageStep(event: StageLogEvent, id: string): LogStep {
     status: "succeeded",
     detail: event.text?.trim(),
     at: event.at,
+    defaultExpanded: false,
   };
 }
 
@@ -131,6 +148,7 @@ function operatorPromptStep(event: StageLogEvent, id: string): LogStep {
     status: "succeeded",
     detail: formatActivityDescription(event),
     at: event.at,
+    defaultExpanded: false,
   };
 }
 
@@ -142,6 +160,7 @@ function operatorAnswerStep(event: StageLogEvent, id: string): LogStep {
     status: "succeeded",
     detail: formatActivityDescription(event),
     at: event.at,
+    defaultExpanded: false,
   };
 }
 
@@ -153,6 +172,7 @@ function systemStep(event: StageLogEvent, id: string): LogStep {
     status: event.event === "failed" ? "failed" : "succeeded",
     detail: formatActivityDescription(event),
     at: event.at,
+    defaultExpanded: false,
   };
 }
 
@@ -182,6 +202,11 @@ export function buildLogPanelSteps(events: StageLogEvent[]): LogStep[] {
     }
   }
 
+  const failingStepId = findFailingStepId(steps);
+  for (const step of steps) {
+    step.defaultExpanded = step.status === "running" || step.id === failingStepId;
+  }
+
   return steps;
 }
 
@@ -199,6 +224,11 @@ function LogStepTrigger({ step, now }: { step: LogStep; now: number }) {
 }
 
 function LogStepRow({ step, now }: { step: LogStep; now: number }) {
+  // Tracks the running/failed-step auto-expand behavior until the operator
+  // manually toggles a row, at which point their choice wins from then on.
+  const [manualOverride, setManualOverride] = useState<boolean | null>(null);
+  const isOpen = manualOverride ?? step.defaultExpanded;
+
   if (!step.detail) {
     return (
       <div className={`logstep logstep--${step.status}`}>
@@ -211,7 +241,11 @@ function LogStepRow({ step, now }: { step: LogStep; now: number }) {
 
   return (
     <div className={`logstep logstep--${step.status}`}>
-      <Collapsible trigger={<LogStepTrigger step={step} now={now} />} defaultIsOpen={false}>
+      <Collapsible
+        trigger={<LogStepTrigger step={step} now={now} />}
+        isOpen={isOpen}
+        onOpenChange={setManualOverride}
+      >
         <pre className="logstep__detail">{step.detail}</pre>
       </Collapsible>
     </div>
