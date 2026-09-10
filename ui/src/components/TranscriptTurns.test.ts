@@ -38,6 +38,7 @@ describe("pairToolEvents", () => {
         args: '{"command":"ls"}',
         result: "done",
         at: undefined,
+        startedAt: undefined,
       },
     ]);
   });
@@ -65,6 +66,7 @@ describe("pairToolEvents", () => {
         args: undefined,
         progressPreview: "second",
         at: undefined,
+        startedAt: undefined,
       },
     ]);
   });

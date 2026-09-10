@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StageLogEvent } from "../api/types";
-import { buildLogPanelSteps } from "./LogPanel";
+import { buildLogPanelSteps, formatDuration, stepDurationMs } from "./LogPanel";
 
 describe("buildLogPanelSteps", () => {
   it("turns a completed tool call into one succeeded step", () => {
@@ -175,6 +175,26 @@ describe("buildLogPanelSteps", () => {
     expect(steps[0].label).toBe("Bash");
   });
 
+  it("carries the paired start and end timestamps on a completed tool step", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:00.000Z" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok", at: "2026-01-01T00:00:05.000Z" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({
+      startedAt: "2026-01-01T00:00:00.000Z",
+      finishedAt: "2026-01-01T00:00:05.000Z",
+    });
+  });
+
+  it("leaves finishedAt unset on a still-running tool step", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:00.000Z" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ startedAt: "2026-01-01T00:00:00.000Z", finishedAt: undefined });
+  });
+
   it("keeps steps in chronological order across mixed event types", () => {
     const events: StageLogEvent[] = [
       { event: "started" },
@@ -186,5 +206,56 @@ describe("buildLogPanelSteps", () => {
     const steps = buildLogPanelSteps(events);
     expect(steps.map((s) => s.kind)).toEqual(["system", "message", "tool", "message"]);
     expect(steps.map((s) => s.id)).toEqual(["step-0", "step-1", "step-2", "step-3"]);
+  });
+});
+
+describe("formatDuration", () => {
+  it("shows sub-second durations as <1s", () => {
+    expect(formatDuration(0)).toBe("<1s");
+    expect(formatDuration(999)).toBe("<1s");
+  });
+
+  it("shows whole seconds under a minute", () => {
+    expect(formatDuration(1000)).toBe("1s");
+    expect(formatDuration(23000)).toBe("23s");
+  });
+
+  it("shows minutes and seconds at or over a minute", () => {
+    expect(formatDuration(65000)).toBe("1m 5s");
+    expect(formatDuration(600000)).toBe("10m 0s");
+  });
+});
+
+describe("stepDurationMs", () => {
+  const now = Date.parse("2026-01-01T00:01:00.000Z");
+
+  it("computes elapsed time for a completed tool step", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:00.000Z" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:05.000Z" },
+    ]);
+    expect(stepDurationMs(steps[0], now)).toBe(5000);
+  });
+
+  it("computes live elapsed time for a running tool step using the supplied now", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:00.000Z" },
+    ]);
+    expect(stepDurationMs(steps[0], now)).toBe(60000);
+  });
+
+  it("returns undefined for non-tool steps", () => {
+    const steps = buildLogPanelSteps([
+      { event: "message", role: "assistant", text: "hi", at: "2026-01-01T00:00:00.000Z" },
+    ]);
+    expect(stepDurationMs(steps[0], now)).toBeUndefined();
+  });
+
+  it("returns undefined when there is no start timestamp to anchor from", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", at: "2026-01-01T00:00:05.000Z" },
+    ]);
+    expect(stepDurationMs(steps[0], now)).toBeUndefined();
   });
 });

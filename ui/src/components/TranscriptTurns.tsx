@@ -20,6 +20,7 @@ export type ToolCallView = {
   result?: string;
   progressPreview?: string;
   at?: string;
+  startedAt?: string;
 };
 
 function eventKey(event: StageLogEvent, index: number): string {
@@ -112,6 +113,7 @@ export function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
         args: start?.args,
         result: ev.resultPreview,
         at: ev.at ?? start?.at,
+        startedAt: start?.at,
       });
     }
   }
@@ -123,6 +125,7 @@ export function pairToolEvents(events: StageLogEvent[]): ToolCallView[] {
       args: start.args,
       progressPreview: start.progressPreview,
       at: start.at,
+      startedAt: start.at,
     });
   }
 

@@ -22,7 +22,29 @@ export type LogStep = {
   status: LogStepStatus;
   detail?: string;
   at?: string;
+  startedAt?: string;
+  finishedAt?: string;
 };
+
+export function formatDuration(ms: number): string {
+  if (ms < 1000) return "<1s";
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+export function stepDurationMs(step: LogStep, now: number): number | undefined {
+  if (step.kind !== "tool" || !step.startedAt) return undefined;
+  const start = Date.parse(step.startedAt);
+  if (Number.isNaN(start)) return undefined;
+  if (step.status === "running") return Math.max(0, now - start);
+  if (!step.finishedAt) return undefined;
+  const end = Date.parse(step.finishedAt);
+  if (Number.isNaN(end)) return undefined;
+  return Math.max(0, end - start);
+}
 
 function toolCallStatus(call: ToolCallView): LogStepStatus {
   if (call.status === "error") return "failed";
@@ -85,6 +107,8 @@ function toolCallToStep(call: ToolCallView, id: string): LogStep {
     status: toolCallStatus(call),
     detail: toolCallDetail(call),
     at: call.at,
+    startedAt: call.startedAt,
+    finishedAt: call.status === "running" ? undefined : call.at,
   };
 }
 
@@ -161,21 +185,25 @@ export function buildLogPanelSteps(events: StageLogEvent[]): LogStep[] {
   return steps;
 }
 
-function LogStepTrigger({ step }: { step: LogStep }) {
+function LogStepTrigger({ step, now }: { step: LogStep; now: number }) {
+  const durationMs = stepDurationMs(step, now);
   return (
     <span className="logstep__trigger">
       <span className={`dot dot--${step.status}`}></span>
       <span className="logstep__label">{step.label}</span>
+      {durationMs !== undefined ? (
+        <span className="logstep__duration">{formatDuration(durationMs)}</span>
+      ) : null}
     </span>
   );
 }
 
-function LogStepRow({ step }: { step: LogStep }) {
+function LogStepRow({ step, now }: { step: LogStep; now: number }) {
   if (!step.detail) {
     return (
       <div className={`logstep logstep--${step.status}`}>
         <div className="logstep__row logstep__row--static">
-          <LogStepTrigger step={step} />
+          <LogStepTrigger step={step} now={now} />
         </div>
       </div>
     );
@@ -183,7 +211,7 @@ function LogStepRow({ step }: { step: LogStep }) {
 
   return (
     <div className={`logstep logstep--${step.status}`}>
-      <Collapsible trigger={<LogStepTrigger step={step} />} defaultIsOpen={false}>
+      <Collapsible trigger={<LogStepTrigger step={step} now={now} />} defaultIsOpen={false}>
         <pre className="logstep__detail">{step.detail}</pre>
       </Collapsible>
     </div>
@@ -192,6 +220,7 @@ function LogStepRow({ step }: { step: LogStep }) {
 
 export function LogPanel({ events }: { events: StageLogEvent[] }) {
   const steps = buildLogPanelSteps(events);
+  const now = Date.now();
 
   return (
     <div className="stream" style={{ height: "100%" }}>
@@ -204,7 +233,7 @@ export function LogPanel({ events }: { events: StageLogEvent[] }) {
         ) : (
           <div className="logpanel">
             {steps.map((step) => (
-              <LogStepRow key={step.id} step={step} />
+              <LogStepRow key={step.id} step={step} now={now} />
             ))}
           </div>
         )}

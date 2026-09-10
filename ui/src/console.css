@@ -2673,6 +2673,14 @@ a.topbar__back { text-decoration: none; }
   white-space: nowrap;
 }
 
+.logstep__duration {
+  margin-left: auto;
+  padding-left: var(--spacing-3);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+}
+
 .logstep__detail {
   margin: 0 0 var(--spacing-3) var(--spacing-5);
   padding: var(--spacing-3);
