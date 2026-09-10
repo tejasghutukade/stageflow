@@ -41,6 +41,16 @@ export function findFailingStepId(steps: LogStep[]): string | undefined {
   return undefined;
 }
 
+// The banner only appears once the stage has actually terminated in
+// failure (the same terminal "system" step findFailingStepId prefers),
+// not merely a tool call that errored and might still be retried.
+export function failureBannerText(steps: LogStep[]): string | undefined {
+  const failingId = findFailingStepId(steps);
+  const step = steps.find((s) => s.id === failingId);
+  if (!step || step.kind !== "system") return undefined;
+  return step.detail ?? step.label;
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return "<1s";
   const totalSeconds = Math.round(ms / 1000);
@@ -231,7 +241,7 @@ function LogStepRow({ step, now }: { step: LogStep; now: number }) {
 
   if (!step.detail) {
     return (
-      <div className={`logstep logstep--${step.status}`}>
+      <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
         <div className="logstep__row logstep__row--static">
           <LogStepTrigger step={step} now={now} />
         </div>
@@ -240,7 +250,7 @@ function LogStepRow({ step, now }: { step: LogStep; now: number }) {
   }
 
   return (
-    <div className={`logstep logstep--${step.status}`}>
+    <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
       <Collapsible
         trigger={<LogStepTrigger step={step} now={now} />}
         isOpen={isOpen}
@@ -252,9 +262,19 @@ function LogStepRow({ step, now }: { step: LogStep; now: number }) {
   );
 }
 
+function jumpToFailingStep(stepId: string) {
+  const el = document.getElementById(`logstep-${stepId}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.add("logstep--highlight");
+  window.setTimeout(() => el.classList.remove("logstep--highlight"), 1500);
+}
+
 export function LogPanel({ events }: { events: StageLogEvent[] }) {
   const steps = buildLogPanelSteps(events);
   const now = Date.now();
+  const failingStepId = findFailingStepId(steps);
+  const bannerText = failureBannerText(steps);
 
   return (
     <div className="stream" style={{ height: "100%" }}>
@@ -272,6 +292,18 @@ export function LogPanel({ events }: { events: StageLogEvent[] }) {
           </div>
         )}
       </div>
+      {bannerText && failingStepId ? (
+        <div className="logpanel__banner">
+          <span className="logpanel__banner-text">{bannerText}</span>
+          <button
+            type="button"
+            className="btn btn--sm"
+            onClick={() => jumpToFailingStep(failingStepId)}
+          >
+            Jump to failing step
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

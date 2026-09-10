@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { StageLogEvent } from "../api/types";
 import {
   buildLogPanelSteps,
+  failureBannerText,
   findFailingStepId,
   formatDuration,
   stepDurationMs,
@@ -270,6 +271,38 @@ describe("findFailingStepId", () => {
       { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true },
     ]);
     expect(findFailingStepId(steps)).toBe(steps[0].id);
+  });
+});
+
+describe("failureBannerText", () => {
+  it("is undefined when the stage has not failed", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
+    ]);
+    expect(failureBannerText(steps)).toBeUndefined();
+  });
+
+  it("is undefined for a tool error that hasn't (yet) failed the stage", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
+    ]);
+    expect(failureBannerText(steps)).toBeUndefined();
+  });
+
+  it("returns the failure reason once the stage has a terminal failed marker", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
+      { event: "failed", reason: "3 tests failed after npm test" },
+    ]);
+    expect(failureBannerText(steps)).toBe("3 tests failed after npm test");
+  });
+
+  it("falls back to the step label when the failed marker carries no reason", () => {
+    const steps = buildLogPanelSteps([{ event: "failed" }]);
+    expect(failureBannerText(steps)).toBe("Stage failed");
   });
 });
 

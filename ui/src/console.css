@@ -2691,3 +2691,32 @@ a.topbar__back { text-decoration: none; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+@keyframes logstep-highlight-flash {
+  from { background: var(--color-background-red); }
+  to { background: transparent; }
+}
+
+.logstep--highlight {
+  animation: logstep-highlight-flash 1.5s ease-out;
+}
+
+.logpanel__banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-5);
+  border-top: 1px solid var(--color-border-red);
+  background: var(--color-background-red);
+}
+
+.logpanel__banner-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-red);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
