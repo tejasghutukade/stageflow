@@ -18,7 +18,7 @@ describe("buildLogPanelSteps", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0]).toMatchObject({
       kind: "tool",
-      label: "bash",
+      label: "bash ls",
       status: "succeeded",
       detail: "done",
     });
@@ -103,6 +103,7 @@ describe("buildLogPanelSteps", () => {
         detail: "tool error",
         at: undefined,
         defaultExpanded: true,
+        sourceEvent: "failed",
       },
     ]);
   });
@@ -174,6 +175,19 @@ describe("buildLogPanelSteps", () => {
     expect(steps[0].label).toBe("Bash");
   });
 
+  it("still recovers the filename when argsPreview is truncated (invalid) JSON", () => {
+    // Mirrors how the backend actually produces argsPreview: JSON.stringify(input)
+    // cut off at a fixed character limit with a trailing ellipsis, regardless of
+    // where that lands — here mid-way through a long old_string value.
+    const truncated = `{"file_path":"/repo/big.ts","old_string":"line one\\nline two\\nline th…`;
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "Edit", toolCallId: "c1", argsPreview: truncated },
+      { event: "tool_end", toolName: "Edit", toolCallId: "c1", resultPreview: "ok" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0].label).toBe("Edit big.ts");
+  });
+
   it("falls back to the raw tool name when the expected argument is missing", () => {
     const events: StageLogEvent[] = [
       { event: "tool_start", toolName: "Bash", toolCallId: "c1", argsPreview: "{}" },
@@ -181,6 +195,16 @@ describe("buildLogPanelSteps", () => {
     ];
     const steps = buildLogPanelSteps(events);
     expect(steps[0].label).toBe("Bash");
+  });
+
+  it("labels the Pi backend's lowercase tool names the same way as Claude's capitalized ones", () => {
+    const events: StageLogEvent[] = [
+      { event: "tool_start", toolName: "read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/src/index.ts"}' },
+      { event: "tool_end", toolName: "read", toolCallId: "c1", resultPreview: "export function main() {}" },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps[0]).toMatchObject({ label: "read index.ts", status: "succeeded" });
+    expect(steps[0].detail).toBeUndefined();
   });
 
   it("carries the paired start and end timestamps on a completed tool step", () => {
@@ -272,6 +296,18 @@ describe("findFailingStepId", () => {
     ]);
     expect(findFailingStepId(steps)).toBe(steps[0].id);
   });
+
+  it("stops flagging an earlier tool error once the stage has actually succeeded", () => {
+    const steps = buildLogPanelSteps([
+      { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "flaky, retried" },
+      { event: "tool_start", toolName: "Bash", toolCallId: "c2" },
+      { event: "tool_end", toolName: "Bash", toolCallId: "c2", resultPreview: "ok" },
+      { event: "succeeded" },
+    ]);
+    expect(findFailingStepId(steps)).toBeUndefined();
+    expect(steps[0]).toMatchObject({ status: "failed", defaultExpanded: false });
+  });
 });
 
 describe("failureBannerText", () => {
@@ -280,7 +316,7 @@ describe("failureBannerText", () => {
       { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
       { event: "tool_end", toolName: "Bash", toolCallId: "c1", resultPreview: "ok" },
     ]);
-    expect(failureBannerText(steps)).toBeUndefined();
+    expect(failureBannerText(steps, findFailingStepId(steps))).toBeUndefined();
   });
 
   it("is undefined for a tool error that hasn't (yet) failed the stage", () => {
@@ -288,7 +324,7 @@ describe("failureBannerText", () => {
       { event: "tool_start", toolName: "Bash", toolCallId: "c1" },
       { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
     ]);
-    expect(failureBannerText(steps)).toBeUndefined();
+    expect(failureBannerText(steps, findFailingStepId(steps))).toBeUndefined();
   });
 
   it("returns the failure reason once the stage has a terminal failed marker", () => {
@@ -297,12 +333,12 @@ describe("failureBannerText", () => {
       { event: "tool_end", toolName: "Bash", toolCallId: "c1", isError: true, resultPreview: "boom" },
       { event: "failed", reason: "3 tests failed after npm test" },
     ]);
-    expect(failureBannerText(steps)).toBe("3 tests failed after npm test");
+    expect(failureBannerText(steps, findFailingStepId(steps))).toBe("3 tests failed after npm test");
   });
 
   it("falls back to the step label when the failed marker carries no reason", () => {
     const steps = buildLogPanelSteps([{ event: "failed" }]);
-    expect(failureBannerText(steps)).toBe("Stage failed");
+    expect(failureBannerText(steps, findFailingStepId(steps))).toBe("Stage failed");
   });
 });
 

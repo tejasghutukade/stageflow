@@ -2614,9 +2614,11 @@ a.topbar__back { text-decoration: none; }
   height: 100%;
 }
 
-.center-split > .stream {
+.center-split__transcript {
+  display: flex;
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 .center-split__logs {
@@ -2627,9 +2629,17 @@ a.topbar__back { text-decoration: none; }
   border-left: 1px solid var(--color-border);
 }
 
+.center-split__transcript > .stream,
 .center-split__logs > .stream {
   flex: 1;
   min-width: 0;
+}
+
+/* Both sides stay mounted when hidden (so composer drafts, recovery
+   guidance, and scroll position survive toggling), just visually hidden. */
+.center-split__transcript[hidden],
+.center-split__logs[hidden] {
+  display: none;
 }
 
 .logpanel {

@@ -499,17 +499,20 @@ export function RunDetailPage({
       </>
     );
     const logsHeaderAction = (
-      <button
-        type="button"
-        className="btn btn--sm"
-        onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
-      >
-        {showTranscript ? "Hide transcript" : "Show transcript"}
-      </button>
+      <>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
+        >
+          {showTranscript ? "Hide transcript" : "Show transcript"}
+        </button>
+        {hideButton}
+      </>
     );
     center = (
       <div className="center-split">
-      {showTranscript ? (
+      <div className="center-split__transcript" hidden={!showTranscript}>
       <TranscriptStream
         stageName={
           workspace.trackStages.find((s) => s.id === streamStageId)?.label ??
@@ -572,12 +575,10 @@ export function RunDetailPage({
           onStop={stage ? () => void stopStageRecovery(stage.stage_id) : undefined}
         />
       </TranscriptStream>
-      ) : null}
-      {showLogs ? (
-      <div className="center-split__logs">
+      </div>
+      <div className="center-split__logs" hidden={!showLogs}>
         <LogPanel events={stage?.events ?? []} headerAction={logsHeaderAction} />
       </div>
-      ) : null}
       </div>
     );
   }
