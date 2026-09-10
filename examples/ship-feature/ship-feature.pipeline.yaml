@@ -1,0 +1,41 @@
+id: ship-feature
+stages:
+  - id: feat-plan
+    uses: ./feat-plan.yaml
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: feat-implement
+    uses: ./feat-implement.yaml
+    needs: feat-plan
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: feat-review
+    uses: ./feat-review.yaml
+    needs: feat-implement
+    clonable: true
+    clone_cap: 4
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: feat-address-feedback
+    uses: ./feat-address-feedback.yaml
+    needs: feat-review
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+  - id: feat-ship
+    uses: ./feat-ship.yaml
+    needs: feat-address-feedback
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

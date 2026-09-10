@@ -29,6 +29,8 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
 | [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |
+| [feature-loop](feature-loop/) | Epic-to-PR: split stories, sequential implement, review loop | `sf validate`, then `sf run` |
+| [ship-feature](ship-feature/) | Plan → implement → parallel review → operator-approved PR | `sf validate`, then `sf run` |
 | [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
 | [archify-on-pr](archify-on-pr/) | **Featured** — PR diagrams via conditional fork + Archify handoff | [README](archify-on-pr/README.md), archify-pr-diagrams workflow |
