@@ -5,9 +5,12 @@ system_prompt: |
   Emit status success, artifacts [], payload { "brief": "diamond start" },
   and a short summary. Do not call ask_operator. Do not emit clone_forks.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [brief]
-  properties:
-    brief:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - brief
+      properties:
+        brief:
+          type: string

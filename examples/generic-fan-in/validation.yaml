@@ -1,6 +1,4 @@
 id: validation
-gate_kinds:
-  - free_text
 system_prompt: |
   You are the validation branch of a diamond join. Follow these steps exactly:
 
@@ -27,9 +25,14 @@ system_prompt: |
   - Do not emit clone_forks.
   - Do not call ask_operator more than once.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [finding]
-  properties:
-    finding:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - finding
+      properties:
+        finding:
+          type: string
+gate_kinds:
+  - free_text

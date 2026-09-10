@@ -38,14 +38,24 @@ system_prompt: |
   path, a one-sentence summary, and a payload matching the stage schema.
   included_versions lists every x.y.z heading in the notes, newest first.
 model: cursor/composer-2-5
-payload_schema:
-  type: object
-  required: [version, tag, previous_version, included_versions]
-  properties:
-    version: { type: string }
-    tag: { type: string }
-    previous_version: { type: string }
-    included_versions:
-      type: array
-      items: { type: string }
-  additionalProperties: false
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - version
+        - tag
+        - previous_version
+        - included_versions
+      properties:
+        version:
+          type: string
+        tag:
+          type: string
+        previous_version:
+          type: string
+        included_versions:
+          type: array
+          items:
+            type: string
+      additionalProperties: false

@@ -1,25 +1,4 @@
 id: oss-investigate-area
-gate_kinds: []
-clone_input_schema:
-  type: object
-  required: [area_id, objective, paths, questions, constraints]
-  properties:
-    area_id:
-      type: string
-    objective:
-      type: string
-    paths:
-      type: array
-      items:
-        type: string
-    questions:
-      type: array
-      items:
-        type: string
-    constraints:
-      type: array
-      items:
-        type: string
 system_prompt: |
   Answer the assigned area's questions with cited evidence from this checkout,
   recorded in investigation.md. This stage is strictly read-only: do not edit
@@ -87,31 +66,74 @@ system_prompt: |
   Do not attempt to coordinate edits with other clones; the later join stage
   will synthesize all investigations.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [area_id, verdict, findings, affected_paths, recommended_changes, risks, tests]
-  properties:
-    area_id:
-      type: string
-    verdict:
-      type: string
-    findings:
-      type: array
-      items:
-        type: string
-    affected_paths:
-      type: array
-      items:
-        type: string
-    recommended_changes:
-      type: array
-      items:
-        type: string
-    risks:
-      type: array
-      items:
-        type: string
-    tests:
-      type: array
-      items:
-        type: string
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - area_id
+        - objective
+        - paths
+        - questions
+        - constraints
+      properties:
+        area_id:
+          type: string
+        objective:
+          type: string
+        paths:
+          type: array
+          items:
+            type: string
+        questions:
+          type: array
+          items:
+            type: string
+        constraints:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - area_id
+        - verdict
+        - findings
+        - affected_paths
+        - recommended_changes
+        - risks
+        - tests
+      properties:
+        area_id:
+          type: string
+        verdict:
+          type: string
+        findings:
+          type: array
+          items:
+            type: string
+        affected_paths:
+          type: array
+          items:
+            type: string
+        recommended_changes:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
+        tests:
+          type: array
+          items:
+            type: string
+verify:
+  - id: investigation
+    type: artifact
+    path: investigation.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

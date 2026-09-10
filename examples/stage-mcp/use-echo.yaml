@@ -7,9 +7,12 @@ system_prompt: |
   clone_forks. MCP elicitation is unsupported — do not wait for the fixture
   to ask the operator a question.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [echoed]
-  properties:
-    echoed:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - echoed
+      properties:
+        echoed:
+          type: string

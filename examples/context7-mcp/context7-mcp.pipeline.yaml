@@ -5,22 +5,8 @@ stages:
     mcp: [context7]
   - id: fetch-docs
     uses: ./fetch-docs.yaml
-    needs: resolve-library
     mcp: [context7]
-    completion:
-      mode: all
-      checks:
-        - id: docs
-          type: artifact
-          path: docs.md
-          nonempty: true
+    needs: resolve-library
   - id: write-brief
     uses: ./write-brief.yaml
     needs: fetch-docs
-    completion:
-      mode: all
-      checks:
-        - id: brief
-          type: artifact
-          path: brief.md
-          nonempty: true

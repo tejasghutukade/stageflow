@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -138,6 +138,48 @@ describe("payload_schema", () => {
     expect(selection.payload_schema).toMatchObject({
       type: "object",
       required: ["boy", "girl"],
+    });
+  });
+
+  it("AE2: retained dual-read pair loads to equal IR", async () => {
+    const legacyPath = path.join(fixtures, "stages", "name-suggestion.yaml");
+    const targetPath = path.join(
+      fixtures,
+      "dual-read",
+      "target",
+      "name-suggestion.yaml",
+    );
+    const legacyYaml = await readFile(legacyPath, "utf8");
+    const targetYaml = await readFile(targetPath, "utf8");
+    expect(legacyYaml).toMatch(/^payload_schema:/m);
+    expect(legacyYaml).not.toMatch(/^io:/m);
+    expect(targetYaml).toMatch(/^io:/m);
+    expect(targetYaml).not.toMatch(/^payload_schema:/m);
+
+    const legacy = await loadStage(legacyPath);
+    const target = await loadStage(targetPath);
+    expect({
+      payload_schema: target.payload_schema,
+      clone_input_schema: target.clone_input_schema,
+      pre_emit_checks: target.pre_emit_checks,
+      gate_kinds: target.gate_kinds,
+      clone_actions: target.clone_actions,
+      timeout_ms: target.timeout_ms,
+      skill: target.skill,
+      mcp: target.mcp,
+      system_prompt: target.system_prompt,
+      model: target.model,
+    }).toEqual({
+      payload_schema: legacy.payload_schema,
+      clone_input_schema: legacy.clone_input_schema,
+      pre_emit_checks: legacy.pre_emit_checks,
+      gate_kinds: legacy.gate_kinds,
+      clone_actions: legacy.clone_actions,
+      timeout_ms: legacy.timeout_ms,
+      skill: legacy.skill,
+      mcp: legacy.mcp,
+      system_prompt: legacy.system_prompt,
+      model: legacy.model,
     });
   });
 

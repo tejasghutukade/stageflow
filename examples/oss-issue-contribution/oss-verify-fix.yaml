@@ -1,6 +1,4 @@
 id: oss-verify-fix
-gate_kinds: []
-timeout_ms: 1800000
 system_prompt: |
   Independently re-verify the proposed upstream fix already present in the task
   checkout working tree, and record the evidence in verification.md. This stage
@@ -63,23 +61,39 @@ system_prompt: |
   own instructions, so never restate this stage's prohibitions or scope limits
   in it.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [result, commands, changed_files, remaining_risks]
-  properties:
-    result:
-      type: string
-      enum: [pass]
-    commands:
-      type: array
-      items:
-        type: string
-    changed_files:
-      type: array
-      minItems: 1
-      items:
-        type: string
-    remaining_risks:
-      type: array
-      items:
-        type: string
+timeout_ms: 1800000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - result
+        - commands
+        - changed_files
+        - remaining_risks
+      properties:
+        result:
+          type: string
+          enum:
+            - pass
+        commands:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
+verify:
+  - id: verification
+    type: artifact
+    path: verification.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

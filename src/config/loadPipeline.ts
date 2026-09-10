@@ -96,6 +96,7 @@ function checkSequentialIoCompatibility(
     if (!node) continue;
     const parents = predecessorEdges(node);
     if (parents.length !== 1) continue;
+    if (node.clonable) continue;
     const parentNode = nodeById.get(parents[0].id);
     if (parentNode?.clonable) continue;
     const parent = stageById.get(parents[0].id);
