@@ -123,8 +123,7 @@ describe("parseCreatePipelineBody", () => {
     ).toEqual({
       ok: false,
       status: 400,
-      error:
-        "stages[0].needs must be a non-empty string or an array of at least two items",
+      error: "stages[0].needs must be a non-empty string or a non-empty array",
     });
 
     expect(
@@ -134,9 +133,15 @@ describe("parseCreatePipelineBody", () => {
         stages: [{ id: "a", uses: "./a.yaml", needs: ["b"] }],
       }),
     ).toMatchObject({
-      ok: false,
-      status: 400,
-      error: expect.stringMatching(/needs array must contain at least two items/),
+      directory: "pipelines",
+      id: "one-parent-array",
+      stages: [
+        {
+          id: "a",
+          uses: "./a.yaml",
+          needs: [{ id: "b", on: ["succeeded"] }],
+        },
+      ],
     });
   });
 

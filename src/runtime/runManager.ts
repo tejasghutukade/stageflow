@@ -600,6 +600,8 @@ export class RunManager {
         ciPrUrl: input.ciPrUrl,
         ciJobUrl: input.ciJobUrl,
       },
+      undefined,
+      resolved.kind === "path" ? resolved.taskPath : undefined,
     );
   }
 
@@ -1446,6 +1448,7 @@ export class RunManager {
       ciJobUrl?: string;
     },
     projectRoot?: string,
+    taskPath?: string,
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -1475,6 +1478,7 @@ export class RunManager {
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
+        taskPath,
         pipeline,
         cwd,
         projectRoot: projectRoot ?? this.projectRoot,

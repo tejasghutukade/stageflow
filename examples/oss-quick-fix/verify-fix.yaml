@@ -1,6 +1,4 @@
 id: verify-fix
-gate_kinds: []
-timeout_ms: 7200000
 system_prompt: |
   Independently verify the fix is correct, complete, and clean before it
   ships — you are the only check this pipeline has; there is no human review
@@ -30,16 +28,29 @@ system_prompt: |
   5. Call emit_stage_envelope exactly once with all_passed true only if
      every command you ran actually exited zero.
 model: openrouter/minimax/minimax-m3:free
-payload_schema:
-  type: object
-  required: [commands_run, all_passed]
-  properties:
-    commands_run:
-      type: array
-      items:
-        type: string
-    all_passed:
-      type: boolean
-    notes:
-      type: string
-  additionalProperties: false
+timeout_ms: 7200000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - commands_run
+        - all_passed
+      properties:
+        commands_run:
+          type: array
+          items:
+            type: string
+        all_passed:
+          type: boolean
+        notes:
+          type: string
+      additionalProperties: false
+verify:
+  - id: verification
+    type: artifact
+    path: verification.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

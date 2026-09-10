@@ -544,6 +544,7 @@ checkout: 42
   });
 });
 
+
 describe("checkout path helpers", () => {
   it("resolves relative checkout against provided cwd", () => {
     const cwd = "/factory/root";

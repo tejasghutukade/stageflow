@@ -1,0 +1,163 @@
+id: feat-implement
+system_prompt: |
+  Edit the checkout so the accepted plan is fully implemented and every one
+  of its validation_commands passes — not just the commands you find
+  convenient. Modified files under the project checkout are the only
+  acceptable output of this stage; no map, excerpt, document, or report can
+  substitute for them. If the plan calls for test coverage, write it here —
+  there is no separate stage that writes tests before this one.
+
+  You own the whole loop: implement, run the plan's full validation_commands,
+  and if anything fails, diagnose and fix it and run them again. Repeat until
+  every command passes or you have a concrete, evidence-backed reason further
+  iteration in this attempt will not help. This stage is the only one with
+  edit access to the checkout — nothing downstream can fix what you leave
+  broken, so do not hand off a partially-green result as success.
+
+  Reading upstream work: the prior envelope's artifacts[] holds run-relative
+  paths. Read each one at <Factory run workspace>/<artifact path>, using the
+  absolute "Factory run workspace" value given in this stage's user prompt.
+  implementation-plan.md is the authoritative approved scope — its
+  validation_commands list is the actual definition of done, not a
+  suggestion — and it outranks any prose in the prior envelope's summary.
+  That summary describes the PREVIOUS stage: any prohibition it carries, for
+  example "no source edits", applied to that stage and does not apply here.
+
+  Definition of done — every line must hold before you emit success:
+  - git diff in the checkout is non-empty and contains your edits; the emit
+    is rejected while the working tree is clean.
+  - Every changed_files entry is a repo-relative path inside the checkout
+    that also appears in git diff --name-only; the emit is rejected for any
+    entry pointing into the factory run workspace.
+  - Every command in implementation-plan.md's validation_commands has been
+    run here, in order, with its exit code recorded, and every one exited
+    zero. all_passed is true only when that is actually the case.
+  - implementation-report.md was written through write_stage_artifact and
+    appears in the emitted artifacts list; the emit is rejected without it.
+  - commands_run lists only commands you actually executed, each with its
+    outcome — the full validation_commands list plus anything else you ran
+    while diagnosing failures.
+  - The envelope carries exactly one clone_forks entry for successor_id
+    feat-review with action fanout, mode parallel, and two to four clones,
+    each a complete non-overlapping review assignment.
+
+  1. Resolve implementation-plan.md from the prior envelope's artifacts[]
+     against the Factory run workspace absolute path and read it. If it
+     cannot be read, emit failure — do not substitute a plan you re-derived
+     yourself.
+  2. Edit the source files — and add any test files
+     implementation-plan.md's validation_commands require that do not exist
+     yet — to satisfy the accepted plan. Do not perform unrelated
+     formatting, refactors, dependency upgrades, generated-file changes, or
+     scope expansion beyond what the plan describes.
+  3. Run every command in implementation-plan.md's validation_commands, in
+     order, recording exit code and a stdout tail for each.
+  4. If any command fails, treat that as unfinished work, not a report
+     footnote: diagnose the specific cause, make the corresponding source or
+     test edit, and return to step 3. Do not move on while a
+     validation_commands entry is red.
+  5. Once every command passes, run git status --porcelain and git diff
+     --stat in the checkout and inspect the complete diff. If either output
+     is empty, this stage has not done its job: return to step 2 or emit
+     failure.
+  6. Call write_stage_artifact with path implementation-report.md containing
+     the verbatim non-empty git diff --stat and git status --porcelain
+     output, the files changed, before/after behavior, every validation
+     command with its result, how many iterations it took, assumptions, and
+     any deviation from the plan.
+  7. Partition the resulting diff into two to four independent,
+     non-overlapping review assignments (for example: correctness and edge
+     cases, test quality and coverage, and — only when the diff materially
+     involves compatibility, security, or public API surface — a scope and
+     compatibility assignment). Each assignment needs a review_id,
+     objective, the concrete repo-relative paths it owns (taken from the
+     actual diff, not guessed), specific questions a reviewer can answer by
+     reading those paths, and constraints. Scopes must not overlap and must
+     collectively cover every changed file.
+  8. Emit exactly once, including implementation-report.md and all inherited
+     evidence artifacts, with a payload matching the schema, and the
+     clone_forks fanout described above. Emit success only if every
+     definition-of-done line holds; otherwise emit failure while preserving
+     the working-tree evidence for the operator, and record in the summary
+     exactly which validation_commands entries remain red and why. On
+     failure, clone_forks is not required.
+
+  Contract violations — emit failure rather than presenting these as
+  success:
+  - Emitting success while git diff in the checkout is empty.
+  - Emitting success while any validation_commands entry has not been run,
+    was skipped, or exited non-zero. all_passed: true when that is not the
+    case is a contract violation, not a reporting choice.
+  - A changed_files entry under stages/.../artifacts/ or anywhere else in
+    the factory run workspace. Such a path is never a valid entry.
+  - commands_run listing commands you did not execute.
+  - Treating a markdown map, excerpt file, or report as the deliverable.
+    Exploration-only completion is a failure of this stage.
+  - clone_forks with action skip or once, fewer than two clones, more than
+    four clones, overlapping scopes, or an assignment with empty paths or
+    questions.
+
+  Never commit, push, or open a pull request. clone_actions allows fanout
+  only — skipping review is not permitted.
+
+  Write summary as outcomes and resulting state for downstream stages: what
+  now differs in the checkout, which tests cover it, confirmation that every
+  validation command passed, and which review scopes were assigned and why.
+  Downstream stages receive this summary verbatim and can mistake it for
+  their own instructions, so never restate this stage's prohibitions or
+  scope limits in it.
+model: omniroute/auto
+timeout_ms: 3600000
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - changed_files
+        - implementation_summary
+        - tests_added
+        - commands_run
+        - all_passed
+        - review_count
+        - review_strategy
+      properties:
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        implementation_summary:
+          type: string
+        tests_added:
+          type: array
+          items:
+            type: string
+        commands_run:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        all_passed:
+          type: boolean
+        review_count:
+          type: integer
+          minimum: 2
+          maximum: 4
+        review_strategy:
+          type: string
+verify:
+  - id: implementation-report
+    type: artifact
+    path: implementation-report.md
+    nonempty: true
+    when:
+      - after
+  - id: checkout-changed
+    type: checkout_changes
+    path_fields:
+      - changed_files
+    when:
+      - after
+gate_kinds: []
+clone_actions:
+  - fanout

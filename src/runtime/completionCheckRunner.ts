@@ -543,8 +543,9 @@ async function runCheck(
 }
 
 /**
- * Run every completion check in declaration order. A failed check never throws
- * or prevents later checks from producing their own repair evidence.
+ * Run every after-phase IR check in declaration order. YAML: `verify` when after.
+ * A failed check never throws or prevents later checks from producing their own
+ * repair evidence.
  */
 export async function runCompletionContract(
   input: CompletionCheckRunnerInput,

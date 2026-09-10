@@ -17,13 +17,25 @@ system_prompt: |
 
   Your last tool call in this attempt must be emit_stage_envelope.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [library_id, query, excerpt]
-  properties:
-    library_id:
-      type: string
-    query:
-      type: string
-    excerpt:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - library_id
+        - query
+        - excerpt
+      properties:
+        library_id:
+          type: string
+        query:
+          type: string
+        excerpt:
+          type: string
+verify:
+  - id: docs
+    type: artifact
+    path: docs.md
+    nonempty: true
+    when:
+      - after

@@ -1,7 +1,8 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import {
   appendOperatorAnswer,
   appendOperatorPrompt,
@@ -678,5 +679,103 @@ describe("emit_stage_envelope pre_emit_checks: mixed gate + artifact_declared", 
     expect(result.isError).toBeUndefined();
     expect(result.terminate).toBe(true);
     expect(capture).toHaveProperty("envelope");
+  });
+});
+
+describe("emit_stage_envelope verify when: [emit]", () => {
+  it("gate failure is isError and does not terminate", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-verify-emit-"));
+    await writeFile(
+      path.join(root, "demo.pipeline.yaml"),
+      [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    gate_kinds: [confirm]",
+        "    verify:",
+        "      - id: approved",
+        "        type: gate",
+        "        kind: confirm",
+        "        when: [emit]",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+
+    const capture = {};
+    const tool = createEmitStageEnvelopeTool(
+      capture,
+      undefined,
+      undefined,
+      undefined,
+      {
+        checks: loaded.value.stages[0]?.pre_emit_checks,
+        readQaTrail: () => [],
+      },
+    );
+    const result = await emitSuccess(tool);
+    expect(result.isError).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(capture).not.toHaveProperty("envelope");
+  });
+
+  it("lists envelope basename for type: artifact when emit without requiring the file on disk", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-verify-emit-artifact-"));
+    await writeFile(
+      path.join(root, "demo.pipeline.yaml"),
+      [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    verify:",
+        "      - id: report",
+        "        type: artifact",
+        "        basename: report.md",
+        "        when: [emit, after]",
+        "",
+      ].join("\n"),
+    );
+    const loaded = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+
+    const missing = {};
+    const missingTool = createEmitStageEnvelopeTool(
+      missing,
+      undefined,
+      undefined,
+      undefined,
+      { checks: loaded.value.stages[0]?.pre_emit_checks },
+    );
+    const missingResult = await missingTool.execute("emit-1", {
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+    expect(missingResult.isError).toBe(true);
+    expect(missingResult.terminate).toBeUndefined();
+
+    const listed = {};
+    const listedTool = createEmitStageEnvelopeTool(
+      listed,
+      undefined,
+      undefined,
+      undefined,
+      { checks: loaded.value.stages[0]?.pre_emit_checks },
+    );
+    const listedResult = await listedTool.execute("emit-1", {
+      status: "success",
+      summary: "ok",
+      artifacts: ["stages/plan/attempts/1/artifacts/report.md"],
+    });
+    expect(listedResult.isError).toBeUndefined();
+    expect(listedResult.terminate).toBe(true);
+    expect(listed).toHaveProperty("envelope");
   });
 });

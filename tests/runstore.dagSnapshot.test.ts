@@ -33,6 +33,43 @@ describe("pipeline DAG snapshot persistence", () => {
     ]);
   });
 
+  it("hydrates frozen snapshot completion and recovery keys from stored JSON", () => {
+    const parsed = parsePipelineDagSnapshot({
+      stage_ids: ["implement"],
+      nodes: [
+        {
+          id: "implement",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          completion: {
+            mode: "all",
+            checks: [{ id: "snap-after", type: "checklist", items: ["Tests pass"] }],
+          },
+          recovery: {
+            mode: "manual",
+            retry_safety: "idempotent",
+            include_failed_checks: true,
+          },
+        },
+      ],
+      roots: ["implement"],
+      childrenOf: {},
+    });
+    expect(parsed?.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "snap-after", type: "checklist", items: ["Tests pass"] }],
+    });
+    expect(parsed?.nodes[0]?.recovery).toEqual({
+      mode: "manual",
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    });
+    expect(JSON.stringify(parsed)).toContain('"completion"');
+    expect(JSON.stringify(parsed)).toContain('"recovery"');
+    expect(JSON.stringify(parsed)).not.toContain("on_verify_fail");
+  });
+
   it("persists diamond needsEdges from a loaded pipeline", async () => {
     const loaded = await loadPipeline(
       path.join(fixtures, "pipelines/diamond-fan-in.pipeline.yaml"),

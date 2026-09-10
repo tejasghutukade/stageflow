@@ -1,25 +1,4 @@
 id: oss-review-change
-gate_kinds: []
-clone_input_schema:
-  type: object
-  required: [review_id, objective, paths, questions, constraints]
-  properties:
-    review_id:
-      type: string
-    objective:
-      type: string
-    paths:
-      type: array
-      items:
-        type: string
-    questions:
-      type: array
-      items:
-        type: string
-    constraints:
-      type: array
-      items:
-        type: string
 system_prompt: |
   Answer your assigned review questions against the actual code and record a
   verdict with file:line evidence. This stage is strictly read-only: do not edit
@@ -80,28 +59,72 @@ system_prompt: |
   summary. Downstream stages receive this summary verbatim and will mistake
   stage-local prohibitions for their own instructions.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [review_id, verdict, findings, blocking_findings, suggestions, evidence]
-  properties:
-    review_id:
-      type: string
-    verdict:
-      type: string
-      enum: [pass, changes_required]
-    findings:
-      type: array
-      items:
-        type: string
-    blocking_findings:
-      type: array
-      items:
-        type: string
-    suggestions:
-      type: array
-      items:
-        type: string
-    evidence:
-      type: array
-      items:
-        type: string
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - review_id
+        - objective
+        - paths
+        - questions
+        - constraints
+      properties:
+        review_id:
+          type: string
+        objective:
+          type: string
+        paths:
+          type: array
+          items:
+            type: string
+        questions:
+          type: array
+          items:
+            type: string
+        constraints:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - review_id
+        - verdict
+        - findings
+        - blocking_findings
+        - suggestions
+        - evidence
+      properties:
+        review_id:
+          type: string
+        verdict:
+          type: string
+          enum:
+            - pass
+            - changes_required
+        findings:
+          type: array
+          items:
+            type: string
+        blocking_findings:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        evidence:
+          type: array
+          items:
+            type: string
+verify:
+  - id: review
+    type: artifact
+    path: review.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

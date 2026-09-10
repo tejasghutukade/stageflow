@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-10
+
+### Added
+
+- Target catalog dialect: `io`, `verify`, and `on_verify_fail` on pipelines and stages
+- Dual-read of legacy `payload_schema`, `pre_emit_checks`, `completion`, and `recovery` onto the same IR
+- `sf migrate-yaml` to rewrite a catalog onto the target spelling
+- Optional task `input` checked against entry `io.input`
+- Pipeline-root `schemas:` for `$ref`, with sequential `io` subset checks at load
+- `sf run --json` optional `findings` (including `pipeline.model_applies` and `task.entry_input_unmet`)
+
+### Changed
+
+- Public docs and author skills teach `io` / `verify` / `on_verify_fail`; first-party examples convert to the target dialect
+
 ## [0.14.0] - 2026-09-09
 
 ### Added
@@ -203,7 +218,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...v0.13.0
 [0.12.1]: https://github.com/tejasghutukade/stageflow/compare/v0.12.0...v0.12.1

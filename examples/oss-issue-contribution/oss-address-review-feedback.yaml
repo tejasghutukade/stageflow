@@ -1,5 +1,4 @@
 id: oss-address-review-feedback
-gate_kinds: []
 system_prompt: |
   Address every blocking finding from oss-review-change before the
   contribution package is assembled. There is no automatic path back to
@@ -81,21 +80,35 @@ system_prompt: |
   for their own instructions, so never restate this stage's prohibitions or
   scope limits in it.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [addressed_all_blocking, fixed_files, verification_commands, remaining_risks]
-  properties:
-    addressed_all_blocking:
-      type: boolean
-    fixed_files:
-      type: array
-      items:
-        type: string
-    verification_commands:
-      type: array
-      items:
-        type: string
-    remaining_risks:
-      type: array
-      items:
-        type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - addressed_all_blocking
+        - fixed_files
+        - verification_commands
+        - remaining_risks
+      properties:
+        addressed_all_blocking:
+          type: boolean
+        fixed_files:
+          type: array
+          items:
+            type: string
+        verification_commands:
+          type: array
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
+verify:
+  - id: review-feedback-report
+    type: artifact
+    path: review-feedback-report.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []

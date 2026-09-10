@@ -36,6 +36,14 @@ export function validateCompletionContractForStage(
   stage: StageConfig,
   completion: CompletionContract | undefined,
 ): LoadOutcome<void> {
+  for (const check of stage.pre_emit_checks ?? []) {
+    if (check.type === "gate" && !stage.gate_kinds?.includes(check.kind)) {
+      return failure(
+        stage.id,
+        `gate check "${check.id}" requires gate_kinds to include "${check.kind}"`,
+      );
+    }
+  }
   if (!completion) return loadSuccess(undefined);
   for (const check of completion.checks) {
     if (check.type === "payload_schema" && stage.payload_schema === undefined) {

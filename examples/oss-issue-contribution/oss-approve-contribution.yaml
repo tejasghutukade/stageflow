@@ -1,10 +1,4 @@
 id: oss-approve-contribution
-gate_kinds:
-  - artifact_backed
-pre_emit_checks:
-  - id: contribution-approved
-    type: gate
-    kind: artifact_backed
 system_prompt: |
   Produce one operator-approved contribution-package.md that states the
   verified facts of the change, then — once the operator accepts it — publish
@@ -104,30 +98,61 @@ system_prompt: |
   tests passed, the publish target, and the PR URL if opened. Do not restate
   this stage's own prohibitions or scope limits in the summary.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [pr_title, pr_body_summary, tests, changed_files, publish_repo, commands_run, opened, pr_url]
-  properties:
-    pr_title:
-      type: string
-    pr_body_summary:
-      type: string
-    tests:
-      type: array
-      items:
-        type: string
-    changed_files:
-      type: array
-      items:
-        type: string
-    publish_repo:
-      type: string
-    commands_run:
-      type: array
-      minItems: 1
-      items:
-        type: string
-    opened:
-      type: boolean
-    pr_url:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - pr_title
+        - pr_body_summary
+        - tests
+        - changed_files
+        - publish_repo
+        - commands_run
+        - opened
+        - pr_url
+      properties:
+        pr_title:
+          type: string
+        pr_body_summary:
+          type: string
+        tests:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+        publish_repo:
+          type: string
+        commands_run:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        opened:
+          type: boolean
+        pr_url:
+          type: string
+verify:
+  - id: contribution-approved
+    type: gate
+    kind: artifact_backed
+    when:
+      - emit
+      - after
+  - id: contribution-package
+    type: artifact
+    path: contribution-package.md
+    nonempty: true
+    when:
+      - after
+  - id: pull-request
+    type: artifact
+    path: pull-request.md
+    nonempty: true
+    when:
+      - after
+gate_kinds:
+  - artifact_backed

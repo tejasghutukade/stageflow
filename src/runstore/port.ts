@@ -15,6 +15,7 @@ export type RunStatus = "created" | "running" | "succeeded" | "failed";
 export type RunPipelineDagSnapshot = ResolvedPipelineDag & {
   stage_ids: string[];
   gate_kinds?: Record<string, StageGateKind[]>;
+  /** IR: per-stage clone assignment schema. YAML: `io.input.schema`. */
   clone_input_schema?: Record<string, unknown>;
 };
 

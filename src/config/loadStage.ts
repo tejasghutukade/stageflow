@@ -1,16 +1,38 @@
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
 import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
+import type { CompletionContract } from "../types/completion.js";
 import {
   STAGE_GATE_KINDS,
   type StageConfig,
   type StageGateKind,
 } from "../types/stage.js";
-import { compilePayloadSchema } from "../envelope/payloadSchema.js";
+import { compilePayloadSchema, UnresolvedSchemaRefError } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseModelField } from "./modelField.js";
+import {
+  allowLegacyYamlAuthoring,
+  dialectWarningForDocument,
+  legacyAuthoringRejected,
+  presentLegacyKeys,
+} from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import {
+  applyCompiledBody,
+  classifyYamlDocument,
+  compileTargetContract,
+  dialectFromKeys,
+  mixedDialectIssue,
+  STAGE_FILE_WIRING_KEYS,
+} from "./yamlDialect.js";
+
+const afterCompletionByStage = new WeakMap<StageConfig, CompletionContract>();
+
+/** After-phase IR from target `verify` (`when` includes after). Stamped onto DAG `completion`. */
+export function afterCompletionForStage(stage: StageConfig): CompletionContract | undefined {
+  return afterCompletionByStage.get(stage);
+}
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
@@ -181,7 +203,10 @@ function parseStageFields(
   raw: Record<string, unknown>,
   label: string,
   entryId: string,
+  deferSchemaRefs: boolean,
 ): LoadOutcome<StageConfig> {
+  // Reads IR field names. Target YAML must already be compiled via
+  // applyCompiledBody; legacy YAML uses these keys as authoring.
   if (typeof raw.system_prompt !== "string") {
     return loadFailure([
       {
@@ -231,15 +256,28 @@ function parseStageFields(
     try {
       compilePayloadSchema(raw.payload_schema);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return loadFailure([
-        {
-          code: "stage.invalid_payload_schema",
-          message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
+      if (err instanceof UnresolvedSchemaRefError) {
+        if (!deferSchemaRefs) {
+          return loadFailure([
+            {
+              code: "stage.unresolved_schema_ref",
+              message: `Invalid stage ${label}: ${err.message}`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+        }
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        return loadFailure([
+          {
+            code: "stage.invalid_payload_schema",
+            message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
     }
     stage.payload_schema = raw.payload_schema;
   }
@@ -262,15 +300,28 @@ function parseStageFields(
     try {
       compilePayloadSchema(raw.clone_input_schema);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return loadFailure([
-        {
-          code: "stage.invalid_clone_input_schema",
-          message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
+      if (err instanceof UnresolvedSchemaRefError) {
+        if (!deferSchemaRefs) {
+          return loadFailure([
+            {
+              code: "stage.unresolved_schema_ref",
+              message: `Invalid stage ${label}: ${err.message}`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+        }
+      } else {
+        const message = err instanceof Error ? err.message : String(err);
+        return loadFailure([
+          {
+            code: "stage.invalid_clone_input_schema",
+            message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
     }
     stage.clone_input_schema = raw.clone_input_schema;
   }
@@ -361,15 +412,48 @@ function parseStageFields(
   return loadSuccess(stage);
 }
 
+export type LoadStageOptions = {
+  deferSchemaRefs?: boolean;
+};
+
 export function loadStageFromObjectOutcome(
   raw: Record<string, unknown>,
-  ctx: { entryId: string; declaringPath: string },
+  ctx: { entryId: string; declaringPath: string; deferSchemaRefs?: boolean },
 ): LoadOutcome<StageConfig> {
   const label = `${ctx.entryId} (${ctx.declaringPath})`;
-  return parseStageFields(raw, label, ctx.entryId);
+  const deferSchemaRefs = ctx.deferSchemaRefs === true;
+  const dialect = dialectFromKeys(Object.keys(raw));
+  if (dialect === "invalid") {
+    return loadFailure([mixedDialectIssue()]);
+  }
+  const rejected = legacyAuthoringRejected(
+    dialect,
+    label,
+    presentLegacyKeys(Object.keys(raw)),
+  );
+  if (rejected) return loadFailure([rejected]);
+  if (dialect === "target") {
+    const compiled = compileTargetContract(raw, {
+      stageId: ctx.entryId,
+      label,
+      category: "stage",
+      deferSchemaRefs,
+    });
+    if (!compiled.ok) return compiled;
+    return parseStageFields(
+      applyCompiledBody(raw, compiled.value),
+      label,
+      ctx.entryId,
+      deferSchemaRefs,
+    );
+  }
+  return parseStageFields(raw, label, ctx.entryId, deferSchemaRefs);
 }
 
-export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<StageConfig>> {
+export async function loadStageOutcome(
+  filePath: string,
+  options: LoadStageOptions = {},
+): Promise<LoadOutcome<StageConfig>> {
   let raw: Record<string, unknown>;
   try {
     raw = await readYamlObject(filePath);
@@ -394,7 +478,46 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
     ]);
   }
 
-  const outcome = parseStageFields(raw, `file ${filePath}`, raw.id);
+  const dialect = classifyYamlDocument(raw);
+  if (dialect === "invalid") {
+    return loadFailure([mixedDialectIssue()]);
+  }
+  const rejected = legacyAuthoringRejected(
+    dialect,
+    filePath,
+    presentLegacyKeys(Object.keys(raw)),
+  );
+  if (rejected) return loadFailure([rejected]);
+  if (dialect === "target") {
+    const wiring = STAGE_FILE_WIRING_KEYS.find((key) => raw[key] !== undefined);
+    if (wiring) {
+      return loadFailure([
+        {
+          code: "stage.invalid_shape",
+          message: `Invalid stage file ${filePath}: new-dialect stage files must not declare wiring key "${wiring}"`,
+          category: "stage",
+          stageId: raw.id,
+        },
+      ]);
+    }
+  }
+
+  let parseRaw = raw;
+  let afterCompletion: CompletionContract | undefined;
+  const deferSchemaRefs = options.deferSchemaRefs === true;
+  if (dialect === "target") {
+    const compiled = compileTargetContract(raw, {
+      stageId: raw.id,
+      label: `file ${filePath}`,
+      category: "stage",
+      deferSchemaRefs,
+    });
+    if (!compiled.ok) return compiled;
+    parseRaw = applyCompiledBody(raw, compiled.value);
+    afterCompletion = compiled.value.completion;
+  }
+
+  const outcome = parseStageFields(parseRaw, `file ${filePath}`, raw.id, deferSchemaRefs);
   if (!outcome.ok) return outcome;
   if (outcome.value.id !== raw.id) {
     return loadFailure([
@@ -406,7 +529,12 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
       },
     ]);
   }
-  return outcome;
+
+  if (afterCompletion) afterCompletionByStage.set(outcome.value, afterCompletion);
+  const warning = allowLegacyYamlAuthoring()
+    ? dialectWarningForDocument(raw, filePath)
+    : undefined;
+  return loadSuccess(outcome.value, warning ? [warning] : undefined);
 }
 
 export async function loadStage(filePath: string): Promise<StageConfig> {

@@ -274,7 +274,7 @@ describe("assertCloneForks", () => {
         },
         ctx,
       ),
-    ).toThrow(/clone_input_schema|objective|paths/);
+    ).toThrow(/io\.input\.schema|objective|paths/);
   });
 
   it("AE4: assignment without child output fields is accepted", () => {

@@ -12,4 +12,22 @@ system_prompt: |
      again with artifact_backed in this same stage. Do not complete yet.
   4. Call emit_stage_envelope with an advancing success status only after the
      operator accepts. Never emit before accept.
-model: anthropic/claude-sonnet-4-5
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - verdict
+      properties:
+        verdict:
+          type: string
+verify:
+  - id: review-accepted
+    type: gate
+    kind: artifact_backed
+  - id: review-artifact
+    type: artifact
+    path: review.md
+    nonempty: true
+    when:
+      - after

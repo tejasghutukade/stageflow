@@ -10,16 +10,29 @@ export const STAGE_GATE_KINDS = [
 
 export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 
+/** Target YAML `io:` block. Compiles onto StageConfig.payload_schema / clone_input_schema. */
+export type StageIoYaml = {
+  input?: { schema?: unknown };
+  output?: { schema?: unknown };
+};
+
+/**
+ * Loaded stage IR. Field names are the runtime contract (emit, VSE, snapshots),
+ * not the catalog YAML spelling. Target YAML `io` / `verify` compile onto these
+ * in `src/config/yamlDialect.ts`. Do not add new catalog keys here — add them on
+ * the YAML dialect and map them in compileTargetContract.
+ */
 export type StageConfig = {
   id: string;
   system_prompt: string;
   model?: string;
-  /** Optional JSON Schema (subset) for envelope.payload on success. */
+  /** IR: success envelope.payload schema. YAML: `io.output.schema`. */
   payload_schema?: unknown;
   /** Declared ask_operator kinds this stage is expected to stop on. */
   gate_kinds?: StageGateKind[];
-  /** In-session checks emit must satisfy this attempt before success is accepted. */
+  /** IR: emit-phase checks. YAML: `verify` items whose `when` includes `emit`. */
   pre_emit_checks?: PreEmitCheck[];
+  /** IR: clone/fan-out assignment schema. YAML: `io.input.schema`. */
   clone_input_schema?: unknown;
   clone_actions?: CloneAction[];
   /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */

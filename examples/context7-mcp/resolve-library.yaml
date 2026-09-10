@@ -14,11 +14,15 @@ system_prompt: |
   Your last tool call in this attempt must be emit_stage_envelope.
   The next stage starts a fresh MCP session — pass the id in the envelope.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [library_id, library_name]
-  properties:
-    library_id:
-      type: string
-    library_name:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - library_id
+        - library_name
+      properties:
+        library_id:
+          type: string
+        library_name:
+          type: string

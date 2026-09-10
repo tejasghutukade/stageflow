@@ -4,4 +4,5 @@ export type TaskFile = {
   context?: string;
   constraints?: string;
   checkout?: string;
+  input?: Record<string, unknown>;
 };

@@ -1,8 +1,20 @@
+/**
+ * Normalize a pipeline `stages:` entry. Target YAML (`io` / `verify` /
+ * `on_verify_fail`) compiles onto IR `completion` / `recovery` / body
+ * `payload_schema`. Legacy YAML keys are dual-read via legacyYaml.ts.
+ */
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
+import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
+import {
+  applyCompiledBody,
+  compileTargetContract,
+  dialectFromKeys,
+  mixedDialectIssue,
+} from "./yamlDialect.js";
 import {
   BODY_KEYS,
   isAllowedPipelineStageEntryKey,
@@ -115,6 +127,11 @@ export function normalizePipelineStageEntries(
       }
     }
 
+    const dialect = dialectFromKeys(Object.keys(raw));
+    if (dialect === "invalid") {
+      return loadFailure([mixedDialectIssue()]);
+    }
+
     const uses = typeof raw.uses === "string" ? raw.uses : undefined;
     const hasBody = hasBodyKey(raw);
     const skillOutcome = readSkill(raw);
@@ -169,7 +186,36 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
-    const policyOutcome = parseExecutionPolicy(raw, id);
+    let compiledBody: Record<string, unknown> | undefined;
+    let policyOutcome: ReturnType<typeof parseExecutionPolicy>;
+    if (dialect === "target") {
+      const compiled = compileTargetContract(raw, {
+        stageId: id,
+        label: `entry at index ${index} in ${declaringPath}`,
+        category: "pipeline",
+        deferSchemaRefs: true,
+      });
+      if (!compiled.ok) return compiled;
+      policyOutcome = loadSuccess({
+        ...(compiled.value.completion !== undefined
+          ? { completion: compiled.value.completion }
+          : {}),
+        ...(compiled.value.recovery !== undefined
+          ? { recovery: compiled.value.recovery }
+          : {}),
+      });
+      if (!uses) {
+        compiledBody = applyCompiledBody(extractBodyRaw(raw), compiled.value);
+      }
+    } else {
+      const rejected = legacyAuthoringRejected(
+        dialect,
+        `stage "${id}" in ${declaringPath}`,
+        presentLegacyKeys(Object.keys(raw)),
+      );
+      if (rejected) return loadFailure([rejected]);
+      policyOutcome = parseExecutionPolicy(raw, id);
+    }
     if (!policyOutcome.ok) return policyOutcome;
 
     let needs: PipelineNeeds | undefined;
@@ -236,7 +282,7 @@ export function normalizePipelineStageEntries(
       const absolutePath = path.resolve(path.dirname(declaringPath), uses);
       body = { kind: "uses", path: uses, absolutePath };
     } else {
-      body = { kind: "inline", raw: extractBodyRaw(raw) };
+      body = { kind: "inline", raw: compiledBody ?? extractBodyRaw(raw) };
     }
 
     const entry: NormalizedPipelineStageEntry = {

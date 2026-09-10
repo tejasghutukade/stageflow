@@ -180,6 +180,95 @@ describe("pipeline completion contracts", () => {
     );
   });
 
+  it("loads a body verify list onto the same DAG completion as the equivalent wrapper", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-completion-verify-"));
+    await writeFile(
+      path.join(dir, "implement.yaml"),
+      [
+        "id: implement",
+        "system_prompt: Implement the requested change.",
+        "model: test/model",
+        "verify:",
+        "  - id: unit-tests",
+        "    type: command",
+        "    run: npm test",
+        "    timeout_ms: 600000",
+        "    when: [after]",
+        "",
+      ].join("\n"),
+    );
+    const pipelinePath = path.join(dir, "verified.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: verified",
+        "stages:",
+        "  - id: implement",
+        "    uses: ./implement.yaml",
+        "",
+      ].join("\n"),
+    );
+
+    const loaded = await loadPipeline(pipelinePath);
+    expect(loaded.dag.nodes[0]?.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "unit-tests", type: "command", run: "npm test", timeout_ms: 600000 }],
+    });
+    expect(buildPipelineDagSnapshotFromLoaded(loaded).nodes[0]).toMatchObject({
+      completion: loaded.dag.nodes[0]?.completion,
+    });
+  });
+
+  it("maps on_verify_fail onto DAG recovery and freezes it under recovery on the snapshot", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-on-verify-fail-"));
+    await writeFile(
+      path.join(dir, "implement.yaml"),
+      [
+        "id: implement",
+        "system_prompt: Implement the requested change.",
+        "model: test/model",
+        "verify:",
+        "  - id: unit-tests",
+        "    type: command",
+        "    run: npm test",
+        "    when: [after]",
+        "",
+      ].join("\n"),
+    );
+    const pipelinePath = path.join(dir, "verified.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: verified",
+        "stages:",
+        "  - id: implement",
+        "    uses: ./implement.yaml",
+        "    on_verify_fail:",
+        "      mode: repair",
+        "      max_attempts: 3",
+        "      retry_safety: idempotent",
+        "      include_failed_checks: true",
+        "",
+      ].join("\n"),
+    );
+
+    const loaded = await loadPipeline(pipelinePath);
+    expect(loaded.dag.nodes[0]?.recovery).toEqual({
+      mode: "repair",
+      max_attempts: 3,
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    });
+    const snapshot = buildPipelineDagSnapshotFromLoaded(loaded);
+    expect(snapshot.nodes[0]).toMatchObject({
+      completion: loaded.dag.nodes[0]?.completion,
+      recovery: loaded.dag.nodes[0]?.recovery,
+    });
+    expect(JSON.stringify(snapshot)).toContain('"completion"');
+    expect(JSON.stringify(snapshot)).toContain('"recovery"');
+    expect(JSON.stringify(snapshot)).not.toContain("on_verify_fail");
+  });
+
   it("rejects checkout path fields that are not required string arrays", async () => {
     const pipelinePath = await writePipeline([
       "id: incompatible-checkout",

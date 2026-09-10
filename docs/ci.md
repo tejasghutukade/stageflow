@@ -27,7 +27,7 @@ sf validate --strict --json
 | `0` | No errors |
 | `1` | Validation errors (warnings alone pass unless `--strict` promotes manifest warnings) |
 
-With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors.
+With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors. `--strict` does not promote `catalog.legacy_yaml`. That warning names replacement fields (for example `payload_schema` → `io.output.schema`). Convert catalogs with `sf migrate-yaml` (dry-run default; `--write` to apply). Finding codes are additive.
 
 Does not prove provider auth or checkout paths.
 
@@ -66,6 +66,26 @@ One document per invocation with `--json`:
   "outcome": "succeeded",
   "runId": "…",
   "runDir": ".stageflow/runs/…"
+}
+```
+
+When start-run pairing produces warnings, the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). `task.entry_input_unmet` is a warning and does not fail the run (`ok` / `outcome` / exit stay as today):
+
+```json
+{
+  "ok": true,
+  "outcome": "succeeded",
+  "runId": "…",
+  "runDir": ".stageflow/runs/…",
+  "findings": [
+    {
+      "severity": "warning",
+      "code": "task.entry_input_unmet",
+      "file": "tasks/sample.task.yaml",
+      "message": "Task has no input; entry stage \"intake\" requires io.input",
+      "category": "task"
+    }
+  ]
 }
 ```
 

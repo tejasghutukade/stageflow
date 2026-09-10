@@ -87,29 +87,39 @@ function formatStartFailureJson(
 function baseRunCompletionPayload(
   result: PipelineRunResult,
 ): Record<string, unknown> {
-  if (result.outcome === "succeeded") {
-    return {
-      ok: true,
-      outcome: "succeeded",
-      runId: result.runId,
-      runDir: result.runDir,
-    };
+  const payload: Record<string, unknown> =
+    result.outcome === "succeeded"
+      ? {
+          ok: true,
+          outcome: "succeeded",
+          runId: result.runId,
+          runDir: result.runDir,
+        }
+      : result.outcome === "waiting"
+        ? {
+            ok: false,
+            outcome: "waiting",
+            runId: result.runId,
+            runDir: result.runDir,
+          }
+        : {
+            ok: false,
+            outcome: "failed",
+            runId: result.runId,
+            runDir: result.runDir,
+          };
+  if (result.outcome === "failed" && result.reason !== undefined) {
+    payload.reason = result.reason;
   }
-  if (result.outcome === "waiting") {
-    return {
-      ok: false,
-      outcome: "waiting",
-      runId: result.runId,
-      runDir: result.runDir,
-    };
+  if (Array.isArray(result.findings) && result.findings.length > 0) {
+    payload.findings = result.findings.map((finding) => ({
+      severity: finding.severity,
+      code: finding.code,
+      file: finding.path,
+      message: finding.message,
+      category: finding.category,
+    }));
   }
-  const payload: Record<string, unknown> = {
-    ok: false,
-    outcome: "failed",
-    runId: result.runId,
-    runDir: result.runDir,
-  };
-  if (result.reason !== undefined) payload.reason = result.reason;
   return payload;
 }
 

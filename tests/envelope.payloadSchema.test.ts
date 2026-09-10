@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import {
   assertCloneAssignmentPayload,
   assertEnvelopePayload,
   compilePayloadSchema,
+  isPayloadSchemaSubset,
 } from "../src/envelope/payloadSchema.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import { EnvelopeError } from "../src/types/envelope.js";
@@ -137,6 +138,48 @@ describe("payload_schema", () => {
     expect(selection.payload_schema).toMatchObject({
       type: "object",
       required: ["boy", "girl"],
+    });
+  });
+
+  it("AE2: retained dual-read pair loads to equal IR", async () => {
+    const legacyPath = path.join(fixtures, "stages", "name-suggestion.yaml");
+    const targetPath = path.join(
+      fixtures,
+      "dual-read",
+      "target",
+      "name-suggestion.yaml",
+    );
+    const legacyYaml = await readFile(legacyPath, "utf8");
+    const targetYaml = await readFile(targetPath, "utf8");
+    expect(legacyYaml).toMatch(/^payload_schema:/m);
+    expect(legacyYaml).not.toMatch(/^io:/m);
+    expect(targetYaml).toMatch(/^io:/m);
+    expect(targetYaml).not.toMatch(/^payload_schema:/m);
+
+    const legacy = await loadStage(legacyPath);
+    const target = await loadStage(targetPath);
+    expect({
+      payload_schema: target.payload_schema,
+      clone_input_schema: target.clone_input_schema,
+      pre_emit_checks: target.pre_emit_checks,
+      gate_kinds: target.gate_kinds,
+      clone_actions: target.clone_actions,
+      timeout_ms: target.timeout_ms,
+      skill: target.skill,
+      mcp: target.mcp,
+      system_prompt: target.system_prompt,
+      model: target.model,
+    }).toEqual({
+      payload_schema: legacy.payload_schema,
+      clone_input_schema: legacy.clone_input_schema,
+      pre_emit_checks: legacy.pre_emit_checks,
+      gate_kinds: legacy.gate_kinds,
+      clone_actions: legacy.clone_actions,
+      timeout_ms: legacy.timeout_ms,
+      skill: legacy.skill,
+      mcp: legacy.mcp,
+      system_prompt: legacy.system_prompt,
+      model: legacy.model,
     });
   });
 
@@ -571,6 +614,461 @@ describe("payload_schema", () => {
     expect(() => assertEnvelopePayload(ok, schema)).not.toThrow();
   });
 
+  const storySliceSchema = {
+    type: "object",
+    required: ["title"],
+    properties: {
+      title: { type: "string" },
+    },
+  };
+
+  it("does not ignore $ref: $ref-only nodes fail without a resolver", () => {
+    expect(() =>
+      compilePayloadSchema({ $ref: "#/schemas/story-slice" }),
+    ).toThrow(/unresolved|\$ref/);
+    expect(() =>
+      compilePayloadSchema({
+        type: "object",
+        properties: {
+          label: { type: "string", $ref: "#/schemas/missing" },
+        },
+      }),
+    ).toThrow(/unresolved|\$ref/);
+  });
+
+  it("compiles $ref-only nodes against a pipeline schemas map", () => {
+    const compiled = compilePayloadSchema(
+      { $ref: "#/schemas/story-slice" },
+      { schemas: { "story-slice": storySliceSchema } },
+    );
+    expect(compiled).toBeDefined();
+    const ok = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: { title: "slice-1" },
+    });
+    expect(() =>
+      assertEnvelopePayload(ok, { $ref: "#/schemas/story-slice" }, {
+        schemas: { "story-slice": storySliceSchema },
+      }),
+    ).not.toThrow();
+    const missing = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: {},
+    });
+    expect(() =>
+      assertEnvelopePayload(missing, { $ref: "#/schemas/story-slice" }, {
+        schemas: { "story-slice": storySliceSchema },
+      }),
+    ).toThrow(EnvelopeError);
+  });
+
+  it("rejects $ref cycles", () => {
+    expect(() =>
+      compilePayloadSchema(
+        { $ref: "#/schemas/a" },
+        {
+          schemas: {
+            a: { $ref: "#/schemas/b" },
+            b: { $ref: "#/schemas/a" },
+          },
+        },
+      ),
+    ).toThrow(/cycle/i);
+  });
+
+  it("treats consumer input as a structural subset of producer output after resolve", () => {
+    const schemas = {
+      produced: {
+        type: "object",
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      consumed: {
+        type: "object",
+        required: ["title", "extra"],
+        properties: {
+          title: { type: "string" },
+          extra: { type: "string" },
+        },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/produced" },
+        { $ref: "#/schemas/produced" },
+        { schemas },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          required: ["title"],
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          required: ["title", "body"],
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/consumed" },
+        { $ref: "#/schemas/produced" },
+        { schemas },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        { $ref: "#/schemas/produced" },
+        { $ref: "#/schemas/consumed" },
+        { schemas },
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects extra producer properties when consumer sets additionalProperties false", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            extra: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts number consumer of integer producer and rejects integer consumer of number producer", () => {
+    const numberField = {
+      type: "object",
+      properties: { n: { type: "number" } },
+    };
+    const integerField = {
+      type: "object",
+      properties: { n: { type: "integer" } },
+    };
+    expect(isPayloadSchemaSubset(numberField, integerField)).toBe(true);
+    expect(isPayloadSchemaSubset(integerField, numberField)).toBe(false);
+  });
+
+  it("requires producer minItems to fit the consumer array bound", () => {
+    const consumer = {
+      type: "object",
+      properties: {
+        tags: { type: "array", items: { type: "string" }, minItems: 2 },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" }, minItems: 2 },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" }, minItems: 1 },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: {
+          tags: { type: "array", items: { type: "string" } },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts the same or fewer producer properties when consumer sets additionalProperties false", () => {
+    const consumer = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string" },
+        note: { type: "string" },
+      },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: false,
+        properties: { title: { type: "string" }, note: { type: "string" } },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: false,
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects an open producer when the consumer sets additionalProperties false", () => {
+    const consumer = {
+      type: "object",
+      additionalProperties: false,
+      properties: { title: { type: "string" } },
+    };
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(consumer, {
+        type: "object",
+        additionalProperties: true,
+        properties: { title: { type: "string" } },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a nullable producer when the consumer is not nullable", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+        {
+          type: "object",
+          properties: { title: { type: "string", nullable: true } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: {
+            tags: { type: "array", items: { type: "string" } },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            tags: { type: "array", nullable: true, items: { type: "string" } },
+          },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: {
+            meta: { type: "object", properties: { title: { type: "string" } } },
+          },
+        },
+        {
+          type: "object",
+          properties: {
+            meta: {
+              type: "object",
+              nullable: true,
+              properties: { title: { type: "string" } },
+            },
+          },
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("allows extra producer fields when consumer omits additionalProperties false", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: {
+            title: { type: "string" },
+            extra: { type: "string" },
+          },
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it("treats producer enum as compatible only when every value is accepted by the consumer", () => {
+    const passFail = {
+      type: "object",
+      properties: { result: { type: "string", enum: ["pass", "fail"] } },
+    };
+    const passOnly = {
+      type: "object",
+      properties: { result: { type: "string", enum: ["pass"] } },
+    };
+    const unconstrained = {
+      type: "object",
+      properties: { result: { type: "string" } },
+    };
+    expect(isPayloadSchemaSubset(passFail, passOnly)).toBe(true);
+    expect(isPayloadSchemaSubset(passOnly, passFail)).toBe(false);
+    expect(isPayloadSchemaSubset(unconstrained, passOnly)).toBe(true);
+    expect(isPayloadSchemaSubset(passOnly, unconstrained)).toBe(false);
+  });
+
+  it("requires identical string patterns when the consumer constrains pattern", () => {
+    const codePattern = "^[a-z]{2,4}$";
+    const patterned = {
+      type: "object",
+      properties: { code: { type: "string", pattern: codePattern } },
+    };
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string", pattern: codePattern } },
+      }),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string", pattern: "^[a-z]+$" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(patterned, {
+        type: "object",
+        properties: { code: { type: "string" } },
+      }),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+        patterned,
+      ),
+    ).toBe(true);
+  });
+
+  it("requires producer min/max and minLength/maxLength to fit inside consumer bounds", () => {
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 2, maximum: 8 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer" } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "integer" } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "integer", minimum: 1, maximum: 10 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { n: { type: "number", minimum: 0, maximum: 5 } },
+        },
+        {
+          type: "object",
+          properties: { n: { type: "number", minimum: -1, maximum: 5 } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 3, maxLength: 6 } },
+        },
+      ),
+    ).toBe(true);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+      ),
+    ).toBe(false);
+    expect(
+      isPayloadSchemaSubset(
+        {
+          type: "object",
+          properties: { code: { type: "string" } },
+        },
+        {
+          type: "object",
+          properties: { code: { type: "string", minLength: 2, maxLength: 8 } },
+        },
+      ),
+    ).toBe(true);
+  });
+
   it("failure envelopes skip enum and minItems checks", () => {
     const schema = {
       type: "object",
@@ -621,6 +1119,6 @@ describe("payload_schema", () => {
         "author-diagrams",
         "clone_forks[0].envelope",
       ),
-    ).toThrow(/clone_forks\[0\]\.envelope/);
+    ).toThrow(/clone_forks\[0\]\.envelope: clone assignment payload is required by io\.input\.schema/);
   });
 });

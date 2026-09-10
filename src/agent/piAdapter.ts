@@ -547,11 +547,11 @@ function buildUserPrompt(
         if (successor.cloneInputSchema === undefined) {
           return header;
         }
-        return `${header}\n  Assignment schema (clone_input_schema):\n${JSON.stringify(successor.cloneInputSchema, null, 2)}`;
+        return `${header}\n  Assignment schema (io.input.schema):\n${JSON.stringify(successor.cloneInputSchema, null, 2)}`;
       },
     );
     emitHint += `\nClonable successors — emit clone_forks covering each of these ids exactly once:\n${successorLines.join("\n")}`;
-    emitHint += `\nEach once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). clone_input_schema fields belong in envelope.payload, not at the top level of the clone_forks item.`;
+    emitHint += `\nEach once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). io.input.schema fields belong in envelope.payload, not at the top level of the clone_forks item.`;
     emitHint += `\nAllowed clone actions: ${allowedActions.join(", ")}`;
   }
 
@@ -594,6 +594,9 @@ function buildUserPrompt(
     `Goal: ${input.task.goal}`,
     input.task.context ? `Context: ${input.task.context}` : "",
     input.task.constraints ? `Constraints: ${input.task.constraints}` : "",
+    input.task.input !== undefined
+      ? `Input: ${JSON.stringify(input.task.input, null, 2)}`
+      : "",
     formatPriorEnvelope(
       input.priorEnvelope,
       input.priorEnvelopes,

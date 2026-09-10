@@ -9,11 +9,14 @@ system_prompt: |
      codeword, for example: codewords: maple, river, pine
   3. Do not invent codewords. Do not call ask_operator. Do not emit clone_forks.
 model: cursor/auto
-payload_schema:
-  type: object
-  required: [codewords]
-  properties:
-    codewords:
-      type: array
-      items:
-        type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - codewords
+      properties:
+        codewords:
+          type: array
+          items:
+            type: string

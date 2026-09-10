@@ -1,4 +1,5 @@
 id: release-gate
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: run-tests
     uses: ./run-tests.yaml
@@ -6,7 +7,10 @@ stages:
       select: one
   - id: hotfix
     uses: ./hotfix.yaml
-    needs: run-tests
+    needs: [run-tests]
   - id: ship
     uses: ./ship.yaml
-    needs: run-tests
+    needs: [run-tests]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting

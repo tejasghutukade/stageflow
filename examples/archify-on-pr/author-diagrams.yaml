@@ -41,18 +41,27 @@ system_prompt: |
   { diagram_type, spec_artifact, summary }.
   Do not stop after a chat reply.
 model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
-payload_schema:
-  type: object
-  required: [diagrams]
-  properties:
-    diagrams:
-      type: array
-      items:
-        type: object
-        required: [diagram_type, spec_artifact, summary]
-        properties:
-          diagram_type: { type: string }
-          spec_artifact: { type: string }
-          summary: { type: string }
-        additionalProperties: false
-  additionalProperties: false
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - diagrams
+      properties:
+        diagrams:
+          type: array
+          items:
+            type: object
+            required:
+              - diagram_type
+              - spec_artifact
+              - summary
+            properties:
+              diagram_type:
+                type: string
+              spec_artifact:
+                type: string
+              summary:
+                type: string
+            additionalProperties: false
+      additionalProperties: false

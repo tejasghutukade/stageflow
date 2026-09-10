@@ -1,7 +1,4 @@
 id: oss-plan-review
-gate_kinds: []
-clone_actions:
-  - fanout
 system_prompt: |
   Produce three or four concrete, non-overlapping review assignments derived from
   the verified diff, and fan them out as clones. Do not edit files, commit, push,
@@ -68,13 +65,27 @@ system_prompt: |
 
   Do not put fork_choice on the envelope.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [review_count, strategy]
-  properties:
-    review_count:
-      type: integer
-      minimum: 3
-      maximum: 4
-    strategy:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - review_count
+        - strategy
+      properties:
+        review_count:
+          type: integer
+          minimum: 3
+          maximum: 4
+        strategy:
+          type: string
+verify:
+  - id: review-plan
+    type: artifact
+    path: review-plan.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []
+clone_actions:
+  - fanout

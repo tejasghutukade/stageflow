@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -336,6 +336,199 @@ describe("sf run --json completion (U3)", () => {
     });
     expect(cap.stdoutText()).not.toMatch(/Pipeline succeeded/);
     expect(cap.stderrText()).toBe("");
+  });
+
+  it("start-run pairing warning appears as findings with file in --json stdout", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-entry-input-"));
+    const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: entry-input",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: intake",
+        "    system_prompt: Collect input",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "          required: [title]",
+        "          properties:",
+        "            title:",
+        "              type: string",
+        "  - id: follow",
+        "    system_prompt: Continue the work",
+        "    needs: [intake]",
+        "",
+      ].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", sampleTask, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome: string;
+        findings: Array<{
+          severity: string;
+          code: string;
+          file: string;
+          path?: string;
+          message: string;
+          category: string;
+        }>;
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.outcome).toBe("succeeded");
+      const unmet = parsed.findings.find(
+        (finding) => finding.code === "task.entry_input_unmet",
+      );
+      expect(unmet).toMatchObject({
+        severity: "warning",
+        code: "task.entry_input_unmet",
+        category: "task",
+      });
+      expect(unmet?.file).toMatch(/sample\.task\.yaml$/);
+      expect(unmet).not.toHaveProperty("path");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("omits findings when task input satisfies entry io.input", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-entry-match-"));
+    const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
+    const taskPath = path.join(cwd, "matched.task.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: entry-input",
+        "stages:",
+        "  - id: intake",
+        "    system_prompt: Collect input",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "          required: [title]",
+        "          properties:",
+        "            title:",
+        "              type: string",
+        "",
+      ].join("\n"),
+    );
+    await writeFile(
+      taskPath,
+      ["id: matched", "goal: Do the work", "input:", "  title: hello", ""].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", taskPath, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome: string;
+        findings?: unknown;
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.outcome).toBe("succeeded");
+      expect(parsed.findings).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("start-run model inheritance warning appears as pipeline.model_applies in --json stdout", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-model-applies-"));
+    const pipelinePath = path.join(cwd, "model-applies.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: model-applies",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "",
+      ].join("\n"),
+    );
+    const store = createRunStore({ rootDir: cwd });
+    const manager = new RunManager({
+      agent: gatedAgent(Promise.resolve()),
+      store,
+      cwd,
+      executionMode: "inprocess",
+    });
+    const cap = captureIo();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const code = await runRunCommand(
+        ["--json", "--task", sampleTask, "--pipeline", pipelinePath],
+        {
+          cwd,
+          io: cap.io,
+          startRun: (input) => manager.startRun(input),
+        },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(cap.stdoutText()) as {
+        ok: boolean;
+        outcome: string;
+        findings: Array<{
+          severity: string;
+          code: string;
+          file: string;
+          message: string;
+          category: string;
+        }>;
+      };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.outcome).toBe("succeeded");
+      const applies = parsed.findings.find(
+        (finding) => finding.code === "pipeline.model_applies",
+      );
+      expect(applies).toMatchObject({
+        severity: "warning",
+        code: "pipeline.model_applies",
+        category: "pipeline",
+      });
+      expect(applies?.file).toMatch(/model-applies\.pipeline\.yaml$/);
+      expect(applies?.message).toMatch(/plan/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("HITL park prints waiting envelope and exits 2", async () => {

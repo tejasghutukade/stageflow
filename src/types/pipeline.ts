@@ -1,5 +1,5 @@
 import type { CloneAction } from "./forkChoice.js";
-import type { LoadedStageConfig, StageGateKind } from "./stage.js";
+import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
 export type PipelineConfig = {
@@ -9,6 +9,8 @@ export type PipelineConfig = {
   agent?: string;
   /** Default LLM model id for every stage in this pipeline; overrides the global default. */
   model?: string;
+  /** Pipeline-file `$ref` root (`#/schemas/<name>`). */
+  schemas?: Record<string, unknown>;
 };
 
 export type PipelineForkConfig = {
@@ -41,13 +43,21 @@ export type PipelineStageRef = {
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  /** IR: after-phase checks. YAML: `verify` items whose `when` includes `after`. */
   completion?: CompletionContract;
+  /** IR: after-phase failure policy. YAML: `on_verify_fail`. */
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   /** Omitted means this stage is safe to include in a feedback replay. */
   replay_safe?: boolean;
 };
 
+/**
+ * Pipeline YAML stage entry (both dialects). Target authoring is `io` / `verify`
+ * / `on_verify_fail`. The payload_schema / pre_emit_checks / completion /
+ * recovery keys are the legacy YAML dialect (and also the IR names after compile).
+ * New catalog fields: add target YAML keys here and compile them in yamlDialect.ts.
+ */
 export type PipelineStageYamlEntry = PipelineStageRef & {
   uses?: string;
   system_prompt?: string;
@@ -58,6 +68,10 @@ export type PipelineStageYamlEntry = PipelineStageRef & {
   clone_actions?: CloneAction[];
   skill?: string;
   mcp?: string[];
+  io?: StageIoYaml;
+  verify?: unknown;
+  on_verify_fail?: RecoveryPolicy;
+  pre_emit_checks?: unknown;
 };
 
 export type PipelineIncludeEntry = {
@@ -75,6 +89,7 @@ export type NormalizedPipelineStageEntry = {
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
+  /** IR after compile. YAML `verify` after-phase / `on_verify_fail`. */
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
@@ -101,7 +116,9 @@ export type ResolvedPipelineStageNode = {
   clonable?: boolean;
   clone_cap?: number;
   definition_id?: string;
+  /** Persisted on pipeline_dag. YAML `verify` after-phase. */
   completion?: CompletionContract;
+  /** Persisted on pipeline_dag. YAML `on_verify_fail`. */
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;

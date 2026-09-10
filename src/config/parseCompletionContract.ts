@@ -1,3 +1,8 @@
+/**
+ * Parse IR `completion` / `recovery` objects (DAG wiring after compile, or
+ * legacy YAML keys). Target YAML `on_verify_fail` / after-phase `verify` are
+ * compiled onto these shapes in yamlDialect.ts before this parser runs.
+ */
 import path from "node:path";
 import type {
   CompletionCheck,
@@ -5,7 +10,7 @@ import type {
   RecoveryPolicy,
 } from "../types/completion.js";
 import { STAGE_GATE_KINDS, type StageGateKind } from "../types/stage.js";
-import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
+import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 
 type ExecutionPolicy = {
   completion?: CompletionContract;
@@ -42,6 +47,14 @@ function hasOnlyKeys(
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function recoveryRequiresCompletionIssue(stageId: string): LoadIssue {
+  return {
+    code: "pipeline.invalid_recovery",
+    message: `Stage "${stageId}" recovery: requires a completion contract`,
+    category: "pipeline",
+  };
 }
 
 function isGateKind(value: unknown): value is StageGateKind {
@@ -204,7 +217,7 @@ function parseRecovery(
   hasCompletion: boolean,
 ): LoadOutcome<RecoveryPolicy | undefined> {
   if (raw === undefined) return loadSuccess(undefined);
-  if (!hasCompletion) return failure(stageId, "recovery", "requires a completion contract");
+  if (!hasCompletion) return loadFailure([recoveryRequiresCompletionIssue(stageId)]);
   if (!isPlainObject(raw)) return failure(stageId, "recovery", "must be an object");
   const unknown = hasOnlyKeys(raw, ["mode", "max_attempts", "retry_safety", "include_failed_checks"]);
   if (unknown) return failure(stageId, "recovery", `unknown key "${unknown}"`);
@@ -243,10 +256,16 @@ function parseRecovery(
 export function parseExecutionPolicy(
   raw: Record<string, unknown>,
   stageId: string,
+  options?: { requireCompletionForRecovery?: boolean },
 ): LoadOutcome<ExecutionPolicy> {
   const completion = parseCompletion(raw.completion, stageId);
   if (!completion.ok) return completion;
-  const recovery = parseRecovery(raw.recovery, stageId, completion.value !== undefined);
+  const requireCompletion = options?.requireCompletionForRecovery ?? true;
+  const recovery = parseRecovery(
+    raw.recovery,
+    stageId,
+    requireCompletion ? completion.value !== undefined : true,
+  );
   if (!recovery.ok) return recovery;
   return loadSuccess({
     ...(completion.value !== undefined ? { completion: completion.value } : {}),

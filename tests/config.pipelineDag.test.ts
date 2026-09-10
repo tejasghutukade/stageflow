@@ -188,19 +188,22 @@ describe("resolvePipelineDag", () => {
     expect(dag.childrenOf.validation).toEqual(["synthesize"]);
   });
 
-  it("rejects one-element needs arrays (AS3)", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [{ id: "design-doc", needs: ["clarify"] }],
-        ctx("needs-array"),
-      ),
-    ).toThrow(/needs array must contain at least two items/i);
+  it("loads a one-element needs array as a single parent (KTD10)", () => {
+    const { dag } = resolvePipelineDag(
+      [{ id: "clarify" }, { id: "design-doc", needs: ["clarify"] }],
+      ctx("needs-array"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("design-doc")).toMatchObject({
+      needs: "clarify",
+      needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+    });
   });
 
   it("rejects empty needs arrays", () => {
     expect(() =>
       resolvePipelineDag([{ id: "design-doc", needs: [] }], ctx("empty-needs")),
-    ).toThrow(/needs array must contain at least two items/i);
+    ).toThrow(/needs array must contain at least one item/i);
   });
 
   it("rejects duplicate parent ids in needs arrays", () => {
@@ -523,7 +526,7 @@ describe("resolvePipelineDag", () => {
       extractPipelineStageIds([
         { id: "design-doc", needs: ["clarify"] },
       ]),
-    ).toBeNull();
+    ).toEqual(["design-doc"]);
   });
 
   it("parsePipelineStageEntries normalizes mixed needs arrays", () => {

@@ -1,8 +1,4 @@
 id: oss-plan-investigation
-gate_kinds: []
-clone_actions:
-  - once
-  - fanout
 system_prompt: |
   Partition the reproduced issue into one to five independent read-only
   investigation assignments, recorded in investigation-map.md and emitted as
@@ -67,13 +63,28 @@ system_prompt: |
   Do not create more than five clones. Do not put fork_choice on the emitted
   envelope.
 model: omniroute/auto
-payload_schema:
-  type: object
-  required: [investigation_count, strategy]
-  properties:
-    investigation_count:
-      type: integer
-      minimum: 1
-      maximum: 5
-    strategy:
-      type: string
+io:
+  output:
+    schema:
+      type: object
+      required:
+        - investigation_count
+        - strategy
+      properties:
+        investigation_count:
+          type: integer
+          minimum: 1
+          maximum: 5
+        strategy:
+          type: string
+verify:
+  - id: investigation-map
+    type: artifact
+    path: investigation-map.md
+    nonempty: true
+    when:
+      - after
+gate_kinds: []
+clone_actions:
+  - once
+  - fanout
