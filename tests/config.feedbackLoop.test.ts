@@ -8,6 +8,9 @@ import { normalizePipelineStageEntries } from "../src/config/normalizePipelineSt
 const ctx = { pipelineId: "feedback", path: "/tmp/feedback.pipeline.yaml" };
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
+// Expected shape of the resolved node's synthesized `feedback_loop` field
+// (ResolvedPipelineStageNode.feedback_loop is unchanged by the route-based
+// rewrite: a `type: "loop"` route entry synthesizes this exact shape).
 const policy = {
   target: "implement",
   max_replays: 2,
@@ -15,7 +18,16 @@ const policy = {
   replay_session: "resume" as const,
 };
 
-describe("feedback_loop pipeline wiring", () => {
+// Loop route-entry input shape (docs/tickets/route-based-pipeline-wiring/03):
+// same replay-policy fields as `policy` above, minus `target` (supplied via
+// `to` inline at each use site).
+const loopPolicy = {
+  max_replays: 2,
+  on_max_replays: "require_continue" as const,
+  replay_session: "resume" as const,
+};
+
+describe("feedback_loop pipeline wiring (route type: loop entries)", () => {
   it("loads the canonical pipeline YAML fixture", async () => {
     const loaded = await loadPipeline(
       path.join(fixtures, "pipelines", "feedback-loop.pipeline.yaml"),
@@ -29,10 +41,16 @@ describe("feedback_loop pipeline wiring", () => {
   it("preserves a valid source-owned policy without adding a reverse DAG edge", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "plan" },
-        { id: "implement", needs: "plan" },
-        { id: "review", needs: "implement", feedback_loop: policy },
-        { id: "submit", needs: "review" },
+        { id: "plan", entry: true, route: [{ to: "implement" }] },
+        { id: "implement", route: [{ to: "review" }] },
+        {
+          id: "review",
+          route: [
+            { to: "submit" },
+            { type: "loop", to: "implement", ...loopPolicy },
+          ],
+        },
+        { id: "submit" },
       ],
       ctx,
     );
@@ -50,14 +68,17 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
-          { id: "review-work", needs: "implement", fork: { select: "subset" } },
-          { id: "persona-a", needs: "review-work" },
-          { id: "persona-b", needs: "review-work" },
+          { id: "implement", entry: true, route: [{ to: "review-work" }] },
+          {
+            id: "review-work",
+            route_select: "subset",
+            route: [{ to: "persona-a" }, { to: "persona-b" }],
+          },
+          { id: "persona-a", route: [{ to: "accumulate" }] },
+          { id: "persona-b" },
           {
             id: "accumulate",
-            needs: "persona-a",
-            feedback_loop: { ...policy, target: "review-work" },
+            route: [{ type: "loop", to: "review-work", ...loopPolicy }],
           },
         ],
         ctx,
@@ -66,17 +87,18 @@ describe("feedback_loop pipeline wiring", () => {
   });
 
   it.each([
-    [{ ...policy, target: "" }, /target must be a non-empty/i],
-    [{ ...policy, target: ["implement"] }, /must be a single stage id string, not an array/i],
-    [{ ...policy, max_replays: 0 }, /max_replays must be a positive integer/i],
-    [{ ...policy, on_max_replays: "continue" }, /on_max_replays/i],
-    [{ ...policy, replay_session: "fresh" }, /replay_session/i],
-  ])("rejects malformed policy %#", (feedback_loop, message) => {
+    [{ to: "", ...loopPolicy }, /non-empty "to" stage id/i],
+    [{ to: ["implement"], ...loopPolicy }, /non-empty "to" stage id/i],
+    [{ to: "implement", ...loopPolicy, max_replays: 0 }, /max_replays must be a positive integer/i],
+    [{ to: "implement", ...loopPolicy, on_max_replays: "continue" }, /on_max_replays/i],
+    [{ to: "implement", ...loopPolicy, replay_session: "fresh" }, /replay_session/i],
+  ])("rejects malformed policy %#", (loopEntry, message) => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
-          { id: "review", needs: "implement", feedback_loop },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", ...loopEntry }] },
         ],
         ctx,
       ),
@@ -87,8 +109,9 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
-          { id: "review", needs: "implement", feedback_loop: { ...policy, target: "missing" } },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", to: "missing", ...loopPolicy }] },
         ],
         ctx,
       ),
@@ -96,8 +119,9 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
-          { id: "review", needs: "implement", feedback_loop: { ...policy, target: "review" } },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", to: "review", ...loopPolicy }] },
         ],
         ctx,
       ),
@@ -105,10 +129,13 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "prepare" },
-          { id: "implement", needs: "prepare", clonable: true },
-          { id: "review", needs: "implement", feedback_loop: policy },
-          { id: "submit", needs: "review" },
+          { id: "prepare", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", clonable: true, route: [{ to: "review" }] },
+          {
+            id: "review",
+            route: [{ to: "submit" }, { type: "loop", to: "implement", ...loopPolicy }],
+          },
+          { id: "submit" },
         ],
         ctx,
       ),
@@ -119,9 +146,9 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "plan" },
-          { id: "implement", needs: "plan", replay_safe: false },
-          { id: "review", needs: "implement", feedback_loop: policy },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", replay_safe: false, route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", to: "implement", ...loopPolicy }] },
         ],
         ctx,
       ),
@@ -132,9 +159,9 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "plan" },
-          { id: "implement", needs: "plan" },
-          { id: "review", needs: "implement", feedback_loop: policy },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", to: "implement", ...loopPolicy }] },
         ],
         ctx,
       ),
@@ -142,8 +169,8 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement", replay_safe: "false" },
-          { id: "review", needs: "implement", feedback_loop: policy },
+          { id: "implement", replay_safe: "false", entry: true, route: [{ to: "review" }] },
+          { id: "review", route: [{ type: "loop", to: "implement", ...loopPolicy }] },
         ],
         ctx,
       ),
@@ -154,11 +181,11 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
           {
             id: "review",
-            needs: "implement",
-            feedback_loop: { ...policy, unknown: true },
+            route: [{ type: "loop", to: "implement", ...loopPolicy, unknown: true }],
           },
         ],
         ctx,
@@ -167,21 +194,21 @@ describe("feedback_loop pipeline wiring", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "implement" },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
           {
             id: "review",
-            needs: "implement",
             clonable: true,
-            feedback_loop: policy,
+            route: [{ to: "submit" }, { type: "loop", to: "implement", ...loopPolicy }],
           },
-          { id: "submit", needs: "review" },
+          { id: "submit" },
         ],
         ctx,
       ),
     ).toThrow(/source cannot be clonable/i);
   });
 
-  it("uses the same feedback_loop and replay_safe validation while normalizing YAML entries", () => {
+  it("uses the same route-loop and replay_safe validation while normalizing YAML entries", () => {
     const unknownPolicy = normalizePipelineStageEntries(
       [
         {
@@ -189,7 +216,7 @@ describe("feedback_loop pipeline wiring", () => {
             id: "review",
             system_prompt: "review",
             model: "x",
-            feedback_loop: { ...policy, unknown: true },
+            route: [{ type: "loop", to: "implement", ...loopPolicy, unknown: true }],
           },
           declaringPath: ctx.path,
         },

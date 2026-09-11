@@ -26,37 +26,43 @@ describe("resolvePipelineDag", () => {
   it("treats feedback-loop and replay-safety policy changes as inequivalent", () => {
     const { dag: baseline } = resolvePipelineDag(
       [
-        { id: "plan" },
-        { id: "implement", needs: "plan" },
+        { id: "plan", entry: true, route: [{ to: "implement" }] },
+        { id: "implement", route: [{ to: "review" }] },
         {
           id: "review",
-          needs: "implement",
-          feedback_loop: {
-            target: "implement",
-            max_replays: 2,
-            on_max_replays: "require_continue",
-            replay_session: "resume",
-          },
+          route: [
+            { to: "submit" },
+            {
+              type: "loop",
+              to: "implement",
+              max_replays: 2,
+              on_max_replays: "require_continue",
+              replay_session: "resume",
+            },
+          ],
         },
-        { id: "submit", needs: "review" },
+        { id: "submit" },
       ],
       ctx("feedback-equivalence-baseline"),
     );
     const { dag: changedPolicy } = resolvePipelineDag(
       [
-        { id: "plan" },
-        { id: "implement", needs: "plan" },
+        { id: "plan", entry: true, route: [{ to: "implement" }] },
+        { id: "implement", route: [{ to: "review" }] },
         {
           id: "review",
-          needs: "implement",
-          feedback_loop: {
-            target: "plan",
-            max_replays: 3,
-            on_max_replays: "wait_for_human",
-            replay_session: "new_session",
-          },
+          route: [
+            { to: "submit" },
+            {
+              type: "loop",
+              to: "plan",
+              max_replays: 3,
+              on_max_replays: "wait_for_human",
+              replay_session: "new_session",
+            },
+          ],
         },
-        { id: "submit", needs: "review", replay_safe: false },
+        { id: "submit", replay_safe: false },
       ],
       ctx("feedback-equivalence-changed"),
     );
