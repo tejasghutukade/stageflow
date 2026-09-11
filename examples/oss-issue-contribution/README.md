@@ -72,6 +72,9 @@ Every stage declares `verify` with at least one `type: artifact` check, so a
 success emit is rejected unless the named file appears in the envelope's
 artifact list. Writer stages add `type: checkout_changes` with `path_fields`;
 approval stages also declare a `type: gate` check (`kind: artifact_backed`).
+Pipeline entries wire `on_verify_fail` (repair for most stages; `manual` on
+`oss-approve-contribution`) so after-phase failures retry or wait for an
+operator instead of silently advancing.
 
 | Stage | `gate_kinds` | `verify` artifacts | `clone_actions` | `checkout_changes` `path_fields` |
 |-------|--------------|--------------------|-----------------|----------------------------------|

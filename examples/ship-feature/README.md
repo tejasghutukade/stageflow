@@ -52,8 +52,7 @@ opened."
 Every stage declares `io.output.schema`, so a success emit is rejected unless
 the payload matches it, and each stage file lists `verify` items so success
 is independently checked rather than only claimed. Artifact paths below are
-after-phase `type: artifact` checks on the stage body (this catalog uses the
-target dialect; see [YAML catalog — Dual-read](../../docs/yaml-catalog.md#dual-read-this-release)):
+after-phase `type: artifact` checks on the stage body:
 
 | Stage | `gate_kinds` | Required artifacts | Other `verify` |
 |-------|--------------|--------------------|----------------|
@@ -87,7 +86,8 @@ entry, so an after-phase verify failure starts a fresh attempt with the
 failed-check evidence carried forward, up to three attempts. `feat-ship` uses
 `on_verify_fail: { mode: manual, retry_safety: side_effecting }` instead,
 because it publishes: a failed after-phase check there leaves the stage failed
-until an operator explicitly retries or stops recovery. See
+until an operator explicitly retries or stops via `on_verify_fail` manual
+handling. See
 [Verified Stage Execution — Recovery policy](../../docs/verified-stage-execution.md#recovery-policy).
 
 ### Review feedback has no way back upstream

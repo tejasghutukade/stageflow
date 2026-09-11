@@ -2,7 +2,9 @@
 
 Runnable Stageflow catalogs. Each directory is **pipeline-owned** (co-located `*.pipeline.yaml`, stage YAML, `*.task.yaml`). Run commands use **paths from the repository git root**.
 
-Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](../docs/yaml-catalog.md) ([dual-read](../docs/yaml-catalog.md#dual-read-this-release)); convert older keys with [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml).
+Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](../docs/yaml-catalog.md).
+
+Upgrading older YAML: see [Upgrading older catalogs](../docs/yaml-catalog.md#upgrading-older-catalogs) and [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml).
 
 ## Featured example: Archify on PR
 

@@ -440,7 +440,7 @@ sf validate --strict --json
 
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
-Convert legacy catalog YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
+For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
 
 ```bash
 sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
@@ -535,7 +535,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Stage concurrency per run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap (also in [CI / headless](ci.md)) |
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |
-| `STAGEFLOW_LEGACY_YAML` | Dual-read of legacy catalog keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
+| `STAGEFLOW_LEGACY_YAML` | Only if you still have pre-`io` catalogs: load adapter for legacy authoring keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
 | `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT` | Transcript text truncation |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
