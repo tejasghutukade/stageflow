@@ -1110,6 +1110,18 @@ export async function runPipelineDag(
         return;
       }
       const skippedIds: string[] = [];
+      // applyForkChoiceToSchedule (and everything it calls, including
+      // skipRejectedNeedDependents in cloneSchedule.ts) is fully synchronous
+      // -- no `await` anywhere in that call chain. So by the time this call
+      // returns, `states` already reflects every one of this stage's
+      // unchosen children as terminal, atomically, before the persistence
+      // loop below runs its first `await`. A downstream multi-parent join
+      // (see pickStalledJoinSkips) that depends on several of these children
+      // therefore always decides off fully-consistent in-memory state, even
+      // though its own `stage_events` row can end up persisted *between*
+      // two of these sequential appendStageEvent calls below (this loop) --
+      // that interleaving is only a SQLite write-ordering artifact, not a
+      // sign the join decided early.
       applyForkChoiceToSchedule(dag, stageId, chosen, states, {
         protectedIds,
         onSkip: (id) => {
