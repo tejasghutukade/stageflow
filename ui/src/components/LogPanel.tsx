@@ -68,6 +68,21 @@ export function failureBannerText(
 
 const PREVIEW_LENGTH_LIMIT = 160;
 
+// Cuts `text` at or before `maxLen`, backing up to the nearest preceding
+// space so a truncated preview never ends mid-word (e.g. "applicat…" with
+// the rest of "application" resuming on the next line reads as broken, not
+// continued). Falls back to a hard cutoff only when there's no space to
+// back up to at all (one very long unbroken token, e.g. a URL).
+function truncateAtWordBoundary(
+  text: string,
+  maxLen: number,
+): { shown: string; cutIndex: number } {
+  const slice = text.slice(0, maxLen);
+  const lastSpace = slice.lastIndexOf(" ");
+  if (lastSpace > 0) return { shown: slice.slice(0, lastSpace), cutIndex: lastSpace + 1 };
+  return { shown: slice, cutIndex: maxLen };
+}
+
 // A step's detail always shows a one-line preview under its label; expanding
 // the row via the chevron reveals `rest` — everything after wherever the
 // preview left off, never repeating what the preview already showed. Many
@@ -75,19 +90,23 @@ const PREVIEW_LENGTH_LIMIT = 160;
 // single, very long "line"), so the cutoff can't rely on finding a newline
 // alone — it also has to account for a first line that's simply too long to
 // show in full, continuing from that character offset instead of a line.
+// Leading blank lines are stripped from `rest` (but not other whitespace),
+// since a detail with a blank line right after its first line would
+// otherwise show an odd empty gap before the continuation.
 export function stepPreview(
   detail: string,
 ): { preview: string; hasMore: boolean; rest: string } {
   const newlineIndex = detail.indexOf("\n");
   const firstLine = newlineIndex === -1 ? detail : detail.slice(0, newlineIndex);
   if (firstLine.length <= PREVIEW_LENGTH_LIMIT) {
-    const rest = newlineIndex === -1 ? "" : detail.slice(newlineIndex + 1);
+    const rest = (newlineIndex === -1 ? "" : detail.slice(newlineIndex + 1)).replace(/^\n+/, "");
     return { preview: firstLine, hasMore: rest.trim().length > 0, rest };
   }
+  const { shown, cutIndex } = truncateAtWordBoundary(firstLine, PREVIEW_LENGTH_LIMIT);
   return {
-    preview: `${firstLine.slice(0, PREVIEW_LENGTH_LIMIT)}…`,
+    preview: `${shown}…`,
     hasMore: true,
-    rest: detail.slice(PREVIEW_LENGTH_LIMIT),
+    rest: detail.slice(cutIndex).replace(/^\n+/, ""),
   };
 }
 

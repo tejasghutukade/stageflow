@@ -356,15 +356,33 @@ describe("stepPreview", () => {
     });
   });
 
-  it("truncates the preview and continues from the cutoff (not a line) when the first line alone is too long", () => {
+  it("truncates the preview and continues from the cutoff (not a line) when there's no space to back up to", () => {
     // Tool results are frequently one long JSON-stringified blob with no real
     // newlines at all — length alone has to be able to trigger "there's more",
     // and the expanded view has to pick up exactly where the preview stopped.
+    // With no space anywhere to back up to, a hard cutoff is unavoidable.
     const longSingleLine = `${"x".repeat(160)}${"y".repeat(140)}`;
     expect(stepPreview(longSingleLine)).toEqual({
       preview: `${"x".repeat(160)}…`,
       hasMore: true,
       rest: "y".repeat(140),
+    });
+  });
+
+  it("backs up to the last full word instead of splitting one across the cutoff", () => {
+    const longSingleLine = `${"x".repeat(150)} ${"y".repeat(50)}`;
+    expect(stepPreview(longSingleLine)).toEqual({
+      preview: `${"x".repeat(150)}…`,
+      hasMore: true,
+      rest: "y".repeat(50),
+    });
+  });
+
+  it("strips a blank line right after the first line so expanding doesn't show an empty gap", () => {
+    expect(stepPreview("first line\n\nsecond paragraph")).toEqual({
+      preview: "first line",
+      hasMore: true,
+      rest: "second paragraph",
     });
   });
 
