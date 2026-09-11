@@ -1,0 +1,16 @@
+id: route-demo-reject-feedback-loop
+stages:
+  - id: implement
+    entry: true
+    route:
+      - to: review
+    system_prompt: Implement.
+    model: anthropic/claude-sonnet-4-5
+  - id: review
+    feedback_loop:
+      target: implement
+      max_replays: 2
+      on_max_replays: require_continue
+      replay_session: resume
+    system_prompt: Review.
+    model: anthropic/claude-sonnet-4-5

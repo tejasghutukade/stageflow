@@ -1,0 +1,14 @@
+id: route-demo-reject-unreachable
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: anthropic/claude-sonnet-4-5
+  - id: review
+    system_prompt: Review.
+    model: anthropic/claude-sonnet-4-5
+  - id: orphan
+    system_prompt: Nobody routes to me, and I'm not marked entry.
+    model: anthropic/claude-sonnet-4-5

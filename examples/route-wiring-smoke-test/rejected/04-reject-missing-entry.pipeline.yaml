@@ -1,0 +1,10 @@
+id: route-demo-reject-missing-entry
+stages:
+  - id: draft
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: anthropic/claude-sonnet-4-5
+  - id: review
+    system_prompt: Review.
+    model: anthropic/claude-sonnet-4-5

@@ -1,0 +1,16 @@
+id: route-demo-reject-allow-none
+stages:
+  - id: decide
+    entry: true
+    allow_none: true
+    route:
+      - to: path-a
+      - to: path-b
+    system_prompt: Decide.
+    model: anthropic/claude-sonnet-4-5
+  - id: path-a
+    system_prompt: A.
+    model: anthropic/claude-sonnet-4-5
+  - id: path-b
+    system_prompt: B.
+    model: anthropic/claude-sonnet-4-5

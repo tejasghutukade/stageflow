@@ -1,0 +1,80 @@
+id: route-demo-core
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+    system_prompt: Draft a plan.
+    model: anthropic/claude-sonnet-4-5
+
+  - id: implement
+    route:
+      - to: review
+    system_prompt: Implement the plan.
+    model: anthropic/claude-sonnet-4-5
+
+  # Loop: continue forward to qa, or send back to implement (independent of
+  # route_select/fork_choice -- driven by the feedback_loop envelope action).
+  - id: review
+    route:
+      - to: qa
+      - type: loop
+        to: implement
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Review the change. Continue to qa, or send it back to implement.
+    model: anthropic/claude-sonnet-4-5
+
+  # route_select: one -- fork_choice picks exactly one branch.
+  - id: qa
+    route_select: one
+    route:
+      - to: ship
+      - to: request-changes
+    system_prompt: Decide to ship or request changes. Pick exactly one.
+    model: anthropic/claude-sonnet-4-5
+
+  # route_select: subset + allow_none -- fork_choice picks any number
+  # (including zero) of these three.
+  - id: ship
+    route_select: subset
+    allow_none: true
+    route:
+      - to: notify-slack
+      - to: notify-email
+      - to: update-changelog
+    system_prompt: Decide which of these notifications to send, if any.
+    model: anthropic/claude-sonnet-4-5
+
+  - id: request-changes
+    route:
+      - to: close
+    system_prompt: Note the requested changes.
+    model: anthropic/claude-sonnet-4-5
+
+  - id: notify-slack
+    route:
+      - to: close
+    system_prompt: Notify Slack.
+    model: anthropic/claude-sonnet-4-5
+
+  - id: notify-email
+    route:
+      - to: close
+    system_prompt: Notify email.
+    model: anthropic/claude-sonnet-4-5
+
+  - id: update-changelog
+    route:
+      - to: close
+    system_prompt: Update the changelog.
+    model: anthropic/claude-sonnet-4-5
+
+  # Fan-in / implicit-AND join: waits for all four of request-changes,
+  # notify-slack, notify-email, update-changelog to resolve to ANY terminal
+  # state. qa's route_select and ship's route_select/allow_none mean most of
+  # these actually resolve "skipped", not "succeeded" -- that still counts.
+  - id: close
+    system_prompt: Close out the run.
+    model: anthropic/claude-sonnet-4-5

@@ -1,0 +1,9 @@
+id: route-demo-entry-false
+stages:
+  - id: draft
+    entry: false
+    system_prompt: A standalone stage explicitly marked entry false.
+    model: anthropic/claude-sonnet-4-5
+  - id: review
+    system_prompt: Another independent stage.
+    model: anthropic/claude-sonnet-4-5

@@ -1,0 +1,11 @@
+id: route-demo-reject-fork
+stages:
+  - id: decide
+    entry: true
+    fork:
+      select: one
+    system_prompt: Decide.
+    model: anthropic/claude-sonnet-4-5
+  - id: branch-a
+    system_prompt: Branch A.
+    model: anthropic/claude-sonnet-4-5

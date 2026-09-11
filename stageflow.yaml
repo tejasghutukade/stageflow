@@ -15,6 +15,7 @@ catalog:
     - examples/feedback-loop
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
+    - examples/route-wiring-smoke-test
   tasks:
     - examples/generic-fan-in
     - examples/stage-mcp
@@ -30,8 +31,10 @@ catalog:
     - examples/feedback-loop
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
+    - examples/route-wiring-smoke-test
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
   exclude:
     - tests/fixtures
+    - examples/route-wiring-smoke-test/rejected

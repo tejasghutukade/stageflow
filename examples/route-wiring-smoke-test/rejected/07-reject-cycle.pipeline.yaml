@@ -1,0 +1,13 @@
+id: route-demo-reject-cycle
+stages:
+  - id: a
+    entry: true
+    route:
+      - to: b
+    system_prompt: A.
+    model: anthropic/claude-sonnet-4-5
+  - id: b
+    route:
+      - to: a
+    system_prompt: B.
+    model: anthropic/claude-sonnet-4-5

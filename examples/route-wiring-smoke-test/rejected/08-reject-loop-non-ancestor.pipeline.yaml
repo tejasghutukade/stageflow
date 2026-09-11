@@ -1,0 +1,21 @@
+id: route-demo-reject-loop-non-ancestor
+stages:
+  - id: a
+    entry: true
+    route:
+      - to: b
+      - to: c
+    system_prompt: A.
+    model: anthropic/claude-sonnet-4-5
+  - id: b
+    route:
+      - type: loop
+        to: c
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: B.
+    model: anthropic/claude-sonnet-4-5
+  - id: c
+    system_prompt: C.
+    model: anthropic/claude-sonnet-4-5
