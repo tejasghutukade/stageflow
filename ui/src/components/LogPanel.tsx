@@ -68,20 +68,27 @@ export function failureBannerText(
 
 const PREVIEW_LENGTH_LIMIT = 160;
 
-// A step's detail always shows a one-line preview under its label — the
-// full detail is only revealed by expanding the row via the chevron.
-// Many tool results are a JSON-stringified blob with no real newlines at
-// all (a single, very long "line"), so "is there more to show" can't rely
-// on finding a newline alone — it also has to account for a first line
-// that's simply too long to show in full.
-export function stepPreview(detail: string): { preview: string; hasMore: boolean } {
+// A step's detail always shows a one-line preview under its label; expanding
+// the row via the chevron reveals `rest` — everything after wherever the
+// preview left off, never repeating what the preview already showed. Many
+// tool results are a JSON-stringified blob with no real newlines at all (a
+// single, very long "line"), so the cutoff can't rely on finding a newline
+// alone — it also has to account for a first line that's simply too long to
+// show in full, continuing from that character offset instead of a line.
+export function stepPreview(
+  detail: string,
+): { preview: string; hasMore: boolean; rest: string } {
   const newlineIndex = detail.indexOf("\n");
   const firstLine = newlineIndex === -1 ? detail : detail.slice(0, newlineIndex);
   if (firstLine.length <= PREVIEW_LENGTH_LIMIT) {
-    const hasMore = newlineIndex !== -1 && detail.slice(newlineIndex + 1).trim().length > 0;
-    return { preview: firstLine, hasMore };
+    const rest = newlineIndex === -1 ? "" : detail.slice(newlineIndex + 1);
+    return { preview: firstLine, hasMore: rest.trim().length > 0, rest };
   }
-  return { preview: `${firstLine.slice(0, PREVIEW_LENGTH_LIMIT)}…`, hasMore: true };
+  return {
+    preview: `${firstLine.slice(0, PREVIEW_LENGTH_LIMIT)}…`,
+    hasMore: true,
+    rest: detail.slice(PREVIEW_LENGTH_LIMIT),
+  };
 }
 
 export function formatDuration(ms: number): string {
@@ -272,7 +279,9 @@ function LogStepRow({
   onToggle: (isOpen: boolean) => void;
 }) {
   const durationMs = stepDurationMs(step, now);
-  const { preview, hasMore } = step.detail ? stepPreview(step.detail) : { preview: "", hasMore: false };
+  const { preview, hasMore, rest } = step.detail
+    ? stepPreview(step.detail)
+    : { preview: "", hasMore: false, rest: "" };
 
   return (
     <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
@@ -299,7 +308,7 @@ function LogStepRow({
           {preview ? <span className="logstep__preview">{preview}</span> : null}
         </span>
       </button>
-      {hasMore && isOpen ? <pre className="logstep__detail">{step.detail}</pre> : null}
+      {hasMore && isOpen ? <pre className="logstep__detail">{rest}</pre> : null}
     </div>
   );
 }

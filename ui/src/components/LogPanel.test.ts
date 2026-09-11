@@ -345,27 +345,31 @@ describe("failureBannerText", () => {
 
 describe("stepPreview", () => {
   it("shows the whole string as the preview with no expand affordance when it's short and single-line", () => {
-    expect(stepPreview("single line")).toEqual({ preview: "single line", hasMore: false });
+    expect(stepPreview("single line")).toEqual({ preview: "single line", hasMore: false, rest: "" });
   });
 
-  it("flags hasMore when there's a real second line", () => {
+  it("continues from the second line onward without repeating the preview", () => {
     expect(stepPreview("Error: 3 tests failed\n  at runTests (test.js:12)")).toEqual({
       preview: "Error: 3 tests failed",
       hasMore: true,
+      rest: "  at runTests (test.js:12)",
     });
   });
 
-  it("flags hasMore and truncates the preview when the first line alone is too long, even with no newline", () => {
+  it("truncates the preview and continues from the cutoff (not a line) when the first line alone is too long", () => {
     // Tool results are frequently one long JSON-stringified blob with no real
-    // newlines at all — length alone has to be able to trigger "there's more".
-    const longSingleLine = "x".repeat(300);
-    const { preview, hasMore } = stepPreview(longSingleLine);
-    expect(hasMore).toBe(true);
-    expect(preview).toBe(`${"x".repeat(160)}…`);
+    // newlines at all — length alone has to be able to trigger "there's more",
+    // and the expanded view has to pick up exactly where the preview stopped.
+    const longSingleLine = `${"x".repeat(160)}${"y".repeat(140)}`;
+    expect(stepPreview(longSingleLine)).toEqual({
+      preview: `${"x".repeat(160)}…`,
+      hasMore: true,
+      rest: "y".repeat(140),
+    });
   });
 
   it("does not flag hasMore for trailing whitespace-only lines", () => {
-    expect(stepPreview("only line\n   \n")).toEqual({ preview: "only line", hasMore: false });
+    expect(stepPreview("only line\n   \n")).toEqual({ preview: "only line", hasMore: false, rest: "   \n" });
   });
 });
 
