@@ -29,6 +29,24 @@ Or use the dev entrypoint:
 npm run dev -- ui
 ```
 
+### Live reload while developing
+
+`sf ui`/`npm run dev -- ui` still serves the UI's last **built** bundle
+(`dist/ui`) — editing `ui/src/**` won't do anything until you rebuild. For a
+loop that actually reflects changes as you make them, run these two in
+separate terminals instead of rebuilding by hand:
+
+```bash
+npm run dev:watch    # backend: tsx watch, restarts on any src/ change
+npm run ui:dev        # frontend: vite dev server with HMR, on :5173
+```
+
+Then open **http://localhost:5173** (not the backend's own `:3847`) — Vite
+proxies `/api` calls to the backend for you (see `ui/vite.config.ts`), so
+frontend edits hot-reload and backend edits auto-restart, with no build step
+in between. `dev:watch` also sets `PI_CURSOR_SETTING_SOURCES=all` and
+`STAGEFLOW_ACTIVITY_VERBOSE=1`, so you don't need to set them by hand.
+
 ## Running Tests
 
 CI runs the same checks on every push and pull request:
