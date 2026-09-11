@@ -17,7 +17,10 @@ const ctx = (pipelineId: string) => ({
 describe("resolveForkEmitContext", () => {
   it("C1: stage without fork field returns undefined", () => {
     const { dag } = resolvePipelineDag(
-      [{ id: "clarify" }, { id: "design-doc", needs: "clarify" }],
+      [
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+        { id: "design-doc" },
+      ],
       ctx("linear"),
     );
     expect(resolveForkEmitContext(dag, "clarify")).toBeUndefined();
@@ -47,13 +50,26 @@ describe("resolveForkEmitContext", () => {
   });
 
   it("C4: single-child fork stage returns one successor ID", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        { id: "decide", fork: { select: "one" } },
-        { id: "only-branch", needs: "decide" },
+    // route_select requires >=2 forward route entries (ticket 02), so a
+    // single-successor fork node can no longer be authored through
+    // resolvePipelineDag's route/route_select front end. This exercises
+    // resolveForkEmitContext's own handling of that resolved-DAG shape
+    // directly, the same way the hand-built-DAG tests below this describe
+    // block do.
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "decide",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        { id: "only-branch", needs: "decide", ancestors: ["decide"], stageIndex: 1 },
       ],
-      ctx("single-child-fork"),
-    );
+      roots: ["decide"],
+      childrenOf: { decide: ["only-branch"], "only-branch": [] },
+    };
     expect(resolveForkEmitContext(dag, "decide")).toEqual({
       immediateSuccessorIds: ["only-branch"],
       forkShape: { cardinality: "one", allowNone: false },

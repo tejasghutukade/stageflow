@@ -1,13 +1,14 @@
 id: fork-route-allow-none
 stages:
   - id: clarify
-    fork:
-      select: subset
-      allow_none: true
+    entry: true
+    route_select: subset
+    allow_none: true
+    route:
+      - to: design-doc
+      - to: implementation-plan
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
     uses: ../stages/design-doc.yaml
   - id: implementation-plan
-    needs: clarify
     uses: ../stages/implementation-plan.yaml
