@@ -15,7 +15,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
-| [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` ([upgrading older catalogs](yaml-catalog.md#dual-read-this-release)) |
+| [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
 | [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 

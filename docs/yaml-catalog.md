@@ -74,7 +74,7 @@ Each stage is an object with one of:
 
 `on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
 
-### Dual-read (this release)
+### Upgrading older catalogs {#upgrading-older-catalogs}
 
 **Write Author YAML only:** `io` / `verify` / `on_verify_fail`. That is the catalog dialect for new and migrated files.
 
@@ -127,7 +127,7 @@ After you migrate, you can optionally set `STAGEFLOW_LEGACY_YAML=0` to reject le
 
 #### For contributors
 
-Target dialect compiles in `src/config/yamlDialect.ts`. Dual-read lives in [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts). Dropping dual-read later means deleting that adapter plus the migrator — not renaming runtime IR.
+Target dialect compiles in `src/config/yamlDialect.ts`. Loading legacy author keys lives in [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts). Dropping that adapter later means deleting it plus the migrator — not renaming runtime IR.
 
 ### Model defaults and precedence
 
@@ -167,7 +167,7 @@ Canonical fixtures:
 | Default when `when` is omitted | Types |
 | --- | --- |
 | `[emit]` | `gate` |
-| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Dual-read](#dual-read-this-release)) |
+| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)) |
 
 Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
 
@@ -201,7 +201,7 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `payload_schema` | `id` | — | `after` only; requires `io.output.schema` (optional re-check; emit already validates when that schema is present) |
 | `checkout_changes` | `id` | `path_fields` | `after` only |
 
-Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds`. Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema` (see [Dual-read](#dual-read-this-release) for the legacy field vs this check type); emit-time validation already runs when that schema is present.
+Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds`. Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema` (see [Upgrading older catalogs](#upgrading-older-catalogs) for the legacy field vs this check type); emit-time validation already runs when that schema is present.
 
 ### `on_verify_fail` {#on-verify-fail}
 

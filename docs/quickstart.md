@@ -154,4 +154,4 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
 
-Older catalogs: [upgrading](yaml-catalog.md#dual-read-this-release) and [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (optional `STAGEFLOW_LEGACY_YAML=0`).
+Older catalogs: [upgrading](yaml-catalog.md#upgrading-older-catalogs) and [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (optional `STAGEFLOW_LEGACY_YAML=0`).
