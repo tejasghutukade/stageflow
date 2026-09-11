@@ -310,6 +310,9 @@ export function normalizePipelineStageEntries(
       forkValue = raw.fork as { select: "one" | "subset"; allow_none?: boolean };
     }
 
+    const routeSelect = raw.route_select as "one" | "subset" | undefined;
+    const allowNone = raw.allow_none as boolean | undefined;
+
     let body: NormalizedPipelineStageEntry["body"];
     if (uses) {
       const absolutePath = path.resolve(path.dirname(declaringPath), uses);
@@ -340,6 +343,8 @@ export function normalizePipelineStageEntries(
         : {}),
       ...(route !== undefined ? { route } : {}),
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
+      ...(routeSelect !== undefined ? { route_select: routeSelect } : {}),
+      ...(allowNone !== undefined ? { allow_none: allowNone } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
     };
@@ -376,6 +381,8 @@ export function toWiringRefs(
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
+  route_select?: "one" | "subset";
+  allow_none?: boolean;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
@@ -391,5 +398,7 @@ export function toWiringRefs(
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     ...(entry.route !== undefined ? { route: entry.route } : {}),
     ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
+    ...(entry.route_select !== undefined ? { route_select: entry.route_select } : {}),
+    ...(entry.allow_none !== undefined ? { allow_none: entry.allow_none } : {}),
   }));
 }

@@ -23,6 +23,9 @@ export const WIRING_KEYS = new Set([
   /** Additive, alongside `needs`/`fork`/`feedback_loop` (route-based-pipeline-wiring spec). */
   "route",
   "entry",
+  /** Fork-equivalent selection over `route` (ticket 02, route-based-pipeline-wiring spec). */
+  "route_select",
+  "allow_none",
 ]);
 
 /** Stage body keys. Target: `io` / `verify`. IR/legacy: `payload_schema`, `pre_emit_checks`, `clone_input_schema`. */
