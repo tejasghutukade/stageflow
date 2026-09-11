@@ -1,20 +1,21 @@
 id: diamond-fan-in-accepted
 stages:
   - id: clarify
-    fork:
-      select: subset
-      allow_none: true
+    entry: true
+    route_select: subset
+    allow_none: true
+    route:
+      - to: research
+      - to: validation
     uses: ../stages/clarify.yaml
   - id: research
-    needs: clarify
+    route:
+      - to: synthesize
+        on: [succeeded, failed, skipped]
     uses: ../stages/research.yaml
   - id: validation
-    needs: clarify
+    route:
+      - to: synthesize
     uses: ../stages/validation.yaml
   - id: synthesize
-    needs:
-      - id: research
-        on: [succeeded, failed, skipped]
-      - id: validation
-        on: [succeeded]
     uses: ../stages/synthesize.yaml

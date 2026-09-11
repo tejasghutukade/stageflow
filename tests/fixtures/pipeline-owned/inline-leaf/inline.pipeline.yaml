@@ -2,13 +2,14 @@ id: inline-leaf
 stages:
   - id: decide
     uses: ./decide.yaml
-    fork:
-      select: one
+    entry: true
+    route_select: one
+    route:
+      - to: branch-a
+      - to: branch-b
   - id: branch-a
     uses: ./branch-a.yaml
-    needs: decide
   - id: branch-b
     system_prompt: |
       Inline branch-b stage body.
     model: cursor/auto
-    needs: decide

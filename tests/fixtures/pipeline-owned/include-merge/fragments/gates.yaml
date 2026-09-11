@@ -1,2 +1,5 @@
 stages:
   - uses: ./gate.stage.yaml
+    entry: true
+    route:
+      - to: finish

@@ -1,17 +1,19 @@
 id: clone-fanout-mix
 stages:
   - id: clarify
-    fork:
-      select: subset
+    entry: true
+    route_select: subset
+    route:
+      - to: design-doc
+      - to: implementation-plan
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
     clonable: true
     clone_cap: 5
+    route:
+      - to: join-doc
     uses: ../stages/design-doc.yaml
   - id: implementation-plan
-    needs: clarify
     uses: ../stages/implementation-plan.yaml
   - id: join-doc
-    needs: design-doc
     uses: ../stages/join-doc.yaml

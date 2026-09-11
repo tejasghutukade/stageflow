@@ -4,4 +4,3 @@ include:
 stages:
   - id: finish
     uses: ./finish.yaml
-    needs: gate

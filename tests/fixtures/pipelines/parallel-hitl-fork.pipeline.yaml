@@ -1,10 +1,12 @@
 id: parallel-hitl-fork
 stages:
   - id: clarify
+    entry: true
+    route:
+      - to: design-doc
+      - to: implementation-plan
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
     uses: ../stages/design-doc.yaml
   - id: implementation-plan
-    needs: clarify
     uses: ../stages/implementation-plan.yaml
