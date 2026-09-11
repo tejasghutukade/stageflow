@@ -6,7 +6,8 @@ Minimal single-stage pipeline. Domain-neutral — the stage id and prompts are y
 
 - **`task.input` ↔ entry `io.input.schema`** — `my-task.task.yaml` supplies a structured `input` object; the entry stage (`research.yaml`) declares matching `io.input.schema`.
 - **Unmet entry input** — if the entry stage declares `io.input` and the task omits `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` warn with `task.entry_input_unmet` and continue (existing product behavior).
-- **Author dialect** — new catalogs use `io` / `verify` / `on_verify_fail`. Convert older keys with [`sf migrate-yaml`](../../docs/cli-reference.md#sf-migrate-yaml); see [YAML catalog — Dual-read](../../docs/yaml-catalog.md#dual-read-this-release) (`STAGEFLOW_LEGACY_YAML=0` rejects legacy authoring keys).
+
+This catalog uses `io` only (no `verify` / `on_verify_fail`). For upgrading older field names, see [YAML catalog — Dual-read](../../docs/yaml-catalog.md#dual-read-this-release).
 
 ## Prerequisites
 

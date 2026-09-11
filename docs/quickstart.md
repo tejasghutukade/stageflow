@@ -65,7 +65,7 @@ id: hello
 goal: Run the hello pipeline scaffold.
 ```
 
-Stages are **object entries** with inline bodies or `uses:` paths — not bare string ids. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](yaml-catalog.md) (including [dual-read](yaml-catalog.md#dual-read-this-release)).
+Stages are **object entries** with inline bodies or `uses:` paths — not bare string ids. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](yaml-catalog.md).
 
 ## 2. Validate the catalog
 
@@ -145,8 +145,7 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 
 ## See also
 
-- [YAML catalog](yaml-catalog.md) — author dialect `io` / `verify` / `on_verify_fail`; [dual-read](yaml-catalog.md#dual-read-this-release) vs runtime IR
-- [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) — convert legacy keys; dual-read off with `STAGEFLOW_LEGACY_YAML=0`
+- [YAML catalog](yaml-catalog.md) — author dialect `io` / `verify` / `on_verify_fail`
 - [hello-world example](../examples/hello-world/) — `task.input` ↔ entry `io.input.schema`
 - [feature-loop example](../examples/feature-loop/) — pipeline `schemas:` + `$ref`
 - [CLI reference](cli-reference.md) — all `sf` commands and selected env vars
@@ -154,3 +153,5 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [MCP](mcp.md) — Streamable HTTP tools (`sf ui` or `sf mcp`)
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
+
+Older catalogs: [upgrading](yaml-catalog.md#dual-read-this-release) and [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (optional `STAGEFLOW_LEGACY_YAML=0`).
