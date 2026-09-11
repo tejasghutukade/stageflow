@@ -2643,8 +2643,6 @@ a.topbar__back { text-decoration: none; }
 }
 
 .logpanel {
-  max-width: 780px;
-  margin: 0 auto;
   padding: 0 var(--spacing-6);
 }
 
