@@ -351,65 +351,43 @@ describe("resolvePipelineDag", () => {
     ).not.toThrow();
   });
 
-  it("AE1: fork select:one on a two-child stage sets fork on resolved node", () => {
+  it("AE1: route_select:one on a two-branch stage sets fork on resolved node", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "decide", fork: { select: "one" } },
-        { id: "branch-a", needs: "decide" },
-        { id: "branch-b", needs: "decide" },
+        {
+          id: "decide",
+          entry: true,
+          route_select: "one",
+          route: [{ to: "branch-a" }, { to: "branch-b" }],
+        },
+        { id: "branch-a" },
+        { id: "branch-b" },
       ],
-      ctx("fork-one"),
+      ctx("route-select-one"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
     expect(byId.get("branch-a")?.fork).toBeUndefined();
   });
 
-  it("AE2: fork select:subset with allow_none:true sets fork on resolved node", () => {
+  it("AE2: route_select:subset with allow_none:true sets fork on resolved node", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "decide", fork: { select: "subset", allow_none: true } },
-        { id: "b", needs: "decide" },
-        { id: "c", needs: "decide" },
-        { id: "d", needs: "decide" },
+        {
+          id: "decide",
+          entry: true,
+          route_select: "subset",
+          allow_none: true,
+          route: [{ to: "b" }, { to: "c" }, { to: "d" }],
+        },
+        { id: "b" },
+        { id: "c" },
+        { id: "d" },
       ],
-      ctx("fork-subset"),
+      ctx("route-select-subset"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("decide")?.fork).toEqual({ select: "subset", allow_none: true });
-  });
-
-  it("AE3: fork on a leaf stage is rejected", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [{ id: "decide", fork: { select: "one" } }],
-        ctx("fork-leaf"),
-      ),
-    ).toThrow(/fork on stage "decide": no children/i);
-  });
-
-  it("AE4: fork without select is rejected", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "decide", fork: { allow_none: false } as { select: "one" | "subset"; allow_none?: boolean } },
-          { id: "branch-a", needs: "decide" },
-        ],
-        ctx("fork-no-select"),
-      ),
-    ).toThrow(/select/i);
-  });
-
-  it("AE5: fork with unknown key is rejected", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "decide", fork: { select: "one", mode: "exclusive" } as unknown as { select: "one" | "subset" } },
-          { id: "branch-a", needs: "decide" },
-        ],
-        ctx("fork-unknown-key"),
-      ),
-    ).toThrow(/fork: unknown key "mode"/i);
   });
 
   it("AE6: existing fan-out pipeline without fork field is unaffected", () => {
@@ -599,14 +577,20 @@ describe("resolvePipelineDag", () => {
     expect(run).toThrow(/clonable/);
   });
 
-  it("allows fork and clonable on the same entry", () => {
+  it("allows route_select and clonable on the same entry", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "detect" },
-        { id: "author", needs: "detect", clonable: true, fork: { select: "one" } },
-        { id: "collect", needs: "author" },
+        { id: "detect", entry: true, route: [{ to: "author" }] },
+        {
+          id: "author",
+          clonable: true,
+          route_select: "one",
+          route: [{ to: "collect-a" }, { to: "collect-b" }],
+        },
+        { id: "collect-a" },
+        { id: "collect-b" },
       ],
-      ctx("fork-and-clonable"),
+      ctx("route-select-and-clonable"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("author")?.clonable).toBe(true);

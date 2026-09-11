@@ -278,9 +278,11 @@ describe("YAML dual-read dialect", () => {
         "stages:",
         "  - id: first",
         "    uses: ./first.yaml",
+        "    entry: true",
+        "    route:",
+        "      - to: second",
         "  - id: second",
         "    uses: ./second.yaml",
-        "    needs: [first]",
         "",
       ].join("\n"),
     });
@@ -291,7 +293,7 @@ describe("YAML dual-read dialect", () => {
     expect(outcome.issues?.some((issue) => issue.code === "catalog.legacy_yaml")).toBeFalsy();
   });
 
-  it("loads needs: [single-parent] on a target inline successor", async () => {
+  it("loads route: [{ to: single-child }] on a target inline predecessor", async () => {
     const root = await writeTempCatalog({
       "demo.pipeline.yaml": [
         "id: demo",
@@ -299,10 +301,12 @@ describe("YAML dual-read dialect", () => {
         "  - id: clarify",
         "    system_prompt: Clarify",
         "    model: anthropic/claude-sonnet-4-5",
+        "    entry: true",
+        "    route:",
+        "      - to: design-doc",
         "  - id: design-doc",
         "    system_prompt: Design",
         "    model: anthropic/claude-sonnet-4-5",
-        "    needs: [clarify]",
         "    io:",
         "      output:",
         "        schema:",

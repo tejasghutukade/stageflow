@@ -167,17 +167,17 @@ describe("resolvePipelineDag: route_select / allow_none (ticket 02, branch selec
     ).toThrow(/route_select must be "one" or "subset"/i);
   });
 
-  it("needs, fork, and feedback_loop pipelines that never use route_select are unaffected", () => {
+  it("pipelines with no route_select at all are unaffected (no fork synthesized)", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "clarify", fork: { select: "one" } },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "clarify" },
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }, { to: "implementation-plan" }] },
+        { id: "design-doc" },
+        { id: "implementation-plan" },
       ],
-      ctx("route-select-legacy-fork-unaffected"),
+      ctx("route-select-unused"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("clarify")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("clarify")?.fork).toBeUndefined();
   });
 });
 

@@ -345,7 +345,7 @@ describe("pipelineConfigToYaml", () => {
     expect(yaml).not.toMatch(/^    model:/m);
   });
 
-  it("writes object-form DAG YAML with per-stage needs", () => {
+  it("writes object-form DAG YAML with per-stage route/entry inverted from needs", () => {
     expect(
       pipelineConfigToYaml(
         {
@@ -362,16 +362,18 @@ describe("pipelineConfigToYaml", () => {
         "id: recon-review",
         "stages:",
         "  - id: recon",
+        "    entry: true",
+        "    route:",
+        "      - to: improve-a",
         "    uses: ./recon.yaml",
         "  - id: improve-a",
-        "    needs: recon",
         "    uses: ./improve-a.yaml",
         "",
       ].join("\n"),
     );
   });
 
-  it("writes mixed multi-parent needs arrays", () => {
+  it("writes mixed multi-parent needs arrays inverted into per-source route entries", () => {
     expect(
       pipelineConfigToYaml(
         {
@@ -396,16 +398,19 @@ describe("pipelineConfigToYaml", () => {
         "id: diamond",
         "stages:",
         "  - id: research",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
         "    uses: ./research.yaml",
         "  - id: validation",
-        "    uses: ./validation.yaml",
-        "  - id: synthesize",
-        "    needs:",
-        "      - research",
-        "      - id: validation",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
         "        on:",
         "          - succeeded",
         "          - failed",
+        "    uses: ./validation.yaml",
+        "  - id: synthesize",
         "    uses: ./synthesize.yaml",
         "",
       ].join("\n"),
@@ -474,6 +479,49 @@ describe("createPipeline", () => {
       expect(pathCollision.ok).toBe(false);
       if (pathCollision.ok) return;
       expect(pathCollision.status).toBe(409);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("writes route/entry YAML (not needs) for a needs-chain and loads it back", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const directory = "pipelines";
+
+    try {
+      await writeStage(root, directory, "alpha");
+      await writeStage(root, directory, "beta");
+      await writeStage(root, directory, "gamma");
+
+      const created = await createPipeline(root, {
+        directory,
+        id: "chain-pipeline",
+        stages: [
+          stageRef("alpha"),
+          stageRef("beta", "alpha"),
+          stageRef("gamma", "beta"),
+        ],
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const yaml = await readFile(
+        path.join(root, directory, "chain-pipeline.pipeline.yaml"),
+        "utf8",
+      );
+      expect(yaml).not.toMatch(/needs:/);
+      expect(yaml).toContain("entry: true");
+      expect(yaml).toContain("route:");
+      expect(yaml).toContain("- to: beta");
+      expect(yaml).toContain("- to: gamma");
+
+      await expect(
+        loadPipeline(path.join(root, directory, "chain-pipeline.pipeline.yaml"), {
+          cwd: root,
+        }),
+      ).resolves.toMatchObject({
+        pipeline: { id: "chain-pipeline", stages: ["alpha", "beta", "gamma"] },
+      });
     } finally {
       await cleanup();
     }

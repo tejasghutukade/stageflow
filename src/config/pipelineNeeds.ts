@@ -1,8 +1,8 @@
 import type {
   NeedTerminalState,
   PipelineNeedEdge,
+  PipelineNeedItem,
   PipelineNeeds,
-  PipelineStageRef,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
 
@@ -135,7 +135,7 @@ export function parsePipelineNeeds(
   return { ok: true, value: edges };
 }
 
-export function toNeedEdges(needs: PipelineStageRef["needs"]): PipelineNeedEdge[] {
+export function toNeedEdges(needs: string | PipelineNeedItem[] | undefined): PipelineNeedEdge[] {
   if (needs === undefined) return [];
   if (typeof needs === "string") {
     return needs ? [{ id: needs, on: ["succeeded"] }] : [];

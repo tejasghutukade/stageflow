@@ -7,7 +7,6 @@ import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type {
   NormalizedPipelineStageEntry,
-  PipelineNeeds,
   PipelineRouteEntry,
 } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
@@ -25,9 +24,7 @@ import {
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
-import { parsePipelineNeeds } from "./pipelineNeeds.js";
 import { parsePipelineRoute } from "./pipelineRoute.js";
-import { parseFeedbackLoopConfig } from "./resolvePipelineDag.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -191,6 +188,37 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
+    if (raw.needs !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "needs" is no longer supported — declare the wiring on the source stage's "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.fork !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "fork" is no longer supported — use "route_select"/"allow_none" alongside "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.feedback_loop !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+
     let compiledBody: Record<string, unknown> | undefined;
     let policyOutcome: ReturnType<typeof parseExecutionPolicy>;
     if (dialect === "target") {
@@ -223,24 +251,6 @@ export function normalizePipelineStageEntries(
     }
     if (!policyOutcome.ok) return policyOutcome;
 
-    let needs: PipelineNeeds | undefined;
-
-    let feedbackLoop: NormalizedPipelineStageEntry["feedback_loop"] | undefined;
-    if (raw.feedback_loop !== undefined) {
-      try {
-        feedbackLoop = parseFeedbackLoopConfig(raw.feedback_loop, id, ctx);
-      } catch (err) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: err instanceof Error ? err.message : String(err),
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
-    }
-
     if (raw.replay_safe !== undefined && typeof raw.replay_safe !== "boolean") {
       return loadFailure([
         {
@@ -250,21 +260,6 @@ export function normalizePipelineStageEntries(
           pipelineId: ctx.pipelineId,
         },
       ]);
-    }
-
-    if (raw.needs !== undefined) {
-      const parsedNeeds = parsePipelineNeeds(raw.needs, id);
-      if (!parsedNeeds.ok) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedNeeds.message}`,
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
-      needs = parsedNeeds.value;
     }
 
     let route: PipelineRouteEntry[] | undefined;
@@ -295,21 +290,6 @@ export function normalizePipelineStageEntries(
     }
     const entryFlag = raw.entry as boolean | undefined;
 
-    let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
-    if (raw.fork !== undefined) {
-      if (!isPlainObject(raw.fork)) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": fork must be an object`,
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
-      forkValue = raw.fork as { select: "one" | "subset"; allow_none?: boolean };
-    }
-
     const routeSelect = raw.route_select as "one" | "subset" | undefined;
     const allowNone = raw.allow_none as boolean | undefined;
 
@@ -325,8 +305,6 @@ export function normalizePipelineStageEntries(
       id,
       declaringPath,
       body,
-      ...(needs !== undefined ? { needs } : {}),
-      ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
       ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
       ...(policyOutcome.value.completion !== undefined
@@ -334,9 +312,6 @@ export function normalizePipelineStageEntries(
         : {}),
       ...(policyOutcome.value.recovery !== undefined
         ? { recovery: policyOutcome.value.recovery }
-        : {}),
-      ...(feedbackLoop !== undefined
-        ? { feedback_loop: feedbackLoop }
         : {}),
       ...(raw.replay_safe !== undefined
         ? { replay_safe: raw.replay_safe as boolean }
@@ -371,13 +346,10 @@ export function toWiringRefs(
   entries: NormalizedPipelineStageEntry[],
 ): Array<{
   id: string;
-  needs?: PipelineNeeds;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: NormalizedPipelineStageEntry["feedback_loop"];
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
@@ -386,15 +358,10 @@ export function toWiringRefs(
 }> {
   return entries.map((entry) => ({
     id: entry.id,
-    ...(entry.needs !== undefined ? { needs: entry.needs } : {}),
-    ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
     ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
     ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
     ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
     ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
-    ...(entry.feedback_loop !== undefined
-      ? { feedback_loop: entry.feedback_loop }
-      : {}),
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     ...(entry.route !== undefined ? { route: entry.route } : {}),
     ...(entry.entry !== undefined ? { entry: entry.entry } : {}),

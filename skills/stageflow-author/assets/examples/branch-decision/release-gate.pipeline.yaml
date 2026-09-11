@@ -3,14 +3,15 @@ model: anthropic/claude-sonnet-4-5
 stages:
   - id: run-tests
     uses: ./run-tests.yaml
-    fork:
-      select: one
+    entry: true
+    route_select: one
+    route:
+      - to: hotfix
+      - to: ship
   - id: hotfix
     uses: ./hotfix.yaml
-    needs: [run-tests]
   - id: ship
     uses: ./ship.yaml
-    needs: [run-tests]
     on_verify_fail:
       mode: manual
       retry_safety: side_effecting

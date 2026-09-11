@@ -12,10 +12,8 @@ import type {
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
-import { parsePipelineNeeds, predecessorEdges, toNeedEdges } from "./pipelineNeeds.js";
+import { predecessorEdges } from "./pipelineNeeds.js";
 import { parsePipelineRoute, toRouteEdges, toRouteLoopEntries } from "./pipelineRoute.js";
-
-const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
 type NormalizedEdge = {
   id: string;
@@ -27,7 +25,6 @@ type NormalizedEdge = {
   routeLoopEntries: PipelineRouteLoopEntry[];
   entry?: boolean;
   stageIndex: number;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
   /** Fork-equivalent selection declared as flat siblings of `route` (ticket 02). */
   route_select?: "one" | "subset";
   allow_none?: boolean;
@@ -35,7 +32,6 @@ type NormalizedEdge = {
   clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
 };
 
@@ -54,73 +50,6 @@ function formatError(ctx: ResolvePipelineDagContext, message: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-const ALLOWED_FEEDBACK_LOOP_KEYS = new Set([
-  "target",
-  "max_replays",
-  "on_max_replays",
-  "replay_session",
-]);
-
-export function parseFeedbackLoopConfig(
-  value: unknown,
-  stageId: string,
-  ctx: ResolvePipelineDagContext,
-): FeedbackLoopConfig {
-  if (!isPlainObject(value)) {
-    throw new Error(formatError(ctx, `stage "${stageId}": feedback_loop must be an object`));
-  }
-  for (const key of Object.keys(value)) {
-    if (!ALLOWED_FEEDBACK_LOOP_KEYS.has(key)) {
-      throw new Error(
-        formatError(ctx, `stage "${stageId}": feedback_loop: unknown key "${key}"`),
-      );
-    }
-  }
-  if (Array.isArray(value.target)) {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.target must be a single stage id string, not an array`,
-      ),
-    );
-  }
-  if (typeof value.target !== "string" || value.target.trim() === "") {
-    throw new Error(
-      formatError(ctx, `stage "${stageId}": feedback_loop.target must be a non-empty stage id`),
-    );
-  }
-  if (!Number.isInteger(value.max_replays) || (value.max_replays as number) < 1) {
-    throw new Error(
-      formatError(ctx, `stage "${stageId}": feedback_loop.max_replays must be a positive integer`),
-    );
-  }
-  if (
-    value.on_max_replays !== "require_continue" &&
-    value.on_max_replays !== "wait_for_human"
-  ) {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.on_max_replays must be "require_continue" or "wait_for_human"`,
-      ),
-    );
-  }
-  if (value.replay_session !== "resume" && value.replay_session !== "new_session") {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.replay_session must be "resume" or "new_session"`,
-      ),
-    );
-  }
-  return {
-    target: value.target,
-    max_replays: value.max_replays as number,
-    on_max_replays: value.on_max_replays as FeedbackLoopConfig["on_max_replays"],
-    replay_session: value.replay_session as FeedbackLoopConfig["replay_session"],
-  };
 }
 
 export function parsePipelineStageEntries(
@@ -161,17 +90,29 @@ export function parsePipelineStageEntries(
       throw new Error(formatError(ctx, `invalid stage entry at index ${index}: id must be a non-empty string`));
     }
 
-    let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
+    if (entry.needs !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${entry.id}": "needs" is no longer supported — declare the wiring on the source stage's "route" instead`,
+        ),
+      );
+    }
     if (entry.fork !== undefined) {
-      if (!isPlainObject(entry.fork)) {
-        throw new Error(formatError(ctx, `stage "${entry.id}": fork must be an object`));
-      }
-      for (const fk of Object.keys(entry.fork)) {
-        if (!ALLOWED_FORK_KEYS.has(fk)) {
-          throw new Error(formatError(ctx, `stage "${entry.id}": fork: unknown key "${fk}"`));
-        }
-      }
-      forkValue = entry.fork as { select: "one" | "subset"; allow_none?: boolean };
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${entry.id}": "fork" is no longer supported — use "route_select"/"allow_none" alongside "route" instead`,
+        ),
+      );
+    }
+    if (entry.feedback_loop !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${entry.id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
+        ),
+      );
     }
 
     const clonableFields: Pick<PipelineStageYamlEntry, "clonable" | "clone_cap"> = {
@@ -195,10 +136,6 @@ export function parsePipelineStageEntries(
         ? { recovery: policyOutcome.value.recovery }
         : {}),
     };
-    const feedbackLoopFields =
-      entry.feedback_loop !== undefined
-        ? { feedback_loop: parseFeedbackLoopConfig(entry.feedback_loop, entry.id, ctx) }
-        : {};
     if (entry.replay_safe !== undefined && typeof entry.replay_safe !== "boolean") {
       throw new Error(
         formatError(ctx, `stage "${entry.id}": replay_safe must be a boolean`),
@@ -229,34 +166,10 @@ export function parsePipelineStageEntries(
     const allowNoneFields =
       entry.allow_none !== undefined ? { allow_none: entry.allow_none as boolean } : {};
 
-    if (entry.needs === undefined) {
-      entries.push({
-        id: entry.id,
-        ...(forkValue !== undefined ? { fork: forkValue } : {}),
-        ...clonableFields,
-        ...policyFields,
-        ...feedbackLoopFields,
-        ...replaySafetyFields,
-        ...routeFields,
-        ...entryFields,
-        ...routeSelectFields,
-        ...allowNoneFields,
-      });
-      continue;
-    }
-
-    const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
-    if (!parsedNeeds.ok) {
-      throw new Error(formatError(ctx, parsedNeeds.message));
-    }
-
     entries.push({
       id: entry.id,
-      needs: parsedNeeds.value,
-      ...(forkValue !== undefined ? { fork: forkValue } : {}),
       ...clonableFields,
       ...policyFields,
-      ...feedbackLoopFields,
       ...replaySafetyFields,
       ...routeFields,
       ...entryFields,
@@ -270,7 +183,7 @@ export function parsePipelineStageEntries(
 
 function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
   return entries.map((entry, index) => {
-    const needsEdges = toNeedEdges(entry.needs);
+    const needsEdges: PipelineNeedEdge[] = [];
     const routeEdges = toRouteEdges(entry.route);
     const routeLoopEntries = toRouteLoopEntries(entry.route);
     return {
@@ -281,12 +194,10 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
       routeLoopEntries,
       stageIndex: index,
       ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
-      ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
       ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
       ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
       ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
       ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
-      ...(entry.feedback_loop !== undefined ? { feedback_loop: entry.feedback_loop } : {}),
       ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
       ...(entry.route_select !== undefined ? { route_select: entry.route_select } : {}),
       ...(entry.allow_none !== undefined ? { allow_none: entry.allow_none } : {}),
@@ -301,17 +212,6 @@ function detectDuplicateIds(edges: NormalizedEdge[], ctx: ResolvePipelineDagCont
       throw new Error(formatError(ctx, `duplicate stage "${edge.id}"`));
     }
     seen.add(edge.id);
-  }
-}
-
-function validateNeedsTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
-  const declared = new Set(edges.map((edge) => edge.id));
-  for (const edge of edges) {
-    for (const parent of edge.needsEdges) {
-      if (!declared.has(parent.id)) {
-        throw new Error(formatError(ctx, `stage "${edge.id}" has unknown needs "${parent.id}"`));
-      }
-    }
   }
 }
 
@@ -353,10 +253,9 @@ function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipeli
 /**
  * Fork-equivalent validation for `route_select` (ticket 02): requires at
  * least two of the declaring stage's own forward `route` entries — the
- * inverse framing of today's `fork` rejection on a leaf with no children
- * (`validateForkFields`). Loop entries never appear in `routeEdges`
- * (`toRouteEdges` skips them), so this only counts forward entries, as the
- * spec requires.
+ * inverse framing of today's now-removed `fork` rejection on a leaf with no
+ * children. Loop entries never appear in `routeEdges` (`toRouteEdges` skips
+ * them), so this only counts forward entries, as the spec requires.
  */
 function validateRouteSelectFields(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
   for (const edge of edges) {
@@ -615,48 +514,21 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
     ...(edge.entry === true ? { entry: true } : {}),
-    ...(edge.fork !== undefined
-      ? { fork: { select: edge.fork.select, allow_none: edge.fork.allow_none ?? false } }
-      : edge.route_select !== undefined
-        ? { fork: { select: edge.route_select, allow_none: edge.allow_none ?? false } }
-        : {}),
+    ...(edge.route_select !== undefined
+      ? { fork: { select: edge.route_select, allow_none: edge.allow_none ?? false } }
+      : {}),
     ...(edge.clonable === true
       ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
       : {}),
     ...(edge.completion !== undefined ? { completion: edge.completion } : {}),
     ...(edge.recovery !== undefined ? { recovery: edge.recovery } : {}),
-    ...(edge.feedback_loop !== undefined
-      ? { feedback_loop: edge.feedback_loop }
-      : edge.routeLoopEntries.length === 1
-        ? { feedback_loop: toFeedbackLoopConfigFromRouteLoopEntry(edge.routeLoopEntries[0]!) }
-        : {}),
+    ...(edge.routeLoopEntries.length === 1
+      ? { feedback_loop: toFeedbackLoopConfigFromRouteLoopEntry(edge.routeLoopEntries[0]!) }
+      : {}),
     ...(edge.replay_safe !== undefined ? { replay_safe: edge.replay_safe } : {}),
   }));
 
   return { nodes, roots, childrenOf };
-}
-
-function validateForkFields(
-  edges: NormalizedEdge[],
-  dag: ResolvedPipelineDag,
-  ctx: ResolvePipelineDagContext,
-): void {
-  for (const edge of edges) {
-    if (!edge.fork) continue;
-    if (edge.fork.select !== "one" && edge.fork.select !== "subset") {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${edge.id}": fork.select must be "one" or "subset"${edge.fork.select === undefined ? " (missing)" : `, got "${String(edge.fork.select)}"`}`,
-        ),
-      );
-    }
-    if ((dag.childrenOf[edge.id] ?? []).length === 0) {
-      throw new Error(
-        formatError(ctx, `fork on stage "${edge.id}": no children in the DAG`),
-      );
-    }
-  }
 }
 
 function validateClonableFields(
@@ -741,7 +613,6 @@ export function resolvePipelineDagFromRefs(
 ): { stages: string[]; dag: ResolvedPipelineDag } {
   const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
-  validateNeedsTargets(edges, ctx);
   validateRouteTargets(edges, ctx);
   validateRouteSelectFields(edges, ctx);
   validateRouteLoopEntryCount(edges, ctx);
@@ -754,7 +625,6 @@ export function resolvePipelineDagFromRefs(
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
   const dag = buildResolvedPipelineDag(edges);
-  validateForkFields(edges, dag, ctx);
   validateClonableFields(edges, dag, ctx);
   validateFeedbackLoopFields(dag, ctx);
 
@@ -836,9 +706,8 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
       if (!isAllowedPipelineStageEntryKey(key)) return null;
     }
     if (typeof entry.id !== "string" || !entry.id) return null;
-    if (entry.needs !== undefined) {
-      const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
-      if (!parsedNeeds.ok) return null;
+    if (entry.needs !== undefined || entry.fork !== undefined || entry.feedback_loop !== undefined) {
+      return null;
     }
     stageIds.push(entry.id);
   }

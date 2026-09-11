@@ -83,18 +83,15 @@ export type FeedbackLoopConfig = {
 
 export type PipelineStageRef = {
   id: string;
-  needs?: string | PipelineNeedItem[];
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
   /** IR: after-phase checks. YAML: `verify` items whose `when` includes `after`. */
   completion?: CompletionContract;
   /** IR: after-phase failure policy. YAML: `on_verify_fail`. */
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   /** Omitted means this stage is safe to include in a feedback replay. */
   replay_safe?: boolean;
-  /** Additive, alongside `needs`/`fork`/`feedback_loop` (see route-based-pipeline-wiring spec). */
+  /** Pipeline wiring vocabulary (see route-based-pipeline-wiring spec). */
   route?: PipelineRouteEntry[];
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
@@ -141,14 +138,11 @@ export type PipelineFragmentConfig = {
 
 export type NormalizedPipelineStageEntry = {
   id: string;
-  needs?: PipelineNeeds;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
   clone_cap?: number;
   /** IR after compile. YAML `verify` after-phase / `on_verify_fail`. */
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;

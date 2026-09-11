@@ -349,6 +349,9 @@ describe("sf run --json completion (U3)", () => {
         "stages:",
         "  - id: intake",
         "    system_prompt: Collect input",
+        "    entry: true",
+        "    route:",
+        "      - to: follow",
         "    io:",
         "      input:",
         "        schema:",
@@ -359,7 +362,6 @@ describe("sf run --json completion (U3)", () => {
         "              type: string",
         "  - id: follow",
         "    system_prompt: Continue the work",
-        "    needs: [intake]",
         "",
       ].join("\n"),
     );

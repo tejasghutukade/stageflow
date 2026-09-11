@@ -304,23 +304,19 @@ describe("resolvePipelineDag: route loop entries (ticket 03)", () => {
     ).toThrow(/duplicate target "plan"/i);
   });
 
-  it("needs/fork/feedback_loop pipelines are unaffected by loop route parsing (no route/entry usage)", () => {
-    const policy = {
-      target: "implement",
-      max_replays: 2,
-      on_max_replays: "require_continue" as const,
-      replay_session: "resume" as const,
-    };
+  it("pipelines with no loop route entries at all are unaffected (no feedback_loop synthesized)", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "plan" },
-        { id: "implement", needs: "plan" },
-        { id: "review", needs: "implement", feedback_loop: policy },
-        { id: "submit", needs: "review" },
+        { id: "plan", entry: true, route: [{ to: "implement" }] },
+        { id: "implement", route: [{ to: "review" }] },
+        { id: "review", route: [{ to: "submit" }] },
+        { id: "submit" },
       ],
-      ctx("route-loop-legacy-unaffected"),
+      ctx("route-loop-unused"),
     );
-    expect(dag.nodes.find((node) => node.id === "review")?.feedback_loop).toEqual(policy);
+    for (const node of dag.nodes) {
+      expect(node.feedback_loop).toBeUndefined();
+    }
   });
 });
 

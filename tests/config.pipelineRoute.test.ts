@@ -251,16 +251,16 @@ describe("resolvePipelineDag: route (ticket 01, forward routing only)", () => {
     ).toThrow(/entry must be a boolean/i);
   });
 
-  it("needs, fork, and feedback_loop pipelines that never use route/entry are unaffected (no entry-stage requirement)", () => {
+  it("pipelines that declare no route/entry wiring at all are unaffected (no entry-stage requirement)", () => {
     const { dag } = resolvePipelineDag(
       [
         { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "clarify" },
+        { id: "design-doc" },
+        { id: "implementation-plan" },
       ],
       ctx("route-unused"),
     );
-    expect(dag.roots).toEqual(["clarify"]);
+    expect(dag.roots).toEqual(["clarify", "design-doc", "implementation-plan"]);
     for (const node of dag.nodes) {
       expect(node.entry).toBeUndefined();
     }

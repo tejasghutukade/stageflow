@@ -84,6 +84,9 @@ describe("mergePipelineStages", () => {
         "    model: anthropic/claude-sonnet-4-5",
         "    payload_schema:",
         "      type: object",
+        "    entry: true",
+        "    route:",
+        "      - to: finish",
         "",
       ].join("\n"),
     );
@@ -97,7 +100,6 @@ describe("mergePipelineStages", () => {
         "  - id: finish",
         "    system_prompt: Finish",
         "    model: anthropic/claude-sonnet-4-5",
-        "    needs: [gate]",
         "    io:",
         "      output:",
         "        schema:",

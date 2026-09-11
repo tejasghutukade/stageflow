@@ -125,24 +125,33 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.value[0]?.clone_cap).toBe(3);
   });
 
-  it("normalizes mixed needs arrays and keeps scalar needs as a string", () => {
+  it("normalizes route entries with mixed on gates", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
-          raw: { id: "research", system_prompt: "p", model: "m" },
+          raw: {
+            id: "research",
+            entry: true,
+            route: [{ to: "synthesize" }],
+            system_prompt: "p",
+            model: "m",
+          },
           declaringPath: "/tmp/pipeline.yaml",
         },
         {
-          raw: { id: "validation", system_prompt: "p", model: "m" },
+          raw: {
+            id: "validation",
+            entry: true,
+            route: [{ to: "synthesize", on: ["succeeded", "failed"] }],
+            system_prompt: "p",
+            model: "m",
+          },
           declaringPath: "/tmp/pipeline.yaml",
         },
         {
           raw: {
             id: "synthesize",
-            needs: [
-              "research",
-              { id: "validation", on: ["succeeded", "failed"] },
-            ],
+            route: [{ to: "followup" }],
             system_prompt: "p",
             model: "m",
           },
@@ -151,7 +160,6 @@ describe("normalizePipelineStageEntries", () => {
         {
           raw: {
             id: "followup",
-            needs: "synthesize",
             system_prompt: "p",
             model: "m",
           },
@@ -162,29 +170,27 @@ describe("normalizePipelineStageEntries", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value[2]?.needs).toEqual([
-      { id: "research", on: ["succeeded"] },
-      { id: "validation", on: ["succeeded", "failed"] },
+    expect(outcome.value[0]?.route).toEqual([{ to: "synthesize", on: ["succeeded"] }]);
+    expect(outcome.value[1]?.route).toEqual([
+      { to: "synthesize", on: ["succeeded", "failed"] },
     ]);
-    expect(outcome.value[3]?.needs).toBe("synthesize");
-    expect(toWiringRefs(outcome.value).map((ref) => ref.needs)).toEqual([
+    expect(outcome.value[2]?.route).toEqual([{ to: "followup", on: ["succeeded"] }]);
+    expect(toWiringRefs(outcome.value).map((ref) => ref.route)).toEqual([
+      [{ to: "synthesize", on: ["succeeded"] }],
+      [{ to: "synthesize", on: ["succeeded", "failed"] }],
+      [{ to: "followup", on: ["succeeded"] }],
       undefined,
-      undefined,
-      [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded", "failed"] },
-      ],
-      "synthesize",
     ]);
   });
 
-  it("accepts a one-element needs array", () => {
+  it("accepts a one-element route array", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
           raw: {
-            id: "design-doc",
-            needs: ["clarify"],
+            id: "clarify",
+            entry: true,
+            route: [{ to: "design-doc" }],
             system_prompt: "p",
             model: "m",
           },
@@ -195,7 +201,7 @@ describe("normalizePipelineStageEntries", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value[0]?.needs).toEqual([{ id: "clarify", on: ["succeeded"] }]);
+    expect(outcome.value[0]?.route).toEqual([{ to: "design-doc", on: ["succeeded"] }]);
   });
 
   it("accepts uses plus on_verify_fail as wiring", () => {
