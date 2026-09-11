@@ -259,7 +259,14 @@ function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipeli
  */
 function validateRouteSelectFields(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
   for (const edge of edges) {
-    if (edge.route_select === undefined) continue;
+    if (edge.route_select === undefined) {
+      if (edge.allow_none !== undefined) {
+        throw new Error(
+          formatError(ctx, `stage "${edge.id}": allow_none requires route_select`),
+        );
+      }
+      continue;
+    }
     if (edge.route_select !== "one" && edge.route_select !== "subset") {
       throw new Error(
         formatError(
@@ -314,7 +321,7 @@ function mergeRouteEdgesIntoNeeds(edges: NormalizedEdge[]): void {
  */
 function validateEntryStageUsage(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
   const usesRouteVocabulary = edges.some(
-    (edge) => edge.entry !== undefined || edge.routeEdges.length > 0,
+    (edge) => edge.entry === true || edge.routeEdges.length > 0,
   );
   if (!usesRouteVocabulary) return;
 

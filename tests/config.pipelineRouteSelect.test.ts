@@ -167,6 +167,24 @@ describe("resolvePipelineDag: route_select / allow_none (ticket 02, branch selec
     ).toThrow(/route_select must be "one" or "subset"/i);
   });
 
+  it("rejects allow_none set without route_select, instead of silently dropping it", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          {
+            id: "clarify",
+            entry: true,
+            allow_none: true,
+            route: [{ to: "design-doc" }, { to: "implementation-plan" }],
+          },
+          { id: "design-doc" },
+          { id: "implementation-plan" },
+        ],
+        ctx("allow-none-without-route-select"),
+      ),
+    ).toThrow(/allow_none requires route_select/i);
+  });
+
   it("pipelines with no route_select at all are unaffected (no fork synthesized)", () => {
     const { dag } = resolvePipelineDag(
       [

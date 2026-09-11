@@ -251,6 +251,17 @@ describe("resolvePipelineDag: route (ticket 01, forward routing only)", () => {
     ).toThrow(/entry must be a boolean/i);
   });
 
+  it("entry: false is equivalent to omitting entry — it does not by itself require another stage to be entry: true", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        { id: "clarify", entry: false },
+        { id: "design-doc" },
+      ],
+      ctx("route-entry-false-no-vocabulary"),
+    );
+    expect(dag.roots.sort()).toEqual(["clarify", "design-doc"]);
+  });
+
   it("pipelines that declare no route/entry wiring at all are unaffected (no entry-stage requirement)", () => {
     const { dag } = resolvePipelineDag(
       [
