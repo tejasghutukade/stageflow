@@ -20,6 +20,9 @@ export const WIRING_KEYS = new Set([
   "on_verify_fail",
   "feedback_loop",
   "replay_safe",
+  /** Additive, alongside `needs`/`fork`/`feedback_loop` (route-based-pipeline-wiring spec). */
+  "route",
+  "entry",
 ]);
 
 /** Stage body keys. Target: `io` / `verify`. IR/legacy: `payload_schema`, `pre_emit_checks`, `clone_input_schema`. */

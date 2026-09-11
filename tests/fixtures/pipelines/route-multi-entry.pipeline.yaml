@@ -1,0 +1,14 @@
+id: route-multi-entry
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: implementation-plan
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    entry: true
+    route:
+      - to: implementation-plan
+    uses: ../stages/design-doc.yaml
+  - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml

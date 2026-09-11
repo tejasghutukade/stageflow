@@ -29,6 +29,44 @@ export type PipelineNeedItem = string | { id: string; on?: NeedTerminalState[] }
 
 export type PipelineNeeds = string | PipelineNeedEdge[];
 
+/**
+ * Terminal states a route entry (or its inverted predecessor edge) can gate on.
+ * Same domain as `NeedTerminalState` — kept as a distinct alias since `route`
+ * is a separate vocabulary from `needs` (see docs/specs/route-based-pipeline-wiring.md).
+ */
+export type RouteTerminalState = NeedTerminalState;
+
+/**
+ * A forward route entry: hands off from the declaring stage to `to`, gated on
+ * the declaring stage's own terminal state (`on`, defaulting to succeeded-only).
+ */
+export type PipelineRouteForwardEntry = {
+  to: string;
+  on?: RouteTerminalState | RouteTerminalState[];
+};
+
+/**
+ * Reserved for ticket 03 (loop routing): `{ type: "loop"; to: string; max_replays: ...; ... }`.
+ * Declared now so `PipelineRouteEntry` is already the discriminated union ticket 03
+ * extends — a forward entry carries no `type` field, so the two stay distinguishable
+ * once the loop variant is implemented. Not parsed or resolved by this ticket.
+ */
+export type PipelineRouteLoopEntry = {
+  type: "loop";
+  to: string;
+};
+
+export type PipelineRouteEntry = PipelineRouteForwardEntry | PipelineRouteLoopEntry;
+
+/** A stage's outbound `route` field: where execution goes next. */
+export type PipelineRoute = PipelineRouteEntry[];
+
+/** Normalized forward route edge (post-parse): `on` is always populated. */
+export type PipelineRouteEdge = {
+  to: string;
+  on: RouteTerminalState[];
+};
+
 /** Runtime feedback-loop policy declared by the stage that can send work back. */
 export type FeedbackLoopConfig = {
   target: string;
@@ -50,6 +88,10 @@ export type PipelineStageRef = {
   feedback_loop?: FeedbackLoopConfig;
   /** Omitted means this stage is safe to include in a feedback replay. */
   replay_safe?: boolean;
+  /** Additive, alongside `needs`/`fork`/`feedback_loop` (see route-based-pipeline-wiring spec). */
+  route?: PipelineRouteEntry[];
+  /** Marks this stage as a pipeline entry point. */
+  entry?: boolean;
 };
 
 /**
@@ -94,6 +136,8 @@ export type NormalizedPipelineStageEntry = {
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
   skill?: string;
   mcp?: string[];
   body:
@@ -122,6 +166,8 @@ export type ResolvedPipelineStageNode = {
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  /** Present (true) only when this stage was declared `entry: true`. */
+  entry?: boolean;
 };
 
 export type ResolvedPipelineDag = {

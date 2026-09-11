@@ -1,0 +1,8 @@
+id: route-missing-entry
+stages:
+  - id: clarify
+    route:
+      - to: design-doc
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    uses: ../stages/design-doc.yaml

@@ -5,7 +5,11 @@
  */
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
-import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
+import type {
+  NormalizedPipelineStageEntry,
+  PipelineNeeds,
+  PipelineRouteEntry,
+} from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
 import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
@@ -22,6 +26,7 @@ import {
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
 import { parsePipelineNeeds } from "./pipelineNeeds.js";
+import { parsePipelineRoute } from "./pipelineRoute.js";
 import { parseFeedbackLoopConfig } from "./resolvePipelineDag.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -262,6 +267,34 @@ export function normalizePipelineStageEntries(
       needs = parsedNeeds.value;
     }
 
+    let route: PipelineRouteEntry[] | undefined;
+    if (raw.route !== undefined) {
+      const parsedRoute = parsePipelineRoute(raw.route, id);
+      if (!parsedRoute.ok) {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedRoute.message}`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+      route = parsedRoute.value;
+    }
+
+    if (raw.entry !== undefined && typeof raw.entry !== "boolean") {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": entry must be a boolean`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    const entryFlag = raw.entry as boolean | undefined;
+
     let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
     if (raw.fork !== undefined) {
       if (!isPlainObject(raw.fork)) {
@@ -305,6 +338,8 @@ export function normalizePipelineStageEntries(
       ...(raw.replay_safe !== undefined
         ? { replay_safe: raw.replay_safe as boolean }
         : {}),
+      ...(route !== undefined ? { route } : {}),
+      ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
     };
@@ -339,6 +374,8 @@ export function toWiringRefs(
   recovery?: RecoveryPolicy;
   feedback_loop?: NormalizedPipelineStageEntry["feedback_loop"];
   replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
@@ -352,5 +389,7 @@ export function toWiringRefs(
       ? { feedback_loop: entry.feedback_loop }
       : {}),
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
+    ...(entry.route !== undefined ? { route: entry.route } : {}),
+    ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
   }));
 }

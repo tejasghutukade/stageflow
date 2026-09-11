@@ -1,0 +1,11 @@
+id: route-cycle
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: design-doc
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    route:
+      - to: clarify
+    uses: ../stages/design-doc.yaml

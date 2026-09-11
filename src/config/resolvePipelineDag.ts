@@ -1,5 +1,7 @@
 import type {
   PipelineNeedEdge,
+  PipelineRouteEdge,
+  PipelineRouteEntry,
   PipelineStageRef,
   PipelineStageYamlEntry,
   ResolvedPipelineDag,
@@ -10,6 +12,7 @@ import type { CompletionContract, RecoveryPolicy } from "../types/completion.js"
 import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
 import { parsePipelineNeeds, predecessorEdges, toNeedEdges } from "./pipelineNeeds.js";
+import { parsePipelineRoute, toRouteEdges } from "./pipelineRoute.js";
 
 const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
@@ -17,6 +20,9 @@ type NormalizedEdge = {
   id: string;
   needs: string | null;
   needsEdges: PipelineNeedEdge[];
+  /** This stage's own outbound `route` entries (forward direction, not yet inverted). */
+  routeEdges: PipelineRouteEdge[];
+  entry?: boolean;
   stageIndex: number;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
   clonable?: boolean;
@@ -195,6 +201,21 @@ export function parsePipelineStageEntries(
     const replaySafetyFields =
       entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {};
 
+    let routeValue: PipelineRouteEntry[] | undefined;
+    if (entry.route !== undefined) {
+      const parsedRoute = parsePipelineRoute(entry.route, entry.id);
+      if (!parsedRoute.ok) {
+        throw new Error(formatError(ctx, parsedRoute.message));
+      }
+      routeValue = parsedRoute.value;
+    }
+    const routeFields = routeValue !== undefined ? { route: routeValue } : {};
+
+    if (entry.entry !== undefined && typeof entry.entry !== "boolean") {
+      throw new Error(formatError(ctx, `stage "${entry.id}": entry must be a boolean`));
+    }
+    const entryFields = entry.entry !== undefined ? { entry: entry.entry as boolean } : {};
+
     if (entry.needs === undefined) {
       entries.push({
         id: entry.id,
@@ -203,6 +224,8 @@ export function parsePipelineStageEntries(
         ...policyFields,
         ...feedbackLoopFields,
         ...replaySafetyFields,
+        ...routeFields,
+        ...entryFields,
       });
       continue;
     }
@@ -220,6 +243,8 @@ export function parsePipelineStageEntries(
       ...policyFields,
       ...feedbackLoopFields,
       ...replaySafetyFields,
+      ...routeFields,
+      ...entryFields,
     });
   }
 
@@ -229,11 +254,14 @@ export function parsePipelineStageEntries(
 function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
   return entries.map((entry, index) => {
     const needsEdges = toNeedEdges(entry.needs);
+    const routeEdges = toRouteEdges(entry.route);
     return {
       id: entry.id,
       needs: needsEdges.length === 1 ? needsEdges[0]!.id : null,
       needsEdges,
+      routeEdges,
       stageIndex: index,
+      ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
       ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
       ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
       ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
@@ -263,6 +291,82 @@ function validateNeedsTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagCo
         throw new Error(formatError(ctx, `stage "${edge.id}" has unknown needs "${parent.id}"`));
       }
     }
+  }
+}
+
+function validateRouteTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+  const declared = new Set(edges.map((edge) => edge.id));
+  for (const edge of edges) {
+    for (const route of edge.routeEdges) {
+      if (!declared.has(route.to)) {
+        throw new Error(
+          formatError(ctx, `stage "${edge.id}" has unknown route target "${route.to}"`),
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Inverts each stage's own outbound `route` entries into predecessor edges on
+ * their targets, stored under the same `needs`/`needsEdges` fields the
+ * resolver already produces from `needs` — so cycle detection, ancestor
+ * computation, topological sort, and childrenOf all pick route-declared
+ * fan-in/fan-out up for free, with no changes to that machinery.
+ */
+function mergeRouteEdgesIntoNeeds(edges: NormalizedEdge[]): void {
+  const byId = new Map(edges.map((edge) => [edge.id, edge]));
+  const inbound = new Map<string, PipelineNeedEdge[]>();
+
+  for (const edge of edges) {
+    for (const route of edge.routeEdges) {
+      const list = inbound.get(route.to) ?? [];
+      list.push({ id: edge.id, on: route.on });
+      inbound.set(route.to, list);
+    }
+  }
+
+  for (const [targetId, incoming] of inbound) {
+    const target = byId.get(targetId);
+    if (!target || incoming.length === 0) continue;
+    target.needsEdges = [...target.needsEdges, ...incoming];
+    target.needs = target.needsEdges.length === 1 ? target.needsEdges[0]!.id : null;
+  }
+}
+
+/**
+ * `entry`/unreachable-stage validation only applies to pipelines that opt into
+ * the `route`/`entry` vocabulary at all — a pipeline that only uses `needs`
+ * (and never declares `route` or `entry` anywhere) is left completely alone,
+ * so existing needs-based pipelines keep working unchanged.
+ */
+function validateEntryStageUsage(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+  const usesRouteVocabulary = edges.some(
+    (edge) => edge.entry !== undefined || edge.routeEdges.length > 0,
+  );
+  if (!usesRouteVocabulary) return;
+
+  const hasEntry = edges.some((edge) => edge.entry === true);
+  if (!hasEntry) {
+    throw new Error(formatError(ctx, "no stage is marked entry: true"));
+  }
+
+  const targeted = new Set<string>();
+  for (const edge of edges) {
+    for (const route of edge.routeEdges) {
+      targeted.add(route.to);
+    }
+  }
+
+  for (const edge of edges) {
+    if (edge.entry === true) continue;
+    if (targeted.has(edge.id)) continue;
+    throw new Error(
+      formatError(
+        ctx,
+        `stage "${edge.id}" is unreachable: not marked entry: true and not targeted by any route entry`,
+      ),
+    );
   }
 }
 
@@ -419,6 +523,7 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     needsEdges: edge.needsEdges,
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
+    ...(edge.entry === true ? { entry: true } : {}),
     ...(edge.fork !== undefined
       ? { fork: { select: edge.fork.select, allow_none: edge.fork.allow_none ?? false } }
       : {}),
@@ -540,6 +645,9 @@ export function resolvePipelineDagFromRefs(
   const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
   validateNeedsTargets(edges, ctx);
+  validateRouteTargets(edges, ctx);
+  validateEntryStageUsage(edges, ctx);
+  mergeRouteEdgesIntoNeeds(edges);
   detectCycle(edges, ctx);
 
   const stages = edges
