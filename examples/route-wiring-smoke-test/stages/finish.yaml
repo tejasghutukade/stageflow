@@ -1,0 +1,3 @@
+id: finish
+system_prompt: Finish -- an external stage file loaded via `uses:`.
+model: cursor/auto

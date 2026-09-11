@@ -1,0 +1,8 @@
+id: route-demo-reject-unknown-route-target
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: nonexistent-stage
+    system_prompt: Draft.
+    model: cursor/auto

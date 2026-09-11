@@ -1,0 +1,14 @@
+id: route-demo-reject-duplicate-stage-id
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: cursor/auto
+  - id: review
+    system_prompt: Review A.
+    model: cursor/auto
+  - id: review
+    system_prompt: Review B -- duplicate id.
+    model: cursor/auto

@@ -1,0 +1,22 @@
+id: route-demo-reject-loop-clonable-target
+stages:
+  - id: implement
+    entry: true
+    clonable: true
+    route:
+      - to: review
+    system_prompt: Implement.
+    model: cursor/auto
+  - id: review
+    route:
+      - to: submit
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Review.
+    model: cursor/auto
+  - id: submit
+    system_prompt: Submit.
+    model: cursor/auto

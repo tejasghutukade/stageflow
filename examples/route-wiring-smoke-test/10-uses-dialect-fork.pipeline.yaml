@@ -1,0 +1,24 @@
+id: route-demo-uses-dialect-fork
+# Every other pipeline in this catalog uses inline stage bodies
+# (system_prompt/model directly on the stage entry). This one uses the
+# `uses:` external-stage-file dialect instead -- the one this catalog
+# hadn't combined with route/route_select/entry before -- to confirm the
+# wiring fields work identically regardless of where the stage body lives.
+stages:
+  - id: decide
+    entry: true
+    route_select: one
+    route:
+      - to: branch-a
+      - to: branch-b
+    uses: ./stages/decide.yaml
+  - id: branch-a
+    route:
+      - to: finish
+    uses: ./stages/branch-a.yaml
+  - id: branch-b
+    route:
+      - to: finish
+    uses: ./stages/branch-b.yaml
+  - id: finish
+    uses: ./stages/finish.yaml

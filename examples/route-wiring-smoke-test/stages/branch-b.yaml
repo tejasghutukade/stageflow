@@ -1,0 +1,3 @@
+id: branch-b
+system_prompt: Branch B -- an external stage file loaded via `uses:`. Not reached in this smoke test.
+model: cursor/auto

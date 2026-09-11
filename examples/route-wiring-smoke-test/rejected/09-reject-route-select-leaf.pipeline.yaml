@@ -1,0 +1,12 @@
+id: route-demo-reject-route-select-leaf
+stages:
+  - id: decide
+    entry: true
+    route_select: one
+    route:
+      - to: only-branch
+    system_prompt: Decide.
+    model: cursor/auto
+  - id: only-branch
+    system_prompt: Only branch.
+    model: cursor/auto

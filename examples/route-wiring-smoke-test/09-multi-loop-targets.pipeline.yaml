@@ -1,0 +1,59 @@
+id: route-demo-multi-loop-targets
+# Two DIFFERENT stages (review, qa) each declare their own loop entry back
+# to the SAME ancestor (implement). review's loop point is dormant in this
+# run (always continues); qa's is the one that actually fires, demonstrating
+# that a loop target doesn't have to be the looping stage's immediate
+# parent -- implement is two hops back from qa (implement -> review -> qa).
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+    system_prompt: Draft a one-sentence plan.
+    model: cursor/auto
+
+  - id: implement
+    route:
+      - to: review
+    system_prompt: Implement the plan in one sentence.
+    model: cursor/auto
+
+  - id: review
+    route:
+      - to: qa
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: >
+      Review the implementation.
+      On success you MUST include feedback_loop in your envelope:
+      {"action":"continue"} or {"action":"send_back","target":"implement"}.
+      For this smoke test, ALWAYS continue -- never send back. This loop
+      point exists in the wiring but stays dormant this run; qa (below) is
+      the one that actually exercises a loop-back to implement.
+    model: cursor/auto
+
+  - id: qa
+    route:
+      - to: done
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: >
+      QA the reviewed implementation.
+      On success you MUST include feedback_loop in your envelope:
+      {"action":"continue"} or {"action":"send_back","target":"implement"}.
+      For this smoke test: on your FIRST attempt, send_back to implement.
+      On your SECOND attempt (after the replay), continue. This demonstrates
+      looping back to an ancestor two stages back (implement), independently
+      of review's own dormant loop point above -- both target the same
+      stage from different points in the chain.
+    model: cursor/auto
+
+  - id: done
+    system_prompt: Close out the run.
+    model: cursor/auto

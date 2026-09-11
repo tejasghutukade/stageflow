@@ -1,0 +1,5 @@
+id: decide
+system_prompt: >
+  Decide between "branch-a" and "branch-b". For this smoke test, always
+  choose branch-a.
+model: cursor/auto
