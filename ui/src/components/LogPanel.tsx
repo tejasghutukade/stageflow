@@ -66,13 +66,22 @@ export function failureBannerText(
   return step.detail ?? step.label;
 }
 
-// A step's detail always shows its first line as a persistent preview
-// (e.g. the first line of a Bash error) — the rest is only revealed by
-// expanding the row via the chevron.
-export function splitFirstLine(detail: string): { firstLine: string; rest: string } {
+const PREVIEW_LENGTH_LIMIT = 160;
+
+// A step's detail always shows a one-line preview under its label — the
+// full detail is only revealed by expanding the row via the chevron.
+// Many tool results are a JSON-stringified blob with no real newlines at
+// all (a single, very long "line"), so "is there more to show" can't rely
+// on finding a newline alone — it also has to account for a first line
+// that's simply too long to show in full.
+export function stepPreview(detail: string): { preview: string; hasMore: boolean } {
   const newlineIndex = detail.indexOf("\n");
-  if (newlineIndex === -1) return { firstLine: detail, rest: "" };
-  return { firstLine: detail.slice(0, newlineIndex), rest: detail.slice(newlineIndex + 1) };
+  const firstLine = newlineIndex === -1 ? detail : detail.slice(0, newlineIndex);
+  if (firstLine.length <= PREVIEW_LENGTH_LIMIT) {
+    const hasMore = newlineIndex !== -1 && detail.slice(newlineIndex + 1).trim().length > 0;
+    return { preview: firstLine, hasMore };
+  }
+  return { preview: `${firstLine.slice(0, PREVIEW_LENGTH_LIMIT)}…`, hasMore: true };
 }
 
 export function formatDuration(ms: number): string {
@@ -263,10 +272,7 @@ function LogStepRow({
   onToggle: (isOpen: boolean) => void;
 }) {
   const durationMs = stepDurationMs(step, now);
-  const { firstLine, rest } = step.detail
-    ? splitFirstLine(step.detail)
-    : { firstLine: "", rest: "" };
-  const hasMore = rest.trim().length > 0;
+  const { preview, hasMore } = step.detail ? stepPreview(step.detail) : { preview: "", hasMore: false };
 
   return (
     <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
@@ -290,10 +296,10 @@ function LogStepRow({
               <span className="logstep__duration">{formatDuration(durationMs)}</span>
             ) : null}
           </span>
-          {firstLine ? <span className="logstep__preview">{firstLine}</span> : null}
+          {preview ? <span className="logstep__preview">{preview}</span> : null}
         </span>
       </button>
-      {hasMore && isOpen ? <pre className="logstep__detail">{rest}</pre> : null}
+      {hasMore && isOpen ? <pre className="logstep__detail">{step.detail}</pre> : null}
     </div>
   );
 }

@@ -134,7 +134,9 @@ export function RunDetailPage({
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
-  const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(null);
+  const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
+    "transcript",
+  );
   const [paneHeight, setPaneHeight] = useState(0);
   const [splitDragging, setSplitDragging] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
@@ -230,7 +232,7 @@ export function RunDetailPage({
     setDrawerStageId(null);
     setDismissedWaitKey(null);
     setWorkHeight(WORK_DEFAULT_H);
-    setHiddenCenterSide(null);
+    setHiddenCenterSide("transcript");
     setRun(null);
     setError(null);
     setVerification(null);

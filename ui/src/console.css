@@ -2739,9 +2739,9 @@ a.topbar__back { text-decoration: none; }
 
 .logstep__detail {
   margin: 0 0 var(--spacing-3) calc(var(--spacing-5) + var(--spacing-5));
-  padding: var(--spacing-3);
-  border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  padding: 0 0 0 var(--spacing-3);
+  border-left: 2px solid var(--color-border);
+  background: none;
   color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   white-space: pre-wrap;

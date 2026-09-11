@@ -5,8 +5,8 @@ import {
   failureBannerText,
   findFailingStepId,
   formatDuration,
-  splitFirstLine,
   stepDurationMs,
+  stepPreview,
 } from "./LogPanel";
 
 describe("buildLogPanelSteps", () => {
@@ -343,20 +343,29 @@ describe("failureBannerText", () => {
   });
 });
 
-describe("splitFirstLine", () => {
-  it("returns the whole string as firstLine with no rest when there's no newline", () => {
-    expect(splitFirstLine("single line")).toEqual({ firstLine: "single line", rest: "" });
+describe("stepPreview", () => {
+  it("shows the whole string as the preview with no expand affordance when it's short and single-line", () => {
+    expect(stepPreview("single line")).toEqual({ preview: "single line", hasMore: false });
   });
 
-  it("splits off everything after the first newline as rest", () => {
-    expect(splitFirstLine("Error: 3 tests failed\n  at runTests (test.js:12)")).toEqual({
-      firstLine: "Error: 3 tests failed",
-      rest: "  at runTests (test.js:12)",
+  it("flags hasMore when there's a real second line", () => {
+    expect(stepPreview("Error: 3 tests failed\n  at runTests (test.js:12)")).toEqual({
+      preview: "Error: 3 tests failed",
+      hasMore: true,
     });
   });
 
-  it("keeps further newlines inside rest", () => {
-    expect(splitFirstLine("a\nb\nc")).toEqual({ firstLine: "a", rest: "b\nc" });
+  it("flags hasMore and truncates the preview when the first line alone is too long, even with no newline", () => {
+    // Tool results are frequently one long JSON-stringified blob with no real
+    // newlines at all — length alone has to be able to trigger "there's more".
+    const longSingleLine = "x".repeat(300);
+    const { preview, hasMore } = stepPreview(longSingleLine);
+    expect(hasMore).toBe(true);
+    expect(preview).toBe(`${"x".repeat(160)}…`);
+  });
+
+  it("does not flag hasMore for trailing whitespace-only lines", () => {
+    expect(stepPreview("only line\n   \n")).toEqual({ preview: "only line", hasMore: false });
   });
 });
 
