@@ -64,12 +64,12 @@ describe("resolvePipelineDag", () => {
     expect(areResolvedDagsEquivalent(baseline, changedPolicy)).toBe(false);
   });
 
-  it("builds explicit linear chain", () => {
+  it("builds explicit linear chain via route/entry", () => {
     const { stages, dag } = resolvePipelineDag(
       [
-        { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "design-doc" },
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+        { id: "design-doc", route: [{ to: "implementation-plan" }] },
+        { id: "implementation-plan" },
       ],
       ctx("docs-only", "pipelines/docs-only.pipeline.yaml"),
     );
@@ -100,12 +100,16 @@ describe("resolvePipelineDag", () => {
     });
   });
 
-  it("builds fan-out fork (AE2)", () => {
+  it("builds fan-out via route (AE2)", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "clarify" },
+        {
+          id: "clarify",
+          entry: true,
+          route: [{ to: "design-doc" }, { to: "implementation-plan" }],
+        },
+        { id: "design-doc" },
+        { id: "implementation-plan" },
       ],
       ctx("parallel-after-clarify"),
     );
@@ -130,25 +134,25 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/bare string stage refs/i);
   });
 
-  it("rejects dependency cycles (AE3)", () => {
+  it("rejects dependency cycles formed via route (AE3)", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "clarify", needs: "design-doc" },
-          { id: "design-doc", needs: "clarify" },
+          { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+          { id: "design-doc", route: [{ to: "clarify" }] },
         ],
         ctx("cycle"),
       ),
     ).toThrow(/cycle/i);
   });
 
-  it("rejects unknown needs targets (AE4)", () => {
+  it("rejects unknown route targets (AE4)", () => {
     expect(() =>
       resolvePipelineDag(
-        [{ id: "clarify" }, { id: "design-doc", needs: "missing-stage" }],
-        ctx("unknown-needs"),
+        [{ id: "clarify", entry: true, route: [{ to: "missing-stage" }] }],
+        ctx("unknown-route-target"),
       ),
-    ).toThrow(/unknown needs "missing-stage"/i);
+    ).toThrow(/unknown route target "missing-stage"/i);
   });
 
   it("rejects duplicate stage ids (AE5)", () => {
@@ -160,20 +164,23 @@ describe("resolvePipelineDag", () => {
     ).toThrow(/duplicate stage "clarify"/i);
   });
 
-  it("accepts mixed needs arrays and normalizes string items to succeeded", () => {
+  it("accepts multiple route entries into the same target and normalizes on gates", () => {
+    // Migrated from a `needs`-side fan-in test (`synthesize` listing two
+    // parents, one with an explicit multi-state `on`). Under `route` the same
+    // per-edge gate is achievable, just declared outbound by each source
+    // stage instead of inbound by the target — see the `route-fan-in` case in
+    // tests/config.pipelineRoute.test.ts for the ticket-01 equivalent.
     const { dag } = resolvePipelineDag(
       [
-        { id: "research" },
-        { id: "validation" },
+        { id: "research", entry: true, route: [{ to: "synthesize" }] },
         {
-          id: "synthesize",
-          needs: [
-            "research",
-            { id: "validation", on: ["succeeded", "failed", "skipped"] },
-          ],
+          id: "validation",
+          entry: true,
+          route: [{ to: "synthesize", on: ["succeeded", "failed", "skipped"] }],
         },
+        { id: "synthesize" },
       ],
-      ctx("mixed-needs"),
+      ctx("mixed-route-on"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("synthesize")).toMatchObject({
@@ -188,62 +195,15 @@ describe("resolvePipelineDag", () => {
     expect(dag.childrenOf.validation).toEqual(["synthesize"]);
   });
 
-  it("loads a one-element needs array as a single parent (KTD10)", () => {
-    const { dag } = resolvePipelineDag(
-      [{ id: "clarify" }, { id: "design-doc", needs: ["clarify"] }],
-      ctx("needs-array"),
-    );
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("design-doc")).toMatchObject({
-      needs: "clarify",
-      needsEdges: [{ id: "clarify", on: ["succeeded"] }],
-    });
-  });
-
-  it("rejects empty needs arrays", () => {
-    expect(() =>
-      resolvePipelineDag([{ id: "design-doc", needs: [] }], ctx("empty-needs")),
-    ).toThrow(/needs array must contain at least one item/i);
-  });
-
-  it("rejects duplicate parent ids in needs arrays", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [{ id: "clarify" }, { id: "join", needs: ["clarify", "clarify"] }],
-        ctx("dup-needs"),
-      ),
-    ).toThrow(/duplicate id "clarify"/i);
-  });
-
-  it("rejects unknown keys on structured needs items", () => {
+  it("rejects invalid route on values", () => {
+    // Migrated from "rejects empty or invalid needs on sets" — `on`
+    // validation is shared logic (parseRouteOn mirrors parsePipelineNeeds'
+    // on-parsing) so the same three failure modes apply.
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "research" },
-          { id: "validation" },
-          {
-            id: "synthesize",
-            needs: [
-              "research",
-              { id: "validation", on: ["succeeded"], extra: true },
-            ],
-          },
-        ],
-        ctx("needs-unknown-key"),
-      ),
-    ).toThrow(/unknown key "extra"/i);
-  });
-
-  it("rejects empty or invalid needs on sets", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "research" },
-          { id: "validation" },
-          {
-            id: "synthesize",
-            needs: ["research", { id: "validation", on: [] }],
-          },
+          { id: "clarify", entry: true, route: [{ to: "design-doc", on: [] }] },
+          { id: "design-doc" },
         ],
         ctx("empty-on"),
       ),
@@ -251,12 +211,8 @@ describe("resolvePipelineDag", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "research" },
-          { id: "validation" },
-          {
-            id: "synthesize",
-            needs: ["research", { id: "validation", on: ["running"] }],
-          },
+          { id: "clarify", entry: true, route: [{ to: "design-doc", on: ["running"] }] },
+          { id: "design-doc" },
         ],
         ctx("bad-on"),
       ),
@@ -264,53 +220,50 @@ describe("resolvePipelineDag", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "research" },
-          { id: "validation" },
           {
-            id: "synthesize",
-            needs: [
-              "research",
-              { id: "validation", on: ["succeeded", "succeeded"] },
-            ],
+            id: "clarify",
+            entry: true,
+            route: [{ to: "design-doc", on: ["succeeded", "succeeded"] }],
           },
+          { id: "design-doc" },
         ],
         ctx("dup-on"),
       ),
     ).toThrow(/on must be a non-empty unique subset/i);
   });
 
-  it("rejects unknown parents through multi-parent edges", () => {
+  it("rejects an unknown route target reached via fan-out", () => {
     expect(() =>
       resolvePipelineDag(
         [
+          { id: "clarify", entry: true, route: [{ to: "research" }, { to: "missing-stage" }] },
           { id: "research" },
-          { id: "synthesize", needs: ["research", "missing-stage"] },
         ],
-        ctx("unknown-multi-needs"),
+        ctx("unknown-multi-route"),
       ),
-    ).toThrow(/unknown needs "missing-stage"/i);
+    ).toThrow(/unknown route target "missing-stage"/i);
   });
 
-  it("rejects cycles through multi-parent edges", () => {
+  it("rejects a cycle reached via a fan-in edge", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "a", needs: "c" },
-          { id: "b" },
-          { id: "c", needs: ["a", "b"] },
+          { id: "a", entry: true, route: [{ to: "c" }] },
+          { id: "b", entry: true, route: [{ to: "c" }] },
+          { id: "c", route: [{ to: "a" }] },
         ],
         ctx("multi-parent-loop"),
       ),
-    ).toThrow(/dependency cycle/i);
+    ).toThrow(/cycle/i);
   });
 
   it("resolves a diamond DAG with two inbound edges into synthesize", () => {
     const { stages, dag } = resolvePipelineDag(
       [
-        { id: "clarify" },
-        { id: "research", needs: "clarify" },
-        { id: "validation", needs: "clarify" },
-        { id: "synthesize", needs: ["research", "validation"] },
+        { id: "clarify", entry: true, route: [{ to: "research" }, { to: "validation" }] },
+        { id: "research", route: [{ to: "synthesize" }] },
+        { id: "validation", route: [{ to: "synthesize" }] },
+        { id: "synthesize" },
       ],
       ctx("diamond"),
     );
@@ -341,10 +294,10 @@ describe("resolvePipelineDag", () => {
 
   it("treats DAGs with matching multi-parent edges as equivalent", () => {
     const diamond = [
-      { id: "clarify" },
-      { id: "research", needs: "clarify" },
-      { id: "validation", needs: "clarify" },
-      { id: "synthesize", needs: ["research", "validation"] },
+      { id: "clarify", entry: true, route: [{ to: "research" }, { to: "validation" }] },
+      { id: "research", route: [{ to: "synthesize" }] },
+      { id: "validation", route: [{ to: "synthesize" }] },
+      { id: "synthesize" },
     ];
     const { dag: a } = resolvePipelineDag(diamond, ctx("equiv-a"));
     const { dag: b } = resolvePipelineDag(diamond, ctx("equiv-b"));
@@ -352,16 +305,10 @@ describe("resolvePipelineDag", () => {
 
     const { dag: differentOn } = resolvePipelineDag(
       [
-        { id: "clarify" },
-        { id: "research", needs: "clarify" },
-        { id: "validation", needs: "clarify" },
-        {
-          id: "synthesize",
-          needs: [
-            "research",
-            { id: "validation", on: ["succeeded", "failed"] },
-          ],
-        },
+        { id: "clarify", entry: true, route: [{ to: "research" }, { to: "validation" }] },
+        { id: "research", route: [{ to: "synthesize" }] },
+        { id: "validation", route: [{ to: "synthesize", on: ["succeeded", "failed"] }] },
+        { id: "synthesize" },
       ],
       ctx("equiv-on"),
     );
@@ -371,12 +318,12 @@ describe("resolvePipelineDag", () => {
   it("rejects malformed stage entries", () => {
     expect(() => resolvePipelineDag([], ctx("empty"))).toThrow(/non-empty/i);
     expect(() => resolvePipelineDag([""], ctx("blank-id"))).toThrow(/bare string stage refs/i);
-    expect(() => resolvePipelineDag([{ needs: "clarify" }], ctx("missing-id"))).toThrow(
-      /id must be a non-empty string/i,
-    );
     expect(() =>
-      resolvePipelineDag([{ id: "clarify", needs: 42 }], ctx("bad-needs")),
-    ).toThrow(/needs must be a non-empty string/i);
+      resolvePipelineDag([{ route: [{ to: "clarify" }] }], ctx("missing-id")),
+    ).toThrow(/id must be a non-empty string/i);
+    expect(() =>
+      resolvePipelineDag([{ id: "clarify", route: 42 }], ctx("bad-route")),
+    ).toThrow(/route must be a non-empty array/i);
     expect(() =>
       resolvePipelineDag([{ id: "clarify", label: "x" }], ctx("unknown-key")),
     ).toThrow(/unknown key "label"/i);
@@ -462,9 +409,13 @@ describe("resolvePipelineDag", () => {
   it("AE6: existing fan-out pipeline without fork field is unaffected", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
-        { id: "implementation-plan", needs: "clarify" },
+        {
+          id: "clarify",
+          entry: true,
+          route: [{ to: "design-doc" }, { to: "implementation-plan" }],
+        },
+        { id: "design-doc" },
+        { id: "implementation-plan" },
       ],
       ctx("no-fork"),
     );
@@ -477,8 +428,8 @@ describe("resolvePipelineDag", () => {
     expect(extractPipelineStageIds(["clarify", "design-doc"])).toBeNull();
     expect(
       extractPipelineStageIds([
-        { id: "clarify" },
-        { id: "design-doc", needs: "clarify" },
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+        { id: "design-doc" },
       ]),
     ).toEqual(["clarify", "design-doc"]);
     expect(extractPipelineStageIds([{ id: "clarify", extra: true }])).toBeNull();
@@ -487,12 +438,15 @@ describe("resolvePipelineDag", () => {
 
   it("parsePipelineStageEntries preserves declaration order for object refs", () => {
     const entries = parsePipelineStageEntries(
-      [{ id: "clarify" }, { id: "design-doc", needs: "clarify" }],
+      [
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+        { id: "design-doc" },
+      ],
       ctx("object-form"),
     );
     expect(entries).toEqual([
-      { id: "clarify" },
-      { id: "design-doc", needs: "clarify" },
+      { id: "clarify", entry: true, route: [{ to: "design-doc", on: ["succeeded"] }] },
+      { id: "design-doc" },
     ]);
   });
 
@@ -507,62 +461,52 @@ describe("resolvePipelineDag", () => {
   it("extractPipelineStageIds accepts clonable keys on object entries", () => {
     expect(
       extractPipelineStageIds([
-        { id: "detect" },
-        { id: "author", needs: "detect", clonable: true },
-        { id: "collect", needs: "author" },
+        { id: "detect", entry: true, route: [{ to: "author" }] },
+        { id: "author", clonable: true, route: [{ to: "collect" }] },
+        { id: "collect" },
       ]),
     ).toEqual(["detect", "author", "collect"]);
   });
 
-  it("extractPipelineStageIds accepts multi-parent needs arrays", () => {
+  it("extractPipelineStageIds accepts route entries fanning into a shared target", () => {
     expect(
       extractPipelineStageIds([
-        { id: "research" },
-        { id: "validation" },
-        { id: "synthesize", needs: ["research", "validation"] },
+        { id: "research", entry: true, route: [{ to: "synthesize" }] },
+        { id: "validation", entry: true, route: [{ to: "synthesize" }] },
+        { id: "synthesize" },
       ]),
     ).toEqual(["research", "validation", "synthesize"]);
     expect(
-      extractPipelineStageIds([
-        { id: "design-doc", needs: ["clarify"] },
-      ]),
+      extractPipelineStageIds([{ id: "design-doc", route: [{ to: "clarify" }] }]),
     ).toEqual(["design-doc"]);
   });
 
-  it("parsePipelineStageEntries normalizes mixed needs arrays", () => {
+  it("parsePipelineStageEntries normalizes route on gates", () => {
     const entries = parsePipelineStageEntries(
       [
-        { id: "research" },
-        { id: "validation" },
+        { id: "research", entry: true, route: [{ to: "synthesize" }] },
         {
-          id: "synthesize",
-          needs: [
-            "research",
-            { id: "validation", on: ["failed", "skipped"] },
-          ],
+          id: "validation",
+          entry: true,
+          route: [{ to: "synthesize", on: ["failed", "skipped"] }],
         },
+        { id: "synthesize" },
       ],
-      ctx("parse-mixed-needs"),
+      ctx("parse-mixed-route"),
     );
     expect(entries).toEqual([
-      { id: "research" },
-      { id: "validation" },
-      {
-        id: "synthesize",
-        needs: [
-          { id: "research", on: ["succeeded"] },
-          { id: "validation", on: ["failed", "skipped"] },
-        ],
-      },
+      { id: "research", entry: true, route: [{ to: "synthesize", on: ["succeeded"] }] },
+      { id: "validation", entry: true, route: [{ to: "synthesize", on: ["failed", "skipped"] }] },
+      { id: "synthesize" },
     ]);
   });
 
   it("AE1: clonable without clone_cap defaults to 5; siblings omit fields", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "detect" },
-        { id: "author", needs: "detect", clonable: true },
-        { id: "collect", needs: "author" },
+        { id: "detect", entry: true, route: [{ to: "author" }] },
+        { id: "author", clonable: true, route: [{ to: "collect" }] },
+        { id: "collect" },
       ],
       ctx("clonable-default"),
     );
@@ -577,9 +521,9 @@ describe("resolvePipelineDag", () => {
   it("AE2: explicit clone_cap 3 is stored on the clonable node", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "detect" },
-        { id: "author", needs: "detect", clonable: true, clone_cap: 3 },
-        { id: "collect", needs: "author" },
+        { id: "detect", entry: true, route: [{ to: "author" }] },
+        { id: "author", clonable: true, clone_cap: 3, route: [{ to: "collect" }] },
+        { id: "collect" },
       ],
       ctx("clonable-cap-3"),
     );
@@ -591,9 +535,9 @@ describe("resolvePipelineDag", () => {
     const run = () =>
       resolvePipelineDag(
         [
-          { id: "detect" },
-          { id: "author", needs: "detect", clone_cap: 5 },
-          { id: "collect", needs: "author" },
+          { id: "detect", entry: true, route: [{ to: "author" }] },
+          { id: "author", clone_cap: 5, route: [{ to: "collect" }] },
+          { id: "collect" },
         ],
         ctx("cap-without-flag"),
       );
@@ -605,9 +549,9 @@ describe("resolvePipelineDag", () => {
     const run = () =>
       resolvePipelineDag(
         [
-          { id: "detect" },
-          { id: "author", needs: "detect", clonable: true, clone_cap: cloneCap },
-          { id: "collect", needs: "author" },
+          { id: "detect", entry: true, route: [{ to: "author" }] },
+          { id: "author", clonable: true, clone_cap: cloneCap, route: [{ to: "collect" }] },
+          { id: "collect" },
         ],
         ctx("bad-clone-cap"),
       );
@@ -624,9 +568,9 @@ describe("resolvePipelineDag", () => {
   it("clonable: false on a non-leaf omits resolved clonable fields", () => {
     const { dag } = resolvePipelineDag(
       [
-        { id: "detect" },
-        { id: "author", needs: "detect", clonable: false },
-        { id: "collect", needs: "author" },
+        { id: "detect", entry: true, route: [{ to: "author" }] },
+        { id: "author", clonable: false, route: [{ to: "collect" }] },
+        { id: "collect" },
       ],
       ctx("clonable-false"),
     );
@@ -639,9 +583,9 @@ describe("resolvePipelineDag", () => {
     const run = () =>
       resolvePipelineDag(
         [
-          { id: "detect" },
-          { id: "author", needs: "detect", clonable: false, clone_cap: 5 },
-          { id: "collect", needs: "author" },
+          { id: "detect", entry: true, route: [{ to: "author" }] },
+          { id: "author", clonable: false, clone_cap: 5, route: [{ to: "collect" }] },
+          { id: "collect" },
         ],
         ctx("cap-with-flag-false"),
       );
@@ -681,11 +625,14 @@ describe("loadPipeline negative DAG fixtures", () => {
         "id: cycle",
         "stages:",
         "  - id: a",
-        "    needs: b",
+        "    entry: true",
+        "    route:",
+        "      - to: b",
         "    system_prompt: x",
         "    model: m",
         "  - id: b",
-        "    needs: a",
+        "    route:",
+        "      - to: a",
         "    system_prompt: x",
         "    model: m",
         "",
@@ -696,7 +643,13 @@ describe("loadPipeline negative DAG fixtures", () => {
     );
   });
 
-  it("loads mixed structured needs via pipeline-owned temp fixture", async () => {
+  it("loads a fan-in with per-source on gates via pipeline-owned temp fixture", async () => {
+    // Migrated from a `needs`-side per-parent-gating fixture ("wait for
+    // research succeeded AND validation on [succeeded, failed, skipped]").
+    // Under `route` the same per-edge gate is declared outbound by each
+    // source stage instead of inbound by the target; the resulting
+    // needsEdges are identical, so no coverage is lost — see the
+    // `route-fan-in` fixture in tests/config.pipelineRoute.test.ts.
     const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-mixed-"));
     await writeFile(
       path.join(dir, "mixed.pipeline.yaml"),
@@ -704,16 +657,19 @@ describe("loadPipeline negative DAG fixtures", () => {
         "id: mixed",
         "stages:",
         "  - id: research",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
         "    system_prompt: x",
         "    model: m",
         "  - id: validation",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
+        "        on: [succeeded, failed, skipped]",
         "    system_prompt: x",
         "    model: m",
         "  - id: synthesize",
-        "    needs:",
-        "      - research",
-        "      - id: validation",
-        "        on: [succeeded, failed, skipped]",
         "    system_prompt: x",
         "    model: m",
         "",
@@ -727,7 +683,7 @@ describe("loadPipeline negative DAG fixtures", () => {
     ]);
   });
 
-  it("rejects unknown-needs via pipeline-owned temp fixture", async () => {
+  it("rejects an unknown route target via pipeline-owned temp fixture", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-dag-unknown-"));
     await writeFile(
       path.join(dir, "unknown.pipeline.yaml"),
@@ -735,17 +691,16 @@ describe("loadPipeline negative DAG fixtures", () => {
         "id: unknown",
         "stages:",
         "  - id: clarify",
-        "    system_prompt: x",
-        "    model: m",
-        "  - id: design-doc",
-        "    needs: missing-stage",
+        "    entry: true",
+        "    route:",
+        "      - to: missing-stage",
         "    system_prompt: x",
         "    model: m",
         "",
       ].join("\n"),
     );
     await expect(loadPipeline(path.join(dir, "unknown.pipeline.yaml"))).rejects.toThrow(
-      /unknown needs/i,
+      /unknown route target/i,
     );
   });
 
