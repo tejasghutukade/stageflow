@@ -24,6 +24,7 @@ import { EnvelopeDrawer } from "../components/EnvelopeDrawer";
 import { EnvelopeRecord } from "../components/EnvelopeFields";
 import { FeedbackDecidePanel } from "../components/FeedbackDecidePanel";
 import { FeedbackLoopPanel } from "../components/FeedbackLoopPanel";
+import { LogPanel } from "../components/LogPanel";
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { TranscriptStream } from "../components/TranscriptStream";
 import { TranscriptTurns } from "../components/TranscriptTurns";
@@ -133,6 +134,9 @@ export function RunDetailPage({
   const [drawerStageId, setDrawerStageId] = useState<string | null>(null);
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
+  const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
+    "transcript",
+  );
   const [paneHeight, setPaneHeight] = useState(0);
   const [splitDragging, setSplitDragging] = useState(false);
   const paneRef = useRef<HTMLDivElement>(null);
@@ -228,6 +232,7 @@ export function RunDetailPage({
     setDrawerStageId(null);
     setDismissedWaitKey(null);
     setWorkHeight(WORK_DEFAULT_H);
+    setHiddenCenterSide("transcript");
     setRun(null);
     setError(null);
     setVerification(null);
@@ -481,7 +486,35 @@ export function RunDetailPage({
   } else if (workspace.selectedStageId) {
     const streamStageId = workspace.selectedStageId;
     const stageToken = stage ? cssStatusToken(stage.status) : undefined;
+    const showTranscript = hiddenCenterSide !== "transcript";
+    const showLogs = hiddenCenterSide !== "logs";
+    const transcriptTrailing = (
+      <>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setHiddenCenterSide(showLogs ? "logs" : null)}
+        >
+          {showLogs ? "Hide logs" : "Show logs"}
+        </button>
+        {hideButton}
+      </>
+    );
+    const logsHeaderAction = (
+      <>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setHiddenCenterSide(showTranscript ? "transcript" : null)}
+        >
+          {showTranscript ? "Hide transcript" : "Show transcript"}
+        </button>
+        {hideButton}
+      </>
+    );
     center = (
+      <div className="center-split">
+      <div className="center-split__transcript" hidden={!showTranscript}>
       <TranscriptStream
         stageName={
           workspace.trackStages.find((s) => s.id === streamStageId)?.label ??
@@ -527,7 +560,7 @@ export function RunDetailPage({
             ) : null}
           </>
         }
-        trailing={hideButton}
+        trailing={transcriptTrailing}
         autoScroll={workspace.liveStream}
         scrollKey={stage?.events.length}
         composer={composer}
@@ -544,6 +577,11 @@ export function RunDetailPage({
           onStop={stage ? () => void stopStageRecovery(stage.stage_id) : undefined}
         />
       </TranscriptStream>
+      </div>
+      <div className="center-split__logs" hidden={!showLogs}>
+        <LogPanel events={stage?.events ?? []} headerAction={logsHeaderAction} />
+      </div>
+      </div>
     );
   }
 

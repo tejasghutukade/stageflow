@@ -1,6 +1,6 @@
 {
   "name": "stageflow",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Stageflow — CLI pipeline runtime for configurable stages on Pi",
   "type": "module",
   "bin": {
@@ -37,6 +37,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "tsx src/cli.ts",
+    "dev:watch": "PI_CURSOR_SETTING_SOURCES=all STAGEFLOW_ACTIVITY_VERBOSE=1 tsx watch src/cli.ts ui",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "ui:dev": "npm run dev -w ui",
     "ui:build": "npm run build -w ui && npm run copy:ui-dist",

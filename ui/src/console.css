@@ -2604,3 +2604,170 @@ a.topbar__back { text-decoration: none; }
     transition: none;
   }
 }
+
+.center-split {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.center-split__transcript {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.center-split__logs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--color-border);
+}
+
+.center-split__transcript > .stream,
+.center-split__logs > .stream {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Both sides stay mounted when hidden (so composer drafts, recovery
+   guidance, and scroll position survive toggling), just visually hidden. */
+.center-split__transcript[hidden],
+.center-split__logs[hidden] {
+  display: none;
+}
+
+.logpanel {
+  padding: 0 var(--spacing-6);
+}
+
+.logstep {
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-family-code);
+  font-size: var(--font-size-sm);
+}
+
+.logstep__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-2);
+  width: 100%;
+  padding: var(--spacing-2) 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logstep__row:disabled {
+  cursor: default;
+}
+
+.logstep__row--static {
+  color: var(--color-text-secondary);
+}
+
+.logstep__chevron {
+  flex-shrink: 0;
+  margin-top: 3px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.logstep__chevron--open {
+  transform: rotate(0deg);
+}
+
+.logstep__chevron--hidden {
+  visibility: hidden;
+}
+
+.logstep__dot {
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.logstep__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.logstep__label-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.logstep--failed .logstep__label {
+  color: var(--color-text-red);
+  font-weight: 600;
+}
+
+.logstep__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logstep__preview {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.logstep__duration {
+  margin-left: auto;
+  padding-left: var(--spacing-3);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+}
+
+.logstep__detail {
+  margin: 0 0 var(--spacing-3) calc(var(--spacing-5) + var(--spacing-5));
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@keyframes logstep-highlight-flash {
+  from { background: var(--color-background-red); }
+  to { background: transparent; }
+}
+
+.logstep--highlight {
+  animation: logstep-highlight-flash 1.5s ease-out;
+}
+
+.logpanel__banner {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-5);
+  border-top: 1px solid var(--color-border-red);
+  background: var(--color-background-red);
+}
+
+.logpanel__banner-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-red);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
