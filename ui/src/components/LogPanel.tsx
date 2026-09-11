@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Collapsible } from "@astryxdesign/core/Collapsible";
+import { Icon } from "@astryxdesign/core/Icon";
 import type { StageLogEvent } from "../api";
 import {
   formatActivityDescription,
@@ -64,6 +64,15 @@ export function failureBannerText(
   const step = steps.find((s) => s.id === failingStepId);
   if (!step || step.kind !== "system") return undefined;
   return step.detail ?? step.label;
+}
+
+// A step's detail always shows its first line as a persistent preview
+// (e.g. the first line of a Bash error) — the rest is only revealed by
+// expanding the row via the chevron.
+export function splitFirstLine(detail: string): { firstLine: string; rest: string } {
+  const newlineIndex = detail.indexOf("\n");
+  if (newlineIndex === -1) return { firstLine: detail, rest: "" };
+  return { firstLine: detail.slice(0, newlineIndex), rest: detail.slice(newlineIndex + 1) };
 }
 
 export function formatDuration(ms: number): string {
@@ -242,19 +251,6 @@ export function buildLogPanelSteps(events: StageLogEvent[]): LogStep[] {
   return steps;
 }
 
-function LogStepTrigger({ step, now }: { step: LogStep; now: number }) {
-  const durationMs = stepDurationMs(step, now);
-  return (
-    <span className="logstep__trigger">
-      <span className={`dot dot--${step.status}`}></span>
-      <span className="logstep__label">{step.label}</span>
-      {durationMs !== undefined ? (
-        <span className="logstep__duration">{formatDuration(durationMs)}</span>
-      ) : null}
-    </span>
-  );
-}
-
 function LogStepRow({
   step,
   now,
@@ -266,25 +262,38 @@ function LogStepRow({
   isOpen: boolean;
   onToggle: (isOpen: boolean) => void;
 }) {
-  if (!step.detail) {
-    return (
-      <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
-        <div className="logstep__row logstep__row--static">
-          <LogStepTrigger step={step} now={now} />
-        </div>
-      </div>
-    );
-  }
+  const durationMs = stepDurationMs(step, now);
+  const { firstLine, rest } = step.detail
+    ? splitFirstLine(step.detail)
+    : { firstLine: "", rest: "" };
+  const hasMore = rest.trim().length > 0;
 
   return (
     <div id={`logstep-${step.id}`} className={`logstep logstep--${step.status}`}>
-      <Collapsible
-        trigger={<LogStepTrigger step={step} now={now} />}
-        isOpen={isOpen}
-        onOpenChange={onToggle}
+      <button
+        type="button"
+        className={`logstep__row${hasMore ? "" : " logstep__row--static"}`}
+        disabled={!hasMore}
+        aria-expanded={hasMore ? isOpen : undefined}
+        onClick={hasMore ? () => onToggle(!isOpen) : undefined}
       >
-        <pre className="logstep__detail">{step.detail}</pre>
-      </Collapsible>
+        <Icon
+          icon="chevronDown"
+          size="sm"
+          className={`logstep__chevron${hasMore ? (isOpen ? " logstep__chevron--open" : "") : " logstep__chevron--hidden"}`}
+        />
+        <span className={`dot dot--${step.status} logstep__dot`}></span>
+        <span className="logstep__text">
+          <span className="logstep__label-row">
+            <span className="logstep__label">{step.label}</span>
+            {durationMs !== undefined ? (
+              <span className="logstep__duration">{formatDuration(durationMs)}</span>
+            ) : null}
+          </span>
+          {firstLine ? <span className="logstep__preview">{firstLine}</span> : null}
+        </span>
+      </button>
+      {hasMore && isOpen ? <pre className="logstep__detail">{rest}</pre> : null}
     </div>
   );
 }

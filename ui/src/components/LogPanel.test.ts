@@ -5,6 +5,7 @@ import {
   failureBannerText,
   findFailingStepId,
   formatDuration,
+  splitFirstLine,
   stepDurationMs,
 } from "./LogPanel";
 
@@ -339,6 +340,23 @@ describe("failureBannerText", () => {
   it("falls back to the step label when the failed marker carries no reason", () => {
     const steps = buildLogPanelSteps([{ event: "failed" }]);
     expect(failureBannerText(steps, findFailingStepId(steps))).toBe("Stage failed");
+  });
+});
+
+describe("splitFirstLine", () => {
+  it("returns the whole string as firstLine with no rest when there's no newline", () => {
+    expect(splitFirstLine("single line")).toEqual({ firstLine: "single line", rest: "" });
+  });
+
+  it("splits off everything after the first newline as rest", () => {
+    expect(splitFirstLine("Error: 3 tests failed\n  at runTests (test.js:12)")).toEqual({
+      firstLine: "Error: 3 tests failed",
+      rest: "  at runTests (test.js:12)",
+    });
+  });
+
+  it("keeps further newlines inside rest", () => {
+    expect(splitFirstLine("a\nb\nc")).toEqual({ firstLine: "a", rest: "b\nc" });
   });
 });
 

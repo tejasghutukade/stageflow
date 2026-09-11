@@ -2654,22 +2654,59 @@ a.topbar__back { text-decoration: none; }
   font-size: var(--font-size-sm);
 }
 
-.logstep__trigger {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-}
-
 .logstep__row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: var(--spacing-2);
   width: 100%;
   padding: var(--spacing-2) 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.logstep__row:disabled {
+  cursor: default;
 }
 
 .logstep__row--static {
   color: var(--color-text-secondary);
+}
+
+.logstep__chevron {
+  flex-shrink: 0;
+  margin-top: 3px;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.logstep__chevron--open {
+  transform: rotate(0deg);
+}
+
+.logstep__chevron--hidden {
+  visibility: hidden;
+}
+
+.logstep__dot {
+  flex-shrink: 0;
+  margin-top: 5px;
+}
+
+.logstep__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.logstep__label-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
 }
 
 .logstep--failed .logstep__label {
@@ -2683,6 +2720,15 @@ a.topbar__back { text-decoration: none; }
   white-space: nowrap;
 }
 
+.logstep__preview {
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
 .logstep__duration {
   margin-left: auto;
   padding-left: var(--spacing-3);
@@ -2692,7 +2738,7 @@ a.topbar__back { text-decoration: none; }
 }
 
 .logstep__detail {
-  margin: 0 0 var(--spacing-3) var(--spacing-5);
+  margin: 0 0 var(--spacing-3) calc(var(--spacing-5) + var(--spacing-5));
   padding: var(--spacing-3);
   border-radius: var(--radius-container);
   background: var(--color-background-surface);
