@@ -1,8 +1,8 @@
 # route wiring smoke test
 
-Four small, self-contained pipelines that together cover most of the `route`-based pipeline wiring migration, plus eight deliberately-invalid ones that each trigger one specific rejection error.
+Five small, self-contained pipelines that together cover most of the `route`-based pipeline wiring migration, plus eight deliberately-invalid ones that each trigger one specific rejection error.
 
-- The 4 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog, so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
+- The 5 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog, so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
 - The 8 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list, so they don't clutter the UI or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure — since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file.
 
 ## Important: use the local build, not your global `sf`
@@ -44,6 +44,11 @@ Expect: **Validation passed.** Two independent `entry: true` stages, no wiring b
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/04-entry-false-equivalent-to-omitted.pipeline.yaml --strict
 ```
 Expect: **Validation passed.** `draft` explicitly writes `entry: false`; this must behave exactly like omitting the key. This is the code-review fix that closed a bug where `entry: false` used to incorrectly force the whole pipeline into strict entry-stage validation.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/05-fork-choice.pipeline.yaml --strict
+```
+Expect: **Validation passed.** A dedicated, *meaningful* fork_choice demo: `01-core-routing`'s `ship` decision has `allow_none: true` and (both times it's been run so far) the model has chosen nothing, so you never actually see a branch execute. This pipeline's prompts are written to be unambiguous, so the model reliably makes a real, non-trivial pick every run instead: `triage` (`route_select: one`, no `allow_none` — a mandatory pick) always chooses `quick-fix` over `big-project`; `quick-fix` (`route_select: subset` + `allow_none: true`, same shape as `ship`) always chooses `notify-team` + `update-docs` but not `schedule-followup` — a genuine subset, never empty and never everything. `close` fans in across a mix of two stages that actually ran and one that was skipped. This is the one to run if you want to *watch* fork_choice branch to real, executing stages rather than proving the wiring is merely valid.
 
 ## Rejected pipelines (should fail with the given message)
 
@@ -89,15 +94,15 @@ Expect: `stage "b": feedback_loop target "c" must be an earlier ancestor` — `b
 
 ## Run from the UI
 
-The 4 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`, so they're picked up by the catalog scan like any other example. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
+The 5 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml` (`examples/route-wiring-smoke-test` is listed once; new `*.pipeline.yaml` files added here are picked up automatically, no further registration needed), so they're picked up by the catalog scan like any other example. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
 
 ```bash
 npx tsx src/cli.ts ui
 ```
 
-Start a new run, pick `route-demo-core` / `route-demo-on-gate` / `route-demo-two-entries` / `route-demo-entry-false` as the pipeline, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
+Start a new run, pick `route-demo-core` / `route-demo-on-gate` / `route-demo-two-entries` / `route-demo-entry-false` / `route-demo-fork-choice` as the pipeline, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
 
-`route-demo-core` is the most interesting to watch live — it's the one where you'll see the `fork_choice` (at `qa` and `ship`) and the loop's replay decision (at `review`) actually play out, which `sf validate` can't show you (it only proves the wiring is valid, not what a running stage decides).
+`route-demo-fork-choice` is the one to run if you specifically want to watch `fork_choice` branch to real, executing stages — its prompts are written to reliably produce a non-trivial pick every run. `route-demo-core` is the broader one to watch — it's where you'll see the loop's replay decision (at `review`) play out too — but its `ship` decision is allowed to (and, so far, always has) picked nothing, so you won't see a `notify-*` stage actually execute there.
 
 Or run one directly from the CLI instead of the UI:
 
