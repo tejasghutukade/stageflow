@@ -6,6 +6,13 @@ stages:
       - to: author-diagrams
     system_prompt: Detect changes.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: author-diagrams
     clonable: true
     clone_cap: 5
@@ -13,6 +20,20 @@ stages:
       - to: collect
     system_prompt: Author diagrams.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: collect
     system_prompt: Collect results.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

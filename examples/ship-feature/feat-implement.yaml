@@ -109,6 +109,32 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - approved
+        - scope_summary
+        - planned_files
+        - validation_commands
+        - risks
+      properties:
+        approved:
+          type: boolean
+        scope_summary:
+          type: string
+        planned_files:
+          type: array
+          items:
+            type: string
+        validation_commands:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

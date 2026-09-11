@@ -4,3 +4,10 @@ system_prompt: |
   status success, a short summary that side ran, and artifacts []. Do not call
   ask_operator.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

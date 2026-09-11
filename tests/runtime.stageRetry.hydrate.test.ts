@@ -39,6 +39,7 @@ async function seedStageStatus(
       status: "success",
       summary: stageId,
       artifacts: [],
+      payload: {},
     });
     await store.appendStageEvent(runId, stageId, { event: "succeeded" });
     return;

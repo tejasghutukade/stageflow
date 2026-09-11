@@ -6,12 +6,26 @@ stages:
       - to: implement
     system_prompt: Prepare the work.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: implement
     clonable: true
     route:
       - to: review
     system_prompt: Implement the approved plan.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: review
     route:
       - type: loop
@@ -21,3 +35,10 @@ stages:
         replay_session: resume
     system_prompt: Review the work and explicitly continue or send it back.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -71,6 +71,43 @@ system_prompt: |
 model: cursor/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - verdict
+        - findings
+        - blocking_findings
+        - suggestions
+        - evidence
+        - reviewed_files
+      properties:
+        verdict:
+          type: string
+          enum:
+            - pass
+            - changes_required
+        findings:
+          type: array
+          items:
+            type: string
+        blocking_findings:
+          type: array
+          items:
+            type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        evidence:
+          type: array
+          items:
+            type: string
+        reviewed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
   output:
     schema:
       type: object

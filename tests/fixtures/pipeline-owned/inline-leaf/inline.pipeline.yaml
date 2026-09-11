@@ -12,3 +12,10 @@ stages:
     system_prompt: |
       Inline branch-b stage body.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

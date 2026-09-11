@@ -48,21 +48,9 @@ export function checkTaskEntryInput(
   for (const rootId of loaded.dag.roots) {
     const stage = stageById.get(rootId);
     if (stage?.clone_input_schema === undefined) continue;
-    if (task.input === undefined) {
-      findings.push({
-        severity: "warning",
-        code: "task.entry_input_unmet",
-        path: findingPath,
-        message: `Task has no input; entry stage "${rootId}" requires io.input`,
-        category: "task",
-        pipelineId: loaded.pipeline.id,
-        stageId: rootId,
-      });
-      continue;
-    }
     let details: string | undefined;
     try {
-      details = payloadInstanceMismatch(task.input, stage.clone_input_schema);
+      details = payloadInstanceMismatch(task.input ?? {}, stage.clone_input_schema);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       findings.push({

@@ -1,0 +1,78 @@
+id: route-demo-ref-io
+schemas:
+  empty:
+    type: object
+  doc:
+    type: object
+    required: [title, body]
+    properties:
+      title:
+        type: string
+        minLength: 1
+      body:
+        type: string
+      extras:
+        type: array
+        items:
+          type: string
+  analyzed:
+    type: object
+    required: [title, body, verdict]
+    properties:
+      title:
+        type: string
+        minLength: 1
+      body:
+        type: string
+      extras:
+        type: array
+        items:
+          type: string
+      verdict:
+        type: string
+        enum: [approve, request-changes]
+  title-only:
+    type: object
+    required: [title]
+    properties:
+      title:
+        type: string
+        minLength: 1
+  done:
+    type: object
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft a document and emit it as payload.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/doc"
+  - id: review
+    route:
+      - to: ship
+    system_prompt: Keep the document fields and add a verdict.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/doc"
+      output:
+        schema:
+          $ref: "#/schemas/analyzed"
+  - id: ship
+    system_prompt: Ship using title from the prior payload.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/title-only"
+      output:
+        schema:
+          $ref: "#/schemas/done"

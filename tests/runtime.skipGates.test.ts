@@ -29,6 +29,7 @@ const waitEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 function waitingAgent() {

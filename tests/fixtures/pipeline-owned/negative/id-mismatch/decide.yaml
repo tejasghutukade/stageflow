@@ -1,3 +1,10 @@
 id: wrong
 system_prompt: Wrong id in external file.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

@@ -73,6 +73,7 @@ const waitThenEmit = {
     status: "success" as const,
     summary: "done",
     artifacts: [] as string[],
+    payload: {},
   },
 };
 

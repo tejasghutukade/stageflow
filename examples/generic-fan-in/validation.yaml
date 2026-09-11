@@ -26,6 +26,14 @@ system_prompt: |
   - Do not call ask_operator more than once.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - brief
+      properties:
+        brief:
+          type: string
   output:
     schema:
       type: object

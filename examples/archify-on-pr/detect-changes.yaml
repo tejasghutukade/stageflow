@@ -23,6 +23,9 @@ system_prompt: |
   Do not call ask_operator. Do not stop after a chat reply. Do not select types yourself.
 model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

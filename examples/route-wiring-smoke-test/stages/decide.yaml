@@ -2,3 +2,10 @@ id: decide
 system_prompt: >
   Start both follow-up branches. branch-a and branch-b both run next.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

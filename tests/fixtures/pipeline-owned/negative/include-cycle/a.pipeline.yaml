@@ -5,3 +5,10 @@ stages:
   - id: root
     system_prompt: Root stage.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

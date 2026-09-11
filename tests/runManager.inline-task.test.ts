@@ -19,6 +19,7 @@ function successEnvelope(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }
@@ -116,6 +117,7 @@ describe("run manager inline task", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -129,6 +131,7 @@ describe("run manager inline task", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },

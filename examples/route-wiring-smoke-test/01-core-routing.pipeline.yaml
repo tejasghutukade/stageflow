@@ -6,12 +6,26 @@ stages:
       - to: implement
     system_prompt: Draft a plan.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: implement
     route:
       - to: review
     system_prompt: Implement the plan.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Loop: continue forward to qa, or send back to implement (driven by
   # the feedback_loop envelope action, independent of listed route targets).
@@ -25,6 +39,13 @@ stages:
         replay_session: resume
     system_prompt: Review the change. Continue to qa, or send it back to implement.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Listed route targets always run after qa succeeds.
   - id: qa
@@ -33,6 +54,13 @@ stages:
       - to: request-changes
     system_prompt: Record the QA outcome. Ship and request-changes both run next.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Listed route targets always run after ship succeeds.
   - id: ship
@@ -42,30 +70,65 @@ stages:
       - to: update-changelog
     system_prompt: Ship the change. Slack, email, and changelog notifications all run next.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: request-changes
     route:
       - to: close
     system_prompt: Note the requested changes.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: notify-slack
     route:
       - to: close
     system_prompt: Notify Slack.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: notify-email
     route:
       - to: close
     system_prompt: Notify email.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: update-changelog
     route:
       - to: close
     system_prompt: Update the changelog.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Fan-in of request-changes plus the three notify stages. On the happy
   # path all four parents run. The join waits until every parent is
@@ -75,3 +138,10 @@ stages:
   - id: close
     system_prompt: Close out the run.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

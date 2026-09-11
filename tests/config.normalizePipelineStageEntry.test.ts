@@ -7,6 +7,13 @@ import {
 
 const ctx = { pipelineId: "test", path: "/tmp/test.pipeline.yaml" };
 
+const REQUIRED_IO = {
+  io: {
+    input: { schema: { type: "object" } },
+    output: { schema: { type: "object" } },
+  },
+};
+
 describe("normalizePipelineStageEntries", () => {
   it("infers id decide from uses path only", () => {
     const outcome = normalizePipelineStageEntries(
@@ -113,6 +120,7 @@ describe("normalizePipelineStageEntries", () => {
             clone_cap: 3,
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -135,6 +143,7 @@ describe("normalizePipelineStageEntries", () => {
             route: [{ to: "synthesize" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -145,6 +154,7 @@ describe("normalizePipelineStageEntries", () => {
             route: [{ to: "synthesize", on: ["succeeded", "failed"] }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -154,6 +164,7 @@ describe("normalizePipelineStageEntries", () => {
             route: [{ to: "followup" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -162,6 +173,7 @@ describe("normalizePipelineStageEntries", () => {
             id: "followup",
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -193,6 +205,7 @@ describe("normalizePipelineStageEntries", () => {
             route: [{ to: "design-doc" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -284,6 +297,7 @@ describe("normalizePipelineStageEntries", () => {
             model: "m",
             gate_kinds: ["confirm"],
             io: {
+              input: { schema: { type: "object" } },
               output: {
                 schema: {
                   type: "object",
@@ -330,6 +344,7 @@ describe("normalizePipelineStageEntries", () => {
             clone_cap: 3,
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -347,7 +362,7 @@ describe("normalizePipelineStageEntries", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
-          raw: { id: "clarify", system_prompt: "p", model: "m" },
+          raw: { id: "clarify", system_prompt: "p", model: "m", ...REQUIRED_IO },
           declaringPath: "/tmp/pipeline.yaml",
         },
       ],

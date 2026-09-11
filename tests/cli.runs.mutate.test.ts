@@ -25,10 +25,11 @@ const successEnvelope = {
   status: "success" as const,
   summary: "ok",
   artifacts: [] as string[],
+  payload: {},
 };
 
 function okEnvelope(summary: string) {
-  return { status: "success" as const, summary, artifacts: [] as string[] };
+  return { status: "success" as const, summary, artifacts: [] as string[], payload: {} };
 }
 
 function failEnvelope(summary: string) {

@@ -6,12 +6,26 @@ stages:
       - to: middle
     system_prompt: Implement.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: middle
     replay_safe: false
     route:
       - to: review
     system_prompt: A stage on the replay route that is not safe to replay.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: review
     route:
       - to: submit
@@ -22,6 +36,20 @@ stages:
         replay_session: resume
     system_prompt: Review.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: submit
     system_prompt: Submit.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

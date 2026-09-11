@@ -66,6 +66,32 @@ system_prompt: |
   Do not put fork_choice on the envelope.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - result
+        - commands
+        - changed_files
+        - remaining_risks
+      properties:
+        result:
+          type: string
+          enum:
+            - pass
+        commands:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

@@ -22,7 +22,7 @@ function okEnvelope(
   summary: string,
   extra?: Partial<StageEnvelope>,
 ): StageEnvelope {
-  return { status: "success", summary, artifacts: [], ...extra };
+  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
 }
 
 type FakeAgentBehavior =

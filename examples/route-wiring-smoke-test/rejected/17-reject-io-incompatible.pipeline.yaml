@@ -1,0 +1,33 @@
+id: route-demo-reject-io-incompatible
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [verdict]
+          properties:
+            verdict:
+              type: string
+  - id: review
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+          required: [title]
+          properties:
+            title:
+              type: string
+      output:
+        schema:
+          type: object

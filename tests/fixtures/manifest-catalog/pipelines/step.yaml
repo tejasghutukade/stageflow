@@ -2,3 +2,10 @@ id: step
 system_prompt: |
   Demo stage for manifest catalog listing.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

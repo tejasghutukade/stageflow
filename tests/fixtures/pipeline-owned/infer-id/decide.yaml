@@ -1,3 +1,10 @@
 id: decide
 system_prompt: Inferred id from uses path.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

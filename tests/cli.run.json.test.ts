@@ -38,6 +38,7 @@ function gatedAgent(gate: Promise<void>) {
               status: "success" as const,
               summary: "ok",
               artifacts: [],
+              payload: {},
             },
           };
         },
@@ -51,6 +52,7 @@ function gatedAgent(gate: Promise<void>) {
           status: "success" as const,
           summary: "ok",
           artifacts: [],
+          payload: {},
         },
       };
     },
@@ -338,7 +340,7 @@ describe("sf run --json completion (U3)", () => {
     expect(cap.stderrText()).toBe("");
   });
 
-  it("start-run pairing warning appears as findings with file in --json stdout", async () => {
+  it("omitted task.input against required entry io.input fails as validate-shaped JSON", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "sf-run-json-entry-input-"));
     const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
     await writeFile(
@@ -360,8 +362,18 @@ describe("sf run --json completion (U3)", () => {
         "          properties:",
         "            title:",
         "              type: string",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "  - id: follow",
         "    system_prompt: Continue the work",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     );
@@ -383,10 +395,10 @@ describe("sf run --json completion (U3)", () => {
           startRun: (input) => manager.startRun(input),
         },
       );
-      expect(code).toBe(0);
+      expect(code).toBe(1);
       const parsed = JSON.parse(cap.stdoutText()) as {
         ok: boolean;
-        outcome: string;
+        outcome?: string;
         findings: Array<{
           severity: string;
           code: string;
@@ -396,18 +408,22 @@ describe("sf run --json completion (U3)", () => {
           category: string;
         }>;
       };
-      expect(parsed.ok).toBe(true);
-      expect(parsed.outcome).toBe("succeeded");
-      const unmet = parsed.findings.find(
-        (finding) => finding.code === "task.entry_input_unmet",
+      expect(parsed.ok).toBe(false);
+      expect(parsed).not.toHaveProperty("outcome");
+      expect(parsed).not.toHaveProperty("runId");
+      const mismatch = parsed.findings.find(
+        (finding) => finding.code === "task.invalid_shape",
       );
-      expect(unmet).toMatchObject({
-        severity: "warning",
-        code: "task.entry_input_unmet",
+      expect(mismatch).toMatchObject({
+        severity: "error",
+        code: "task.invalid_shape",
         category: "task",
       });
-      expect(unmet?.file).toMatch(/sample\.task\.yaml$/);
-      expect(unmet).not.toHaveProperty("path");
+      expect(mismatch?.file).toMatch(/sample\.task\.yaml$/);
+      expect(mismatch).not.toHaveProperty("path");
+      expect(parsed.findings.some((f) => f.code === "task.entry_input_unmet")).toBe(
+        false,
+      );
     } finally {
       spy.mockRestore();
     }
@@ -433,6 +449,9 @@ describe("sf run --json completion (U3)", () => {
         "          properties:",
         "            title:",
         "              type: string",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     );
@@ -483,6 +502,13 @@ describe("sf run --json completion (U3)", () => {
         "stages:",
         "  - id: plan",
         "    system_prompt: Do work",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     );

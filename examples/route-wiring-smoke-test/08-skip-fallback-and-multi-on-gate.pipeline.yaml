@@ -8,25 +8,60 @@ stages:
       - to: safe-step
     system_prompt: Run both the risky-step and safe-step follow-ups.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Leaf: does not route onward. done is only on the safe-step arm, so
   # it does not wait on this sibling.
   - id: risky-step
     system_prompt: The risky path. A leaf — no child runs from here.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: safe-step
     route:
       - to: notify-either-way
     system_prompt: The safe path. Routes onward to notify-either-way, then done.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: notify-either-way
     route:
       - to: done
     system_prompt: Runs after safe-step succeeds.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: done
     system_prompt: Close out the run.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

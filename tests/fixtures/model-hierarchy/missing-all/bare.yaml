@@ -1,2 +1,9 @@
 id: bare
 system_prompt: No model at stage, pipeline, or global tier.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

@@ -18,6 +18,20 @@ system_prompt: |
   Your last tool call in this attempt must be emit_stage_envelope.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - library_id
+        - query
+        - excerpt
+      properties:
+        library_id:
+          type: string
+        query:
+          type: string
+        excerpt:
+          type: string
   output:
     schema:
       type: object

@@ -16,3 +16,10 @@ system_prompt: |
   5. Optionally, before the plan gate, you may ask one clarifying free_text or
      multi_question via ask_operator if needed. Never emit before plan accept.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

@@ -7,6 +7,9 @@ io:
   input:
     schema:
       $ref: "#/schemas/topic-brief"
+  output:
+    schema:
+      type: object
 verify:
   - id: approved
     type: gate

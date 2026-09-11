@@ -4,6 +4,20 @@ stages:
     entry: false
     system_prompt: A standalone stage explicitly marked entry false.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: review
     system_prompt: Another independent stage.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

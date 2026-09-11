@@ -22,3 +22,10 @@ system_prompt: |
   - Never invent other stage ids.
   - Name only the single id the operator chose.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

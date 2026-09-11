@@ -99,6 +99,29 @@ system_prompt: |
   this stage's own prohibitions or scope limits in the summary.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - addressed_all_blocking
+        - fixed_files
+        - verification_commands
+        - remaining_risks
+      properties:
+        addressed_all_blocking:
+          type: boolean
+        fixed_files:
+          type: array
+          items:
+            type: string
+        verification_commands:
+          type: array
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

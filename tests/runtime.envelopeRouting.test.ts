@@ -370,7 +370,7 @@ describe("resolvePriorEnvelope clone join list (U2 / U5)", () => {
 });
 
 function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [] };
+  return { status: "success", summary, artifacts: [], payload: {} };
 }
 
 async function seedStageTerminal(

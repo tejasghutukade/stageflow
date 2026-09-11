@@ -9,9 +9,30 @@ stages:
         on: [failed]
     system_prompt: Run the test suite.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: ship
     system_prompt: Ship the release.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: hotfix
     system_prompt: Apply a hotfix.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

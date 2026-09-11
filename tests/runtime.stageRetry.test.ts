@@ -51,7 +51,7 @@ const fixtures = path.resolve(
 );
 
 function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [] };
+  return { status: "success", summary, artifacts: [], payload: {} };
 }
 
 function failEnvelope(summary: string): StageEnvelope {

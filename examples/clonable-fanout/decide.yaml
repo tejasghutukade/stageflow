@@ -52,3 +52,10 @@ system_prompt: |
   - Never use action fanout with fewer than 2 clones.
   - Never put fork_choice on this emit.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

@@ -5,6 +5,26 @@ import path from "node:path";
 import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
 
+const INLINE_IO = [
+  "    io:",
+  "      input:",
+  "        schema:",
+  "          type: object",
+  "      output:",
+  "        schema:",
+  "          type: object",
+];
+
+const FILE_IO = [
+  "io:",
+  "  input:",
+  "    schema:",
+  "      type: object",
+  "  output:",
+  "    schema:",
+  "      type: object",
+];
+
 async function writeTempCatalog(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "sf-dual-read-"));
   for (const [rel, content] of Object.entries(files)) {
@@ -26,6 +46,9 @@ describe("YAML dual-read dialect", () => {
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
         "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
         "      output:",
         "        schema:",
         "          type: object",
@@ -69,6 +92,7 @@ describe("YAML dual-read dialect", () => {
         "id: worker",
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "verify:",
         "  - id: self-review",
         "    type: checklist",
@@ -93,6 +117,9 @@ describe("YAML dual-read dialect", () => {
         "  - id: worker",
         "    uses: ./worker.yaml",
         "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
         "      output:",
         "        schema:",
         "          type: object",
@@ -126,6 +153,7 @@ describe("YAML dual-read dialect", () => {
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
         "gate_kinds: [confirm]",
+        ...FILE_IO,
         "verify:",
         "  - id: approved",
         "    type: gate",
@@ -168,6 +196,7 @@ describe("YAML dual-read dialect", () => {
         "id: worker",
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "",
       ].join("\n"),
     );
@@ -187,6 +216,7 @@ describe("YAML dual-read dialect", () => {
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
+        ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
@@ -242,6 +272,8 @@ describe("YAML dual-read dialect", () => {
         "  properties:",
         "    verdict:",
         "      type: string",
+        "clone_input_schema:",
+        "  type: object",
         "",
       ].join("\n"),
       "demo.pipeline.yaml": [
@@ -265,12 +297,14 @@ describe("YAML dual-read dialect", () => {
         "id: first",
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "",
       ].join("\n"),
       "second.yaml": [
         "id: second",
         "system_prompt: Do more",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "",
       ].join("\n"),
       "demo.pipeline.yaml": [
@@ -304,10 +338,14 @@ describe("YAML dual-read dialect", () => {
         "    entry: true",
         "    route:",
         "      - to: design-doc",
+        ...INLINE_IO,
         "  - id: design-doc",
         "    system_prompt: Design",
         "    model: anthropic/claude-sonnet-4-5",
         "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
         "      output:",
         "        schema:",
         "          type: object",
@@ -332,6 +370,13 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "    verify:",
         "      - id: tests",
         "        type: command",
@@ -361,6 +406,13 @@ describe("YAML dual-read dialect", () => {
         "    label: bad",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     });
@@ -377,10 +429,7 @@ describe("YAML dual-read dialect", () => {
         "id: worker",
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
-        "io:",
-        "  output:",
-        "    schema:",
-        "      type: object",
+        ...FILE_IO,
         "needs: other",
         "",
       ].join("\n"),
@@ -389,6 +438,8 @@ describe("YAML dual-read dialect", () => {
         "system_prompt: Do work",
         "model: anthropic/claude-sonnet-4-5",
         "payload_schema:",
+        "  type: object",
+        "clone_input_schema:",
         "  type: object",
         "needs: other",
         "",
@@ -414,6 +465,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: tests",
         "        type: command",
@@ -439,6 +491,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: report",
         "        type: artifact",
@@ -464,6 +517,7 @@ describe("YAML dual-read dialect", () => {
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
+        ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
@@ -494,6 +548,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: report",
         "        type: artifact",
@@ -522,6 +577,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: report",
         "        type: artifact",
@@ -535,6 +591,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: report",
         "        type: artifact",
@@ -571,6 +628,7 @@ describe("YAML dual-read dialect", () => {
         "  - id: plan",
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
+        ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
@@ -595,6 +653,7 @@ describe("YAML dual-read dialect", () => {
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
+        ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
@@ -636,6 +695,10 @@ describe("YAML dual-read dialect", () => {
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
+        "    payload_schema:",
+        "      type: object",
+        "    clone_input_schema:",
+        "      type: object",
         "    pre_emit_checks:",
         "      - id: approved",
         "        type: gate",
@@ -661,6 +724,7 @@ describe("YAML dual-read dialect", () => {
         "    system_prompt: Do work",
         "    model: anthropic/claude-sonnet-4-5",
         "    gate_kinds: [confirm]",
+        ...INLINE_IO,
         "    verify:",
         "      - id: approved",
         "        type: gate",
@@ -693,5 +757,90 @@ describe("YAML dual-read dialect", () => {
     expect(target.value.dag.nodes[0]?.completion).toEqual(
       legacy.value.dag.nodes[0]?.completion,
     );
+  });
+
+  it("rejects omitted io on an inline stage", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io is required/);
+  });
+
+  it("rejects omitted io.input.schema", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.input\.schema is required/);
+  });
+
+  it("rejects omitted io.output.schema", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
+  });
+
+  it("rejects a side without schema", async () => {
+    const root = await writeTempCatalog({
+      "demo.pipeline.yaml": [
+        "id: demo",
+        "stages:",
+        "  - id: plan",
+        "    system_prompt: Do work",
+        "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output: {}",
+        "",
+      ].join("\n"),
+    });
+    const outcome = await loadPipelineOutcome("demo.pipeline.yaml", { cwd: root });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
   });
 });

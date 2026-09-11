@@ -36,7 +36,7 @@ type FeedbackLoopAction =
 | `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage skips successors whose `needs` do not accept `failed` (legacy scalar `needs` accepts `succeeded` only). A [generic fan-in](yaml-catalog.md#generic-fan-in) join that lists `failed` in that parent's `on` set continues. A parallel clone failure lets sibling clones finish and skips the clone-list join and its descendants |
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
-| `payload` | no | Structured data for downstream stages; required on success when the stage declares `io.output.schema` |
+| `payload` | no | Structured data for downstream stages; required on success (`io.output.schema` is required on every stage body) |
 | `fork_choice` | no* | Non-clonable immediate successor ids to run; required on success when the stage has a `fork` field and at least one non-clonable child |
 | `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
 | `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares `feedback_loop` policy |
@@ -67,7 +67,7 @@ Example success emit (conceptual):
 
 On `status: "failure"`, the envelope is accepted. A named-stage failure skips paths whose dependency contract rejects `failed`. Independent siblings and [generic fan-in](yaml-catalog.md#generic-fan-in) joins that list `failed` in that parent's `on` set continue. A parallel clone failure does not stop sibling clones; the clone-list join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the clone-list join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
 
-If the stage declares `io.output.schema` in YAML, `payload` is validated against that JSON Schema subset on success — see [io schemas](#io-schemas).
+Every stage body declares `io.output.schema`. On success, `payload` is validated against that JSON Schema subset — see [io schemas](#io-schemas).
 
 ### Fork stages
 
@@ -126,7 +126,7 @@ Nested `clone_forks[i].envelope` (for `once`) and `clones[j].envelope` (for `fan
 }
 ```
 
-Illegal items are rejected by emit. A successor may declare `io.input.schema` (same JSON Schema subset as `io.output.schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Omit the field to skip the assignment-payload check. Never validate clone briefs against the child's output `io.output.schema`. `skip` does not need an assignment payload.
+Illegal items are rejected by emit. Every successor declares `io.input.schema` (same JSON Schema subset as `io.output.schema`). That schema validates `envelope.payload` — assignment fields belong there, not at the top level of the `clone_forks` item. Parent emit checks `once` and `fanout` assignment payloads against it. Never validate clone briefs against the child's output `io.output.schema`. `skip` does not need an assignment payload.
 
 Sequential vs parallel join: in **parallel**, sibling clones still finish after a failure, but the join successor and its descendants are skipped unless every clone succeeded. In **sequential**, the first failure skips remaining clones of that successor and the join successor does not run.
 
@@ -172,7 +172,7 @@ Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [
 
 ### io schemas {#io-schemas}
 
-When a stage declares `io.output.schema`, success `payload` is required and checked against a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for clone assignment payloads and (when both exist) matching optional task `input` on entry stages. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
+Every stage body must declare both `io.input.schema` and `io.output.schema`. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). Success `payload` is required and checked against `io.output.schema` using a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for clone assignment payloads, predecessor success payloads on normal edges, and matching optional task `input` on entry stages (omitted `input` is `{}`; mismatch is an error). Sequential and fan-in non-clone edges: the child's `io.input` must be a structural subset of each non-clonable parent's `io.output`; pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 

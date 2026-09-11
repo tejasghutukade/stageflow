@@ -8,6 +8,14 @@ system_prompt: |
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload describing what you shipped.
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - ready
+      properties:
+        ready:
+          type: boolean
   output:
     schema:
       type: object

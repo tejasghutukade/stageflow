@@ -6,12 +6,26 @@ stages:
       - to: middle
     system_prompt: Implement.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: middle
     route:
       - to: review
     system_prompt: Middle.
     model: cursor/auto
-  # Two loop entries with DIFFERENT (both valid) targets -- so the rejection
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+# Two loop entries with DIFFERENT (both valid) targets -- so the rejection
   # below is specifically "at most one loop entry", not a duplicate-target
   # error from having two entries pointing at the same place.
   - id: review
@@ -28,3 +42,10 @@ stages:
         replay_session: new_session
     system_prompt: Review.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -1,3 +1,10 @@
 id: branch-a
 system_prompt: Branch A -- an external stage file loaded via `uses:`.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

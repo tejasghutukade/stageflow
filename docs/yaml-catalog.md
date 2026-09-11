@@ -68,7 +68,7 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `clonable`, `clone_cap`, `on_verify_fail`, `replay_safe`. `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp). `needs`, `fork`, `feedback_loop`, `route_select`, and `allow_none` are rejected.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io`, `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`, `clone_actions`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start (clone assignment is the strong case). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). Presence of `io.output.schema` still implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`, `clone_actions`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start (clone assignment is the strong case). Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
@@ -218,7 +218,7 @@ Use `manual` for side-effecting work such as publishing or payments. Operator co
 
 Optional pipeline-file `schemas:` is the `$ref` root for this release. Refs are JSON Pointer `#/schemas/NAME`. Cycles fail load. `schemas:` on an include fragment fails load. Isolated stage validate of a `$ref`-only schema fails with `stage.unresolved_schema_ref`; pipeline validate resolves after attach.
 
-Sequential single-parent non-clone edges: if both sides have schemas, consumer `io.input` must be a structural subset of producer `io.output`. Clone edges and multi-parent joins do not run that subset check — the child's `io.input` is the assignment or join contract.
+Sequential and fan-in non-clone edges: consumer `io.input` must be a structural subset of **each** non-clonable parent's `io.output`. Pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. Clone edges (clonable parent or child) skip that subset check — the child's `io.input` is the assignment contract. Compatible vs incompatible handoffs: [`11-sequential-io-handoff.pipeline.yaml`](../examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml), [`rejected/17-reject-io-incompatible.pipeline.yaml`](../examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml). Richer `$ref`/nested/array subset example: [`12-complex-io-schemas.pipeline.yaml`](../examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml). All-`$ref` input and output: [`13-ref-io-handoff.pipeline.yaml`](../examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml); incompatible `$ref` pair: [`rejected/21-reject-ref-io.pipeline.yaml`](../examples/route-wiring-smoke-test/rejected/21-reject-ref-io.pipeline.yaml).
 
 ```yaml
 id: story-handoff
@@ -237,6 +237,9 @@ stages:
     route:
       - to: review
     io:
+      input:
+        schema:
+          type: object
       output:
         schema:
           $ref: "#/schemas/story-slice"
@@ -246,6 +249,9 @@ stages:
       input:
         schema:
           $ref: "#/schemas/story-slice"
+      output:
+        schema:
+          type: object
 ```
 
 Runnable demo with `uses:` stages: [`examples/feature-loop/`](../examples/feature-loop/) (`schemas.story-assignment` → `plan` `io.input.schema`).
@@ -637,7 +643,7 @@ Optional when a pipeline or manifest default can fill it:
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
 
-Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `io`, `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `clonable`, `needs`, `fork`, `route_select`, `allow_none`) are errors on an external stage file (body only — put wiring on the pipeline entry). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `clonable`, `needs`, `fork`, `route_select`, `allow_none`) are errors on an external stage file (body only — put wiring on the pipeline entry). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -650,9 +656,9 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 | `context` | no | Background for agents |
 | `constraints` | no | Boundaries |
 | `checkout` | no | Relative or absolute path to working tree |
-| `input` | no | Structured object; when present must match each entry stage's `io.input` |
+| `input` | no | Structured object matched against each entry stage's `io.input`; omitted is `{}` |
 
-Prose-only tasks (no `input`) stay valid. If an entry stage declares `io.input` and the task has no `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` emit a `task.entry_input_unmet` warning and continue. Non-entry stages still receive the full task in the agent prompt.
+Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `io.input.schema` and the task omits `input`, start-run / `preparePipeline` treat it as `{}` and fail with `task.invalid_shape` when that does not match. `sf validate` of the task file alone still succeeds. Non-entry stages still receive the full task in the agent prompt.
 
 Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
@@ -695,7 +701,7 @@ sf migrate-yaml                         # dry-run convert legacy keys to io / ve
 sf migrate-yaml --write                 # apply
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `--strict` does not promote `catalog.legacy_yaml` or `task.entry_input_unmet`. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml).
+Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `--strict` does not promote `catalog.legacy_yaml`. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml).
 
 ## CLI run
 

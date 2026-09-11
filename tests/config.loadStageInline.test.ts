@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { loadStageFromObjectOutcome } from "../src/config/loadStage.js";
 
+const REQUIRED_IO = {
+  io: {
+    input: { schema: { type: "object" } },
+    output: { schema: { type: "object" } },
+  },
+};
+
+const REQUIRED_IR_SCHEMAS = {
+  payload_schema: { type: "object" },
+  clone_input_schema: { type: "object" },
+};
+
 describe("loadStageFromObjectOutcome", () => {
   it("loads valid inline object", () => {
     const outcome = loadStageFromObjectOutcome(
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
     );
@@ -18,7 +31,7 @@ describe("loadStageFromObjectOutcome", () => {
 
   it("allows missing model at parse time", () => {
     const outcome = loadStageFromObjectOutcome(
-      { system_prompt: "Do work" },
+      { system_prompt: "Do work", ...REQUIRED_IO },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
     );
     expect(outcome.ok).toBe(true);
@@ -42,6 +55,7 @@ describe("loadStageFromObjectOutcome", () => {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
         gate_kinds: ["not_a_kind"],
+        ...REQUIRED_IO,
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
     );
@@ -69,6 +83,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [
           { id: "plan-approved", type: "gate", kind: "artifact_backed" },
           {
@@ -97,6 +112,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
     );
@@ -110,6 +126,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [],
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
@@ -124,6 +141,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [{ id: "x", type: "artifact", path: "plan.md" }],
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
@@ -138,6 +156,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [{ id: "x", type: "gate", kind: "not_a_kind" }],
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
@@ -152,6 +171,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [
           { id: "x", type: "artifact_declared", basename: "" },
         ],
@@ -168,6 +188,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IR_SCHEMAS,
         pre_emit_checks: [
           { id: "dup", type: "gate", kind: "confirm" },
           { id: "dup", type: "artifact_declared", basename: "plan.md" },
@@ -199,6 +220,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
         clone_actions: [],
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
@@ -241,6 +263,95 @@ describe("loadStageFromObjectOutcome", () => {
     ]);
   });
 
+  it("rejects omitted io", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io is required/);
+  });
+
+  it("rejects io: {}", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        io: {},
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.input\.schema is required/);
+  });
+
+  it("rejects omitted io.input", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        io: { output: { schema: { type: "object" } } },
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.input\.schema is required/);
+  });
+
+  it("rejects omitted io.output", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        io: { input: { schema: { type: "object" } } },
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
+  });
+
+  it("rejects io.input without schema", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        io: { input: {}, output: { schema: { type: "object" } } },
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.input\.schema is required/);
+  });
+
+  it("rejects io.output without schema", () => {
+    const outcome = loadStageFromObjectOutcome(
+      {
+        system_prompt: "Do work",
+        model: "anthropic/claude-sonnet-4-5",
+        io: { input: { schema: { type: "object" } }, output: {} },
+      },
+      { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.code).toBe("stage.invalid_io");
+    expect(outcome.issues[0]?.message).toMatch(/io\.output\.schema is required/);
+  });
+
   it("rejects mixed payload_schema and io", () => {
     const outcome = loadStageFromObjectOutcome(
       {
@@ -261,6 +372,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
         verify: [
           { id: "tests", type: "command", run: "npm test", when: ["emit"] },
         ],
@@ -278,6 +390,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
         verify: [
           { id: "tests", type: "command", run: "npm test", when: ["emit", "after"] },
         ],
@@ -295,6 +408,7 @@ describe("loadStageFromObjectOutcome", () => {
       {
         system_prompt: "Do work",
         model: "anthropic/claude-sonnet-4-5",
+        ...REQUIRED_IO,
         verify: [{ id: "report", type: "artifact", path: "report.md" }],
       },
       { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },
@@ -316,6 +430,7 @@ describe("loadStageFromObjectOutcome", () => {
         {
           system_prompt: "Do work",
           model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
           verify: [check],
         },
         { entryId: "inline", declaringPath: "/tmp/pipeline.yaml" },

@@ -30,3 +30,10 @@ system_prompt: |
     control for it.
   - Never omit clone_forks.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

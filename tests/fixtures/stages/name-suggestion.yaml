@@ -15,3 +15,5 @@ payload_schema:
       type: array
       items: { type: string }
   additionalProperties: false
+clone_input_schema:
+  type: object

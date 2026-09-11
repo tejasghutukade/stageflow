@@ -224,7 +224,10 @@ export class FakeAgent implements AgentPort {
           : undefined;
 
       try {
-        const envelope = assertRequiredEnvelope(envelopeValue);
+        let envelope = assertRequiredEnvelope(envelopeValue);
+        if (envelope.status === "success" && envelope.payload === undefined) {
+          envelope = { ...envelope, payload: {} };
+        }
         assertFeedbackLoopAction(envelope, input.feedbackLoopEmitContext);
         const isFeedbackSendBack = envelope.feedback_loop?.action === "send_back";
         if (!isFeedbackSendBack && input.forkEmitContext !== undefined) {

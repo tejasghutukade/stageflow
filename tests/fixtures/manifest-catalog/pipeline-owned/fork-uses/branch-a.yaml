@@ -2,3 +2,10 @@ id: branch-a
 system_prompt: |
   You are branch-a. Emit success envelope.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

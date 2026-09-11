@@ -83,6 +83,9 @@ system_prompt: |
   scope limits in it.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

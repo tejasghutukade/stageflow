@@ -23,6 +23,7 @@ function successEnvelope(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }

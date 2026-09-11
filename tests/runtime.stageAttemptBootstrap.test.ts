@@ -57,6 +57,31 @@ function stage(id: string, skill?: string): StageConfig {
   };
 }
 
+const titleInputSchema = {
+  type: "object",
+  properties: { title: { type: "string" } },
+  required: ["title"],
+};
+
+const unconstrainedObjectSchema = { type: "object" };
+
+function linearDag(parent: string, child: string): ResolvedPipelineDag {
+  return {
+    nodes: [
+      { id: parent, needs: null, ancestors: [], stageIndex: 0 },
+      {
+        id: child,
+        needs: parent,
+        needsEdges: [{ id: parent, on: ["succeeded"] }],
+        ancestors: [parent],
+        stageIndex: 1,
+      },
+    ],
+    roots: [parent],
+    childrenOf: { [parent]: [child] },
+  };
+}
+
 function recordingAgent() {
   const opened: StageRunInput[] = [];
   const inner = scriptedFakeAgent([
@@ -292,6 +317,7 @@ describe("openStageAttempt", () => {
       status: "success",
       summary: "from-clarify",
       artifacts: ["stages/clarify/attempts/1/artifacts/a.md"],
+      payload: {},
     };
     await store.createStageExecution(run.runId, "clarify");
     await store.writeEnvelope(run.runId, "clarify", parent);
@@ -641,9 +667,9 @@ describe("openStageAttempt", () => {
       taskYaml: "id: t\ngoal: g\n",
     });
     const completed = new Map<string, StageEnvelope>([
-      ["design-doc~1", { status: "success", summary: "d1", artifacts: [] }],
-      ["design-doc~2", { status: "success", summary: "d2", artifacts: [] }],
-      ["design-doc~3", { status: "success", summary: "d3", artifacts: [] }],
+      ["design-doc~1", { status: "success", summary: "d1", artifacts: [], payload: {} }],
+      ["design-doc~2", { status: "success", summary: "d2", artifacts: [], payload: {} }],
+      ["design-doc~3", { status: "success", summary: "d3", artifacts: [], payload: {} }],
     ]);
     const { agent, opened } = recordingAgent();
     const joinDoc = loaded.stages.find((s) => s.id === "join-doc");
@@ -686,11 +712,13 @@ describe("openStageAttempt", () => {
       status: "success",
       summary: "from-research",
       artifacts: [],
+      payload: {},
     };
     const validation: StageEnvelope = {
       status: "success",
       summary: "from-validation",
       artifacts: [],
+      payload: {},
     };
     for (const [stageId, envelope] of [
       ["validation", validation],
@@ -748,11 +776,13 @@ describe("openStageAttempt", () => {
       status: "success",
       summary: "from-research",
       artifacts: [],
+      payload: {},
     };
     const validation: StageEnvelope = {
       status: "success",
       summary: "from-validation",
       artifacts: [],
+      payload: {},
     };
     for (const [stageId, envelope] of [
       ["research", research],
@@ -1085,5 +1115,584 @@ describe("openStageAttempt", () => {
       reason: expect.stringMatching(/MCP catalog.*missing/i),
     });
     expect(opened).toHaveLength(0);
+  });
+
+  describe("clone_input_schema prior validation", () => {
+    it("opens when a single predecessor payload matches", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-ok-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "from-parent",
+        artifacts: [],
+        payload: { title: "Calendar" },
+      };
+      await store.createStageExecution(run.runId, "clarify");
+      await store.writeEnvelope(run.runId, "clarify", parent);
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
+        task,
+        dag: linearDag("clarify", "design-doc"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+    });
+
+    it("fails closed when a single predecessor payload is missing", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-miss-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "from-parent",
+        artifacts: [],
+      };
+      await store.createStageExecution(run.runId, "clarify");
+      await store.writeEnvelope(run.runId, "clarify", parent);
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
+        task,
+        dag: linearDag("clarify", "design-doc"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: "prior payload is required by io.input.schema for design-doc",
+      });
+      expect(opened).toHaveLength(0);
+    });
+
+    it("fails closed when a single predecessor payload does not match", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-bad-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "from-parent",
+        artifacts: [],
+        payload: { title: 12 },
+      };
+      await store.createStageExecution(run.runId, "clarify");
+      await store.writeEnvelope(run.runId, "clarify", parent);
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("design-doc"), clone_input_schema: titleInputSchema },
+        task,
+        dag: linearDag("clarify", "design-doc"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(
+        /^prior payload does not match io\.input\.schema for design-doc:/,
+      );
+      expect(opened).toHaveLength(0);
+    });
+
+    it("skips the check when clone_input_schema is omitted", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-prior-skip-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "from-parent",
+        artifacts: [],
+      };
+      await store.createStageExecution(run.runId, "clarify");
+      await store.writeEnvelope(run.runId, "clarify", parent);
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: stage("design-doc"),
+        task,
+        dag: linearDag("clarify", "design-doc"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+    });
+
+    it("fails closed when a fan-in prior payload does not match", async () => {
+      const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+        cwd: fixtures,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-fanin-bad-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("diamond-fan-in"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const research: StageEnvelope = {
+        status: "success",
+        summary: "from-research",
+        artifacts: [],
+        payload: { title: "ok" },
+      };
+      const validation: StageEnvelope = {
+        status: "success",
+        summary: "from-validation",
+        artifacts: [],
+        payload: { title: 1 },
+      };
+      for (const [stageId, envelope] of [
+        ["validation", validation],
+        ["research", research],
+      ] as const) {
+        await store.ensureStageWorkspace(run.runId, stageId);
+        await store.createStageExecution(run.runId, stageId);
+        await store.appendStageEvent(run.runId, stageId, { event: "started" });
+        await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
+        await store.writeEnvelope(run.runId, stageId, envelope);
+        await store.updateStageExecution(run.runId, stageId, 1, {
+          status: "succeeded",
+          envelope,
+        });
+      }
+      const synthesize = loaded.stages.find((s) => s.id === "synthesize");
+      expect(synthesize).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...synthesize!, clone_input_schema: titleInputSchema },
+        task,
+        dag: loaded.dag,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(
+        /^prior payload does not match io\.input\.schema for synthesize:/,
+      );
+      expect(opened).toHaveLength(0);
+    });
+
+    it("opens when every fan-in prior payload matches", async () => {
+      const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
+        cwd: fixtures,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-fanin-ok-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("diamond-fan-in"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const research: StageEnvelope = {
+        status: "success",
+        summary: "from-research",
+        artifacts: [],
+        payload: { title: "r" },
+      };
+      const validation: StageEnvelope = {
+        status: "success",
+        summary: "from-validation",
+        artifacts: [],
+        payload: { title: "v" },
+      };
+      for (const [stageId, envelope] of [
+        ["validation", validation],
+        ["research", research],
+      ] as const) {
+        await store.ensureStageWorkspace(run.runId, stageId);
+        await store.createStageExecution(run.runId, stageId);
+        await store.appendStageEvent(run.runId, stageId, { event: "started" });
+        await store.appendStageEvent(run.runId, stageId, { event: "succeeded" });
+        await store.writeEnvelope(run.runId, stageId, envelope);
+        await store.updateStageExecution(run.runId, stageId, 1, {
+          status: "succeeded",
+          envelope,
+        });
+      }
+      const synthesize = loaded.stages.find((s) => s.id === "synthesize");
+      expect(synthesize).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...synthesize!, clone_input_schema: titleInputSchema },
+        task,
+        dag: loaded.dag,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+    });
+
+    it("fails closed when a clone-list join prior payload does not match", async () => {
+      const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+        cwd: fixtures,
+      });
+      const base = buildPipelineDagSnapshotFromLoaded(loaded);
+      const { snapshot } = appendCloneInstances(base, {
+        catalogId: "design-doc",
+        predecessorId: "clarify",
+        count: 3,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-join-bad-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("clone-fanout-join"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const completed = new Map<string, StageEnvelope>([
+        [
+          "design-doc~1",
+          {
+            status: "success",
+            summary: "d1",
+            artifacts: [],
+            payload: { title: "a" },
+          },
+        ],
+        [
+          "design-doc~2",
+          {
+            status: "success",
+            summary: "d2",
+            artifacts: [],
+            payload: { title: 2 },
+          },
+        ],
+        [
+          "design-doc~3",
+          {
+            status: "success",
+            summary: "d3",
+            artifacts: [],
+            payload: { title: "c" },
+          },
+        ],
+      ]);
+      const joinDoc = loaded.stages.find((s) => s.id === "join-doc");
+      expect(joinDoc).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...joinDoc!, clone_input_schema: titleInputSchema },
+        task,
+        dag: snapshot,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+        completedEnvelopes: completed,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(
+        /^prior payload does not match io\.input\.schema for join-doc:/,
+      );
+      expect(opened).toHaveLength(0);
+    });
+
+    it("opens when every clone-list join prior payload matches", async () => {
+      const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+        cwd: fixtures,
+      });
+      const base = buildPipelineDagSnapshotFromLoaded(loaded);
+      const { snapshot } = appendCloneInstances(base, {
+        catalogId: "design-doc",
+        predecessorId: "clarify",
+        count: 3,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-join-ok-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("clone-fanout-join"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const completed = new Map<string, StageEnvelope>([
+        [
+          "design-doc~1",
+          {
+            status: "success",
+            summary: "d1",
+            artifacts: [],
+            payload: { title: "a" },
+          },
+        ],
+        [
+          "design-doc~2",
+          {
+            status: "success",
+            summary: "d2",
+            artifacts: [],
+            payload: { title: "b" },
+          },
+        ],
+        [
+          "design-doc~3",
+          {
+            status: "success",
+            summary: "d3",
+            artifacts: [],
+            payload: { title: "c" },
+          },
+        ],
+      ]);
+      const joinDoc = loaded.stages.find((s) => s.id === "join-doc");
+      expect(joinDoc).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...joinDoc!, clone_input_schema: titleInputSchema },
+        task,
+        dag: snapshot,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+        completedEnvelopes: completed,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+    });
+
+    it("skips clone assignment already checked on the parent emit", async () => {
+      const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+        cwd: fixtures,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-assign-skip-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("clone-fanout-join"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "clarify-summary",
+        artifacts: [],
+        clone_forks: [
+          {
+            successor_id: "design-doc",
+            action: "once",
+            envelope: {
+              status: "success",
+              summary: "once-prior",
+              artifacts: [],
+            },
+          },
+        ],
+      };
+      const designDoc = loaded.stages.find((s) => s.id === "design-doc");
+      expect(designDoc).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...designDoc!, clone_input_schema: titleInputSchema },
+        task,
+        dag: loaded.dag,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+        completedEnvelopes: new Map([["clarify", parent]]),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+      expect(opened[0]?.priorEnvelope?.summary).toBe("once-prior");
+    });
+
+    it("skips clone fanout assignment already checked on the parent emit", async () => {
+      const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+        cwd: fixtures,
+      });
+      const base = buildPipelineDagSnapshotFromLoaded(loaded);
+      const { snapshot } = appendCloneInstances(base, {
+        catalogId: "design-doc",
+        predecessorId: "clarify",
+        count: 2,
+      });
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-fanout-skip-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        ...catalogLocators("clone-fanout-join"),
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const parent: StageEnvelope = {
+        status: "success",
+        summary: "clarify-summary",
+        artifacts: [],
+        clone_forks: [
+          {
+            successor_id: "design-doc",
+            action: "fanout",
+            mode: "parallel",
+            clones: [
+              {
+                envelope: {
+                  status: "success",
+                  summary: "c1",
+                  artifacts: [],
+                },
+              },
+              {
+                envelope: {
+                  status: "success",
+                  summary: "c2",
+                  artifacts: [],
+                },
+              },
+            ],
+          },
+        ],
+      };
+      const designDoc = loaded.stages.find((s) => s.id === "design-doc");
+      expect(designDoc).toBeDefined();
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...designDoc!, clone_input_schema: titleInputSchema },
+        stageId: "design-doc~1",
+        task,
+        dag: snapshot,
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+        completedEnvelopes: new Map([["clarify", parent]]),
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+      expect(opened[0]?.priorEnvelope?.summary).toBe("c1");
+    });
+
+    it("treats omitted task.input as {} on entry and opens when it matches", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-empty-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: {
+          ...stage("clarify"),
+          clone_input_schema: unconstrainedObjectSchema,
+        },
+        task,
+        dag: rootDag("clarify"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(opened).toHaveLength(1);
+    });
+
+    it("fails closed when omitted task.input does not match entry io.input.schema", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-unmet-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("clarify"), clone_input_schema: titleInputSchema },
+        task,
+        dag: rootDag("clarify"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(
+        /^task input does not match io\.input\.schema for clarify:/,
+      );
+      expect(opened).toHaveLength(0);
+    });
+
+    it("fails closed when task.input does not match entry io.input.schema", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-boot-entry-bad-"));
+      const store = createRunStore({ rootDir: root });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      const { agent, opened } = recordingAgent();
+
+      const result = await openStageAttempt({
+        agent,
+        store,
+        runId: run.runId,
+        stage: { ...stage("clarify"), clone_input_schema: titleInputSchema },
+        task: { ...task, input: { title: 9 } },
+        dag: rootDag("clarify"),
+        workspaceDir: run.workspaceDir,
+        factoryCwd,
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toMatch(
+        /^task input does not match io\.input\.schema for clarify:/,
+      );
+      expect(opened).toHaveLength(0);
+    });
   });
 });

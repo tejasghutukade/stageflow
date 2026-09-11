@@ -138,8 +138,12 @@ function parseIo(
   label: string,
   stageId: string,
   deferSchemaRefs: boolean,
+  requireIo: boolean,
 ): LoadOutcome<{ payload_schema?: unknown; clone_input_schema?: unknown }> {
-  if (raw === undefined) return loadSuccess({});
+  if (raw === undefined) {
+    if (!requireIo) return loadSuccess({});
+    return invalidIo(label, "io is required", stageId);
+  }
   if (!isPlainObject(raw)) {
     return invalidIo(label, "io must be an object", stageId);
   }
@@ -147,6 +151,12 @@ function parseIo(
     if (key !== "input" && key !== "output") {
       return invalidIo(label, `io: unknown key "${key}"`, stageId);
     }
+  }
+  if (raw.input === undefined) {
+    return invalidIo(label, "io.input.schema is required", stageId);
+  }
+  if (raw.output === undefined) {
+    return invalidIo(label, "io.output.schema is required", stageId);
   }
 
   const result: { payload_schema?: unknown; clone_input_schema?: unknown } = {};
@@ -156,7 +166,6 @@ function parseIo(
     ["input", "clone_input_schema"],
   ] as const) {
     const side = raw[field];
-    if (side === undefined) continue;
     if (!isPlainObject(side)) {
       return invalidIo(label, `io.${field} must be an object`, stageId);
     }
@@ -165,7 +174,9 @@ function parseIo(
         return invalidIo(label, `io.${field}: unknown key "${key}"`, stageId);
       }
     }
-    if (side.schema === undefined) continue;
+    if (side.schema === undefined) {
+      return invalidIo(label, `io.${field}.schema is required`, stageId);
+    }
     if (side.schema === null || typeof side.schema !== "object" || Array.isArray(side.schema)) {
       return invalidIo(label, `io.${field}.schema must be an object`, stageId);
     }
@@ -192,6 +203,13 @@ function parseIo(
     }
     if (target === "payload_schema") result.payload_schema = side.schema;
     else result.clone_input_schema = side.schema;
+  }
+
+  if (result.payload_schema === undefined) {
+    return invalidIo(label, "io.output.schema is required", stageId);
+  }
+  if (result.clone_input_schema === undefined) {
+    return invalidIo(label, "io.input.schema is required", stageId);
   }
 
   return loadSuccess(result);
@@ -372,9 +390,16 @@ export function compileTargetContract(
     label: string;
     category: "pipeline" | "stage";
     deferSchemaRefs?: boolean;
+    requireIo?: boolean;
   },
 ): LoadOutcome<CompiledTargetContract> {
-  const ioOutcome = parseIo(raw.io, ctx.label, ctx.stageId, ctx.deferSchemaRefs === true);
+  const ioOutcome = parseIo(
+    raw.io,
+    ctx.label,
+    ctx.stageId,
+    ctx.deferSchemaRefs === true,
+    ctx.requireIo !== false,
+  );
   if (!ioOutcome.ok) return ioOutcome;
 
   const verifyOutcome = parseVerifyList(raw.verify, ctx.stageId, ctx.category);

@@ -1,9 +1,9 @@
 # route wiring smoke test
 
-Ten small, self-contained pipelines that together cover the `route`-based pipeline wiring YAML surface, plus sixteen deliberately-invalid ones that each trigger one specific rejection error.
+Thirteen small, self-contained pipelines that together cover the `route`-based pipeline wiring YAML surface, plus twenty-one deliberately-invalid ones that each trigger one specific rejection error.
 
-- The 10 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog (the directory is listed once; new `*.pipeline.yaml` files dropped in here are picked up automatically), so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
-- The 16 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list — **they will not show up in the UI on purpose**, so they don't clutter the picker or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure; since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file. They're CLI-only, via `sf validate --pipeline <path>`.
+- The 13 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog (the directory is listed once; new `*.pipeline.yaml` files dropped in here are picked up automatically), so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
+- The 21 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list — **they will not show up in the UI on purpose**, so they don't clutter the picker or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure; since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file. They're CLI-only, via `sf validate --pipeline <path>`.
 
 ## Patterns covered — which pipeline for which feature
 
@@ -25,6 +25,9 @@ State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), whi
 | `route-demo-skip-and-multi-on` | `08-skip-fallback-and-multi-on-gate.pipeline.yaml` | `decide` fans out to both `risky-step` and `safe-step`. `risky-step` is a leaf. `done` stays only on the safe-step arm (not a join across both). |
 | `route-demo-multi-loop-targets` | `09-multi-loop-targets.pipeline.yaml` | Two *different* stages (`review`, `qa`) each declaring their own loop entry back to the *same* ancestor — `qa` loops to a stage two hops back, not its immediate parent. |
 | `route-demo-uses-dialect-fork` | `10-uses-dialect-fork.pipeline.yaml` | `route`/`entry` combined with the `uses:` external-stage-file dialect — every other pipeline here uses inline `system_prompt`/`model` bodies instead. Both branches always run. |
+| `route-demo-sequential-io` | `11-sequential-io-handoff.pipeline.yaml` | Sequential `io` handoff: parent `draft` `io.output.schema` and child `review` `io.input.schema` share the same object contract (`required: [title]`). `sf validate` is how users see this compatibility check. |
+| `route-demo-complex-io` | `12-complex-io-schemas.pipeline.yaml` | Sequential `io` with pipeline `schemas:` (`finding`, `report`, `analyzed`): nested metadata, array of `$ref` items, enum/pattern/minLength/integer score. `draft → analyze → summarize`; summarize input is a subset (`title`/`summary`/`score` as number). Some `io` sides stay inline (`draft.in`, `summarize.in`/`out`). |
+| `route-demo-ref-io` | `13-ref-io-handoff.pipeline.yaml` | Sequential `io` where **both** every `io.input.schema` and every `io.output.schema` is `$ref: "#/schemas/..."`. `draft.out` and `review.in` share `#/schemas/doc`; `ship.in` is `#/schemas/title-only` (subset of `analyzed`). Unlike `12`, no inline schema sides. |
 
 ## Important: use the local build, not your global `sf`
 
@@ -95,6 +98,21 @@ Expect: **Validation passed.** `review` and `qa` each declare their own `type: l
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/10-uses-dialect-fork.pipeline.yaml --strict
 ```
 Expect: **Validation passed.** Same fan-out shape as `05-fork-choice`'s `triage` (both listed branches always run), but every stage body lives in an external file under `stages/` and is loaded via `uses:` instead of inline `system_prompt`/`model` — confirms `route`/`entry` work identically under both stage-body dialects.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml --strict
+```
+Expect: **Validation passed.** Parent `draft` `io.output` matches child `review` `io.input` — the same object contract (`required: [title]`). This is the check users see from `sf validate` on sequential (non-clone) edges.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml --strict
+```
+Expect: **Validation passed.** Three-stage `draft → analyze → summarize` with pipeline `schemas:` (`finding`, `report`, `analyzed`): nested metadata, array of `$ref` items, enum/pattern/minLength/integer score. `summarize` input is a subset (`title`/`summary`/`score` as number). Some `io` sides stay inline.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml --strict
+```
+Expect: **Validation passed.** Every `io.input.schema` and `io.output.schema` is `$ref: "#/schemas/..."`. `draft.out` and `review.in` share `#/schemas/doc`; `ship.in` is `#/schemas/title-only` (subset of `analyzed`). Unlike `12`, both sides of every stage are `$ref`.
 
 ## Rejected pipelines (should fail with the given message)
 
@@ -178,15 +196,40 @@ npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected
 ```
 Expect: `stage "draft": route item must have a non-empty "to" stage id` — a route entry with only `on:`, no `to:`.
 
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml --json
+```
+Expect: `io.input is not a structural subset` / `pipeline.io_incompatible` — `draft` outputs `verdict`, `review` requires `title`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/18-reject-nested-io.pipeline.yaml --json
+```
+Expect: `pipeline.io_incompatible` / `io.input is not a structural subset` — nested `metadata.owner.email` required on child, parent only has `metadata.source`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/19-reject-array-item-io.pipeline.yaml --json
+```
+Expect: `pipeline.io_incompatible` / `io.input is not a structural subset` — array items `$ref` child requires `severity`, parent items only `id`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/20-reject-closed-io.pipeline.yaml --json
+```
+Expect: `pipeline.io_incompatible` / `io.input is not a structural subset` — child `additionalProperties: false` while parent has extra `extra`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/21-reject-ref-io.pipeline.yaml --json
+```
+Expect: `pipeline.io_incompatible` — `draft.out` `$ref` `#/schemas/produced` vs `review.in` `$ref` `#/schemas/consumed` (`consumed` requires extra field `extra`).
+
 ## Run from the UI
 
-All 10 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
+All 13 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
 
 ```bash
 npx tsx src/cli.ts ui
 ```
 
-Start a new run, pick any of the 10 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
+Start a new run, pick any of the 13 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
 
 - Want to watch a larger fan-out (triage plus three follow-ups from quick-fix)? Run `route-demo-fork-choice`.
 - Want to watch true parallel fan-out/fan-in? Run `route-demo-fan-out-fan-in`.
@@ -210,6 +253,6 @@ A few things intentionally aren't in this catalog because they're orthogonal to 
 
 - **`clonable`/`clone_cap`** (parallel/sequential clone fan-out) — a separate mechanism from `route`. See `examples/clonable-fanout/` instead (currently still on legacy `needs` syntax — one of the pre-existing examples affected by the CI-breaking gap noted in the handoff doc).
 - **`gate_kinds`** / non-`feedback_loop` HITL gates — a stage-body concept, unrelated to wiring.
-- **`io`/`verify`/`on_verify_fail`** completion contracts interacting with `route` — these fields pass through the migration completely unchanged; already covered by the existing (non-route) test suite.
+- **`verify`/`on_verify_fail`** completion contracts interacting with `route` — these fields pass through the migration completely unchanged; already covered by the existing (non-route) test suite.
 - **`skill`/`mcp`** fields on a routed stage — capability wiring, unrelated to routing wiring.
 - **The exact two-sequential-forks race timing** that caused the original "stuck-looking run" bug report — deliberately not turned into a hand-runnable example, since its whole point is a timing race that a live run can't reliably reproduce on demand. It lives only as an automated regression test: `tests/fixtures/pipelines/two-sequential-forks-join.pipeline.yaml` + `tests/runtime.genericFanIn.schedule.test.ts`.

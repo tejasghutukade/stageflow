@@ -10,6 +10,9 @@ system_prompt: |
   Success routes to ship; failure routes to hotfix. Do not emit fork_choice
   to pick a successor — listed route targets are gated by on: succeeded/failed.
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

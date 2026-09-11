@@ -1,3 +1,10 @@
 id: branch-b
 system_prompt: Parallel HITL branch B.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

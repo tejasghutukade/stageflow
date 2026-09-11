@@ -7,6 +7,21 @@ system_prompt: |
   and a payload describing what you produced. Your last tool call in this
   attempt must be emit_stage_envelope. An empty final message is a stage failure.
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - known
+        - unknown
+      properties:
+        known:
+          type: array
+          items:
+            type: string
+        unknown:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

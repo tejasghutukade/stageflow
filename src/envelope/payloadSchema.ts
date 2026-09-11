@@ -659,3 +659,32 @@ export function assertCloneAssignmentPayload(
     );
   }
 }
+
+/**
+ * Validate a predecessor success payload against the child's IR
+ * `clone_input_schema` (YAML: `io.input.schema`) on a normal pipeline edge.
+ */
+export function assertPriorInputPayload(
+  envelope: StageEnvelope,
+  cloneInputSchema: unknown,
+  childId: string,
+  options?: CompilePayloadSchemaOptions,
+): void {
+  if (envelope.status !== "success") {
+    return;
+  }
+  const schema = compilePayloadSchema(cloneInputSchema, options);
+  if (envelope.payload === undefined) {
+    throw new EnvelopeError(
+      `prior payload is required by io.input.schema for ${childId}`,
+    );
+  }
+  if (!Value.Check(schema, envelope.payload)) {
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
+    throw new EnvelopeError(
+      details
+        ? `prior payload does not match io.input.schema for ${childId}: ${details}`
+        : `prior payload does not match io.input.schema for ${childId}`,
+    );
+  }
+}

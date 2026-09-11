@@ -11,12 +11,26 @@ stages:
       - to: implement
     system_prompt: Draft a one-sentence plan.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: implement
     route:
       - to: review
     system_prompt: Implement the plan in one sentence.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: review
     route:
@@ -34,6 +48,13 @@ stages:
       point exists in the wiring but stays dormant this run; qa (below) is
       the one that actually exercises a loop-back to implement.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: qa
     route:
@@ -53,7 +74,21 @@ stages:
       of review's own dormant loop point above -- both target the same
       stage from different points in the chain.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: done
     system_prompt: Close out the run.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

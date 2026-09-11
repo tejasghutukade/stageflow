@@ -35,6 +35,9 @@ system_prompt: |
   - Do not call ask_operator more than once.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

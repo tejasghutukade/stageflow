@@ -13,12 +13,26 @@ stages:
       - to: implement
     system_prompt: Draft a one-sentence plan.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: implement
     route:
       - to: review
     system_prompt: Implement the plan in one sentence.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: review
     route:
@@ -40,8 +54,22 @@ stages:
       pipeline exists to demonstrate.
       Do not combine send_back with fork_choice or clone_forks.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: submit
     replay_safe: false
     system_prompt: Submit the approved change.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

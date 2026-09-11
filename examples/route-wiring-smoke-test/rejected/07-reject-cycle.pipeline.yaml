@@ -6,8 +6,22 @@ stages:
       - to: b
     system_prompt: A.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: b
     route:
       - to: a
     system_prompt: B.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -7,6 +7,13 @@ stages:
       - to: sibling
     system_prompt: Create the plan.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: implement
     route:
       - type: loop
@@ -16,6 +23,20 @@ stages:
         replay_session: resume
     system_prompt: Implement the approved plan.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: sibling
     system_prompt: An unrelated sibling stage, not an ancestor of implement.
     model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

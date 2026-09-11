@@ -39,6 +39,9 @@ system_prompt: |
   included_versions lists every x.y.z heading in the notes, newest first.
 model: cursor/composer-2-5
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

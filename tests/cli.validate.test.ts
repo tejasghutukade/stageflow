@@ -34,6 +34,13 @@ const validStageYaml = (id: string) =>
     `id: ${id}`,
     "system_prompt: test",
     "model: anthropic/claude-sonnet-4-5",
+    "io:",
+    "  input:",
+    "    schema:",
+    "      type: object",
+    "  output:",
+    "    schema:",
+    "      type: object",
     "",
   ].join("\n");
 
@@ -448,6 +455,13 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
             "  - id: alpha-stage",
             "    system_prompt: test",
             "    model: anthropic/claude-sonnet-4-5",
+            "    io:",
+            "      input:",
+            "        schema:",
+            "          type: object",
+            "      output:",
+            "        schema:",
+            "          type: object",
             "",
           ].join("\n"),
           "beta.pipeline.yaml": [
@@ -456,6 +470,13 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
             "  - id: beta-stage",
             "    system_prompt: test",
             "    model: anthropic/claude-sonnet-4-5",
+            "    io:",
+            "      input:",
+            "        schema:",
+            "          type: object",
+            "      output:",
+            "        schema:",
+            "          type: object",
             "",
           ].join("\n"),
         },
@@ -484,6 +505,8 @@ describe("catalog.legacy_yaml findings", () => {
     "    system_prompt: do the work",
     "    model: anthropic/claude-sonnet-4-5",
     "    payload_schema:",
+    "      type: object",
+    "    clone_input_schema:",
     "      type: object",
     "",
   ].join("\n");
@@ -533,6 +556,101 @@ describe("catalog.legacy_yaml findings", () => {
       parsed.findings.some(
         (finding) => finding.code === "catalog.legacy_yaml" && finding.severity === "warning",
       ),
+    ).toBe(true);
+  });
+});
+
+describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () => {
+  it("validate --pipeline sequential io handoff --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline complex io schemas --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline ref io handoff --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline incompatible io --json reports pipeline.io_incompatible", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml",
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some(
+        (finding) =>
+          finding.code === "pipeline.io_incompatible" &&
+          /structural subset/.test(finding.message),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "18-reject-nested-io.pipeline.yaml",
+    "19-reject-array-item-io.pipeline.yaml",
+    "20-reject-closed-io.pipeline.yaml",
+    "21-reject-ref-io.pipeline.yaml",
+  ])("validate --pipeline %s --json reports pipeline.io_incompatible", (file) => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        `examples/route-wiring-smoke-test/rejected/${file}`,
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string; message: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.io_incompatible"),
     ).toBe(true);
   });
 });

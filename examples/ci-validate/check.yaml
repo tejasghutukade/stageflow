@@ -4,3 +4,10 @@ system_prompt: |
   without invoking agents; this stage exists so the catalog is a valid,
   runnable example if you extend it later.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

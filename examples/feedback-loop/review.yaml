@@ -7,3 +7,10 @@ system_prompt: |
   Prefer at most one send_back in this walkthrough, then continue.
   Do not combine send_back with fork_choice or clone_forks.
 model: omniroute/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

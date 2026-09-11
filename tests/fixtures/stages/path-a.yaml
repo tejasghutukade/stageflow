@@ -1,3 +1,10 @@
 id: path-a
 system_prompt: Path A stage.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

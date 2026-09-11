@@ -6,6 +6,13 @@ stages:
       - to: B
     system_prompt: Stage A.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: B
     clonable: true
     clone_cap: 5
@@ -13,6 +20,13 @@ stages:
       - to: C
     system_prompt: Stage B.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: C
     clonable: true
     clone_cap: 5
@@ -20,6 +34,20 @@ stages:
       - to: join
     system_prompt: Stage C.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: join
     system_prompt: Join after C.
     model: anthropic/claude-sonnet-4-5
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

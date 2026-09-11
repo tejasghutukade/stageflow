@@ -15,6 +15,9 @@ system_prompt: |
   The next stage starts a fresh MCP session — pass the id in the envelope.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

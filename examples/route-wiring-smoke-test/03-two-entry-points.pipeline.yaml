@@ -4,7 +4,21 @@ stages:
     entry: true
     system_prompt: Gather a news digest.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
   - id: weather-report
     entry: true
     system_prompt: Gather a weather report.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

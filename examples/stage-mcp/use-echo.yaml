@@ -8,6 +8,9 @@ system_prompt: |
   to ask the operator a question.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

@@ -1,0 +1,33 @@
+id: route-demo-sequential-io
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: Draft a titled document.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [title]
+          properties:
+            title:
+              type: string
+  - id: review
+    system_prompt: Review the titled document.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+          required: [title]
+          properties:
+            title:
+              type: string
+      output:
+        schema:
+          type: object

@@ -480,6 +480,13 @@ export function pipelineConfigToYaml(
       if (stage.inline.model !== undefined && stage.inline.model.length > 0) {
         lines.push(`    model: ${formatInlineYamlScalar(stage.inline.model)}`);
       }
+      lines.push("    io:");
+      lines.push("      input:");
+      lines.push("        schema:");
+      lines.push("          type: object");
+      lines.push("      output:");
+      lines.push("        schema:");
+      lines.push("          type: object");
     } else if (stage.uses) {
       lines.push(`    uses: ${stage.uses}`);
     }

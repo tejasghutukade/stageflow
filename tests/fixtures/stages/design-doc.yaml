@@ -1,3 +1,10 @@
 id: design-doc
 system_prompt: Write a design doc from the clarified requirements.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

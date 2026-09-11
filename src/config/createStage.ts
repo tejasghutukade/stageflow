@@ -164,6 +164,13 @@ export function stageConfigToYaml(stage: Omit<CreateStageInput, "pipeline_direct
   if (stage.model !== undefined && stage.model.length > 0) {
     lines.push(`model: ${formatInlineYamlScalar(stage.model)}`);
   }
+  lines.push("io:");
+  lines.push("  input:");
+  lines.push("    schema:");
+  lines.push("      type: object");
+  lines.push("  output:");
+  lines.push("    schema:");
+  lines.push("      type: object");
   lines.push("");
   return lines.join("\n");
 }

@@ -17,6 +17,9 @@ system_prompt: |
   Your last tool call in this attempt must be emit_stage_envelope.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

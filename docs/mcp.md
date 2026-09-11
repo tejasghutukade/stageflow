@@ -309,7 +309,7 @@ Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus
 | Capacity full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds` |
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout` |
 
-Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run warns (`task.entry_input_unmet`) and continues.
+Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
 
 ### `get_run`
 

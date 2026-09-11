@@ -96,7 +96,7 @@ describe("resolve-catalog-id.mjs", () => {
     const dir = emptyDir();
     writeFileSync(
       path.join(dir, "existing.yaml"),
-      ["id: ship-the-login-redesign", "system_prompt: keep", "model: anthropic/claude-sonnet-4-5", ""].join(
+      ["id: ship-the-login-redesign", "system_prompt: keep", "model: anthropic/claude-sonnet-4-5", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join(
         "\n",
       ),
     );

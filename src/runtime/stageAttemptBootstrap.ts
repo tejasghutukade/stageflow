@@ -25,8 +25,13 @@ import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
+  assertPriorInputPayload,
+  payloadInstanceMismatch,
+} from "../envelope/payloadSchema.js";
+import {
   buildCompletedEnvelopesFromRun,
   resolvePriorEnvelope,
+  type ResolvePriorEnvelopeResult,
 } from "./envelopeRouting.js";
 import { resumeSessionFilePath, type StageAttemptContext } from "./stageAttemptContext.js";
 import {
@@ -161,6 +166,79 @@ async function openStageWithOperatorCatalog(
   }
 }
 
+function isCloneAssignmentPrior(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  completedEnvelopes: Map<string, StageEnvelope>,
+): boolean {
+  const node = dag.nodes.find((n) => n.id === stageId);
+  if (!node) return false;
+  const parentId =
+    typeof node.needs === "string" && node.needs
+      ? node.needs
+      : node.needsEdges?.length === 1
+        ? node.needsEdges[0]?.id
+        : undefined;
+  if (parentId === undefined) return false;
+  const parent = completedEnvelopes.get(parentId);
+  if (parent === undefined) return false;
+  const definitionId = node.definition_id ?? node.id;
+  for (const item of parent.clone_forks ?? []) {
+    if (item.action === "once" && item.successor_id === stageId) return true;
+    if (item.action === "fanout" && item.successor_id === definitionId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function assertPriorsMatchCloneInput(
+  cloneInputSchema: unknown | undefined,
+  childId: string,
+  priorResult: Extract<ResolvePriorEnvelopeResult, { ok: true }>,
+  task: TaskFile,
+  skipCloneAssignment: boolean,
+): { ok: true } | { ok: false; reason: string } {
+  if (cloneInputSchema === undefined) return { ok: true };
+  if (skipCloneAssignment) return { ok: true };
+  try {
+    if (priorResult.priorEnvelopesByStage !== undefined) {
+      for (const value of Object.values(priorResult.priorEnvelopesByStage)) {
+        const envelopes = Array.isArray(value) ? value : [value];
+        for (const envelope of envelopes) {
+          if (envelope.status !== "success") continue;
+          assertPriorInputPayload(envelope, cloneInputSchema, childId);
+        }
+      }
+      return { ok: true };
+    }
+    if (priorResult.joinPriors !== undefined) {
+      for (const envelope of priorResult.joinPriors) {
+        if (envelope.status !== "success") continue;
+        assertPriorInputPayload(envelope, cloneInputSchema, childId);
+      }
+      return { ok: true };
+    }
+    if (priorResult.prior !== null) {
+      assertPriorInputPayload(priorResult.prior, cloneInputSchema, childId);
+      return { ok: true };
+    }
+    const details = payloadInstanceMismatch(task.input ?? {}, cloneInputSchema);
+    if (details !== undefined) {
+      return {
+        ok: false,
+        reason: `task input does not match io.input.schema for ${childId}: ${details}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): StageRoots {
   const baseRoots =
     input.roots ??
@@ -257,6 +335,15 @@ export async function openStageAttempt(
     runId: input.runId,
   });
   if (!priorResult.ok) return priorResult;
+
+  const priorInput = assertPriorsMatchCloneInput(
+    input.stage.clone_input_schema,
+    stageId,
+    priorResult,
+    input.task,
+    isCloneAssignmentPrior(input.dag, stageId, completedEnvelopes),
+  );
+  if (!priorInput.ok) return priorInput;
 
   const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;

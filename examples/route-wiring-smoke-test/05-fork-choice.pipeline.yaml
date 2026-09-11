@@ -10,10 +10,24 @@ stages:
       Categorize this work. Both the quick-fix and big-project follow-ups
       run next.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: big-project
     system_prompt: Kick off planning for the big project.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Listed route targets always run after quick-fix succeeds.
   - id: quick-fix
@@ -25,27 +39,62 @@ stages:
       Apply the quick fix. Notify-team, update-docs, and schedule-followup
       all run next.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: notify-team
     route:
       - to: close
     system_prompt: Notify the team the quick fix shipped.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: update-docs
     route:
       - to: close
     system_prompt: Update the docs for the quick fix.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: schedule-followup
     route:
       - to: close
     system_prompt: Schedule a follow-up review.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Fan-in of notify-team, update-docs, and schedule-followup — all three
   # run on the happy path.
   - id: close
     system_prompt: Close out the run.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

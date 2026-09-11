@@ -53,6 +53,9 @@ system_prompt: |
 model: cursor/auto
 timeout_ms: 1800000
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

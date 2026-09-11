@@ -1,3 +1,10 @@
 id: gate
 system_prompt: Gate stage from included fragment.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

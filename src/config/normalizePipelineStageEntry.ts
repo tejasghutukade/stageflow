@@ -247,6 +247,7 @@ export function normalizePipelineStageEntries(
         label: `entry at index ${index} in ${declaringPath}`,
         category: "pipeline",
         deferSchemaRefs: true,
+        requireIo: !uses,
       });
       if (!compiled.ok) return compiled;
       policyOutcome = loadSuccess({

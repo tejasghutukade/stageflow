@@ -85,7 +85,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 
 Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout leased).
 
-Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `task.entry_input_unmet`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. See [CI / headless](ci.md#json-stdout).
+Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `pipeline.model_applies`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. Omitted `task.input` is `{}` against entry `io.input.schema`; mismatch is `task.invalid_shape` and fails start-run. See [CI / headless](ci.md#json-stdout).
 
 Example:
 

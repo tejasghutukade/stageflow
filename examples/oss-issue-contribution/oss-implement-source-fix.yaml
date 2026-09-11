@@ -102,6 +102,28 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - test_files
+        - test_node_id
+        - red_evidence
+        - commands_run
+      properties:
+        test_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        test_node_id:
+          type: string
+        red_evidence:
+          type: string
+        commands_run:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

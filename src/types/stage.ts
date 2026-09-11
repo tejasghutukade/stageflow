@@ -12,8 +12,8 @@ export type StageGateKind = (typeof STAGE_GATE_KINDS)[number];
 
 /** Target YAML `io:` block. Compiles onto StageConfig.payload_schema / clone_input_schema. */
 export type StageIoYaml = {
-  input?: { schema?: unknown };
-  output?: { schema?: unknown };
+  input: { schema: unknown };
+  output: { schema: unknown };
 };
 
 /**

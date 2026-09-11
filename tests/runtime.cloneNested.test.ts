@@ -37,6 +37,7 @@ const okEnvelope = (
   status: "success",
   summary,
   artifacts: [],
+  payload: {},
   ...extra,
 });
 

@@ -11,27 +11,62 @@ stages:
       - to: review-notes
     system_prompt: Kick off three independent workstreams in parallel.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: research
     route:
       - to: synthesize
     system_prompt: Workstream 1 (research). Produce one short finding.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: analysis
     route:
       - to: synthesize
     system_prompt: Workstream 2 (analysis). Produce one short finding.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   - id: review-notes
     route:
       - to: synthesize
     system_prompt: Workstream 3 (review notes). Produce one short finding.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 
   # Fan-in: waits for research, analysis, and review-notes — all three,
   # every time, since none of them are skipped.
   - id: synthesize
     system_prompt: Combine all three workstreams' findings into one summary.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

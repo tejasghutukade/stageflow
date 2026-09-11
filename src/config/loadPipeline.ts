@@ -94,24 +94,24 @@ function checkSequentialIoCompatibility(
   for (const child of stages) {
     const node = nodeById.get(child.id);
     if (!node) continue;
-    const parents = predecessorEdges(node);
-    if (parents.length !== 1) continue;
     if (node.clonable) continue;
-    const parentNode = nodeById.get(parents[0].id);
-    if (parentNode?.clonable) continue;
-    const parent = stageById.get(parents[0].id);
-    if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
-    if (
-      !isPayloadSchemaSubset(child.clone_input_schema, parent.payload_schema, options)
-    ) {
-      return loadFailure([
-        {
-          code: "pipeline.io_incompatible",
-          message: `Pipeline ${pipelineId}: stage "${child.id}" io.input is not a structural subset of "${parent.id}" io.output`,
-          category: "pipeline",
-          pipelineId,
-        },
-      ]);
+    for (const parentEdge of predecessorEdges(node)) {
+      const parentNode = nodeById.get(parentEdge.id);
+      if (parentNode?.clonable) continue;
+      const parent = stageById.get(parentEdge.id);
+      if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
+      if (
+        !isPayloadSchemaSubset(child.clone_input_schema, parent.payload_schema, options)
+      ) {
+        return loadFailure([
+          {
+            code: "pipeline.io_incompatible",
+            message: `Pipeline ${pipelineId}: stage "${child.id}" io.input is not a structural subset of "${parent.id}" io.output`,
+            category: "pipeline",
+            pipelineId,
+          },
+        ]);
+      }
     }
   }
   return loadSuccess(undefined);
@@ -136,6 +136,7 @@ async function loadPipelineFromPath(
   pipelinePath: string,
   cwd: string,
   projectRoot: string = cwd,
+  requireIo: boolean = true,
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const normalizedPipelinePath = path.normalize(path.resolve(pipelinePath));
 
@@ -204,6 +205,7 @@ async function loadPipelineFromPath(
         entryId: entry.id,
         declaringPath: entry.declaringPath,
         deferSchemaRefs: true,
+        requireIo,
       });
       if (!inlineOutcome.ok) {
         return loadFailure(inlineOutcome.issues);
@@ -215,6 +217,7 @@ async function loadPipelineFromPath(
 
     const stageOutcome = await loadStageOutcome(entry.body.absolutePath, {
       deferSchemaRefs: true,
+      requireIo,
     });
     if (!stageOutcome.ok) {
       if (stageOutcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
@@ -335,7 +338,7 @@ async function loadPipelineFromPath(
 
 export async function loadPipelineOutcome(
   nameOrPath: string,
-  options: { cwd?: string; projectRoot?: string } = {},
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
 ): Promise<LoadOutcome<LoadedPipeline>> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -354,12 +357,12 @@ export async function loadPipelineOutcome(
     ]);
   }
 
-  return loadPipelineFromPath(pipelinePath, cwd, projectRoot);
+  return loadPipelineFromPath(pipelinePath, cwd, projectRoot, options.requireIo !== false);
 }
 
 export async function loadPipeline(
   nameOrPath: string,
-  options: { cwd?: string; projectRoot?: string } = {},
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
 ): Promise<LoadedPipeline> {
   const outcome = await loadPipelineOutcome(nameOrPath, options);
   if (!outcome.ok) {

@@ -10,6 +10,9 @@ system_prompt: |
   3. Do not invent codewords. Do not call ask_operator. Do not emit clone_forks.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

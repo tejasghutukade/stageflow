@@ -10,6 +10,7 @@ import { assertRequiredEnvelope } from "../src/envelope/check.js";
 import {
   assertCloneAssignmentPayload,
   assertEnvelopePayload,
+  assertPriorInputPayload,
   compilePayloadSchema,
   isPayloadSchemaSubset,
 } from "../src/envelope/payloadSchema.js";
@@ -196,7 +197,7 @@ describe("payload_schema", () => {
         "",
       ].join("\n"),
     );
-    await expect(loadStage(badType)).rejects.toThrow(/payload_schema must be an object/);
+    await expect(loadStage(badType)).rejects.toThrow(/io\.output\.schema must be an object/);
 
     const badSchema = path.join(dir, "bad-schema.yaml");
     await writeFile(
@@ -210,7 +211,7 @@ describe("payload_schema", () => {
         "",
       ].join("\n"),
     );
-    await expect(loadStage(badSchema)).rejects.toThrow(/invalid payload_schema/);
+    await expect(loadStage(badSchema)).rejects.toThrow(/invalid io\.output\.schema/);
   });
 
   it("emit tool accepts matching payload and rejects bad payload on success", async () => {
@@ -1120,5 +1121,57 @@ describe("payload_schema", () => {
         "clone_forks[0].envelope",
       ),
     ).toThrow(/clone_forks\[0\]\.envelope: clone assignment payload is required by io\.input\.schema/);
+  });
+
+  it("assertPriorInputPayload requires payload and names the child io.input.schema", () => {
+    const missing = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+    expect(() =>
+      assertPriorInputPayload(missing, nameListSchema, "design-doc"),
+    ).toThrow(
+      /^prior payload is required by io\.input\.schema for design-doc$/,
+    );
+
+    const wrong = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: { boy_names: "Arjun" },
+    });
+    let message = "";
+    try {
+      assertPriorInputPayload(wrong, nameListSchema, "design-doc");
+    } catch (err) {
+      expect(err).toBeInstanceOf(EnvelopeError);
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(
+      /^prior payload does not match io\.input\.schema for design-doc:/,
+    );
+    expect(message).toMatch(/payload\.boy_names/);
+    expect(message).not.toMatch(/\/boy_names/);
+
+    const ok = assertRequiredEnvelope({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+      payload: {
+        boy_names: ["Arjun"],
+        girl_names: ["Meera"],
+      },
+    });
+    expect(() => assertPriorInputPayload(ok, nameListSchema, "design-doc")).not.toThrow();
+
+    const failure = assertRequiredEnvelope({
+      status: "failure",
+      summary: "blocked",
+      artifacts: [],
+    });
+    expect(() =>
+      assertPriorInputPayload(failure, nameListSchema, "design-doc"),
+    ).not.toThrow();
   });
 });

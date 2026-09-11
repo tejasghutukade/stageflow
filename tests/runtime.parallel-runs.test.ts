@@ -40,6 +40,7 @@ function gatedAgent(gate: Promise<void>) {
               status: "success" as const,
               summary: "ok",
               artifacts: [],
+              payload: {},
             },
           };
         },
@@ -53,6 +54,7 @@ function gatedAgent(gate: Promise<void>) {
           status: "success" as const,
           summary: "ok",
           artifacts: [],
+          payload: {},
         },
       };
     },
@@ -475,6 +477,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 async function seedWaitingRun(

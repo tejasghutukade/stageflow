@@ -53,6 +53,8 @@ const workStageYaml = [
   `model: ${MODEL}`,
   "payload_schema:",
   "  type: object",
+  "clone_input_schema:",
+  "  type: object",
   "pre_emit_checks:",
   "  - id: declared",
   "    type: artifact_declared",
@@ -288,7 +290,9 @@ describe("sf migrate-yaml", () => {
     try {
       const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot);
       await commitAll(catalogRoot, "catalog");
-      const before = comparableIr(await loadPipeline(pipelinePath, { cwd: catalogRoot }));
+      const before = comparableIr(
+        await loadPipeline(pipelinePath, { cwd: catalogRoot, requireIo: false }),
+      );
       const cap = captureIo();
       expect(
         await runMigrateYamlCommand(["--write", pipelinePath], {
@@ -307,7 +311,11 @@ describe("sf migrate-yaml", () => {
       expect(afterStage).not.toMatch(/needs:/);
       expect(afterStage).not.toMatch(/on_verify_fail:/);
       const after = comparableIr(await loadPipeline(pipelinePath, { cwd: catalogRoot }));
-      expect(after).toEqual(before);
+      expect(after.stages.map(({ clone_input_schema: _, ...stage }) => stage)).toEqual(
+        before.stages.map(({ clone_input_schema: _, ...stage }) => stage),
+      );
+      expect(after.stages[0]?.clone_input_schema).toEqual({ type: "object" });
+      expect(after.dag).toEqual(before.dag);
       expect(after.dag[0]?.completion?.checks.some((check) => check.id === "tests")).toBe(
         true,
       );
@@ -526,6 +534,8 @@ describe("sf migrate-yaml", () => {
         `model: ${MODEL}`,
         "payload_schema:",
         "  $ref: '#/schemas/story'",
+        "clone_input_schema:",
+        "  type: object",
         "pre_emit_checks:",
         "  - id: declared",
         "    type: artifact_declared",
