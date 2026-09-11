@@ -1,18 +1,21 @@
 id: diamond-fan-in-clone
 stages:
   - id: clarify
+    entry: true
+    route:
+      - to: research
+      - to: validation
     uses: ../stages/clarify.yaml
   - id: research
-    needs: clarify
     clonable: true
     clone_cap: 5
+    route:
+      - to: synthesize
+        on: [succeeded, skipped]
     uses: ../stages/research.yaml
   - id: validation
-    needs: clarify
+    route:
+      - to: synthesize
     uses: ../stages/validation.yaml
   - id: synthesize
-    needs:
-      - id: research
-        on: [succeeded, skipped]
-      - validation
     uses: ../stages/synthesize.yaml

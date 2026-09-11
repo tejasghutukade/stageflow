@@ -1,15 +1,19 @@
 id: clone-fanout-retry-ancestor
 stages:
   - id: intake
+    entry: true
+    route:
+      - to: clarify
     uses: ../stages/intake.yaml
   - id: clarify
-    needs: intake
+    route:
+      - to: design-doc
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
     clonable: true
     clone_cap: 5
+    route:
+      - to: join-doc
     uses: ../stages/design-doc.yaml
   - id: join-doc
-    needs: design-doc
     uses: ../stages/join-doc.yaml
