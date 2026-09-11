@@ -1,0 +1,47 @@
+id: route-demo-loop-human-decision
+# Covers the loop config variants 01-core-routing doesn't: on_max_replays:
+# wait_for_human (vs. require_continue) and replay_session: new_session (vs.
+# resume). max_replays: 1 plus review's prompt (always send_back) makes this
+# reliably exhaust its replay budget and PARK the run waiting for a human
+# decision -- a genuine "waiting for input" state, not a bug. Use
+# `sf runs waiting` / `sf runs answer` (or the UI's own decide flow) to
+# unstick it: `npx tsx src/cli.ts runs answer --run <runId> --stage review`.
+stages:
+  - id: plan
+    entry: true
+    route:
+      - to: implement
+    system_prompt: Draft a one-sentence plan.
+    model: cursor/auto
+
+  - id: implement
+    route:
+      - to: review
+    system_prompt: Implement the plan in one sentence.
+    model: cursor/auto
+
+  - id: review
+    route:
+      - to: submit
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: wait_for_human
+        replay_session: new_session
+    system_prompt: |
+      Review the upstream work against the task goal.
+      On success you MUST include feedback_loop in your envelope:
+      - {"action":"continue"} when the work is good enough to submit
+      - {"action":"send_back","target":"implement"} when another pass is needed
+      For this smoke test: ALWAYS send_back to implement, never continue.
+      This is deliberate -- with max_replays: 1, your second send_back will
+      exhaust the replay budget and park the run waiting for a human
+      decision (on_max_replays: wait_for_human), which is exactly what this
+      pipeline exists to demonstrate.
+      Do not combine send_back with fork_choice or clone_forks.
+    model: cursor/auto
+
+  - id: submit
+    replay_safe: false
+    system_prompt: Submit the approved change.
+    model: cursor/auto
