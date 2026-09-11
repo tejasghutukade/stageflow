@@ -65,9 +65,13 @@ creates or switches branches.
 | `publish` | — | `artifact_backed` | `ship-package.md`, `pull-request.md` | `on_verify_fail: manual` |
 
 `on_verify_fail` repair (idempotent, 3 attempts) sits on every stage except
-`publish` (`manual` / `side_effecting`). Stage files use `io` / `verify`;
-this release still loads the previous field names — see
-[YAML catalog — Dual-read](../../docs/yaml-catalog.md#dual-read-this-release).
+`publish` (`manual` / `side_effecting`). Stage files use `io` / `verify` /
+`on_verify_fail`.
+
+Shared JSON Schema lives on the pipeline under `schemas:` — `plan`'s
+`io.input.schema` is `$ref: "#/schemas/story-assignment"` (the
+decompose → plan clone assignment contract). See
+[YAML catalog — Pipeline schemas](../../docs/yaml-catalog.md#pipeline-schemas).
 
 `plan` clones are **parallel** so stories can be refined at the same
 time. `implement` clones are **sequential** so shared files do not

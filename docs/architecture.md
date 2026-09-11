@@ -16,7 +16,7 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 | Config loader | Load and validate manifests, tasks, stages, and resolved pipeline DAGs | `src/config/` |
 | Run manager | Start/resume coordination, run capacity, checkout leases, retries, startup reconciliation | `src/runtime/runManager.ts` |
 | DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, clone instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
-| Stage runtime | Build attempt context, open the agent, validate handoff and optional completion checks, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
+| Stage runtime | Build attempt context, open the agent, validate handoff and optional after-phase `verify`, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
 | Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
 | Pi adapter | Translate Stageflow stage execution into Pi coding-agent sessions and tools | `src/agent/piAdapter.ts` |
@@ -32,9 +32,9 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 4. **Open an isolated stage attempt.** In the default process mode, a stage worker opens a fresh agent session with the task, stage instructions, predecessor envelope data, and scoped workspace paths.
 5. **Record activity.** Logs and lifecycle events are appended to the run store while the stage works. Artifacts are written inside the run workspace instead of being embedded into transcripts.
 6. **Validate the handoff.** A successful stage emits a `StageEnvelope`. Stageflow validates its status, summary, artifacts, optional payload schema, and routing fields before downstream stages consume it.
-7. **Verify completion when configured.** Stageflow runs the pipeline-owned completion checks after handoff validation, persists per-check evidence and the attempt's verification disposition, and accepts the candidate only when every required check passes.
+7. **Run after-phase `verify` when configured.** Stageflow runs the declared `verify` checks after handoff validation, persists per-check evidence and the attempt's verification disposition, and accepts the candidate only when every required check passes.
 8. **Route or wait.** The accepted envelope may select conditional successors or create clone instances. If the agent calls `ask_operator`, the stage parks as `waiting_for_input` until an answer is delivered through the console, MCP, or another supported operator path.
-9. **Continue, recover, or finish.** The scheduler advances newly ready nodes, skips unreachable branches, starts an eligible automatic repair or leaves a manual-recovery decision to an operator, and derives the final run outcome from persisted stage state.
+9. **Continue, recover, or finish.** The scheduler advances newly ready nodes, skips unreachable branches, applies `on_verify_fail` (automatic repair or a manual operator decision), and derives the final run outcome from persisted stage state.
 
 ## Handoff contract
 
@@ -63,7 +63,7 @@ Stageflow persists:
 
 - run metadata and a snapshot of the resolved DAG;
 - stage attempts and lifecycle events;
-- completion-check evidence and each attempt's verification disposition;
+- after-phase `verify` evidence and each attempt's verification disposition;
 - terminal envelopes and artifact paths;
 - pending operator prompts and session context needed to resume a parked stage;
 - projections used by the console and MCP resources.
@@ -108,7 +108,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 - A stage becomes ready only when its required predecessors reach compatible terminal states.
 - A successor consumes validated envelopes, not arbitrary predecessor transcripts.
-- A completion contract accepts a successful handoff only after every declared check passes.
+- After-phase `verify` accepts a successful handoff only after every declared check passes (`on_verify_fail` is the fail policy; runtime IR still names this path `completion` / `recovery`).
 - Run and stage lifecycle state is persisted before it is projected to operator surfaces.
 - Waiting is a first-class state and is distinct from failure.
 - Retries create new attempts and recompute affected downstream execution rather than rewriting prior history.
@@ -118,7 +118,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 - [YAML catalog](yaml-catalog.md) — pipeline, stage, task, fork, and clone configuration
 - [Envelopes](envelopes.md) — handoff schema, payload validation, and artifact rules
-- [Verified Stage Execution](verified-stage-execution.md) — completion checks, evidence, and recovery policy
+- [Verified Stage Execution](verified-stage-execution.md) — `verify` / `on_verify_fail`, evidence, and repair policy
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths
 - [CI / headless](ci.md) — JSON output, exit codes, and GitHub Actions
 - [MCP](mcp.md) — tools and run resources

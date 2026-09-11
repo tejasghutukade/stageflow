@@ -15,7 +15,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
-| [YAML catalog](yaml-catalog.md) | Pipeline, stage, and task file schema |
+| [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
 | [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
@@ -25,7 +25,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Architecture](architecture.md) | Runtime boundaries, execution flow, persistence, recovery, and design tradeoffs |
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
-| [Verified Stage Execution](verified-stage-execution.md) | Completion checks, evidence, and repair policy |
+| [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 
@@ -50,7 +50,7 @@ For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedb
 Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of truth for valid catalog shapes:
 
 - [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — linear, parallel fan-out, diamond fan-in, HITL, fork routing, clonable fan-out, feedback loops, validation edge cases (`*.pipeline.yaml`)
-- [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, payload schemas (referenced via `uses:`)
+- [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, `io` / `verify` shapes (referenced via `uses:`)
 - [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 
 Runnable walkthroughs live in [`examples/`](../examples/) (see [`examples/README.md`](../examples/README.md)).

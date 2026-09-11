@@ -16,11 +16,10 @@ context: |
   no such reply exists, so this run prepares a local change and a fork PR
   only; the upstream PR is a separate, explicitly-authorized step.
 
-  This run's primary purpose is validating the migrated
-  oss-issue-contribution pipeline's Verified Stage Execution completion
-  contracts (artifact checks, checkout_changes checks, gate + pre_emit_checks
-  on the approval stages) against a real run, not a genuine race to land
-  this specific fix upstream.
+  This run's primary purpose is validating the oss-issue-contribution
+  pipeline's Verified Stage Execution contracts (`verify` artifact /
+  checkout_changes / gate checks, plus `on_verify_fail` wiring) against a
+  real run, not a genuine race to land this specific fix upstream.
 
   Reported behavior: in fullscreen TUI mode, a custom footer
   (`pi.ui.setFooter`) that renders zero rows still occupies one blank line;

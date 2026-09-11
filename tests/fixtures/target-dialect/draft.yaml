@@ -1,0 +1,18 @@
+id: draft
+system_prompt: |
+  Draft a short brief from the prior topic payload. Emit a success envelope
+  after operator confirm, and write brief.md under the stage artifacts root.
+gate_kinds: [confirm]
+io:
+  input:
+    schema:
+      $ref: "#/schemas/topic-brief"
+verify:
+  - id: approved
+    type: gate
+    kind: confirm
+    when: [emit]
+  - id: brief
+    type: artifact
+    path: brief.md
+    when: [after]

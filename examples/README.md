@@ -2,7 +2,9 @@
 
 Runnable Stageflow catalogs. Each directory is **pipeline-owned** (co-located `*.pipeline.yaml`, stage YAML, `*.task.yaml`). Run commands use **paths from the repository git root**.
 
-Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types.
+Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](../docs/yaml-catalog.md).
+
+Upgrading older YAML: see [Upgrading older catalogs](../docs/yaml-catalog.md#upgrading-older-catalogs) and [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml).
 
 ## Featured example: Archify on PR
 
@@ -20,7 +22,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 
 | Example | Description | Commands |
 |---------|-------------|----------|
-| [hello-world](hello-world/) | Single stage, no HITL | `sf validate --strict`, `sf run` with paths below |
+| [hello-world](hello-world/) | Single stage; demos `task.input` ↔ entry `io.input.schema` | `sf validate --strict`, `sf run` with paths below |
 | [plan-review](plan-review/) | Multi-stage with operator gate | `sf ui`, then `sf run` |
 | [conditional-fork](conditional-fork/) | Exclusive fork; operator chooses branch | `sf ui`, then `sf run` |
 | [clonable-fanout](clonable-fanout/) | Dummy clonable skip / once / parallel / sequential / mix | `sf ui`, then `sf run` |
@@ -29,7 +31,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [playwright-mcp](playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) | `sf validate`, then `sf run` from git root |
 | [context7-mcp](context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) | `sf validate`, then `sf run` from git root |
 | [feedback-loop](feedback-loop/) | Source-owned review loop (`continue` / `send_back`) | `sf validate`, then `sf run` |
-| [feature-loop](feature-loop/) | Epic-to-PR: split stories, sequential implement, review loop | `sf validate`, then `sf run` |
+| [feature-loop](feature-loop/) | Epic-to-PR; demos pipeline `schemas:` + `$ref` | `sf validate`, then `sf run` |
 | [ship-feature](ship-feature/) | Plan → implement → parallel review → operator-approved PR | `sf validate`, then `sf run` |
 | [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |

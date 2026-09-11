@@ -51,7 +51,7 @@ Optional top-level fields:
 |-------|------|-------------|
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
-| `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/<name>"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
+| `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
 
 Bare string stage refs are rejected.
 
@@ -61,7 +61,7 @@ Each stage is an object with one of:
 
 | Form | Fields | Use when |
 |------|--------|----------|
-| External | `uses: <path>` | Stage body lives in another YAML file |
+| External | `uses: path/to/stage.yaml` | Stage body lives in another YAML file |
 | Inline | `system_prompt`, optional `model`, … | Single-file pipeline |
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
@@ -74,20 +74,60 @@ Each stage is an object with one of:
 
 `on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
 
-### Dual-read (this release)
+### Upgrading older catalogs {#upgrading-older-catalogs}
 
-This release still **loads** catalogs that use the previous field names. Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load. Do not author both spellings. **New catalog fields belong in the Target column** — compile them in `src/config/yamlDialect.ts`. Runtime, snapshots, emit, and VSE keep the Today-column names as TypeScript/JSON.
+**Write Author YAML only:** `io` / `verify` / `on_verify_fail`. That is the catalog dialect for new and migrated files.
 
-Dual-read is the load adapter for those previous names (on by default). Turn it off with `STAGEFLOW_LEGACY_YAML=0`. Dropping it later is deleting [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts) plus the migrator — not renaming runtime IR (`payload_schema` / `pre_emit_checks` / `completion` / `recovery`).
+This release still **loads** catalogs that use the previous authoring keys (second column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load — do not author both spellings.
 
-| Today | Target |
-|-------|--------|
-| `payload_schema` | `io.output.schema` |
-| `clone_input_schema` | `io.input.schema` |
-| `pre_emit_checks` | `verify` (when includes `emit`) |
-| `completion` | `verify` (when includes `after`) |
-| `recovery` | `on_verify_fail` |
-| `artifact_declared` | `type: artifact` + `emit` |
+Runtime IR names in TypeScript/JSON after load (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`) are **not** what you write in catalog YAML.
+
+| Write this instead | Legacy author keys (still loaded) |
+|--------------------|-----------------------------------|
+| `io.output.schema` | `payload_schema:` (top-level field) |
+| `io.input.schema` | `clone_input_schema` |
+| `verify` items with `when` including `emit` | `pre_emit_checks` |
+| `verify` items with `when` including `after` | `completion` |
+| `on_verify_fail` | `recovery` |
+| `type: artifact` + `basename` + `when: [emit]` | `type: artifact_declared` under `pre_emit_checks` |
+
+**`payload_schema` means two different things:**
+
+- Legacy author field `payload_schema:` → write `io.output.schema` instead.
+- Check type `type: payload_schema` under `verify` is **current** and correct: an optional after-phase re-check of the captured payload against `io.output.schema`. Presence of `io.output.schema` already validates on emit; the check type is only if you want that re-check after the attempt.
+
+Before → after (legacy `pre_emit_checks` / `completion` merge into one `verify:` list):
+
+```yaml
+# Legacy (still loaded)
+pre_emit_checks:
+  - id: plan-declared
+    type: artifact_declared
+    basename: plan.md
+completion:
+  mode: all
+  checks:
+    - id: tests
+      type: command
+      run: npm test
+
+# Write this instead
+verify:
+  - id: plan-declared
+    type: artifact
+    basename: plan.md
+    when: [emit]
+  - id: tests
+    type: command
+    run: npm test
+    # omitted when → [after] for command
+```
+
+After you migrate, you can optionally set `STAGEFLOW_LEGACY_YAML=0` to reject leftover legacy authoring keys (`sf migrate-yaml` still reads them). You do not need that env var to author `io` / `verify` / `on_verify_fail`.
+
+#### For contributors
+
+Target dialect compiles in `src/config/yamlDialect.ts`. Loading legacy author keys lives in [`src/config/legacyYaml.ts`](../src/config/legacyYaml.ts). Dropping that adapter later means deleting it plus the migrator — not renaming runtime IR.
 
 ### Model defaults and precedence
 
@@ -127,7 +167,7 @@ Canonical fixtures:
 | Default when `when` is omitted | Types |
 | --- | --- |
 | `[emit]` | `gate` |
-| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (the check type) |
+| `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)) |
 
 Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
 
@@ -158,10 +198,10 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `artifact` | `id`, `when` | `basename` (emit), `path` / `nonempty` (after) | `emit`, `after`, or both — **required** |
 | `command` | `id`, `run` | `cwd`, `timeout_ms` | `after` only |
 | `checklist` | `id`, `items` | — | `after` only |
-| `payload_schema` | `id` | — | `after` only; requires `io.output.schema` |
+| `payload_schema` | `id` | — | `after` only; requires `io.output.schema` (optional re-check; emit already validates when that schema is present) |
 | `checkout_changes` | `id` | `path_fields` | `after` only |
 
-Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds`. Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema`; emit-time payload validation already runs when that schema is present.
+Check IDs are unique within the stage. `artifact.path` is relative to the stage attempt's artifact directory. Emit `type: artifact` is a basename list check on `envelope.artifacts` (no disk I/O). After `type: artifact` is an on-disk file under the attempt artifacts dir. `gate.kind` must also appear in the stage's `gate_kinds`. Each `checkout_changes.path_fields` entry must name a required array-of-strings field in `io.output.schema`. Optional `type: payload_schema` with `when: [after]` re-checks the captured payload against `io.output.schema` (see [Upgrading older catalogs](#upgrading-older-catalogs) for the legacy field vs this check type); emit-time validation already runs when that schema is present.
 
 ### `on_verify_fail` {#on-verify-fail}
 
@@ -176,7 +216,7 @@ Use `manual` for side-effecting work such as publishing or payments. Operator co
 
 ### Pipeline schemas {#pipeline-schemas}
 
-Optional pipeline-file `schemas:` is the `$ref` root for this release. Refs are JSON Pointer `#/schemas/<name>`. Cycles fail load. `schemas:` on an include fragment fails load. Isolated stage validate of a `$ref`-only schema fails with `stage.unresolved_schema_ref`; pipeline validate resolves after attach.
+Optional pipeline-file `schemas:` is the `$ref` root for this release. Refs are JSON Pointer `#/schemas/NAME`. Cycles fail load. `schemas:` on an include fragment fails load. Isolated stage validate of a `$ref`-only schema fails with `stage.unresolved_schema_ref`; pipeline validate resolves after attach.
 
 Sequential single-parent non-clone edges: if both sides have schemas, consumer `io.input` must be a structural subset of producer `io.output`. Clone edges and multi-parent joins do not run that subset check — the child's `io.input` is the assignment or join contract.
 
@@ -205,6 +245,8 @@ stages:
         schema:
           $ref: "#/schemas/story-slice"
 ```
+
+Runnable demo with `uses:` stages: [`examples/feature-loop/`](../examples/feature-loop/) (`schemas.story-assignment` → `plan` `io.input.schema`).
 
 **`uses:` paths are relative to the pipeline file's directory.**
 
@@ -271,7 +313,7 @@ A stage may wait for two or more catalog parents. `needs` takes one of two forms
 
 | Form | Shape | When |
 |------|-------|------|
-| Scalar | `needs: <stage-id>` | One parent. The accepted terminal is `succeeded` only. |
+| Scalar | `needs: stage-id` | One parent. The accepted terminal is `succeeded` only. |
 | Array | `needs: [ … ]` with length ≥ 1 | One or more parents. Length 1 is the same graph as a scalar. Length ≥ 2 is keyed generic fan-in. |
 
 Array items may be mixed. A string id defaults to `on: [succeeded]`. `{ id, on }` declares a non-empty unique subset of `succeeded` \| `failed` \| `skipped`. Duplicate ids, unknown keys, unknown parents, empty `on`, and cycles are rejected.
@@ -351,7 +393,7 @@ A deciding stage may declare a `fork` object to require a runtime choice among i
 
 `fork_choice` names only non-clonable immediate successors. When every child is clonable, `fork_choice` is not required.
 
-Children list `needs: <parent>`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
+Children list `needs: parent-id`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
 
 Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor — unless a multi-parent join lists `skipped` in that parent's `on` set. That join waits for its other parents instead of cascade-skipping. Non-accepting paths still cascade. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch (scalar `needs`, so `skipped` is not accepted).
 
@@ -494,14 +536,14 @@ stages:
 
 | Behavior | Detail |
 |----------|--------|
-| Resolution | Looks up `.pi/skills/<name>/SKILL.md` under the operator checkout (`--operator-cwd` / `STAGEFLOW_OPERATOR_CWD`) and the Pi agent skills dir |
+| Resolution | Looks up `.pi/skills/NAME/SKILL.md` under the operator checkout (`--operator-cwd` / `STAGEFLOW_OPERATOR_CWD`) and the Pi agent skills dir |
 | Startup | Stage fails before the agent session if the skill is not installed |
 | Agent prompt | Skill instructions are injected for the stage attempt |
 
 Install skills before `sf run` in CI:
 
 ```bash
-sf skills install --from-zip <url> --skill-name archify
+sf skills install --from-zip https://example.com/skill.zip --skill-name archify
 ```
 
 Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA provisions Archify, agents author JSON specs only; shell steps run `deliver` outside the agent.
@@ -535,7 +577,7 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 
 | Behavior | Detail |
 |----------|--------|
-| Catalog | `.mcp.json` `{ "mcpServers": { "<name>": { … } } }` at the project root that holds `stageflow.yaml` |
+| Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml` |
 | Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
 | Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
@@ -577,7 +619,7 @@ Optional when a pipeline or manifest default can fill it:
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
 
-Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `io`, `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`needs`, `on_verify_fail`, `fork`, `clonable`) are errors on a new-dialect stage file. `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `io`, `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`needs`, `on_verify_fail`, `fork`, `clonable`) are errors on an external stage file (body only — put wiring on the pipeline entry). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -594,7 +636,7 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 
 Prose-only tasks (no `input`) stay valid. If an entry stage declares `io.input` and the task has no `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` emit a `task.entry_input_unmet` warning and continue. Non-entry stages still receive the full task in the agent prompt.
 
-See [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
+Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
 ## Manifest (`stageflow.yaml`)
 
@@ -645,4 +687,4 @@ sf run \
   --task examples/hello-world/my-task.task.yaml
 ```
 
-Run state is stored under **`<git-root>/.stageflow/`** regardless of which subdirectory you start `sf ui` from.
+Run state is stored under **`GIT_ROOT/.stageflow/`** regardless of which subdirectory you start `sf ui` from.
