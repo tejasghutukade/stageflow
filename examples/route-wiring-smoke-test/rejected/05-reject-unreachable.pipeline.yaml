@@ -5,10 +5,10 @@ stages:
     route:
       - to: review
     system_prompt: Draft.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: review
     system_prompt: Review.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: orphan
     system_prompt: Nobody routes to me, and I'm not marked entry.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

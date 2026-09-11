@@ -5,7 +5,7 @@ stages:
     route:
       - to: review
     system_prompt: Implement.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: review
     feedback_loop:
       target: implement
@@ -13,4 +13,4 @@ stages:
       on_max_replays: require_continue
       replay_session: resume
     system_prompt: Review.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

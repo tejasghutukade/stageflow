@@ -8,10 +8,10 @@ stages:
       - to: hotfix
         on: [failed]
     system_prompt: Run the test suite.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: ship
     system_prompt: Ship the release.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: hotfix
     system_prompt: Apply a hotfix.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

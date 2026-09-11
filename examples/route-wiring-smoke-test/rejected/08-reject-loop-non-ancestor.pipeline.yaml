@@ -6,7 +6,7 @@ stages:
       - to: b
       - to: c
     system_prompt: A.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: b
     route:
       - type: loop
@@ -15,7 +15,7 @@ stages:
         on_max_replays: require_continue
         replay_session: resume
     system_prompt: B.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: c
     system_prompt: C.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

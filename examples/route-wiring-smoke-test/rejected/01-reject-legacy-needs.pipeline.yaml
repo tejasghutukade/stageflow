@@ -5,8 +5,8 @@ stages:
     route:
       - to: review
     system_prompt: Draft.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: review
     needs: draft
     system_prompt: Review.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

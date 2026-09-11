@@ -3,8 +3,8 @@ stages:
   - id: news-digest
     entry: true
     system_prompt: Gather a news digest.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: weather-report
     entry: true
     system_prompt: Gather a weather report.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto

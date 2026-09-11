@@ -7,10 +7,10 @@ stages:
       - to: path-a
       - to: path-b
     system_prompt: Decide.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: path-a
     system_prompt: A.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
   - id: path-b
     system_prompt: B.
-    model: anthropic/claude-sonnet-4-5
+    model: cursor/auto
