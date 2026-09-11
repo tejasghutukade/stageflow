@@ -173,6 +173,15 @@ function shouldSkipForObservedNeed(
   parentDefId: string,
   observed: NeedTerminalState,
 ): boolean {
+  // A multi-parent (implicit-AND join) node must never be skipped from a
+  // single resolving parent in isolation -- that would seal the node's fate
+  // before its other predecessors are even known to be terminal. Its
+  // disposition is decided only once every predecessor edge is terminal, by
+  // `pickStalledJoinSkips` (which reuses `edgeInstancesReady`, the same
+  // per-edge check `cloneScheduleAllowsRun` uses on the run path), invoked
+  // once per scheduler tick. A single-parent node keeps the original eager
+  // behavior below.
+  if (predecessorEdges(node).length > 1) return false;
   const edge = parentNeedEdge(node, parentId, parentDefId);
   if (!edge) return false;
   if (edge.on.includes(observed)) return false;
@@ -451,6 +460,58 @@ export function cloneScheduleAllowsRun(
     states,
     completedEnvelopes,
   );
+}
+
+/**
+ * A multi-parent (implicit-AND join) node whose predecessor edges have ALL
+ * reached a terminal state, but which will never satisfy
+ * `cloneScheduleAllowsRun` -- terminal states don't change, so once every
+ * edge is terminal and at least one still isn't `edgeInstancesReady`, that
+ * node is permanently stuck in `pending` unless something explicitly skips
+ * it. Deliberately reuses `edgeInstancesReady`, the exact per-edge check the
+ * run path (`cloneScheduleAllowsRun`, the `edges.length >= 2` branch above)
+ * already applies, so "does this node run" and "does this node get skipped"
+ * can't diverge.
+ */
+function isStalledMultiParentJoin(
+  dag: ResolvedPipelineDag,
+  node: ResolvedPipelineStageNode,
+  states: Map<string, StageScheduleState>,
+): boolean {
+  const edges = predecessorEdges(node);
+  if (edges.length <= 1) return false;
+  for (const edge of edges) {
+    const instances = definitionInstances(dag, edge.id);
+    if (instances.length === 0) return false;
+    if (!instances.every((id) => isNeedTerminalState(states.get(id)))) {
+      return false;
+    }
+  }
+  return !edges.every((edge) => edgeInstancesReady(dag, edge, states));
+}
+
+/**
+ * Finds pending multi-parent join nodes whose disposition is now decided
+ * (every predecessor edge terminal) but unsatisfiable, so they must be
+ * force-skipped. Nothing else ever transitions them out of `pending`
+ * otherwise: the positive `cloneScheduleAllowsRun` path never returns true
+ * for them once they're stalled, and the single-parent eager skip-cascade in
+ * `shouldSkipForObservedNeed` deliberately no longer decides for multi-parent
+ * nodes (see its comment). Intended to be called once per scheduler tick,
+ * alongside the run-readiness pass.
+ */
+export function pickStalledJoinSkips(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+): string[] {
+  const ids: string[] = [];
+  for (const node of dag.nodes) {
+    if (states.get(node.id) !== "pending") continue;
+    if (isStalledMultiParentJoin(dag, node, states)) {
+      ids.push(node.id);
+    }
+  }
+  return ids;
 }
 
 export type ApplyCloneForksResult = {

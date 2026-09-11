@@ -20,6 +20,7 @@ import {
   cloneScheduleAllowsRun,
   failureIsAccepted,
   isCloneInstance,
+  pickStalledJoinSkips,
   protectedClonableChildIds,
   sequentialLaterCloneIds,
   skipRejectedNeedDependents,
@@ -775,6 +776,28 @@ export async function runPipelineDag(
     await persistSkipRejected(id, "skipped");
   };
 
+  /**
+   * Finalizes multi-parent (implicit-AND) join nodes that are permanently
+   * stuck in `pending`: every predecessor edge has reached a terminal state,
+   * but `cloneScheduleAllowsRun` still can't be satisfied, and terminal
+   * states never change back. `shouldSkipForObservedNeed` deliberately
+   * refuses to decide these nodes from a single resolving parent (see its
+   * comment in cloneSchedule.ts), so this is the only place their fate gets
+   * sealed -- once we're sure every sibling has actually settled. Runs once
+   * per scheduler tick; loops until a pass finds nothing new, so a chain of
+   * stalled joins settles within a single tick rather than one per ~25ms
+   * poll.
+   */
+  const applyStalledJoinSkips = async (): Promise<void> => {
+    for (;;) {
+      const ids = pickStalledJoinSkips(dag, states);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await persistSkipPending(id);
+      }
+    }
+  };
+
   for (const [stageId, state] of states) {
     if (state !== "failed") continue;
     for (const id of cloneFailFastSkipIds(dag, stageId, completedEnvelopes)) {
@@ -1303,6 +1326,7 @@ export async function runPipelineDag(
 
   while (!allTerminal()) {
     drainRetryMutations();
+    await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
     }

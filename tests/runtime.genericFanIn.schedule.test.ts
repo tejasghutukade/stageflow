@@ -10,7 +10,10 @@ import {
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
-import { cloneScheduleAllowsRun } from "../src/runtime/cloneSchedule.js";
+import {
+  cloneScheduleAllowsRun,
+  pickStalledJoinSkips,
+} from "../src/runtime/cloneSchedule.js";
 import {
   applyForkSkipsFromEnvelopes,
   runPipelineDag,
@@ -473,7 +476,11 @@ describe("generic fan-in skip cascade", () => {
     expect(states.get("synthesize")).toBe("pending");
   });
 
-  it("still cascades through a succeeded-only join", () => {
+  it("does not seal a succeeded-only join's fate while a sibling parent is still pending", () => {
+    // Regression for the premature-skip bug: a multi-parent join must not be
+    // decided off a single resolving parent. Previously this exact setup
+    // (research fork-skipped, validation still pending) skipped `synthesize`
+    // immediately -- sealing its fate before `validation` was even known.
     const dag = acceptedDiamondDag();
     dag.nodes[3] = {
       ...dag.nodes[3]!,
@@ -496,7 +503,51 @@ describe("generic fan-in skip cascade", () => {
       ]),
     );
     expect(states.get("research")).toBe("skipped");
-    expect(states.get("synthesize")).toBe("skipped");
+    // validation hasn't resolved yet -- synthesize must stay pending, and the
+    // stalled-join sweep (what the scheduler runs each tick) must agree
+    // there's nothing to finalize yet.
+    expect(states.get("validation")).toBe("pending");
+    expect(states.get("synthesize")).toBe("pending");
+    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
+  });
+
+  it("skips a succeeded-only join once every predecessor is terminal and none satisfy their edge", () => {
+    const dag = acceptedDiamondDag();
+    dag.nodes[3] = {
+      ...dag.nodes[3]!,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ],
+    };
+    // Continuation of the case above: validation has now also settled
+    // (succeeded), so every predecessor edge of `synthesize` is terminal.
+    // research resolved "skipped", which its succeeded-only edge can never
+    // accept, so the join is permanently unsatisfiable and must be
+    // force-skipped by the stalled-join sweep.
+    const states = new Map<string, StageScheduleState>([
+      ["clarify", "succeeded"],
+      ["research", "skipped"],
+      ["validation", "succeeded"],
+      ["synthesize", "pending"],
+    ]);
+    expect(pickStalledJoinSkips(dag, states)).toEqual(["synthesize"]);
+  });
+
+  it("does not flag a join as stalled once every predecessor settles into a satisfiable state", () => {
+    const dag = acceptedDiamondDag();
+    // Default acceptedDiamondDag() accepts "skipped" on the research edge,
+    // so once both parents are terminal the join is ready to RUN, not skip.
+    const states = new Map<string, StageScheduleState>([
+      ["clarify", "succeeded"],
+      ["research", "skipped"],
+      ["validation", "succeeded"],
+      ["synthesize", "pending"],
+    ]);
+    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
+    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+      true,
+    );
   });
 });
 
@@ -558,6 +609,102 @@ describe("generic fan-in scheduler", () => {
     expect(agent.launchOrder.indexOf("synthesize")).toBeGreaterThan(
       agent.launchOrder.indexOf("validation"),
     );
+  });
+
+  it("keeps a join pending across two independent, sequentially-resolving forks", async () => {
+    // Regression for the exact shape that exposed the premature-skip bug in
+    // production (examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml):
+    // two SEQUENTIAL, independent fork stages both feed one join. clarify
+    // (route_select: one) resolves immediately and skip-cascades branch-a,
+    // while branch-b (route_select: subset, allow_none) -- an entirely
+    // separate, later-resolving fork -- is still gated/pending. join-doc's
+    // three parents (branch-a directly, path-a/path-b behind branch-b) span
+    // both forks, so it must stay pending until every one of them is
+    // terminal, not just the first (branch-a) to resolve.
+    const root = await mkdtemp(path.join(tmpdir(), "sf-two-forks-join-"));
+    let releaseBranchB: () => void = () => undefined;
+    const branchBGate = new Promise<void>((resolve) => {
+      releaseBranchB = resolve;
+    });
+    const agent = gatedFanInAgent({
+      behaviorsByStage: {
+        clarify: [
+          {
+            type: "emit",
+            envelope: okEnvelope("clarify-ok", { fork_choice: ["branch-b"] }),
+          },
+        ],
+        "branch-b": [
+          {
+            type: "gate",
+            gate: branchBGate,
+            // Mirrors the production run: the second fork chooses none of
+            // its own branches (allow_none: true).
+            envelope: okEnvelope("branch-b-ok", { fork_choice: [] }),
+          },
+        ],
+        "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
+      },
+    });
+    const { prepared, store, runId } = await prepareInprocessPipeline(
+      root,
+      "two-sequential-forks-join",
+      agent,
+    );
+    const runPromise = runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    await waitFor(() => (agent.openCounts.get("branch-b") ?? 0) === 1);
+    await waitFor(async () => {
+      const detail = await store.readRun(runId);
+      return detail.stages.find((s) => s.stage_id === "branch-a")?.status === "skipped";
+    });
+
+    // branch-a is skip-cascaded from clarify's fork choice, but branch-b
+    // (and therefore path-a/path-b) hasn't resolved yet -- join-doc must NOT
+    // be decided (run or skip) yet.
+    await new Promise((r) => setTimeout(r, 80));
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
+    {
+      const detail = await store.readRun(runId);
+      expect(
+        detail.stages.find((s) => s.stage_id === "join-doc")?.status,
+      ).toBe("pending");
+      expect(
+        detail.stages.find((s) => s.stage_id === "path-a")?.status,
+      ).toBe("pending");
+      expect(
+        detail.stages.find((s) => s.stage_id === "path-b")?.status,
+      ).toBe("pending");
+    }
+
+    releaseBranchB();
+    const result = await runPromise;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+
+    const detail = await store.readRun(runId);
+    expect(detail.stages.find((s) => s.stage_id === "branch-a")?.status).toBe(
+      "skipped",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "path-a")?.status).toBe(
+      "skipped",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "path-b")?.status).toBe(
+      "skipped",
+    );
+    // None of join-doc's parents ever succeeded (branch-a lost the first
+    // fork, path-a/path-b were never chosen by the second), so join-doc's
+    // own succeeded-only edges can never be satisfied -- it's correctly
+    // skipped too, but only now, after every parent across both forks
+    // actually settled.
+    expect(detail.stages.find((s) => s.stage_id === "join-doc")?.status).toBe(
+      "skipped",
+    );
+    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
   });
 
   it("skips succeeded-only synthesize when a parent fails and fails the run", async () => {

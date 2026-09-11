@@ -1,0 +1,39 @@
+id: two-sequential-forks-join
+# Regression fixture for the premature-skip join bug: two SEQUENTIAL,
+# independent fork stages (clarify, then branch-b) both feed one downstream
+# join (join-doc), mirroring
+# examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml. clarify's
+# fork resolves first and skip-cascades branch-a; branch-b's own fork
+# resolves later and independently decides path-a/path-b. join-doc must wait
+# for every one of its three parents (branch-a, path-a, path-b) to reach a
+# terminal state before its own disposition is decided -- not just the first
+# one to resolve.
+stages:
+  - id: clarify
+    entry: true
+    route_select: one
+    route:
+      - to: branch-a
+      - to: branch-b
+    uses: ../stages/clarify.yaml
+  - id: branch-a
+    route:
+      - to: join-doc
+    uses: ../stages/branch-a.yaml
+  - id: branch-b
+    route_select: subset
+    allow_none: true
+    route:
+      - to: path-a
+      - to: path-b
+    uses: ../stages/branch-b.yaml
+  - id: path-a
+    route:
+      - to: join-doc
+    uses: ../stages/path-a.yaml
+  - id: path-b
+    route:
+      - to: join-doc
+    uses: ../stages/path-b.yaml
+  - id: join-doc
+    uses: ../stages/join-doc.yaml
