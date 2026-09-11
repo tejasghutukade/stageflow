@@ -2,6 +2,7 @@ import type {
   PipelineNeedEdge,
   PipelineRouteEdge,
   PipelineRouteEntry,
+  PipelineRouteLoopEntry,
   PipelineStageRef,
   PipelineStageYamlEntry,
   ResolvedPipelineDag,
@@ -12,7 +13,7 @@ import type { CompletionContract, RecoveryPolicy } from "../types/completion.js"
 import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
 import { parsePipelineNeeds, predecessorEdges, toNeedEdges } from "./pipelineNeeds.js";
-import { parsePipelineRoute, toRouteEdges } from "./pipelineRoute.js";
+import { parsePipelineRoute, toRouteEdges, toRouteLoopEntries } from "./pipelineRoute.js";
 
 const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
 
@@ -22,6 +23,8 @@ type NormalizedEdge = {
   needsEdges: PipelineNeedEdge[];
   /** This stage's own outbound `route` entries (forward direction, not yet inverted). */
   routeEdges: PipelineRouteEdge[];
+  /** This stage's own outbound `route` loop entries (ticket 03: no forward edge). */
+  routeLoopEntries: PipelineRouteLoopEntry[];
   entry?: boolean;
   stageIndex: number;
   fork?: { select: "one" | "subset"; allow_none?: boolean };
@@ -269,11 +272,13 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
   return entries.map((entry, index) => {
     const needsEdges = toNeedEdges(entry.needs);
     const routeEdges = toRouteEdges(entry.route);
+    const routeLoopEntries = toRouteLoopEntries(entry.route);
     return {
       id: entry.id,
       needs: needsEdges.length === 1 ? needsEdges[0]!.id : null,
       needsEdges,
       routeEdges,
+      routeLoopEntries,
       stageIndex: index,
       ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
       ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
@@ -319,6 +324,28 @@ function validateRouteTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagCo
           formatError(ctx, `stage "${edge.id}" has unknown route target "${route.to}"`),
         );
       }
+    }
+  }
+}
+
+/**
+ * A stage's own resolved node can carry only one `feedback_loop`-shaped
+ * replay policy (`ResolvedPipelineStageNode.feedback_loop` is a single
+ * object, not a list — the shape the runtime already consumes and that this
+ * ticket must not change). A stage declaring more than one `type: loop`
+ * route entry has no unambiguous single replay policy to synthesize onto
+ * that field, so it is rejected at parse time rather than silently picking
+ * one and discarding the rest.
+ */
+function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+  for (const edge of edges) {
+    if (edge.routeLoopEntries.length > 1) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${edge.id}": route supports at most one loop entry, got ${edge.routeLoopEntries.length}`,
+        ),
+      );
     }
   }
 }
@@ -537,6 +564,24 @@ function topologicalSort(edges: NormalizedEdge[]): NormalizedEdge[] {
   return sorted;
 }
 
+/**
+ * Ticket 03: a route loop entry carries the same replay-policy fields as
+ * today's `feedback_loop` (just `to` instead of `target`). Synthesizing it
+ * into the exact `FeedbackLoopConfig` shape here — onto the same
+ * `ResolvedPipelineStageNode.feedback_loop` field the legacy path populates
+ * — means `validateFeedbackLoopFields` below and every downstream
+ * runtime/executor consumer of `.feedback_loop` need zero changes to also
+ * support route-declared loops.
+ */
+function toFeedbackLoopConfigFromRouteLoopEntry(entry: PipelineRouteLoopEntry): FeedbackLoopConfig {
+  return {
+    target: entry.to,
+    max_replays: entry.max_replays,
+    on_max_replays: entry.on_max_replays,
+    replay_session: entry.replay_session,
+  };
+}
+
 function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag {
   const ancestorsById = computeAncestors(edges);
   const sortedEdges = topologicalSort(edges);
@@ -580,7 +625,11 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
       : {}),
     ...(edge.completion !== undefined ? { completion: edge.completion } : {}),
     ...(edge.recovery !== undefined ? { recovery: edge.recovery } : {}),
-    ...(edge.feedback_loop !== undefined ? { feedback_loop: edge.feedback_loop } : {}),
+    ...(edge.feedback_loop !== undefined
+      ? { feedback_loop: edge.feedback_loop }
+      : edge.routeLoopEntries.length === 1
+        ? { feedback_loop: toFeedbackLoopConfigFromRouteLoopEntry(edge.routeLoopEntries[0]!) }
+        : {}),
     ...(edge.replay_safe !== undefined ? { replay_safe: edge.replay_safe } : {}),
   }));
 
@@ -695,6 +744,7 @@ export function resolvePipelineDagFromRefs(
   validateNeedsTargets(edges, ctx);
   validateRouteTargets(edges, ctx);
   validateRouteSelectFields(edges, ctx);
+  validateRouteLoopEntryCount(edges, ctx);
   validateEntryStageUsage(edges, ctx);
   mergeRouteEdgesIntoNeeds(edges);
   detectCycle(edges, ctx);

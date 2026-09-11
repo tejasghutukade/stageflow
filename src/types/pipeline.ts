@@ -46,14 +46,20 @@ export type PipelineRouteForwardEntry = {
 };
 
 /**
- * Reserved for ticket 03 (loop routing): `{ type: "loop"; to: string; max_replays: ...; ... }`.
- * Declared now so `PipelineRouteEntry` is already the discriminated union ticket 03
- * extends — a forward entry carries no `type` field, so the two stay distinguishable
- * once the loop variant is implemented. Not parsed or resolved by this ticket.
+ * A loop route entry (ticket 03, route-based-pipeline-wiring spec): sends
+ * execution back to a declared ancestor of the source stage instead of
+ * continuing forward, carrying the same replay policy `FeedbackLoopConfig`
+ * carries today — `target` renamed to `to` for naming consistency with
+ * forward entries. Contributes no forward DAG edge (`toRouteEdges` skips
+ * it), so it is excluded from cycle detection; it is a runtime-only replay
+ * schedule over the already-resolved forward graph.
  */
 export type PipelineRouteLoopEntry = {
   type: "loop";
   to: string;
+  max_replays: number;
+  on_max_replays: "require_continue" | "wait_for_human";
+  replay_session: "resume" | "new_session";
 };
 
 export type PipelineRouteEntry = PipelineRouteForwardEntry | PipelineRouteLoopEntry;
