@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-10
+
+### Added
+
+- GitHub-Actions-style log panel on the run detail page, alongside the existing conversational transcript: every tool call, message, and lifecycle event renders as a collapsible step with a status indicator, human-readable label (e.g. `Read app.ts`, `Bash npm test`), duration, and a one-line preview of its result
+- The step responsible for a stage failure auto-expands, with a pinned banner linking straight to it
+- Either side of the transcript/logs split can be hidden independently; logs are shown by default
+- `npm run dev:watch` — a live-reload local dev loop for the backend (paired with the existing `npm run ui:dev` for the frontend), so UI/backend changes no longer require a manual build + restart cycle
+
 ## [0.16.0] - 2026-09-10
 
 ### Added
