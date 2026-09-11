@@ -71,7 +71,9 @@ If the stage declares `io.output.schema` in YAML, `payload` is validated against
 
 ### Fork stages
 
-If the stage's pipeline entry has a `fork` field and at least one non-clonable child, the success emit **must** include `fork_choice: string[]` naming which of those successors to run. A fork parent whose every child is clonable does not require `fork_choice`. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
+Catalog YAML `route` does **not** use `fork_choice`. Listed `to:` targets always run; do not emit `fork_choice` to pick YAML successors. `fork_choice` is only validated when the resolved DAG node has a `fork` field (not produced from catalog YAML).
+
+If a constructed DAG node has a `fork` field and at least one non-clonable child, the success emit **must** include `fork_choice: string[]` naming which of those successors to run. A fork parent whose every child is clonable does not require `fork_choice`. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
 
 ```json
 {
@@ -87,7 +89,7 @@ Rules:
 - `fork_choice: []` is accepted only when `allow_none: true` is set with `select: subset`. `select: one` always requires exactly one choice — empty `fork_choice` fails emit even if `allow_none: true`.
 - On failure, `fork_choice` is not required or validated.
 
-Unchosen successors are `skipped` — the same status used when a parent fails. See [YAML catalog](yaml-catalog.md#fork-pipelines) for the `fork` field.
+Unchosen successors are `skipped` — the same status used when a parent fails. Catalog pipelines use [unconditional fan-out](yaml-catalog.md#route) instead of `fork_choice`.
 
 ### Clonable successors {#clonable-successors}
 

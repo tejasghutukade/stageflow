@@ -13,8 +13,8 @@ stages:
     system_prompt: Implement the plan.
     model: cursor/auto
 
-  # Loop: continue forward to qa, or send back to implement (independent of
-  # route_select/fork_choice -- driven by the feedback_loop envelope action).
+  # Loop: continue forward to qa, or send back to implement (driven by
+  # the feedback_loop envelope action, independent of listed route targets).
   - id: review
     route:
       - to: qa
@@ -26,25 +26,21 @@ stages:
     system_prompt: Review the change. Continue to qa, or send it back to implement.
     model: cursor/auto
 
-  # route_select: one -- fork_choice picks exactly one branch.
+  # Listed route targets always run after qa succeeds.
   - id: qa
-    route_select: one
     route:
       - to: ship
       - to: request-changes
-    system_prompt: Decide to ship or request changes. Pick exactly one.
+    system_prompt: Record the QA outcome. Ship and request-changes both run next.
     model: cursor/auto
 
-  # route_select: subset + allow_none -- fork_choice picks any number
-  # (including zero) of these three.
+  # Listed route targets always run after ship succeeds.
   - id: ship
-    route_select: subset
-    allow_none: true
     route:
       - to: notify-slack
       - to: notify-email
       - to: update-changelog
-    system_prompt: Decide which of these notifications to send, if any.
+    system_prompt: Ship the change. Slack, email, and changelog notifications all run next.
     model: cursor/auto
 
   - id: request-changes
@@ -71,10 +67,11 @@ stages:
     system_prompt: Update the changelog.
     model: cursor/auto
 
-  # Fan-in / implicit-AND join: waits for all four of request-changes,
-  # notify-slack, notify-email, update-changelog to resolve to ANY terminal
-  # state. qa's route_select and ship's route_select/allow_none mean most of
-  # these actually resolve "skipped", not "succeeded" -- that still counts.
+  # Fan-in of request-changes plus the three notify stages. On the happy
+  # path all four parents run. The join waits until every parent is
+  # terminal, then runs if at least one succeeded (skipped arms do not
+  # block; their envelopes are omitted). Stays pending if a parent failed.
+  # Does not run if every parent skipped.
   - id: close
     system_prompt: Close out the run.
     model: cursor/auto

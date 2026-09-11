@@ -116,23 +116,25 @@ stages:
 
 Do not make `approve` / `ship` `needs: review` when blockers are expected.
 
-### Release gate (fork, select one)
+### Release gate (`on:` success / fail)
 
-One deciding step, then exactly one successor.
+Success routes to ship; failure routes to hotfix. Listed `to:` targets are gated by `on:`, not by an agent choice.
 
 ```yaml
 id: release-gate
 stages:
   - id: run-tests
     uses: ./run-tests.yaml
-    fork:
-      select: one
+    entry: true
+    route:
+      - to: ship
+        on: [succeeded]
+      - to: hotfix
+        on: [failed]
   - id: hotfix
     uses: ./hotfix.yaml
-    needs: [run-tests]
   - id: ship
     uses: ./ship.yaml
-    needs: [run-tests]
 ```
 
 Full set: [`../assets/examples/branch-decision/`](../assets/examples/branch-decision/).

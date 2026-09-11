@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
-import { RunManager } from "../src/runtime/runManager.js";
-import { hydrateScheduleFromStore } from "../src/runtime/pipelineScheduler.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
+import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import {
+  hydrateScheduleFromStore,
+  runPipelineDag,
+} from "../src/runtime/pipelineScheduler.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
@@ -18,18 +22,6 @@ const fixtures = path.resolve(
 
 function okEnvelope(summary: string, extra?: Partial<StageEnvelope>): StageEnvelope {
   return { status: "success", summary, artifacts: [], ...extra };
-}
-
-async function waitFor(
-  predicate: () => Promise<boolean>,
-  timeoutMs = 8000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await predicate()) return;
-    await new Promise((r) => setTimeout(r, 25));
-  }
-  throw new Error("timeout waiting for condition");
 }
 
 type FakeAgentBehavior =
@@ -77,29 +69,59 @@ function stageEvents(detail: Awaited<ReturnType<typeof createRunStore>["readRun"
 }
 
 describe("fork skip store persistence", () => {
+  async function prepareInjectedForkRun(
+    root: string,
+    agent: AgentPort,
+  ) {
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, "sample");
+    const loaded = await loadPipeline(pipelinePath("fork-route-allow-none"), {
+      cwd: fixtures,
+    });
+    const clarify = loaded.dag.nodes.find((n) => n.id === "clarify");
+    if (clarify) {
+      clarify.fork = { select: "subset", allow_none: true };
+    }
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    return {
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      store,
+      loaded,
+      runId: run.runId,
+    };
+  }
+
   it("empty fork_choice persists skipped events for downstream stages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-skip-empty-"));
-    const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [{ type: "emit", envelope: okEnvelope("detect-ok", { fork_choice: [] }) }],
       "design-doc": [{ type: "throw", message: "should not run" }],
       "implementation-plan": [{ type: "throw", message: "should not run" }],
     });
+    const { prepared, store, runId } = await prepareInjectedForkRun(root, agent);
 
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-allow-none"),
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
     });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
 
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(started.runId);
+    const detail = await store.readRun(runId);
     const design = detail.stages.find((s) => s.stage_id === "design-doc");
     const impl = detail.stages.find((s) => s.stage_id === "implementation-plan");
 
@@ -113,7 +135,6 @@ describe("fork skip store persistence", () => {
 
   it("chosen fork path does not persist skipped event for that stage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-skip-chosen-"));
-    const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
         {
@@ -124,21 +145,17 @@ describe("fork skip store persistence", () => {
       "design-doc": [{ type: "emit", envelope: okEnvelope("author-ok") }],
       "implementation-plan": [{ type: "throw", message: "should not run" }],
     });
+    const { prepared, store, runId } = await prepareInjectedForkRun(root, agent);
 
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-allow-none"),
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
     });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
 
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(started.runId);
+    const detail = await store.readRun(runId);
     const design = detail.stages.find((s) => s.stage_id === "design-doc");
     const impl = detail.stages.find((s) => s.stage_id === "implementation-plan");
 
@@ -152,30 +169,24 @@ describe("fork skip store persistence", () => {
 
   it("hydrateScheduleFromStore restores skipped state from persisted events", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-skip-hydrate-"));
-    const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [{ type: "emit", envelope: okEnvelope("detect-ok", { fork_choice: [] }) }],
       "design-doc": [{ type: "throw", message: "should not run" }],
       "implementation-plan": [{ type: "throw", message: "should not run" }],
     });
+    const { prepared, store, loaded, runId } = await prepareInjectedForkRun(root, agent);
 
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("fork-route-allow-none"),
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
     });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
 
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(started.runId);
-      return meta.status === "succeeded";
-    });
-
-    const loaded = await loadPipeline(pipelinePath("fork-route-allow-none"), fixtures);
     const hydrated = await hydrateScheduleFromStore(
       store,
-      started.runId,
+      runId,
       loaded.dag,
       "process",
     );

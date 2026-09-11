@@ -1295,7 +1295,6 @@ describe("MCP Tier 1 operator parity", () => {
         expect.arrayContaining([
           expect.objectContaining({
             id: "clarify",
-            fork: expect.objectContaining({ select: "subset" }),
           }),
           expect.objectContaining({
             id: "design-doc",

@@ -1,13 +1,12 @@
 id: route-demo-uses-dialect-fork
 # Every other pipeline in this catalog uses inline stage bodies
 # (system_prompt/model directly on the stage entry). This one uses the
-# `uses:` external-stage-file dialect instead -- the one this catalog
-# hadn't combined with route/route_select/entry before -- to confirm the
-# wiring fields work identically regardless of where the stage body lives.
+# `uses:` external-stage-file dialect instead — to confirm route/entry
+# work identically regardless of where the stage body lives. Both
+# listed branches always run after decide succeeds.
 stages:
   - id: decide
     entry: true
-    route_select: one
     route:
       - to: branch-a
       - to: branch-b

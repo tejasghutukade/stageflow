@@ -1,5 +1,4 @@
 id: decide
 system_prompt: >
-  Decide between "branch-a" and "branch-b". For this smoke test, always
-  choose branch-a.
+  Start both follow-up branches. branch-a and branch-b both run next.
 model: cursor/auto

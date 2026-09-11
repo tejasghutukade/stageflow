@@ -2,7 +2,6 @@ id: route-select-subset
 stages:
   - id: clarify
     entry: true
-    route_select: subset
     route:
       - to: branch-a
       - to: branch-b

@@ -202,7 +202,7 @@ export function normalizePipelineStageEntries(
       return loadFailure([
         {
           code: "pipeline.dag_error",
-          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "fork" is no longer supported — use "route_select"/"allow_none" alongside "route" instead`,
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "fork" is no longer supported — use "route" instead; listed route targets always run`,
           category: "pipeline",
           pipelineId: ctx.pipelineId,
         },
@@ -213,6 +213,26 @@ export function normalizePipelineStageEntries(
         {
           code: "pipeline.dag_error",
           message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.route_select !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "route_select" is no longer supported — listed route targets always run`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.allow_none !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "allow_none" is no longer supported — listed route targets always run`,
           category: "pipeline",
           pipelineId: ctx.pipelineId,
         },
@@ -290,9 +310,6 @@ export function normalizePipelineStageEntries(
     }
     const entryFlag = raw.entry as boolean | undefined;
 
-    const routeSelect = raw.route_select as "one" | "subset" | undefined;
-    const allowNone = raw.allow_none as boolean | undefined;
-
     let body: NormalizedPipelineStageEntry["body"];
     if (uses) {
       const absolutePath = path.resolve(path.dirname(declaringPath), uses);
@@ -318,8 +335,6 @@ export function normalizePipelineStageEntries(
         : {}),
       ...(route !== undefined ? { route } : {}),
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
-      ...(routeSelect !== undefined ? { route_select: routeSelect } : {}),
-      ...(allowNone !== undefined ? { allow_none: allowNone } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
     };
@@ -353,8 +368,6 @@ export function toWiringRefs(
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
-  route_select?: "one" | "subset";
-  allow_none?: boolean;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
@@ -365,7 +378,5 @@ export function toWiringRefs(
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     ...(entry.route !== undefined ? { route: entry.route } : {}),
     ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
-    ...(entry.route_select !== undefined ? { route_select: entry.route_select } : {}),
-    ...(entry.allow_none !== undefined ? { allow_none: entry.allow_none } : {}),
   }));
 }

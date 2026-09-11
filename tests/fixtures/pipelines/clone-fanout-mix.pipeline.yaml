@@ -2,7 +2,6 @@ id: clone-fanout-mix
 stages:
   - id: clarify
     entry: true
-    route_select: subset
     route:
       - to: design-doc
       - to: implementation-plan

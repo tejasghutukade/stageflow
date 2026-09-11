@@ -25,9 +25,6 @@ type NormalizedEdge = {
   routeLoopEntries: PipelineRouteLoopEntry[];
   entry?: boolean;
   stageIndex: number;
-  /** Fork-equivalent selection declared as flat siblings of `route` (ticket 02). */
-  route_select?: "one" | "subset";
-  allow_none?: boolean;
   clonable?: boolean;
   clone_cap?: number;
   completion?: CompletionContract;
@@ -102,7 +99,7 @@ export function parsePipelineStageEntries(
       throw new Error(
         formatError(
           ctx,
-          `stage "${entry.id}": "fork" is no longer supported — use "route_select"/"allow_none" alongside "route" instead`,
+          `stage "${entry.id}": "fork" is no longer supported — use "route" instead; listed route targets always run`,
         ),
       );
     }
@@ -111,6 +108,22 @@ export function parsePipelineStageEntries(
         formatError(
           ctx,
           `stage "${entry.id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
+        ),
+      );
+    }
+    if (entry.route_select !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${entry.id}": "route_select" is no longer supported — listed route targets always run`,
+        ),
+      );
+    }
+    if (entry.allow_none !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${entry.id}": "allow_none" is no longer supported — listed route targets always run`,
         ),
       );
     }
@@ -159,13 +172,6 @@ export function parsePipelineStageEntries(
     }
     const entryFields = entry.entry !== undefined ? { entry: entry.entry as boolean } : {};
 
-    const routeSelectFields =
-      entry.route_select !== undefined
-        ? { route_select: entry.route_select as "one" | "subset" }
-        : {};
-    const allowNoneFields =
-      entry.allow_none !== undefined ? { allow_none: entry.allow_none as boolean } : {};
-
     entries.push({
       id: entry.id,
       ...clonableFields,
@@ -173,8 +179,6 @@ export function parsePipelineStageEntries(
       ...replaySafetyFields,
       ...routeFields,
       ...entryFields,
-      ...routeSelectFields,
-      ...allowNoneFields,
     });
   }
 
@@ -199,8 +203,6 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
       ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
       ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
       ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
-      ...(entry.route_select !== undefined ? { route_select: entry.route_select } : {}),
-      ...(entry.allow_none !== undefined ? { allow_none: entry.allow_none } : {}),
     };
   });
 }
@@ -244,42 +246,6 @@ function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipeli
         formatError(
           ctx,
           `stage "${edge.id}": route supports at most one loop entry, got ${edge.routeLoopEntries.length}`,
-        ),
-      );
-    }
-  }
-}
-
-/**
- * Fork-equivalent validation for `route_select` (ticket 02): requires at
- * least two of the declaring stage's own forward `route` entries — the
- * inverse framing of today's now-removed `fork` rejection on a leaf with no
- * children. Loop entries never appear in `routeEdges` (`toRouteEdges` skips
- * them), so this only counts forward entries, as the spec requires.
- */
-function validateRouteSelectFields(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
-  for (const edge of edges) {
-    if (edge.route_select === undefined) {
-      if (edge.allow_none !== undefined) {
-        throw new Error(
-          formatError(ctx, `stage "${edge.id}": allow_none requires route_select`),
-        );
-      }
-      continue;
-    }
-    if (edge.route_select !== "one" && edge.route_select !== "subset") {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${edge.id}": route_select must be "one" or "subset", got "${String(edge.route_select)}"`,
-        ),
-      );
-    }
-    if (edge.routeEdges.length < 2) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${edge.id}": route_select requires at least two forward route entries`,
         ),
       );
     }
@@ -521,9 +487,6 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
     ...(edge.entry === true ? { entry: true } : {}),
-    ...(edge.route_select !== undefined
-      ? { fork: { select: edge.route_select, allow_none: edge.allow_none ?? false } }
-      : {}),
     ...(edge.clonable === true
       ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
       : {}),
@@ -621,7 +584,6 @@ export function resolvePipelineDagFromRefs(
   const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
   validateRouteTargets(edges, ctx);
-  validateRouteSelectFields(edges, ctx);
   validateRouteLoopEntryCount(edges, ctx);
   validateEntryStageUsage(edges, ctx);
   mergeRouteEdgesIntoNeeds(edges);
@@ -713,7 +675,13 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
       if (!isAllowedPipelineStageEntryKey(key)) return null;
     }
     if (typeof entry.id !== "string" || !entry.id) return null;
-    if (entry.needs !== undefined || entry.fork !== undefined || entry.feedback_loop !== undefined) {
+    if (
+      entry.needs !== undefined ||
+      entry.fork !== undefined ||
+      entry.feedback_loop !== undefined ||
+      entry.route_select !== undefined ||
+      entry.allow_none !== undefined
+    ) {
       return null;
     }
     stageIds.push(entry.id);

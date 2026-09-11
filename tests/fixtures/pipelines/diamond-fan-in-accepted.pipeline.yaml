@@ -2,8 +2,6 @@ id: diamond-fan-in-accepted
 stages:
   - id: clarify
     entry: true
-    route_select: subset
-    allow_none: true
     route:
       - to: research
       - to: validation

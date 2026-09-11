@@ -71,7 +71,6 @@ describe("feedback_loop pipeline wiring (route type: loop entries)", () => {
           { id: "implement", entry: true, route: [{ to: "review-work" }] },
           {
             id: "review-work",
-            route_select: "subset",
             route: [{ to: "persona-a" }, { to: "persona-b" }],
           },
           { id: "persona-a", route: [{ to: "accumulate" }] },

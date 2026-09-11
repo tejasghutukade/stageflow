@@ -118,21 +118,23 @@ For MCP without the console, use `sf mcp` — see [MCP](mcp.md).
 
 ## Multi-stage pipelines
 
-Add more stage entries to the pipeline. Use `uses:` for external stage files or inline `system_prompt` / `model`. Order with explicit `needs`:
+Add more stage entries to the pipeline. Use `uses:` for external stage files or inline `system_prompt` / `model`. Declare wiring on the source stage with `route`:
 
 ```yaml
 id: linear
 stages:
   - id: clarify
     uses: ../stages/clarify.yaml
+    entry: true
+    route:
+      - to: design-doc
   - id: design-doc
     uses: ../stages/design-doc.yaml
-    needs: clarify
 ```
 
 Canonical example: [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-Parallel fan-out uses the same `needs` field — see [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog](yaml-catalog.md). For conditional routing (the deciding stage chooses one or more branches at runtime), see [Fork pipelines](yaml-catalog.md#fork-pipelines) in the YAML catalog. Clonable fan-out clones one successor N times at completion — see [Clonable successors](yaml-catalog.md#clonable-successors).
+Multiple `to:` entries are unconditional fan-out — every listed target runs. See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog — route](yaml-catalog.md#route). Success vs failure uses `on:` on the source stage. Clonable fan-out clones one successor N times at completion — see [Clonable successors](yaml-catalog.md#clonable-successors).
 
 ## Headless / CI
 

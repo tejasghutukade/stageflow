@@ -2,7 +2,6 @@ id: fork-choice-smoke
 stages:
   - id: decide
     entry: true
-    route_select: one
     route:
       - to: path-a
       - to: path-b

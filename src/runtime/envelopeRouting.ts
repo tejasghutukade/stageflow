@@ -6,7 +6,6 @@ import {
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type {
   StageEnvelope,
-  SyntheticSkippedEnvelope,
   TerminalEnvelope,
 } from "../types/envelope.js";
 import type {
@@ -101,12 +100,6 @@ function dagNode(dag: ResolvedPipelineDag, stageId: string) {
   return dag.nodes.find((node) => node.id === stageId);
 }
 
-const SYNTHETIC_SKIPPED_TERMINAL: SyntheticSkippedEnvelope = {
-  status: "skipped",
-  summary: "stage was skipped",
-  artifacts: [],
-};
-
 export type ResolvePriorEnvelopeResult =
   | {
       ok: true;
@@ -135,17 +128,6 @@ function mintedCloneInstances(dag: ResolvedPipelineDag, parentId: string): strin
 function isClonableParent(dag: ResolvedPipelineDag, parentId: string): boolean {
   const node = dagNode(dag, parentId);
   return node?.clonable === true || mintedCloneInstances(dag, parentId).length > 0;
-}
-
-function failureReasonFromSnapshot(snap: StageSnapshot | undefined): string {
-  let reason = "stage failed";
-  if (snap === undefined) return reason;
-  for (const ev of snap.events) {
-    if (ev.event === "failed" && typeof ev.reason === "string" && ev.reason) {
-      reason = ev.reason;
-    }
-  }
-  return reason;
 }
 
 async function loadStageSnapshots(
@@ -177,28 +159,18 @@ async function readCachedEnvelope(
   return undefined;
 }
 
-async function terminalForPersistedStage(
+async function successTerminalForPersistedStage(
   options: ResolvePriorEnvelopeOptions,
   snapshots: Map<string, StageSnapshot>,
   stageId: string,
-): Promise<{ ok: true; value: TerminalEnvelope } | { ok: false; reason: string }> {
+): Promise<
+  | { ok: true; value: TerminalEnvelope }
+  | { ok: true; omit: true }
+  | { ok: false; reason: string }
+> {
   const snap = snapshots.get(stageId);
-  if (snap?.status === "skipped") {
-    return { ok: true, value: { ...SYNTHETIC_SKIPPED_TERMINAL } };
-  }
-  if (snap?.status === "failed") {
-    const envelope = await readCachedEnvelope(options, snapshots, stageId);
-    if (envelope?.status === "failure") {
-      return { ok: true, value: envelope };
-    }
-    return {
-      ok: true,
-      value: {
-        status: "failure",
-        summary: failureReasonFromSnapshot(snap),
-        artifacts: [],
-      },
-    };
+  if (snap?.status === "skipped" || snap?.status === "failed") {
+    return { ok: true, omit: true };
   }
   if (snap?.status === "succeeded") {
     const envelope = await readCachedEnvelope(options, snapshots, stageId);
@@ -208,7 +180,17 @@ async function terminalForPersistedStage(
         reason: `missing envelope for upstream stage "${stageId}"`,
       };
     }
+    if (envelope.status !== "success") {
+      return { ok: true, omit: true };
+    }
     return { ok: true, value: envelope };
+  }
+  const fromMap = options.completedEnvelopes.get(stageId);
+  if (fromMap?.status === "success") {
+    return { ok: true, value: structuredClone(fromMap) };
+  }
+  if (fromMap !== undefined) {
+    return { ok: true, omit: true };
   }
   return {
     ok: false,
@@ -232,25 +214,38 @@ async function resolveGenericJoinPriors(
       if (minted.length > 0) {
         const list: TerminalEnvelope[] = [];
         for (const id of minted) {
-          const terminal = await terminalForPersistedStage(options, snapshots, id);
+          const terminal = await successTerminalForPersistedStage(
+            options,
+            snapshots,
+            id,
+          );
           if (!terminal.ok) return terminal;
+          if ("omit" in terminal) continue;
           list.push(terminal.value);
         }
-        priorEnvelopesByStage[parentId] = list;
+        if (list.length > 0) {
+          priorEnvelopesByStage[parentId] = list;
+        }
         continue;
       }
-      if (snapshots.get(parentId)?.status === "skipped") {
-        priorEnvelopesByStage[parentId] = [];
-        continue;
-      }
-      const once = await terminalForPersistedStage(options, snapshots, parentId);
+      const once = await successTerminalForPersistedStage(
+        options,
+        snapshots,
+        parentId,
+      );
       if (!once.ok) return once;
+      if ("omit" in once) continue;
       priorEnvelopesByStage[parentId] = [once.value];
       continue;
     }
 
-    const terminal = await terminalForPersistedStage(options, snapshots, parentId);
+    const terminal = await successTerminalForPersistedStage(
+      options,
+      snapshots,
+      parentId,
+    );
     if (!terminal.ok) return terminal;
+    if ("omit" in terminal) continue;
     priorEnvelopesByStage[parentId] = terminal.value;
   }
 
@@ -289,17 +284,28 @@ export async function resolvePriorEnvelope(
       options.scheduleOverride,
     );
     const joinInstances = filterJoinInputs(allJoinInstances, cohort);
+    const snapshots = new Map(
+      (await loadStageSnapshots(options)).map((snap) => [snap.stage_id, snap]),
+    );
     const joinPriors: StageEnvelope[] = [];
     for (const id of joinInstances) {
+      const snap = snapshots.get(id);
+      if (snap?.status === "skipped" || snap?.status === "failed") {
+        continue;
+      }
       const fromMap = options.completedEnvelopes.get(id);
       if (fromMap !== undefined) {
-        joinPriors.push(structuredClone(fromMap));
+        if (fromMap.status === "success") {
+          joinPriors.push(structuredClone(fromMap));
+        }
         continue;
       }
       if (options.store !== undefined && options.runId !== undefined) {
         try {
           const envelope = await options.store.readEnvelope(options.runId, id);
-          joinPriors.push(structuredClone(envelope));
+          if (envelope.status === "success") {
+            joinPriors.push(structuredClone(envelope));
+          }
           continue;
         } catch {
           return {

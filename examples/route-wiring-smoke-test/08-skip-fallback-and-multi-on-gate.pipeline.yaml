@@ -1,55 +1,32 @@
 id: route-demo-skip-and-multi-on
 stages:
+  # Listed route targets always run after decide succeeds — both arms.
   - id: decide
     entry: true
-    route_select: one
     route:
       - to: risky-step
       - to: safe-step
-    system_prompt: >
-      Decide between "risky-step" and "safe-step". For this smoke test,
-      always choose safe-step.
+    system_prompt: Run both the risky-step and safe-step follow-ups.
     model: cursor/auto
 
+  # Leaf: does not route onward. done is only on the safe-step arm, so
+  # it does not wait on this sibling.
   - id: risky-step
-    route:
-      - to: cleanup-if-skipped
-        on: [skipped]
-    system_prompt: The risky path. (Not reached in this smoke test -- decide always picks safe-step, so this is skip-cascaded, which is what triggers cleanup-if-skipped below.)
-    model: cursor/auto
-
-  # on: [skipped] -- this route entry only fires because risky-step ITSELF
-  # resolves "skipped" (it was never chosen by decide). A fallback/cleanup
-  # pattern: "if my sibling never ran, do this instead." Every other on:
-  # gate in this catalog (02-on-gating) is on: [succeeded] or on: [failed]
-  # for a stage that actually ran -- this is the one gated on a stage that
-  # never executed at all.
-  - id: cleanup-if-skipped
-    route:
-      - to: done
-    system_prompt: Runs specifically because risky-step was skipped, not because it succeeded.
+    system_prompt: The risky path. A leaf — no child runs from here.
     model: cursor/auto
 
   - id: safe-step
     route:
-      # on: [succeeded, failed] -- fires regardless of which terminal state
-      # safe-step lands in (a "run either way" gate), unlike 02-on-gating's
-      # single-state on: [succeeded] / on: [failed] entries. safe-step's
-      # trivial docs-only prompt won't realistically fail, but the config
-      # itself accepts and applies a multi-state gate either way.
       - to: notify-either-way
-        on: [succeeded, failed]
-    system_prompt: The safe path. Always chosen in this smoke test.
+    system_prompt: The safe path. Routes onward to notify-either-way, then done.
     model: cursor/auto
 
   - id: notify-either-way
     route:
       - to: done
-    system_prompt: Runs whether safe-step succeeded or failed.
+    system_prompt: Runs after safe-step succeeds.
     model: cursor/auto
 
-  # Fan-in: waits for cleanup-if-skipped AND notify-either-way, both of
-  # which genuinely run in this deterministic smoke test.
   - id: done
     system_prompt: Close out the run.
     model: cursor/auto

@@ -369,7 +369,7 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     ).toBe(false);
   });
 
-  it("accepted-failure diamond is ready after a failed parent settles", async () => {
+  it("failed parent keeps a multi-parent join blocked even if the edge accepts failed", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in-accepted"), {
       cwd: fixtures,
     });
@@ -386,7 +386,8 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     states.set("validation", "succeeded");
     expect(
       cloneScheduleAllowsRun(dag, "synthesize", states, new Map()),
-    ).toBe(true);
+    ).toBe(false);
+    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
   });
 
   it("succeeded-only generic join is ready after clone-count shrink leftovers", async () => {
@@ -403,7 +404,7 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     ).toBe(true);
   });
 
-  it("succeeded-only generic join stays blocked when the whole parent is skipped", async () => {
+  it("succeeded-only generic join runs when the whole clonable parent is skipped and a sibling succeeded", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in-clone"), {
       cwd: fixtures,
     });
@@ -418,10 +419,10 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     ]);
     expect(
       cloneScheduleAllowsRun(dag, "synthesize", states, new Map()),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("succeeded-only generic join stays blocked when every clone instance is skipped", async () => {
+  it("succeeded-only generic join runs when every clone instance is skipped and a sibling succeeded", async () => {
     const dag = succeededOnlyResearchJoin(await diamondCloneWithResearch(2));
     const states = new Map<string, StageScheduleState>([
       ["clarify", "succeeded"],
@@ -432,7 +433,7 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     ]);
     expect(
       cloneScheduleAllowsRun(dag, "synthesize", states, new Map()),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("scalar clone-list join is still ready after shrink leftovers", async () => {
@@ -452,6 +453,25 @@ describe("generic fan-in readiness (cloneScheduleAllowsRun)", () => {
     expect(
       cloneScheduleAllowsRun(snapshot, "join-doc", states, new Map()),
     ).toBe(true);
+  });
+
+  it("scalar clone-list join stays blocked when every clone instance is skipped", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
+      cwd: fixtures,
+    });
+    const { snapshot } = appendCloneInstances(
+      buildPipelineDagSnapshotFromLoaded(loaded),
+      { catalogId: "design-doc", predecessorId: "clarify", count: 2 },
+    );
+    const states = new Map<string, StageScheduleState>([
+      ["clarify", "succeeded"],
+      ["design-doc~1", "skipped"],
+      ["design-doc~2", "skipped"],
+      ["join-doc", "pending"],
+    ]);
+    expect(
+      cloneScheduleAllowsRun(snapshot, "join-doc", states, new Map()),
+    ).toBe(false);
   });
 });
 
@@ -511,7 +531,7 @@ describe("generic fan-in skip cascade", () => {
     expect(pickStalledJoinSkips(dag, states)).toEqual([]);
   });
 
-  it("skips a succeeded-only join once every predecessor is terminal and none satisfy their edge", () => {
+  it("runs a succeeded-only join once a skipped fork child and the other parents are terminal", () => {
     const dag = acceptedDiamondDag();
     dag.nodes[3] = {
       ...dag.nodes[3]!,
@@ -520,18 +540,58 @@ describe("generic fan-in skip cascade", () => {
         { id: "validation", on: ["succeeded"] },
       ],
     };
-    // Continuation of the case above: validation has now also settled
-    // (succeeded), so every predecessor edge of `synthesize` is terminal.
-    // research resolved "skipped", which its succeeded-only edge can never
-    // accept, so the join is permanently unsatisfiable and must be
-    // force-skipped by the stalled-join sweep.
     const states = new Map<string, StageScheduleState>([
       ["clarify", "succeeded"],
       ["research", "skipped"],
       ["validation", "succeeded"],
       ["synthesize", "pending"],
     ]);
+    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
+    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+      true,
+    );
+  });
+
+  it("does not stalled-skip a join when a predecessor failed and every edge is terminal", () => {
+    const dag = acceptedDiamondDag();
+    dag.nodes[3] = {
+      ...dag.nodes[3]!,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ],
+    };
+    const states = new Map<string, StageScheduleState>([
+      ["clarify", "succeeded"],
+      ["research", "failed"],
+      ["validation", "succeeded"],
+      ["synthesize", "pending"],
+    ]);
+    expect(pickStalledJoinSkips(dag, states)).toEqual([]);
+    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+      false,
+    );
+  });
+
+  it("stalled-skips a join when every parent is skipped", () => {
+    const dag = acceptedDiamondDag();
+    dag.nodes[3] = {
+      ...dag.nodes[3]!,
+      needsEdges: [
+        { id: "research", on: ["succeeded"] },
+        { id: "validation", on: ["succeeded"] },
+      ],
+    };
+    const states = new Map<string, StageScheduleState>([
+      ["clarify", "succeeded"],
+      ["research", "skipped"],
+      ["validation", "skipped"],
+      ["synthesize", "pending"],
+    ]);
     expect(pickStalledJoinSkips(dag, states)).toEqual(["synthesize"]);
+    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+      false,
+    );
   });
 
   it("does not flag a join as stalled once every predecessor settles into a satisfiable state", () => {
@@ -611,16 +671,11 @@ describe("generic fan-in scheduler", () => {
     );
   });
 
-  it("keeps a join pending across two independent, sequentially-resolving forks", async () => {
-    // Regression for the exact shape that exposed the premature-skip bug in
-    // production (examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml):
-    // two SEQUENTIAL, independent fork stages both feed one join. clarify
-    // (route_select: one) resolves immediately and skip-cascades branch-a,
-    // while branch-b (route_select: subset, allow_none) -- an entirely
-    // separate, later-resolving fork -- is still gated/pending. join-doc's
-    // three parents (branch-a directly, path-a/path-b behind branch-b) span
-    // both forks, so it must stay pending until every one of them is
-    // terminal, not just the first (branch-a) to resolve.
+  it("keeps a join pending across two sequential fan-outs until every parent is terminal", async () => {
+    // Sequential fan-out into a join: clarify fans out to branch-a and
+    // branch-b; branch-b fans out to path-a and path-b. join-doc's three
+    // parents (branch-a, path-a, path-b) must all be terminal before the
+    // join runs. The join runs if at least one parent succeeded.
     const root = await mkdtemp(path.join(tmpdir(), "sf-two-forks-join-"));
     let releaseBranchB: () => void = () => undefined;
     const branchBGate = new Promise<void>((resolve) => {
@@ -628,21 +683,17 @@ describe("generic fan-in scheduler", () => {
     });
     const agent = gatedFanInAgent({
       behaviorsByStage: {
-        clarify: [
-          {
-            type: "emit",
-            envelope: okEnvelope("clarify-ok", { fork_choice: ["branch-b"] }),
-          },
-        ],
+        clarify: [{ type: "emit", envelope: okEnvelope("clarify-ok") }],
+        "branch-a": [{ type: "emit", envelope: okEnvelope("branch-a-ok") }],
         "branch-b": [
           {
             type: "gate",
             gate: branchBGate,
-            // Mirrors the production run: the second fork chooses none of
-            // its own branches (allow_none: true).
-            envelope: okEnvelope("branch-b-ok", { fork_choice: [] }),
+            envelope: okEnvelope("branch-b-ok"),
           },
         ],
+        "path-a": [{ type: "emit", envelope: okEnvelope("path-a-ok") }],
+        "path-b": [{ type: "emit", envelope: okEnvelope("path-b-ok") }],
         "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
       },
     });
@@ -658,14 +709,8 @@ describe("generic fan-in scheduler", () => {
     });
 
     await waitFor(() => (agent.openCounts.get("branch-b") ?? 0) === 1);
-    await waitFor(async () => {
-      const detail = await store.readRun(runId);
-      return detail.stages.find((s) => s.stage_id === "branch-a")?.status === "skipped";
-    });
+    await waitFor(() => (agent.openCounts.get("branch-a") ?? 0) === 1);
 
-    // branch-a is skip-cascaded from clarify's fork choice, but branch-b
-    // (and therefore path-a/path-b) hasn't resolved yet -- join-doc must NOT
-    // be decided (run or skip) yet.
     await new Promise((r) => setTimeout(r, 80));
     expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
     {
@@ -688,26 +733,21 @@ describe("generic fan-in scheduler", () => {
 
     const detail = await store.readRun(runId);
     expect(detail.stages.find((s) => s.stage_id === "branch-a")?.status).toBe(
-      "skipped",
+      "succeeded",
     );
     expect(detail.stages.find((s) => s.stage_id === "path-a")?.status).toBe(
-      "skipped",
+      "succeeded",
     );
     expect(detail.stages.find((s) => s.stage_id === "path-b")?.status).toBe(
-      "skipped",
+      "succeeded",
     );
-    // None of join-doc's parents ever succeeded (branch-a lost the first
-    // fork, path-a/path-b were never chosen by the second), so join-doc's
-    // own succeeded-only edges can never be satisfied -- it's correctly
-    // skipped too, but only now, after every parent across both forks
-    // actually settled.
     expect(detail.stages.find((s) => s.stage_id === "join-doc")?.status).toBe(
-      "skipped",
+      "succeeded",
     );
-    expect(agent.openCounts.get("join-doc") ?? 0).toBe(0);
+    expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
-  it("skips succeeded-only synthesize when a parent fails and fails the run", async () => {
+  it("keeps succeeded-only synthesize pending when a parent fails and fails the run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-unhandled-"));
     const store = createRunStore({ rootDir: root });
     const agent = gatedFanInAgent({
@@ -742,12 +782,12 @@ describe("generic fan-in scheduler", () => {
       "failed",
     );
     expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
-      "skipped",
+      "pending",
     );
     expect(detail.status).toBe("failed");
   });
 
-  it("runs synthesize after an accepted parent failure and can succeed the run", async () => {
+  it("keeps synthesize pending after an accepted parent failure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-accepted-fail-"));
     let releaseValidation: () => void = () => undefined;
     const validationGate = new Promise<void>((resolve) => {
@@ -767,7 +807,7 @@ describe("generic fan-in scheduler", () => {
         validation: [
           { type: "gate", gate: validationGate, envelope: okEnvelope("v-ok") },
         ],
-        synthesize: [{ type: "emit", envelope: okEnvelope("syn-ok") }],
+        synthesize: [{ type: "throw", message: "synthesize must not run" }],
       },
     });
     const { prepared, store, runId } = await prepareInprocessPipeline(
@@ -787,11 +827,9 @@ describe("generic fan-in scheduler", () => {
 
     releaseValidation();
     const result = await runPromise;
-    expect(result.ok).toBe(true);
-    expect(result.outcome).toBe("succeeded");
-    expect(agent.openCounts.get("synthesize")).toBe(1);
-    const meta = await store.readRunMeta(runId);
-    expect(meta.status).toBe("succeeded");
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe("failed");
+    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
     const detail = await store.readRun(runId);
     expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
       "failed",
@@ -800,12 +838,11 @@ describe("generic fan-in scheduler", () => {
       "succeeded",
     );
     expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
-      "succeeded",
+      "pending",
     );
-    expect(detail.status).toBe("succeeded");
   });
 
-  it("runs synthesize after a fork-skipped parent that accepts skipped", async () => {
+  it("runs synthesize after both fan-out parents succeed", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-accepted-skip-"));
     let releaseValidation: () => void = () => undefined;
     const validationGate = new Promise<void>((resolve) => {
@@ -813,15 +850,8 @@ describe("generic fan-in scheduler", () => {
     });
     const agent = gatedFanInAgent({
       behaviorsByStage: {
-        clarify: [
-          {
-            type: "emit",
-            envelope: okEnvelope("clarify-ok", {
-              fork_choice: ["validation"],
-            }),
-          },
-        ],
-        research: [{ type: "throw", message: "research must stay skipped" }],
+        clarify: [{ type: "emit", envelope: okEnvelope("clarify-ok") }],
+        research: [{ type: "emit", envelope: okEnvelope("r-ok") }],
         validation: [
           { type: "gate", gate: validationGate, envelope: okEnvelope("v-ok") },
         ],
@@ -840,7 +870,7 @@ describe("generic fan-in scheduler", () => {
     });
 
     await waitFor(() => (agent.openCounts.get("validation") ?? 0) === 1);
-    expect(agent.openCounts.get("research") ?? 0).toBe(0);
+    expect(agent.openCounts.get("research") ?? 0).toBe(1);
     expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
 
     releaseValidation();
@@ -850,7 +880,7 @@ describe("generic fan-in scheduler", () => {
     expect(agent.openCounts.get("synthesize")).toBe(1);
     const detail = await store.readRun(runId);
     expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
-      "skipped",
+      "succeeded",
     );
     expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
       "succeeded",

@@ -351,43 +351,45 @@ describe("resolvePipelineDag", () => {
     ).not.toThrow();
   });
 
-  it("AE1: route_select:one on a two-branch stage sets fork on resolved node", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        {
-          id: "decide",
-          entry: true,
-          route_select: "one",
-          route: [{ to: "branch-a" }, { to: "branch-b" }],
-        },
-        { id: "branch-a" },
-        { id: "branch-b" },
-      ],
-      ctx("route-select-one"),
+  it("AE1: route_select is rejected", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          {
+            id: "decide",
+            entry: true,
+            route_select: "one",
+            route: [{ to: "branch-a" }, { to: "branch-b" }],
+          },
+          { id: "branch-a" },
+          { id: "branch-b" },
+        ],
+        ctx("route-select-one"),
+      ),
+    ).toThrow(
+      /stage "decide": "route_select" is no longer supported — listed route targets always run/,
     );
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
-    expect(byId.get("branch-a")?.fork).toBeUndefined();
   });
 
-  it("AE2: route_select:subset with allow_none:true sets fork on resolved node", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        {
-          id: "decide",
-          entry: true,
-          route_select: "subset",
-          allow_none: true,
-          route: [{ to: "b" }, { to: "c" }, { to: "d" }],
-        },
-        { id: "b" },
-        { id: "c" },
-        { id: "d" },
-      ],
-      ctx("route-select-subset"),
+  it("AE2: allow_none is rejected", () => {
+    expect(() =>
+      resolvePipelineDag(
+        [
+          {
+            id: "decide",
+            entry: true,
+            allow_none: true,
+            route: [{ to: "b" }, { to: "c" }, { to: "d" }],
+          },
+          { id: "b" },
+          { id: "c" },
+          { id: "d" },
+        ],
+        ctx("route-select-subset"),
+      ),
+    ).toThrow(
+      /stage "decide": "allow_none" is no longer supported — listed route targets always run/,
     );
-    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("decide")?.fork).toEqual({ select: "subset", allow_none: true });
   });
 
   it("AE6: existing fan-out pipeline without fork field is unaffected", () => {
@@ -577,25 +579,24 @@ describe("resolvePipelineDag", () => {
     expect(run).toThrow(/clonable/);
   });
 
-  it("allows route_select and clonable on the same entry", () => {
+  it("allows clonable on a fan-out entry without synthesizing fork", () => {
     const { dag } = resolvePipelineDag(
       [
         { id: "detect", entry: true, route: [{ to: "author" }] },
         {
           id: "author",
           clonable: true,
-          route_select: "one",
           route: [{ to: "collect-a" }, { to: "collect-b" }],
         },
         { id: "collect-a" },
         { id: "collect-b" },
       ],
-      ctx("route-select-and-clonable"),
+      ctx("fan-out-and-clonable"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
     expect(byId.get("author")?.clonable).toBe(true);
     expect(byId.get("author")?.clone_cap).toBe(5);
-    expect(byId.get("author")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("author")?.fork).toBeUndefined();
   });
 });
 
@@ -720,12 +721,13 @@ describe("loadPipeline negative DAG fixtures", () => {
 });
 
 describe("loadPipeline fork fixtures", () => {
-  it("fork-uses pipeline loads and sets fork on the deciding node", async () => {
+  it("fork-uses pipeline loads as fan-out with no node.fork", async () => {
     const { dag } = await loadPipeline(
       path.join(owned, "fork-uses/fork-demo.pipeline.yaml"),
     );
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("decide")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("decide")?.fork).toBeUndefined();
+    expect(dag.childrenOf.decide).toEqual(["branch-a", "branch-b"]);
     expect(byId.get("branch-a")?.fork).toBeUndefined();
     expect(byId.get("branch-b")?.fork).toBeUndefined();
   });
@@ -745,7 +747,8 @@ describe("loadPipeline clonable fixtures", () => {
   it("AE7: fork-one-of-two leaves clonable fields absent on every node", async () => {
     const { dag } = await loadPipeline(pipelinePath("fork-one-of-two"));
     const byId = new Map(dag.nodes.map((node) => [node.id, node]));
-    expect(byId.get("clarify")?.fork).toEqual({ select: "one", allow_none: false });
+    expect(byId.get("clarify")?.fork).toBeUndefined();
+    expect(dag.childrenOf.clarify).toEqual(["design-doc", "implementation-plan"]);
     for (const node of dag.nodes) {
       expect(node.clonable).toBeUndefined();
       expect(node.clone_cap).toBeUndefined();

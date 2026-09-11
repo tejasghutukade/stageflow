@@ -1,26 +1,30 @@
 # route wiring smoke test
 
-Ten small, self-contained pipelines that together cover the `route`-based pipeline wiring migration's YAML surface, plus sixteen deliberately-invalid ones that each trigger one specific rejection error.
+Ten small, self-contained pipelines that together cover the `route`-based pipeline wiring YAML surface, plus sixteen deliberately-invalid ones that each trigger one specific rejection error.
 
 - The 10 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog (the directory is listed once; new `*.pipeline.yaml` files dropped in here are picked up automatically), so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
 - The 16 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list — **they will not show up in the UI on purpose**, so they don't clutter the picker or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure; since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file. They're CLI-only, via `sf validate --pipeline <path>`.
 
 ## Patterns covered — which pipeline for which feature
 
-If you think of this in classic workflow-pattern terms: **AND** = unconditional fan-out/fan-in (every branch always runs, the join waits for all of them) vs. **OR** = `route_select`-driven branching (the stage's own decision picks one or a subset, the rest are skipped). There is no "OR-join" in this system by design — a join with multiple parents always waits for *every* one of them (an unpicked branch still counts once it resolves to `skipped`); that was a deliberate call made during the design of this migration, not a gap.
+`route` is declarative wiring. Listed forward `to:` targets **always all run** when the source reaches a matching `on:` state (default `succeeded` only). That is unconditional fan-out. There is no agent `fork_choice` for catalog pipelines, and `route_select` / `allow_none` are rejected. Conditional / exclusive routing is future work.
+
+A join with multiple parents waits for *every* parent to become terminal. It runs if at least one parent succeeded (skipped parents do not block; their envelopes are omitted). It stays pending if a parent failed. It skips only if every parent skipped.
+
+State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), which is still allowed.
 
 | Pipeline ID | File | Demonstrates |
 |---|---|---|
-| `route-demo-core` | `01-core-routing.pipeline.yaml` | The broadest single flow: entry, forward routing, loop (`require_continue`/`resume`), `route_select: one`, `route_select: subset`+`allow_none`, fan-in join. `ship`'s subset pick has come back empty every run so far, so you won't see a `notify-*` stage actually execute here — that's what `05` is for. |
+| `route-demo-core` | `01-core-routing.pipeline.yaml` | The broadest single flow: entry, forward routing, loop (`require_continue`/`resume`), unconditional fan-out from `qa` and `ship`, fan-in join. After qa succeeds, both `ship` and `request-changes` run. After ship succeeds, all three notify stages run. `close` fans in those four parents. |
 | `route-demo-on-gate` | `02-on-gating.pipeline.yaml` | `on: [succeeded]` / `on: [failed]` state-gated routing, declared on the source stage. |
 | `route-demo-two-entries` | `03-two-entry-points.pipeline.yaml` | Multiple independent `entry: true` roots. |
 | `route-demo-entry-false` | `04-entry-false-equivalent-to-omitted.pipeline.yaml` | `entry: false` behaves like omitting the key (code-review fix). |
-| `route-demo-fork-choice` | `05-fork-choice.pipeline.yaml` | **OR pattern.** Deterministic prompts so `route_select: one` and `route_select: subset`+`allow_none` reliably make a real, non-trivial pick every run — run this to actually *watch* a branch execute, not just prove the wiring is valid. |
-| `route-demo-fan-out-fan-in` | `06-fan-out-fan-in.pipeline.yaml` | **AND pattern.** True parallel fan-out (no `route_select` — all 3 branches always run) into a join that waits for and combines all 3 real outputs. |
+| `route-demo-fork-choice` | `05-fork-choice.pipeline.yaml` | Larger unconditional fan-out: `triage` lists two follow-ups; `quick-fix` lists three. All listed `to:` targets run. Overlaps `06` on purpose — a bigger fan-out graph in one file. |
+| `route-demo-fan-out-fan-in` | `06-fan-out-fan-in.pipeline.yaml` | Parallel fan-out (all 3 branches always run) into a join that waits for and combines all 3 real outputs. |
 | `route-demo-loop-human-decision` | `07-loop-human-decision.pipeline.yaml` | The loop config variants `01` doesn't cover: `on_max_replays: wait_for_human` + `replay_session: new_session`. Reliably parks the run waiting for a human decision — exercises the HITL UI flow (`sf runs answer`), not a bug/stuck state. |
-| `route-demo-skip-and-multi-on` | `08-skip-fallback-and-multi-on-gate.pipeline.yaml` | Two more `on:` shapes `02` doesn't cover: `on: [skipped]` (a fallback stage that runs *because* its sibling was never chosen, not because it succeeded) and `on: [succeeded, failed]` (a "run either way" multi-state gate). |
+| `route-demo-skip-and-multi-on` | `08-skip-fallback-and-multi-on-gate.pipeline.yaml` | `decide` fans out to both `risky-step` and `safe-step`. `risky-step` is a leaf. `done` stays only on the safe-step arm (not a join across both). |
 | `route-demo-multi-loop-targets` | `09-multi-loop-targets.pipeline.yaml` | Two *different* stages (`review`, `qa`) each declaring their own loop entry back to the *same* ancestor — `qa` loops to a stage two hops back, not its immediate parent. |
-| `route-demo-uses-dialect-fork` | `10-uses-dialect-fork.pipeline.yaml` | `route`/`route_select`/`entry` combined with the `uses:` external-stage-file dialect — every other pipeline here uses inline `system_prompt`/`model` bodies instead. |
+| `route-demo-uses-dialect-fork` | `10-uses-dialect-fork.pipeline.yaml` | `route`/`entry` combined with the `uses:` external-stage-file dialect — every other pipeline here uses inline `system_prompt`/`model` bodies instead. Both branches always run. |
 
 ## Important: use the local build, not your global `sf`
 
@@ -45,12 +49,12 @@ If you want the bare `sf`/`stageflow` command itself to point at this worktree (
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml --strict
 ```
 Expect: **Validation passed.** One pipeline, most of the new surface in one realistic flow:
-`plan -> implement -> review` (review's `route` mixes a normal forward entry to `qa` with a `type: loop` entry back to `implement`, `max_replays: 2`, `on_max_replays: require_continue`, `replay_session: resume`) `-> qa` (`route_select: one` — picks `ship` or `request-changes`) `-> ship` (`route_select: subset` + `allow_none: true` — picks any of `notify-slack`/`notify-email`/`update-changelog`, or none) `-> close` (fan-in: waits on all four of `request-changes`/`notify-slack`/`notify-email`/`update-changelog`, most of which resolve "skipped" rather than "succeeded" — that still satisfies the implicit-AND join).
+`plan -> implement -> review` (review's `route` mixes a normal forward entry to `qa` with a `type: loop` entry back to `implement`, `max_replays: 2`, `on_max_replays: require_continue`, `replay_session: resume`) `-> qa` (fans out to both `ship` and `request-changes`) `-> ship` (fans out to `notify-slack`/`notify-email`/`update-changelog`) `-> close` (fan-in of request-changes plus the three notify stages; all four run on the happy path. The join waits until every parent is terminal, then runs if at least one succeeded. It stays pending if a parent failed. It does not run if every parent skipped).
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/02-on-gating.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** `run-tests` routes to `ship` on `succeeded` and to `hotfix` on `failed` — the `on` gate is declared on the *source* stage now, not the target's old `needs`. (Distinct mechanism from `route_select`/`fork_choice` — state-gated, not envelope-chosen.)
+Expect: **Validation passed.** `run-tests` routes to `ship` on `succeeded` and to `hotfix` on `failed` — the `on` gate is declared on the *source* stage now, not the target's old `needs`. This is the supported way to run different successors for success vs failure.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/03-two-entry-points.pipeline.yaml --strict
@@ -65,12 +69,12 @@ Expect: **Validation passed.** `draft` explicitly writes `entry: false`; this mu
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/05-fork-choice.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** The **OR pattern**, made meaningful: `01-core-routing`'s `ship` decision has `allow_none: true` and (every run so far) the model has chosen nothing, so you never actually see a branch execute. This pipeline's prompts are written to be unambiguous, so the model reliably makes a real, non-trivial pick every run instead: `triage` (`route_select: one`, no `allow_none` — a mandatory pick) always chooses `quick-fix` over `big-project`; `quick-fix` (`route_select: subset` + `allow_none: true`, same shape as `ship`) always chooses `notify-team` + `update-docs` but not `schedule-followup` — a genuine subset, never empty and never everything. `close` fans in across a mix of two stages that actually ran and one that was skipped.
+Expect: **Validation passed.** Unconditional fan-out: `triage` lists `quick-fix` and `big-project` — both always run. `quick-fix` lists `notify-team`/`update-docs`/`schedule-followup` — all three always run. `close` fans in those three notify stages. `big-project` is a leaf.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/06-fan-out-fan-in.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** The **AND pattern**: `kickoff` has no `route_select` at all, so its `route` list of three targets (`research`/`analysis`/`review-notes`) all fire unconditionally — true parallel fan-out, no skipping. `synthesize` is the fan-in join: it waits for and combines all three, every run, since none of them are ever optional.
+Expect: **Validation passed.** `kickoff`'s `route` list of three targets (`research`/`analysis`/`review-notes`) all fire unconditionally — parallel fan-out, no skipping. `synthesize` is the fan-in join: it waits for and combines all three, every run.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/07-loop-human-decision.pipeline.yaml --strict
@@ -80,7 +84,7 @@ Expect: **Validation passed.** The loop config variants `01-core-routing` doesn'
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/08-skip-fallback-and-multi-on-gate.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** `decide` (`route_select: one`, always picks `safe-step`) skip-cascades `risky-step`; `risky-step`'s own route entry to `cleanup-if-skipped` has `on: [skipped]`, so it fires *because* `risky-step` never ran — a fallback/cleanup pattern, not a success-gated one. Separately, `safe-step`'s route entry to `notify-either-way` has `on: [succeeded, failed]`, firing regardless of which terminal state `safe-step` lands in. `done` is a fan-in of both.
+Expect: **Validation passed.** `decide` lists both `risky-step` and `safe-step`, so both always run. `risky-step` is a leaf. `safe-step` routes to `notify-either-way` on success (the default `on:`), then `done`. `done` is only on that arm, not a join across both.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/09-multi-loop-targets.pipeline.yaml --strict
@@ -90,7 +94,7 @@ Expect: **Validation passed.** `review` and `qa` each declare their own `type: l
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/10-uses-dialect-fork.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** Same shape as `05-fork-choice`'s `triage` decision (`route_select: one`, deterministic), but every stage body lives in an external file under `stages/` and is loaded via `uses:` instead of inline `system_prompt`/`model` — confirms `route`/`route_select`/`entry` work identically under both stage-body dialects.
+Expect: **Validation passed.** Same fan-out shape as `05-fork-choice`'s `triage` (both listed branches always run), but every stage body lives in an external file under `stages/` and is loaded via `uses:` instead of inline `system_prompt`/`model` — confirms `route`/`entry` work identically under both stage-body dialects.
 
 ## Rejected pipelines (should fail with the given message)
 
@@ -102,7 +106,7 @@ Expect: `stage "review": "needs" is no longer supported — declare the wiring o
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/02-reject-legacy-fork.pipeline.yaml --strict
 ```
-Expect: `stage "decide": "fork" is no longer supported — use "route_select"/"allow_none" alongside "route" instead`
+Expect: `stage "decide": "fork" is no longer supported — use "route" instead; listed route targets always run`
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/03-reject-legacy-feedback-loop.pipeline.yaml --strict
@@ -122,7 +126,7 @@ Expect: `stage "orphan" is unreachable: not marked entry: true and not targeted 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/06-reject-allow-none-without-route-select.pipeline.yaml --strict
 ```
-Expect: `stage "decide": allow_none requires route_select` — the other code-review fix: `allow_none` used to be silently dropped (no error, no effect) when declared without `route_select`.
+Expect: `stage "decide": "allow_none" is no longer supported — listed route targets always run`
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/07-reject-cycle.pipeline.yaml --strict
@@ -137,7 +141,7 @@ Expect: `stage "b": feedback_loop target "c" must be an earlier ancestor` — `b
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/09-reject-route-select-leaf.pipeline.yaml --strict
 ```
-Expect: `stage "decide": route_select requires at least two forward route entries` — `route_select: one` on a stage with only one forward `route` entry.
+Expect: `stage "decide": "route_select" is no longer supported — listed route targets always run` — the field itself is unsupported, including on a leaf.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/10-reject-loop-clonable-source.pipeline.yaml --strict
@@ -184,13 +188,13 @@ npx tsx src/cli.ts ui
 
 Start a new run, pick any of the 10 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
 
-- Want to watch `fork_choice` branch to a real, executing stage? Run `route-demo-fork-choice`.
+- Want to watch a larger fan-out (triage plus three follow-ups from quick-fix)? Run `route-demo-fork-choice`.
 - Want to watch true parallel fan-out/fan-in? Run `route-demo-fan-out-fan-in`.
 - Want to practice the human-in-the-loop decision flow? Run `route-demo-loop-human-decision` — it *will* stop and wait for you; that's expected, use `sf runs waiting` to find it and `sf runs answer --run <runId> --stage review --answer '{"action":"continue"}'` (or the UI's own decide control) to unblock it.
-- Want to see a fallback-on-skip and a multi-state `on:` gate? Run `route-demo-skip-and-multi-on`.
+- Want to see both arms of a fan-out run, with `done` only on the safe-step arm? Run `route-demo-skip-and-multi-on`.
 - Want to see two loop points converging on one ancestor? Run `route-demo-multi-loop-targets` — it also parks briefly for a replay, same idea as `07`, but resolves itself (`require_continue`) rather than needing a human.
 - Want to confirm the `uses:` dialect works the same as inline stage bodies? Run `route-demo-uses-dialect-fork`.
-- Want the broadest single flow? Run `route-demo-core` — but note its `ship` decision has consistently picked nothing so far, so you won't see a `notify-*` stage execute there.
+- Want the broadest single flow, including notify stages that all run after ship? Run `route-demo-core`.
 
 Or run one directly from the CLI instead of the UI:
 
@@ -204,7 +208,7 @@ npx tsx src/cli.ts run \
 
 A few things intentionally aren't in this catalog because they're orthogonal to the `route` migration (pre-existing features the migration didn't touch, not gaps in route coverage):
 
-- **`clonable`/`clone_cap`** (parallel/sequential clone fan-out) — a separate mechanism from `route`/`fork_choice`. See `examples/clonable-fanout/` instead (currently still on legacy `needs` syntax — one of the pre-existing examples affected by the CI-breaking gap noted in the handoff doc).
+- **`clonable`/`clone_cap`** (parallel/sequential clone fan-out) — a separate mechanism from `route`. See `examples/clonable-fanout/` instead (currently still on legacy `needs` syntax — one of the pre-existing examples affected by the CI-breaking gap noted in the handoff doc).
 - **`gate_kinds`** / non-`feedback_loop` HITL gates — a stage-body concept, unrelated to wiring.
 - **`io`/`verify`/`on_verify_fail`** completion contracts interacting with `route` — these fields pass through the migration completely unchanged; already covered by the existing (non-route) test suite.
 - **`skill`/`mcp`** fields on a routed stage — capability wiring, unrelated to routing wiring.

@@ -2,7 +2,6 @@ id: fork-route-cascade
 stages:
   - id: clarify
     entry: true
-    route_select: one
     route:
       - to: design-doc
       - to: implementation-plan

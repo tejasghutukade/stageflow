@@ -322,11 +322,7 @@ describe("resolvePriorEnvelope clone join list (U2 / U5)", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.prior).toBeNull();
-    expect(result.joinPriors?.map((e) => e.summary)).toEqual([
-      "a",
-      "b-fail",
-      "c",
-    ]);
+    expect(result.joinPriors?.map((e) => e.summary)).toEqual(["a", "c"]);
     expect(result.priorEnvelopesByStage).toBeUndefined();
   });
 
@@ -498,7 +494,7 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     expect(result.priorEnvelopesByStage?.research).toEqual(research);
   });
 
-  it("failed parent uses emitted failure envelope", async () => {
+  it("failed parent is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -531,10 +527,13 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual(emitted);
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(result.priorEnvelopesByStage?.validation).toEqual(
+      okEnvelope("from-validation"),
+    );
   });
 
-  it("failed parent without envelope uses synthetic failure from persisted reason", async () => {
+  it("failed parent without envelope is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -561,14 +560,13 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "failure",
-      summary: "validation crashed",
-      artifacts: [],
-    });
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(result.priorEnvelopesByStage?.validation).toEqual(
+      okEnvelope("from-validation"),
+    );
   });
 
-  it("skipped parent uses synthetic skipped and ignores an emitted success envelope", async () => {
+  it("skipped parent is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -597,17 +595,16 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "skipped",
-      summary: "stage was skipped",
-      artifacts: [],
-    });
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual([
+      "validation",
+    ]);
     expect(result.priorEnvelopesByStage?.validation).toEqual(
       okEnvelope("from-validation"),
     );
   });
 
-  it("does not treat an emitted success envelope as a failed parent's terminal", async () => {
+  it("does not merge a failed parent's emitted success envelope", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -637,11 +634,10 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "failure",
-      summary: "agent crashed",
-      artifacts: [],
-    });
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(result.priorEnvelopesByStage?.validation).toEqual(
+      okEnvelope("from-validation"),
+    );
   });
 
   it("clonable parent under a generic join is a nested list in clone-list order", async () => {
@@ -704,7 +700,7 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     );
   });
 
-  it("skipped clone group under a generic join supplies an empty list", async () => {
+  it("skipped clone group under a generic join is omitted", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -738,7 +734,10 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual([]);
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual([
+      "validation",
+    ]);
     expect(result.priorEnvelopesByStage?.validation).toEqual(
       okEnvelope("from-validation"),
     );

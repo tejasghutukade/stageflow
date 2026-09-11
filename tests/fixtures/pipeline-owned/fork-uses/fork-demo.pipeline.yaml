@@ -3,7 +3,6 @@ stages:
   - id: decide
     uses: ./decide.yaml
     entry: true
-    route_select: one
     route:
       - to: branch-a
       - to: branch-b

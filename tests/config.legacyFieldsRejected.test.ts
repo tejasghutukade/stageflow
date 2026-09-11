@@ -3,7 +3,7 @@
  * `feedback_loop` are no longer valid pipeline-stage input fields. Every
  * stage declaring one of them must fail to load with a clear, specific
  * error naming the offending field and pointing at `route` (or
- * `route_select`/`allow_none`, or a `type: loop` route entry) as the
+ * `route` (listed targets always run), or a `type: loop` route entry) as the
  * replacement.
  *
  * Covers both parsing seams that accept raw pipeline stage input:
@@ -52,7 +52,7 @@ describe("legacy needs/fork/feedback_loop fields are hard-rejected: raw-ref path
     );
   });
 
-  it('rejects "fork" with a message naming the field and pointing at route_select/allow_none', () => {
+  it('rejects "fork" with a message naming the field and pointing at route', () => {
     expect(() =>
       resolvePipelineDag(
         [
@@ -62,7 +62,7 @@ describe("legacy needs/fork/feedback_loop fields are hard-rejected: raw-ref path
         ctx("legacy-fork"),
       ),
     ).toThrow(
-      /stage "decide": "fork" is no longer supported — use "route_select"\/"allow_none" alongside "route" instead/,
+      /stage "decide": "fork" is no longer supported — use "route" instead; listed route targets always run/,
     );
   });
 
@@ -116,7 +116,7 @@ describe("legacy needs/fork/feedback_loop fields are hard-rejected: YAML path (l
     );
   });
 
-  it('rejects "fork" in YAML with a message naming the field and pointing at route_select/allow_none', async () => {
+  it('rejects "fork" in YAML with a message naming the field and pointing at route', async () => {
     const root = await writeTempCatalog({
       "demo.pipeline.yaml": [
         "id: demo",
@@ -137,7 +137,7 @@ describe("legacy needs/fork/feedback_loop fields are hard-rejected: YAML path (l
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues[0]?.message).toMatch(
-      /stage "decide": "fork" is no longer supported — use "route_select"\/"allow_none" alongside "route" instead/,
+      /stage "decide": "fork" is no longer supported — use "route" instead; listed route targets always run/,
     );
   });
 

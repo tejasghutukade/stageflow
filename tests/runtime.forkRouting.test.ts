@@ -280,16 +280,16 @@ describe("applyForkSkipsFromEnvelopes", () => {
 // ─── Section 2: Integration tests ──────────────────────────────────────────
 
 describe("fork routing integration", () => {
-  it("AE1+AE5: exclusive fork — chosen path runs, unchosen and cascade skipped, run succeeds", async () => {
+  it("AE1: exclusive catalog fan-out — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae1-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
-        { type: "emit", envelope: okEnvelope("clarify-ok", { fork_choice: ["design-doc"] }) },
+        { type: "emit", envelope: okEnvelope("clarify-ok") },
       ],
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "throw", message: "should not be opened" }],
-      "join-doc": [{ type: "throw", message: "should not be opened" }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -307,26 +307,26 @@ describe("fork routing integration", () => {
 
     expect(agent.openCounts.get("clarify")).toBe(1);
     expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
+    expect(agent.openCounts.get("join-doc")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE2: subset fork — two chosen run, one skipped, run succeeds", async () => {
+  it("AE2: subset catalog fan-out — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae2-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
         {
           type: "emit",
-          envelope: okEnvelope("clarify-ok", { fork_choice: ["design-doc", "implementation-plan"] }),
+          envelope: okEnvelope("clarify-ok"),
         },
       ],
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
-      "join-doc": [{ type: "throw", message: "should not be opened" }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -344,21 +344,21 @@ describe("fork routing integration", () => {
 
     expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("join-doc")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE3: empty choice allowed — all skipped, run succeeds", async () => {
+  it("AE3: catalog fan-out ignores empty fork_choice — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae3-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
         { type: "emit", envelope: okEnvelope("clarify-ok", { fork_choice: [] }) },
       ],
-      "design-doc": [{ type: "throw", message: "should not be opened" }],
-      "implementation-plan": [{ type: "throw", message: "should not be opened" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -374,14 +374,14 @@ describe("fork routing integration", () => {
       return meta.status === "succeeded";
     });
 
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE8: retry re-decides fork — unchosen successors reset, new choice runs", async () => {
+  it("AE8: retry after failure then fans out all listed successors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae8-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
@@ -389,10 +389,10 @@ describe("fork routing integration", () => {
         { type: "emit", envelope: failEnvelope("clarify-fail") },
         {
           type: "emit",
-          envelope: okEnvelope("clarify-retry", { fork_choice: ["implementation-plan"] }),
+          envelope: okEnvelope("clarify-retry"),
         },
       ],
-      "design-doc": [{ type: "throw", message: "design-doc should not be opened" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
@@ -419,7 +419,7 @@ describe("fork routing integration", () => {
     });
 
     expect(agent.openCounts.get("clarify")).toBe(2);
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
     expect(agent.openCounts.get("join-doc")).toBe(1);
 
@@ -427,7 +427,7 @@ describe("fork routing integration", () => {
     expect(detail.status).toBe("succeeded");
   }, 15000);
 
-  it("AE8-success-retry: deciding stage succeeds choosing A, retried choosing B — previously skipped B now runs", async () => {
+  it("AE8-success-retry: retry of a succeeded fan-out parent re-runs listed successors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae8-sr-"));
     const store = createRunStore({ rootDir: root });
 
@@ -474,10 +474,10 @@ describe("fork routing integration", () => {
       clarify: [
         {
           type: "emit",
-          envelope: okEnvelope("clarify-retry", { fork_choice: ["implementation-plan"] }),
+          envelope: okEnvelope("clarify-retry"),
         },
       ],
-      "design-doc": [{ type: "throw", message: "design-doc must not run after retry" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-retry") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
@@ -499,12 +499,12 @@ describe("fork routing integration", () => {
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("succeeded");
     expect(agent.openCounts.get("clarify")).toBe(1);
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
     expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
-  it("AE-hydration: fork skips re-applied from stored envelope before first loop tick", async () => {
+  it("AE-hydration: catalog fan-out runs all listed successors from stored envelope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-hydration-"));
     const store = createRunStore({ rootDir: root });
 
@@ -525,7 +525,7 @@ describe("fork routing integration", () => {
     await store.writeEnvelope(
       run.runId,
       "clarify",
-      okEnvelope("clarify-ok", { fork_choice: ["design-doc"] }),
+      okEnvelope("clarify-ok"),
     );
     await store.updateRunStatus(run.runId, "running");
 
@@ -541,8 +541,8 @@ describe("fork routing integration", () => {
 
     const agent = stageKeyedAgent({
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "throw", message: "implementation-plan must not be opened" }],
-      "join-doc": [{ type: "throw", message: "join-doc must not be opened" }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const result = await runPipelineDag({
@@ -562,7 +562,7 @@ describe("fork routing integration", () => {
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("succeeded");
     expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
+    expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 });

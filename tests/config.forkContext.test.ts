@@ -27,22 +27,47 @@ describe("resolveForkEmitContext", () => {
     expect(resolveForkEmitContext(dag, "design-doc")).toBeUndefined();
   });
 
-  it("C2: fork stage with select one and two children returns full context", async () => {
+  it("C2: YAML fan-out stage returns undefined fork context", async () => {
     const { dag } = await loadPipeline(
       path.join(FIXTURES_ROOT, "pipelines/fork-one-of-two.pipeline.yaml"),
       { cwd: FIXTURES_ROOT },
     );
-    expect(resolveForkEmitContext(dag, "clarify")).toEqual({
-      immediateSuccessorIds: ["design-doc", "implementation-plan"],
-      forkShape: { cardinality: "one", allowNone: false },
-    });
+    expect(resolveForkEmitContext(dag, "clarify")).toBeUndefined();
   });
 
-  it("C3: fork stage with allow_none true sets allowNone on shape", async () => {
-    const { dag } = await loadPipeline(
-      path.join(FIXTURES_ROOT, "pipelines/fork-route-allow-none.pipeline.yaml"),
-      { cwd: FIXTURES_ROOT },
-    );
+  it("C3: programmatic fork stage with allow_none true sets allowNone on shape", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "clarify",
+          needs: null,
+          needsEdges: [],
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "subset", allow_none: true },
+        },
+        {
+          id: "design-doc",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 1,
+        },
+        {
+          id: "implementation-plan",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 2,
+        },
+      ],
+      roots: ["clarify"],
+      childrenOf: {
+        clarify: ["design-doc", "implementation-plan"],
+        "design-doc": [],
+        "implementation-plan": [],
+      },
+    };
     expect(resolveForkEmitContext(dag, "clarify")).toEqual({
       immediateSuccessorIds: ["design-doc", "implementation-plan"],
       forkShape: { cardinality: "subset", allowNone: true },
@@ -50,9 +75,7 @@ describe("resolveForkEmitContext", () => {
   });
 
   it("C4: single-child fork stage returns one successor ID", () => {
-    // route_select requires >=2 forward route entries (ticket 02), so a
-    // single-successor fork node can no longer be authored through
-    // resolvePipelineDag's route/route_select front end. This exercises
+    // Catalog YAML cannot produce node.fork. This exercises
     // resolveForkEmitContext's own handling of that resolved-DAG shape
     // directly, the same way the hand-built-DAG tests below this describe
     // block do.

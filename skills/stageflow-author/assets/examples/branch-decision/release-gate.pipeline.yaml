@@ -4,10 +4,11 @@ stages:
   - id: run-tests
     uses: ./run-tests.yaml
     entry: true
-    route_select: one
     route:
-      - to: hotfix
       - to: ship
+        on: [succeeded]
+      - to: hotfix
+        on: [failed]
   - id: hotfix
     uses: ./hotfix.yaml
   - id: ship

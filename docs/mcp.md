@@ -487,7 +487,6 @@ Describe a pipeline DAG from a filesystem pipeline path (same locator style as `
     {
       "id": "clarify",
       "needs": null,
-      "fork": { "select": "subset", "allow_none": false },
       "gate_kinds": ["free_text"]
     },
     {

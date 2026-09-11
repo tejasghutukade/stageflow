@@ -1,11 +1,7 @@
 id: route-demo-fan-out-fan-in
-# AND-split / AND-join: unconditional parallel fan-out (no route_select --
-# kickoff's route lists ALL three targets, so ALL three always run) feeding
-# one join that waits for ALL of them to genuinely succeed. This is the
-# "true AND" pattern -- distinct from 05-fork-choice's "OR" pattern
-# (route_select picks one-or-a-subset, the rest are skipped) and from
-# 01-core-routing's close (also an AND-join, but most of its parents
-# resolve "skipped" rather than actually running).
+# Unconditional parallel fan-out: kickoff's route lists three targets, so
+# all three always run, feeding one join that waits for all of them.
+# Multiple forward `to:` entries always fan out this way.
 stages:
   - id: kickoff
     entry: true
@@ -34,9 +30,8 @@ stages:
     system_prompt: Workstream 3 (review notes). Produce one short finding.
     model: cursor/auto
 
-  # AND-join: waits for research, analysis, AND review-notes -- all three,
-  # every time, since none of them are ever skipped (kickoff has no
-  # route_select, so nothing here is optional).
+  # Fan-in: waits for research, analysis, and review-notes — all three,
+  # every time, since none of them are skipped.
   - id: synthesize
     system_prompt: Combine all three workstreams' findings into one summary.
     model: cursor/auto

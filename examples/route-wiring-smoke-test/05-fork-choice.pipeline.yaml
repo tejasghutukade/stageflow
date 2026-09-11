@@ -1,41 +1,29 @@
 id: route-demo-fork-choice
 stages:
-  # route_select: one, no allow_none -- the model MUST pick exactly one.
-  # Prompted deterministically so this reliably picks quick-fix every run,
-  # so you always see a real branch execute (unlike ship's allow_none: true
-  # in 01-core-routing, which is allowed to -- and has -- picked nothing).
+  # Listed route targets always run after triage succeeds.
   - id: triage
     entry: true
-    route_select: one
     route:
       - to: quick-fix
       - to: big-project
     system_prompt: >
-      Decide how to categorize this work: exactly one of "quick-fix" (small,
-      low-risk) or "big-project" (large, needs planning). For this smoke
-      test, always choose quick-fix.
+      Categorize this work. Both the quick-fix and big-project follow-ups
+      run next.
     model: cursor/auto
 
   - id: big-project
-    system_prompt: Kick off planning for the big project. (Not reached in this smoke test -- triage always picks quick-fix.)
+    system_prompt: Kick off planning for the big project.
     model: cursor/auto
 
-  # route_select: subset + allow_none: true -- same shape as ship's decision
-  # in 01-core-routing, but prompted deterministically so the pick is never
-  # empty, demonstrating a meaningful (non-trivial, non-empty) subset choice.
+  # Listed route targets always run after quick-fix succeeds.
   - id: quick-fix
-    route_select: subset
-    allow_none: true
     route:
       - to: notify-team
       - to: update-docs
       - to: schedule-followup
     system_prompt: >
-      Decide which follow-up actions to take after the quick fix: any subset
-      of notify-team, update-docs, schedule-followup, or none. For this
-      smoke test, always choose notify-team and update-docs, but not
-      schedule-followup -- so the pick is a real subset, never empty and
-      never everything.
+      Apply the quick fix. Notify-team, update-docs, and schedule-followup
+      all run next.
     model: cursor/auto
 
   - id: notify-team
@@ -53,12 +41,11 @@ stages:
   - id: schedule-followup
     route:
       - to: close
-    system_prompt: Schedule a follow-up review. (Not reached in this smoke test.)
+    system_prompt: Schedule a follow-up review.
     model: cursor/auto
 
-  # Fan-in / implicit-AND join across notify-team (runs), update-docs (runs),
-  # schedule-followup (skipped) -- a mix of run and skip feeding one join,
-  # same mechanism as 01-core-routing's close.
+  # Fan-in of notify-team, update-docs, and schedule-followup — all three
+  # run on the happy path.
   - id: close
     system_prompt: Close out the run.
     model: cursor/auto

@@ -95,14 +95,6 @@ export type PipelineStageRef = {
   route?: PipelineRouteEntry[];
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
-  /**
-   * Fork-equivalent selection over this stage's forward `route` entries
-   * (ticket 02, route-based-pipeline-wiring spec). Flat sibling of `route`,
-   * mirroring today's `fork.select` but requires >=2 forward route entries.
-   */
-  route_select?: "one" | "subset";
-  /** Sibling of `route_select`; mirrors today's `fork.allow_none` (default false). */
-  allow_none?: boolean;
 };
 
 /**
@@ -146,8 +138,6 @@ export type NormalizedPipelineStageEntry = {
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
-  route_select?: "one" | "subset";
-  allow_none?: boolean;
   skill?: string;
   mcp?: string[];
   body:
