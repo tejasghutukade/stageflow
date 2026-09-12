@@ -24,8 +24,11 @@ import {
   UnresolvedSchemaRefError,
 } from "../envelope/payloadSchema.js";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
+import type { PreEmitCheck } from "../types/preEmitCheck.js";
+import type { CompiledStageEmitBody } from "../types/stage.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
+import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { LEGACY_CONTRACT_KEYS } from "./legacyYaml.js";
 
 export {
@@ -56,11 +59,8 @@ export const STAGE_FILE_WIRING_KEYS = [
 
 export type YamlDialect = "legacy" | "target" | "invalid" | "neutral";
 
-/** Target YAML compiled onto IR field names (see file comment). */
-export type CompiledTargetContract = {
-  payload_schema?: unknown;
-  clone_input_schema?: unknown;
-  pre_emit_raw?: unknown[];
+/** Target YAML compiled onto typed emit/after/recovery IR fields (see file comment). */
+export type CompiledTargetContract = CompiledStageEmitBody & {
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
 };
@@ -415,11 +415,16 @@ export function compileTargetContract(
   );
   if (!policyOutcome.ok) return policyOutcome;
 
+  let pre_emit_checks: PreEmitCheck[] | undefined;
+  if (verifyOutcome.value.pre_emit_raw !== undefined) {
+    const preEmitOutcome = parsePreEmitChecks(verifyOutcome.value.pre_emit_raw, ctx.label);
+    if (!preEmitOutcome.ok) return preEmitOutcome;
+    pre_emit_checks = preEmitOutcome.value;
+  }
+
   return loadSuccess({
     ...ioOutcome.value,
-    ...(verifyOutcome.value.pre_emit_raw !== undefined
-      ? { pre_emit_raw: verifyOutcome.value.pre_emit_raw }
-      : {}),
+    ...(pre_emit_checks !== undefined ? { pre_emit_checks } : {}),
     ...(policyOutcome.value.completion !== undefined
       ? { completion: policyOutcome.value.completion }
       : {}),
@@ -427,22 +432,4 @@ export function compileTargetContract(
       ? { recovery: policyOutcome.value.recovery }
       : {}),
   });
-}
-
-/** Strip target YAML keys and stamp IR `payload_schema` / `clone_input_schema` / `pre_emit_checks`. */
-export function applyCompiledBody(
-  raw: Record<string, unknown>,
-  compiled: CompiledTargetContract,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (key === "io" || key === "verify" || key === "on_verify_fail") continue;
-    next[key] = value;
-  }
-  if (compiled.payload_schema !== undefined) next.payload_schema = compiled.payload_schema;
-  if (compiled.clone_input_schema !== undefined) {
-    next.clone_input_schema = compiled.clone_input_schema;
-  }
-  if (compiled.pre_emit_raw !== undefined) next.pre_emit_checks = compiled.pre_emit_raw;
-  return next;
 }

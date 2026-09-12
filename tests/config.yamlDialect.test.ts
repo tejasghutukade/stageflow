@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
+import { compileTargetContract } from "../src/config/yamlDialect.js";
 
 const INLINE_IO = [
   "    io:",
@@ -36,6 +37,64 @@ async function writeTempCatalog(files: Record<string, string>): Promise<string> 
 }
 
 describe("YAML dual-read dialect", () => {
+  it("compileTargetContract returns typed emit/after/recovery without stamping the source record", () => {
+    const raw: Record<string, unknown> = {
+      io: {
+        input: { schema: { type: "object" } },
+        output: {
+          schema: {
+            type: "object",
+            properties: { verdict: { type: "string" } },
+            required: ["verdict"],
+          },
+        },
+      },
+      verify: [
+        { id: "approved", type: "gate", kind: "confirm", when: ["emit"] },
+        { id: "report", type: "artifact", path: "report.md", when: ["after"] },
+      ],
+      on_verify_fail: {
+        mode: "repair",
+        max_attempts: 2,
+        retry_safety: "idempotent",
+      },
+    };
+    const compiled = compileTargetContract(raw, {
+      stageId: "plan",
+      label: "plan",
+      category: "pipeline",
+    });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) return;
+    expect(compiled.value.payload_schema).toEqual({
+      type: "object",
+      properties: { verdict: { type: "string" } },
+      required: ["verdict"],
+    });
+    expect(compiled.value.clone_input_schema).toEqual({ type: "object" });
+    expect(compiled.value.pre_emit_checks).toEqual([
+      { id: "approved", type: "gate", kind: "confirm" },
+    ]);
+    expect(compiled.value.completion).toEqual({
+      mode: "all",
+      checks: [{ id: "report", type: "artifact", path: "report.md" }],
+    });
+    expect(compiled.value.recovery).toEqual({
+      mode: "repair",
+      max_attempts: 2,
+      retry_safety: "idempotent",
+      include_failed_checks: true,
+    });
+    expect(raw.payload_schema).toBeUndefined();
+    expect(raw.clone_input_schema).toBeUndefined();
+    expect(raw.pre_emit_checks).toBeUndefined();
+    expect(raw.completion).toBeUndefined();
+    expect(raw.recovery).toBeUndefined();
+    expect(raw.io).toBeDefined();
+    expect(raw.verify).toBeDefined();
+    expect(raw.on_verify_fail).toBeDefined();
+  });
+
   it("loads an inline target entry with io and verify onto IR fields", async () => {
     const root = await writeTempCatalog({
       "demo.pipeline.yaml": [

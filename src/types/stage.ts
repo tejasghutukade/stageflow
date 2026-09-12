@@ -1,6 +1,13 @@
 import type { PreEmitCheck } from "./preEmitCheck.js";
 import type { CloneAction } from "./forkChoice.js";
 
+/** Typed emit/schema fields from `compileTargetContract`. Not catalog YAML keys. */
+export type CompiledStageEmitBody = {
+  payload_schema?: unknown;
+  clone_input_schema?: unknown;
+  pre_emit_checks?: PreEmitCheck[];
+};
+
 export const STAGE_GATE_KINDS = [
   "free_text",
   "confirm",

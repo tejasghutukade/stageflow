@@ -1,6 +1,6 @@
 /**
- * Parse IR `pre_emit_checks` (emit-phase). YAML `verify` emit items are compiled
- * onto this list in yamlDialect.ts before this parser runs.
+ * Parse IR `pre_emit_checks` (emit-phase). Target `verify` emit items are mapped
+ * in yamlDialect.ts then parsed here. Legacy YAML still authors this key.
  */
 import { STAGE_GATE_KINDS, type StageGateKind } from "../types/stage.js";
 import type { PreEmitCheck } from "../types/preEmitCheck.js";

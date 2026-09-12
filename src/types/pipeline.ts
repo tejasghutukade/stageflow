@@ -138,25 +138,28 @@ export type PipelineStageRef = {
 };
 
 /**
- * Pipeline YAML stage entry (both dialects). Target authoring is `io` / `verify`
- * / `on_verify_fail`. The payload_schema / pre_emit_checks / completion /
- * recovery keys are the legacy YAML dialect (and also the IR names after compile).
- * New catalog fields: add target YAML keys here and compile them in yamlDialect.ts.
+ * Catalog YAML stage entry (`io` / `verify` / `on_verify_fail`). Not IR.
+ * Dual-read of `payload_schema` / `pre_emit_checks` / `completion` / `recovery`
+ * stays in `legacyYaml.ts` on the raw record.
  */
-export type PipelineStageYamlEntry = PipelineStageRef & {
+export type PipelineStageYamlEntry = {
+  id?: string;
   uses?: string;
   system_prompt?: string;
   model?: string;
-  payload_schema?: unknown;
   gate_kinds?: StageGateKind[];
-  clone_input_schema?: unknown;
   clone_actions?: CloneAction[];
+  timeout_ms?: number;
   skill?: string;
   mcp?: string[];
+  clonable?: boolean;
+  clone_cap?: number;
+  replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
   io?: StageIoYaml;
   verify?: unknown;
   on_verify_fail?: RecoveryPolicy;
-  pre_emit_checks?: unknown;
 };
 
 export type PipelineIncludeEntry = {

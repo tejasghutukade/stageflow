@@ -1,7 +1,8 @@
 /**
  * Normalize a pipeline `stages:` entry. Target YAML (`io` / `verify` /
- * `on_verify_fail`) compiles onto IR `completion` / `recovery` / body
- * `payload_schema`. Legacy YAML keys are dual-read via legacyYaml.ts.
+ * `on_verify_fail`) compiles onto IR `completion` / `recovery`. Emit/schema
+ * fields stay on the YAML-shaped inline body until `parseStageFields`.
+ * Legacy YAML keys are dual-read via legacyYaml.ts.
  */
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
@@ -13,7 +14,6 @@ import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
 import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
 import {
-  applyCompiledBody,
   compileTargetContract,
   dialectFromKeys,
   mixedDialectIssue,
@@ -239,7 +239,6 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
-    let compiledBody: Record<string, unknown> | undefined;
     let policyOutcome: ReturnType<typeof parseExecutionPolicy>;
     if (dialect === "target") {
       const compiled = compileTargetContract(raw, {
@@ -258,9 +257,6 @@ export function normalizePipelineStageEntries(
           ? { recovery: compiled.value.recovery }
           : {}),
       });
-      if (!uses) {
-        compiledBody = applyCompiledBody(extractBodyRaw(raw), compiled.value);
-      }
     } else {
       const rejected = legacyAuthoringRejected(
         dialect,
@@ -317,7 +313,7 @@ export function normalizePipelineStageEntries(
       const absolutePath = path.resolve(path.dirname(declaringPath), uses);
       body = { kind: "uses", path: uses, absolutePath };
     } else {
-      body = { kind: "inline", raw: compiledBody ?? extractBodyRaw(raw) };
+      body = { kind: "inline", raw: extractBodyRaw(raw) };
     }
 
     const entry: NormalizedPipelineStageEntry = {

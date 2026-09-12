@@ -294,7 +294,7 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.code).toBe("catalog.mixed_yaml_dialect");
   });
 
-  it("maps inline io and after-verify onto payload_schema and completion", () => {
+  it("maps inline io and after-verify onto completion without stamping IR onto body.raw", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
@@ -327,14 +327,18 @@ describe("normalizePipelineStageEntries", () => {
     if (!outcome.ok) return;
     expect(outcome.value[0]?.body.kind).toBe("inline");
     if (outcome.value[0]?.body.kind !== "inline") return;
-    expect(outcome.value[0].body.raw.payload_schema).toEqual({
-      type: "object",
-      properties: { verdict: { type: "string" } },
-      required: ["verdict"],
+    expect(outcome.value[0].body.raw.io).toEqual({
+      input: { schema: { type: "object" } },
+      output: {
+        schema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+      },
     });
-    expect(outcome.value[0].body.raw.pre_emit_checks).toEqual([
-      { id: "approved", type: "gate", kind: "confirm" },
-    ]);
+    expect(outcome.value[0].body.raw.payload_schema).toBeUndefined();
+    expect(outcome.value[0].body.raw.pre_emit_checks).toBeUndefined();
     expect(outcome.value[0]?.completion).toEqual({
       mode: "all",
       checks: [{ id: "report", type: "artifact", path: "report.md" }],
