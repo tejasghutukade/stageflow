@@ -6,9 +6,15 @@ stages:
     entry: true
     route:
       - to: ship
-        on: [succeeded]
+        if:
+          field: ready
+          op: eq
+          value: true
       - to: hotfix
-        on: [failed]
+        if:
+          field: ready
+          op: eq
+          value: false
   - id: hotfix
     uses: ./hotfix.yaml
   - id: ship

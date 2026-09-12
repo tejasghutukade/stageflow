@@ -1,7 +1,7 @@
 id: hotfix
 system_prompt: |
-  Take the failing results from the prior envelope and repair the work they
-  describe.
+  Take the prior envelope (payload.ready is false) and repair the work it
+  describes.
 
   Write the repair notes via write_stage_artifact (for example hotfix.md).
 

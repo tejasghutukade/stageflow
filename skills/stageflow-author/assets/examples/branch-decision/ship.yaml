@@ -1,6 +1,6 @@
 id: ship
 system_prompt: |
-  Take the passing results from the prior envelope and produce the shippable
+  Take the prior envelope (payload.ready is true) and produce the shippable
   package.
 
   Write the package notes via write_stage_artifact (for example ship.md).

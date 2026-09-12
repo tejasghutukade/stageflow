@@ -10,7 +10,7 @@ Resolve collision-safe ids with `scripts/resolve-catalog-id.mjs` (`--text`, `--d
 
 ## External stage file
 
-Required fields: `id`, `system_prompt`. Filename stem must match `id` (`research.yaml` → `id: research`). `model` is optional when the pipeline or manifest supplies it.
+Required fields: `id`, `system_prompt`, `io.input.schema`, `io.output.schema`. Filename stem must match `id` (`research.yaml` → `id: research`). `model` is optional when the pipeline or manifest supplies it.
 
 Every `system_prompt` ends with a mandatory `emit_stage_envelope` footer, for example:
 
@@ -28,7 +28,9 @@ Worked example: `assets/example-pipeline/research.yaml` and `assets/example-pipe
 
 ## Pipeline file
 
-`id` plus `stages:` entries with `id`, `uses:` (path relative to the pipeline file), and `needs:` for every non-root stage. Linear chain: each stage `needs` the previous id (scalar or a one-item array). Optional pipeline-root `model` fills stages that omit `model`. Put body contracts (`io`, `verify`) on stage files; put `on_verify_fail` on the pipeline entry when after-phase verify should repair or wait for an operator.
+`id` plus `stages:` array of object entries with `id`, `uses:` (path relative to the pipeline file). Mark the first stage `entry: true`. Linear chain: each non-leaf lists `route: [{ to: next-id }]`. Optional pipeline-root `model` fills stages that omit `model`. Put body contracts (`io`, `verify`) on stage files; `io.input.schema` and `io.output.schema` are required on every stage. Put `on_verify_fail` on the pipeline entry when after-phase verify should repair or wait for an operator.
+
+Session-capture is a linear chain of transcript phases. Exclusive branches, if needed, are catalog `if` on `route` after success, not agent-picked ids — see [`../../stageflow-author/references/catalog-mapping.md`](../../stageflow-author/references/catalog-mapping.md). `needs` and `fork` fail load.
 
 Worked example: `assets/example-pipeline/example.pipeline.yaml`.
 

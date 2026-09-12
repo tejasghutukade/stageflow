@@ -1,10 +1,10 @@
 # Stage prompt template
 
-Every external stage file has `id` and `system_prompt`. Filename stem matches `id`. `model` is optional when the pipeline or `stageflow.yaml` supplies it — otherwise set it on the stage. Default when writing a concrete string is `anthropic/claude-sonnet-4-5`. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after a fork should use the same configured model family unless the human asks otherwise.
+Every external stage file has `id`, `system_prompt`, `io.input.schema`, and `io.output.schema`. Filename stem matches `id`. `model` is optional when the pipeline or `stageflow.yaml` supplies it — otherwise set it on the stage. Default when writing a concrete string is `anthropic/claude-sonnet-4-5`. When the human names a different model, write that string verbatim. Before writing models, confirm at least one provider is `configured` (see the skill Provider gate). Sibling stages after fan-out should use the same configured model family unless the human asks otherwise.
 
 ## Base
 
-Use for every stage that is not a review point and does not decide a branch.
+Use for every stage that is not a review point. Branching is catalog `if` on the source `route`, not an agent choice. Base stages do not name successor ids.
 
 ```yaml
 id: <id>
@@ -18,6 +18,13 @@ system_prompt: |
   attempt must be emit_stage_envelope (or ask_operator if waiting on HITL).
   An empty final message is a stage failure.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
 ```
 
 The prompt has no `ask_operator` line. It ends on the `emit_stage_envelope` instruction. Call `emit_stage_envelope` once per attempt.
@@ -46,7 +53,7 @@ Set artifacts: [] on emit. Put that path in payload.<field>.
 
 ## Summary and payload
 
-Add to every stage (base, gated, or fork):
+Add to every stage (base, gated, or route-if):
 
 ```
 summary and payload are handed to the next stage verbatim. State outcomes and
@@ -75,6 +82,13 @@ system_prompt: |
   4. Call emit_stage_envelope with an advancing success status only after the
      operator accepts. Never emit before accept.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
 ```
 
 Use the `gate_kinds` value that matches the human's review: `artifact_backed` for a file to accept, `confirm` for yes/no, `free_text` for an open reply, `multi_question` for a batch. `ask_operator` does not complete the stage.
@@ -87,23 +101,21 @@ same attempt (commit, push, open PR as required), write any final artifact,
 then emit. Do not pause after accept. Do not ask_operator for emit/schema errors.
 ```
 
-## Fork
+## Route if
 
-When the pipeline entry has `fork`, the success emit names immediate successors in `fork_choice`. Add this block to the base (or gated) prompt:
+When the source `route` uses `if`, the success payload must include the required discriminator field(s) named in `if.field`. Those fields must be required in `io.output.schema`. The agent emits the field values; it does not name successor ids and does not emit `fork_choice`. Listed `to:` stay on the DAG; `if` decides which run.
+
+Add this block to the base (or gated) prompt:
 
 ```
-On a success emit, include fork_choice naming immediate successor id(s) that
-should run. Name only ids listed as this stage's children. select: one →
-exactly one id. select: subset → one or more of those ids.
-Normalize free_text answers before mapping (trim, lowercase, collapse spaces
-and hyphens). If unmapped, ask_operator again; do not emit.
+On success, emit the payload fields this stage's route if predicates read
+(name them). Use the types in io.output.schema. Do not name successor stage
+ids. Catalog if decides which children run.
 ```
-
-`fork_choice` on a failure emit is ignored. Leave `clone_forks` unset unless the human explicitly asked for clonable fan-out (see [`catalog-mapping.md`](catalog-mapping.md)).
 
 ## Clonable parent
 
-When a successor is `clonable: true`, the parent success emit uses `clone_forks` (not `fork_choice`) for that successor. Add:
+When a successor is `clonable: true`, the parent success emit includes `clone_forks` with full envelopes matching that successor's `io.input.schema`. Add:
 
 ```
 On success, include clone_forks covering every clonable successor exactly once.
@@ -112,3 +124,14 @@ matching that successor's io.input.schema — not a stub object.
 ```
 
 Clonable child stages use the base (or gated) prompt. Remind them they are one clone among others and must emit independently.
+
+## Loop
+
+When `route` has `{ type: loop }`, the success emit includes envelope field `feedback_loop`: `{ action: continue }` or `{ action: send_back, target: <ancestor id> }`. Catalog YAML uses `{ type: loop }` inside `route`, not a `feedback_loop:` key. `if` is not allowed on the loop entry.
+
+Add this block to the base (or gated) prompt:
+
+```
+On success, include feedback_loop: { action: continue } to advance, or
+{ action: send_back, target: <ancestor id> } to replay that ancestor.
+```

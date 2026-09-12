@@ -16,21 +16,66 @@ Collision handling lives in [`catalog-write-conventions.md`](catalog-write-conve
 
 ## Sequencing
 
-`needs` is a parent stage id, or a non-empty array (length ≥ 1). Strings default to `on: [succeeded]`. `{ id, on }` accepts a non-empty unique subset of `succeeded` | `failed` | `skipped`.
+Write **Author YAML only**:
+
+- Wiring: `route` / `entry: true` / `{ type: loop }`
+- Contracts: `io` / `verify` / `on_verify_fail`
+- Every stage body has `io.input.schema` and `io.output.schema`
+- Sequential and fan-in non-clone edges: consumer `io.input` must be a structural subset of **each** non-clonable parent's `io.output`
+
+Wiring is declared on the **source** stage. Children do not list parents. A pipeline that uses `route` must mark at least one `entry: true` root.
+
+`route` is a list of entries. Forward entries name `to:`, optional `on:`, optional `if`. Load rejects `needs`, `fork`, `feedback_loop`, `route_select`, and `allow_none`.
 
 | Human says | Pipeline shape |
 |---|---|
-| Steps in order | Each later stage `needs` the previous id. No `fork` field. |
-| Steps happen together | Sibling stages share one `needs` (the same parent). No `fork` field. |
-| A later step waits for two or more earlier steps | That stage `needs` an array of those parent ids (length ≥ 2). |
-| Exactly one branch runs | Deciding stage gets `fork: { select: one }`. Each branch `needs` the decider. |
-| Either, both, or a subset may run | Deciding stage gets `fork: { select: subset }`. Each branch `needs` the decider. |
-
-Default `select` is `one` unless the human says more than one branch can run.
-
-Map linear chains, sibling fan-out, generic fan-in (`needs` array), and single-level `fork`.
+| Steps in order | First stage `entry: true`. Each source lists `route: [{ to: next }]`. |
+| Steps happen together | Parent lists multiple `to:` with no `if`. Both run after the parent succeeds. |
+| A later step waits for two or more earlier steps | Each parent lists `to: join`. The join does not declare parents. |
+| Exactly one of several successors should run | Source lists every `to:` with mutually exclusive `if`s on a required payload field. Agent emits that field; it does not name successor ids. |
+| Optional extra successor | `if` on that `to:`. Keep an ungated sibling if something should always run. |
+| Review can send work back | Source `route` includes `{ type: loop, to: ancestor, max_replays, on_max_replays, replay_session }`. Success emit includes envelope `feedback_loop`. |
 
 A review, approval, or sign-off step is a gated stage: put `gate_kinds` on that stage file and follow [`stage-prompt-template.md`](stage-prompt-template.md).
+
+### `on:` (skip-cascade policy, not a launch)
+
+Default is succeeded-only. Omit `on:` unless you need to opt an edge out of skip-cascade.
+
+Including `failed` or `skipped` in `on:` opts that edge out of skip-cascade. It does **not** launch a child from a skipped or failed parent.
+
+- Single-parent: launch still requires a **succeeded** parent. A skipped parent skip-cascades children whose `on` does **not** include `skipped`. Including `skipped` only prevents cascade; the child stays pending.
+- Multi-parent Join (two or more parents each listing `to:` the same child): never skip-cascaded from one parent. Wait until every parent is terminal. Runs if at least one parent succeeded (skipped siblings do not block). Stays pending if any parent failed (even if `on` lists `failed`). Force-skipped if every parent skipped.
+
+For exclusive branching after a check, emit **success** with a required discriminator in `io.output.schema` and gate successors with `if`. `on: [failed]` does not mean “run hotfix when tests fail” — that child will not launch.
+
+### `if` (runtime gate after success)
+
+Evaluated after the source **succeeds**, against that source's output payload only.
+
+Leaf `{ field, op, value }` or composition `{ all: [...] }` | `{ any: [...] }` | `{ not: {...} }`.
+
+Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`. Type-strict (`1` is not `"1"`).
+
+`field` is a dot-separated path; every segment must be a **required** object property in the source `io.output.schema`.
+
+Two matching `if`s both fire (not first-match-wins).
+
+When every forward `to:` on a stage has `if`, validate warns `pipeline.route_all_gated` (`ok: true`; `--strict` does not promote). That is acceptable for exclusive branches.
+
+`if` is illegal on `{ type: loop }`, on a clonable `to:`, mixed with a clonable sibling target, or combined with `on` other than succeeded-only.
+
+The completing agent does **not** pick which successors run. Do not emit `fork_choice`.
+
+### Loops
+
+A review that can send work back to an ancestor is a `{ type: loop }` entry **inside** `route` on the source (the reviewer). Required fields: `type: loop`, `to` (earlier ancestor), `max_replays`, `on_max_replays` (`require_continue` | `wait_for_human`), `replay_session` (`resume` | `new_session`).
+
+The **envelope** field on emit is still `feedback_loop` (`continue` / `send_back`). Catalog YAML does not use a `feedback_loop:` key.
+
+Optional `replay_safe: false` on stages that must not be replayed (e.g. one-shot submit).
+
+Forward-only “review → address-feedback → approve” is still the right map when the human wants a separate fix stage rather than send-back.
 
 ## Review then fix then approve
 
@@ -40,7 +85,7 @@ When the human wants a review that can demand changes, then a later approve/ship
 … → review → address-feedback → approve
 ```
 
-Do not wire approve/ship as the immediate child of review. Pipelines are forward-only; without an address-feedback stage, blocking findings have nowhere to land. The address-feedback stage is the only post-review editor; the approve stage is the backstop.
+Do not wire approve/ship as the immediate child of review when blockers are expected. The address-feedback stage is the only post-review editor; the approve stage is the backstop. When they want send-back to an earlier stage instead, put `{ type: loop }` on the reviewer's `route`.
 
 ## Verify and on_verify_fail
 
@@ -62,16 +107,33 @@ A runtime clone count is not knowable from a vague description — leave `clonab
 
 When the human explicitly wants N parallel instances of **one** successor catalog id (e.g. several review lenses, several prototype variants):
 
-- On that successor pipeline entry: `clonable: true` and `clone_cap` (integer ≥ 2).
-- That successor must have at least one child (a join / address-feedback / collect stage). It cannot be a DAG leaf.
-- Parent success emit uses `clone_forks` for that successor (not `fork_choice`). Each clone assignment is a full envelope; validate assignments with `io.input.schema` on the clonable stage body.
+- Parent lists `route: [{ to: clonable-id }]`.
+- On that successor pipeline entry: `clonable: true`, `clone_cap` (integer ≥ 2), and at least one child via its own `route`. It cannot be a DAG leaf.
+- Parent success emit uses `clone_forks` for that successor. Each clone assignment is a full envelope; validate assignments with `io.input.schema` on the clonable stage body.
 - Join stages that wait on the clonable parent read clone-list `priorEnvelopes`, not `priorEnvelopesByStage`.
 
-`fork` + `fork_choice` picks which **branch stage ids** run. `clone_forks` spawns **N instances** of one successor id.
+`clone_forks` spawns N instances of one successor id. Listed `to:` still all run. `if` must not mix with clonable targets.
+
+```yaml
+stages:
+  - id: detect-changes
+    uses: ./detect-changes.yaml
+    entry: true
+    route:
+      - to: author-diagrams
+  - id: author-diagrams
+    uses: ./author-diagrams.yaml
+    clonable: true
+    clone_cap: 5
+    route:
+      - to: collect
+  - id: collect
+    uses: ./collect.yaml
+```
 
 ## Models
 
-Confirm providers before writing. After a fork, give every sibling the same configured `model` unless the human asks for different ones. Prefer a reliable configured model on side-effecting final stages.
+Confirm providers before writing. After fan-out, give every sibling the same configured `model` unless the human asks for different ones. Prefer a reliable configured model on side-effecting final stages.
 
 ## Worked examples
 
@@ -85,12 +147,23 @@ model: anthropic/claude-sonnet-4-5
 stages:
   - id: draft
     uses: ./draft.yaml
+    entry: true
+    route:
+      - to: review
   - id: review
     uses: ./review.yaml
-    needs: [draft]
+    route:
+      - to: publish
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
   - id: publish
     uses: ./publish.yaml
-    needs: [review]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting
 ```
 
 `review` carries `gate_kinds: [artifact_backed]` and emit-phase `verify` `type: gate`. Full set: [`../assets/examples/linear-review/`](../assets/examples/linear-review/).
@@ -103,57 +176,78 @@ When review can emit blockers and a later stage approves or ships, insert addres
 stages:
   - id: implement
     uses: ./implement.yaml
+    entry: true
+    route:
+      - to: review
   - id: review
     uses: ./review.yaml
-    needs: [implement]
+    route:
+      - to: address-feedback
   - id: address-feedback
     uses: ./address-feedback.yaml
-    needs: [review]
+    route:
+      - to: approve
   - id: approve
     uses: ./approve.yaml
-    needs: [address-feedback]
 ```
 
-Do not make `approve` / `ship` `needs: review` when blockers are expected.
+Do not wire approve/ship as the immediate child of review when blockers are expected.
 
-### Release gate (`on:` success / fail)
+### Release gate (exclusive via `if`)
 
-Success routes to ship; failure routes to hotfix. Listed `to:` targets are gated by `on:`, not by an agent choice.
+`run-tests` emits **success** with required `ready` boolean. Catalog `if` picks the successor. A failure emit would leave both children unlaunched.
 
 ```yaml
 id: release-gate
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: run-tests
     uses: ./run-tests.yaml
     entry: true
     route:
       - to: ship
-        on: [succeeded]
+        if:
+          field: ready
+          op: eq
+          value: true
       - to: hotfix
-        on: [failed]
+        if:
+          field: ready
+          op: eq
+          value: false
   - id: hotfix
     uses: ./hotfix.yaml
   - id: ship
     uses: ./ship.yaml
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting
 ```
 
 Full set: [`../assets/examples/branch-decision/`](../assets/examples/branch-decision/).
 
 ### Research digest (linear, non-software)
 
-Weekly gather → summarize → send. Same `needs` chain as the review loop; ids and prompts stay in that domain.
+Weekly gather → summarize → send. Same `entry` + `route` chain as the review loop; ids and prompts stay in that domain.
 
 ```yaml
 id: research-digest
+model: anthropic/claude-sonnet-4-5
 stages:
   - id: gather
     uses: ./gather.yaml
+    entry: true
+    route:
+      - to: summarize
   - id: summarize
     uses: ./summarize.yaml
-    needs: [gather]
+    route:
+      - to: send
   - id: send
     uses: ./send.yaml
-    needs: [summarize]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting
 ```
 
 Full set: [`../assets/examples/non-sdlc-digest/`](../assets/examples/non-sdlc-digest/).
@@ -166,15 +260,17 @@ Full set: [`../assets/examples/non-sdlc-digest/`](../assets/examples/non-sdlc-di
 stages:
   - id: intake
     uses: ./intake.yaml
+    entry: true
+    route:
+      - to: collect-quotes
+      - to: collect-notes
   - id: collect-quotes
     uses: ./collect-quotes.yaml
-    needs: [intake]
   - id: collect-notes
     uses: ./collect-notes.yaml
-    needs: [intake]
 ```
 
-No `fork` field. Both siblings run.
+Both run after intake succeeds. No `if`.
 
 ### Diamond join
 
@@ -184,37 +280,65 @@ No `fork` field. Both siblings run.
 stages:
   - id: clarify
     uses: ./clarify.yaml
+    entry: true
+    route:
+      - to: research
+      - to: validation
   - id: research
     uses: ./research.yaml
-    needs: [clarify]
+    route:
+      - to: synthesize
   - id: validation
     uses: ./validation.yaml
-    needs: [clarify]
+    route:
+      - to: synthesize
   - id: synthesize
     uses: ./synthesize.yaml
-    needs:
-      - research
-      - validation
 ```
 
-`needs` array length ≥ 2 is keyed fan-in. The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`.
+The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`. A skipped sibling does not block. A failed parent leaves the join pending.
 
-### Fork, select subset
+### Optional / subset fan-out
 
-"Email, post, or both could go out":
+"Email, post, or both": list both `to:` with no `if` (both run). To skip a channel, add `if` on that `to:` and put the discriminator in `io.output.schema`. Do not emit `fork_choice`.
 
 ```yaml
 stages:
   - id: choose-channels
     uses: ./choose-channels.yaml
-    fork:
-      select: subset
+    entry: true
+    route:
+      - to: email
+      - to: post
   - id: email
     uses: ./email.yaml
-    needs: [choose-channels]
   - id: post
     uses: ./post.yaml
-    needs: [choose-channels]
 ```
 
-The success emit names one or more of those successor ids in `fork_choice`.
+To skip a channel, add `if` on that `to:` (keep an ungated sibling if the other channel should always run).
+
+### Review send-back (loop)
+
+```yaml
+stages:
+  - id: implement
+    uses: ./implement.yaml
+    entry: true
+    route:
+      - to: review
+  - id: review
+    uses: ./review.yaml
+    route:
+      - to: submit
+      - type: loop
+        to: implement
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
+  - id: submit
+    uses: ./submit.yaml
+    replay_safe: false
+```
+
+Success emit from `review` includes envelope `feedback_loop`: `{ action: continue }` or `{ action: send_back, target: implement }`.
