@@ -456,6 +456,31 @@ describe("pipelineConfigToYaml", () => {
     );
   });
 
+  it("quotes string if values so YAML reload keeps string type", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: "true" },
+                },
+              ],
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toContain('          value: "true"');
+  });
+
   it("writes if only on the gated outbound entry among always-run siblings", () => {
     expect(
       pipelineConfigToYaml(

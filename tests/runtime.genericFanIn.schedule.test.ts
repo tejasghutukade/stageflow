@@ -10,10 +10,8 @@ import {
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
-import {
-  cloneScheduleAllowsRun,
-  pickStalledJoinSkips,
-} from "../src/runtime/cloneSchedule.js";
+import { cloneScheduleAllowsRun } from "../src/runtime/cloneSchedule.js";
+import { pickStalledJoinSkips } from "../src/runtime/joinReadiness.js";
 import {
   applyForkSkipsFromEnvelopes,
   runPipelineDag,

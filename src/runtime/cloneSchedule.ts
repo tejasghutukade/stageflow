@@ -24,8 +24,6 @@ import {
 } from "./joinReadiness.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
-export { pickStalledJoinSkips } from "./joinReadiness.js";
-
 function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
   const snapshot = dag as RunPipelineDagSnapshot;
   if (Array.isArray(snapshot.stage_ids)) return snapshot;
