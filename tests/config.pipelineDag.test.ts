@@ -324,6 +324,42 @@ describe("resolvePipelineDag", () => {
     expect(areResolvedDagsEquivalent(a, differentOn)).toBe(false);
   });
 
+  it("treats matching edge if as equivalent and different if as not (AE2)", () => {
+    const gated = [
+      {
+        id: "triage",
+        entry: true,
+        route: [{ to: "page", if: { field: "ok", op: "eq", value: true } }],
+      },
+      { id: "page" },
+    ];
+    const { dag: matchingA } = resolvePipelineDag(gated, ctx("if-equiv-a"));
+    const { dag: matchingB } = resolvePipelineDag(gated, ctx("if-equiv-b"));
+    expect(areResolvedDagsEquivalent(matchingA, matchingB)).toBe(true);
+
+    const { dag: differentIf } = resolvePipelineDag(
+      [
+        {
+          id: "triage",
+          entry: true,
+          route: [{ to: "page", if: { field: "ok", op: "eq", value: false } }],
+        },
+        { id: "page" },
+      ],
+      ctx("if-equiv-diff"),
+    );
+    expect(areResolvedDagsEquivalent(matchingA, differentIf)).toBe(false);
+
+    const { dag: withoutIf } = resolvePipelineDag(
+      [
+        { id: "triage", entry: true, route: [{ to: "page" }] },
+        { id: "page" },
+      ],
+      ctx("if-equiv-none"),
+    );
+    expect(areResolvedDagsEquivalent(matchingA, withoutIf)).toBe(false);
+  });
+
   it("rejects malformed stage entries", () => {
     expect(() => resolvePipelineDag([], ctx("empty"))).toThrow(/non-empty/i);
     expect(() => resolvePipelineDag([""], ctx("blank-id"))).toThrow(/bare string stage refs/i);

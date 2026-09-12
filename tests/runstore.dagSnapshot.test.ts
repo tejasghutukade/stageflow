@@ -31,6 +31,78 @@ describe("pipeline DAG snapshot persistence", () => {
       ["a", null, []],
       ["b", "a", [{ id: "a", on: ["succeeded"] }]],
     ]);
+    expect(parsed?.nodes[1]?.needsEdges[0]).not.toHaveProperty("if");
+  });
+
+  it("hydrates needsEdges if from a frozen snapshot", () => {
+    const parsed = parsePipelineDagSnapshot({
+      stage_ids: ["a", "b"],
+      nodes: [
+        { id: "a", needs: null, ancestors: [], stageIndex: 0 },
+        {
+          id: "b",
+          needs: "a",
+          needsEdges: [
+            {
+              id: "a",
+              on: ["succeeded"],
+              if: { field: "ok", op: "eq", value: true },
+            },
+          ],
+          ancestors: ["a"],
+          stageIndex: 1,
+        },
+      ],
+      roots: ["a"],
+      childrenOf: { a: ["b"] },
+    });
+    expect(parsed?.nodes[1]?.needsEdges).toEqual([
+      { id: "a", on: ["succeeded"], if: { field: "ok", op: "eq", value: true } },
+    ]);
+    expect(JSON.stringify(parsed)).toContain('"needs"');
+    expect(JSON.stringify(parsed)).toContain('"needsEdges"');
+  });
+
+  it("omits malformed persisted if and still loads the run", async () => {
+    const snapshot = {
+      stage_ids: ["a", "b"],
+      nodes: [
+        { id: "a", needs: null, ancestors: [], stageIndex: 0, definition_id: "a" },
+        {
+          id: "b",
+          needs: "a",
+          needsEdges: [
+            {
+              id: "a",
+              on: ["succeeded"],
+              if: { field: "severity", op: "exists" },
+            },
+          ],
+          ancestors: ["a"],
+          stageIndex: 1,
+          definition_id: "b",
+        },
+      ],
+      roots: ["a"],
+      childrenOf: { a: ["b"] },
+    };
+    const parsed = parsePipelineDagSnapshot(snapshot);
+    expect(parsed?.nodes[1]?.needsEdges).toEqual([{ id: "a", on: ["succeeded"] }]);
+    expect(parsed?.nodes[1]?.needsEdges[0]).not.toHaveProperty("if");
+
+    const root = await mkdtemp(path.join(tmpdir(), "sf-dag-malformed-if-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "malformed-if",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      pipelineDag: snapshot as NonNullable<ReturnType<typeof parsePipelineDagSnapshot>>,
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.pipeline_dag?.nodes[1]?.needsEdges).toEqual([
+      { id: "a", on: ["succeeded"] },
+    ]);
+    expect(meta.pipeline_dag?.nodes[1]?.needsEdges[0]).not.toHaveProperty("if");
   });
 
   it("hydrates frozen snapshot completion and recovery keys from stored JSON", () => {
@@ -83,6 +155,21 @@ describe("pipeline DAG snapshot persistence", () => {
     ]);
     expect(snapshot.childrenOf.research).toEqual(["synthesize"]);
     expect(snapshot.childrenOf.validation).toEqual(["synthesize"]);
+  });
+
+  it("fresh snapshot of a join-with-if catalog keeps both inbound predicates", async () => {
+    const loaded = await loadPipeline(
+      path.join(fixtures, "pipelines/route-if-join.pipeline.yaml"),
+    );
+    const snapshot = buildPipelineDagSnapshotFromLoaded(loaded);
+    const assemble = snapshot.nodes.find((node) => node.id === "assemble");
+    expect(assemble?.needs).toBeNull();
+    expect(assemble?.needsEdges).toEqual([
+      { id: "write", on: ["succeeded"], if: { field: "ready", op: "eq", value: true } },
+      { id: "draw", on: ["succeeded"], if: { field: "complete", op: "eq", value: true } },
+    ]);
+    expect(JSON.stringify(snapshot)).toContain('"needsEdges"');
+    expect(JSON.stringify(snapshot)).toContain('"needs"');
   });
 
   it("copies successor clone_input_schema and never the child payload_schema", () => {

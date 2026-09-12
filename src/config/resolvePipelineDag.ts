@@ -504,6 +504,15 @@ export function resolvePipelineDag(
   return resolvePipelineDagFromRefs(toWiringRefs(outcome.value), ctx);
 }
 
+function sameNeedIf(
+  a: PipelineNeedEdge["if"],
+  b: PipelineNeedEdge["if"],
+): boolean {
+  if (a === undefined && b === undefined) return true;
+  if (a === undefined || b === undefined) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPipelineDag): boolean {
   const nodeIdsA = new Set(a.nodes.map((node) => node.id));
   const nodeIdsB = new Set(b.nodes.map((node) => node.id));
@@ -528,6 +537,7 @@ export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPip
       for (let j = 0; j < edgesA[i]!.on.length; j++) {
         if (edgesA[i]!.on[j] !== edgesB[i]!.on[j]) return false;
       }
+      if (!sameNeedIf(edgesA[i]!.if, edgesB[i]!.if)) return false;
     }
     if (nodeA.ancestors.length !== nodeB.ancestors.length) return false;
     for (let i = 0; i < nodeA.ancestors.length; i++) {
