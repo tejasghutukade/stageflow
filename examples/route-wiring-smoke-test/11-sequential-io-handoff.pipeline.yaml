@@ -4,7 +4,9 @@ stages:
     entry: true
     route:
       - to: review
-    system_prompt: Draft a titled document.
+    system_prompt: |
+      Draft a titled document in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"title": "Smoke draft"}.
     model: cursor/auto
     io:
       input:
@@ -18,7 +20,9 @@ stages:
             title:
               type: string
   - id: review
-    system_prompt: Review the titled document.
+    system_prompt: |
+      Review the titled document in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

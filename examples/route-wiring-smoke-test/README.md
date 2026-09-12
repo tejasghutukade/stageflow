@@ -21,7 +21,7 @@ State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), whi
 | `route-demo-entry-false` | `04-entry-false-equivalent-to-omitted.pipeline.yaml` | `entry: false` behaves like omitting the key (code-review fix). |
 | `route-demo-fork-choice` | `05-fork-choice.pipeline.yaml` | Larger unconditional fan-out: `triage` lists two follow-ups; `quick-fix` lists three. All listed `to:` targets run. Overlaps `06` on purpose — a bigger fan-out graph in one file. |
 | `route-demo-fan-out-fan-in` | `06-fan-out-fan-in.pipeline.yaml` | Parallel fan-out (all 3 branches always run) into a join that waits for and combines all 3 real outputs. |
-| `route-demo-loop-human-decision` | `07-loop-human-decision.pipeline.yaml` | The loop config variants `01` doesn't cover: `on_max_replays: wait_for_human` + `replay_session: new_session`. Reliably parks the run waiting for a human decision — exercises the HITL UI flow (`sf runs answer`), not a bug/stuck state. |
+| `route-demo-loop-human-decision` | `07-loop-human-decision.pipeline.yaml` | The loop config variants `01` doesn't cover: `on_max_replays: wait_for_human` + `replay_session: new_session`. Reliably parks the run waiting for a human decision — exercises the HITL UI flow (`npx tsx src/cli.ts runs answer`), not a bug/stuck state. |
 | `route-demo-skip-and-multi-on` | `08-skip-fallback-and-multi-on-gate.pipeline.yaml` | `decide` fans out to both `risky-step` and `safe-step`. `risky-step` is a leaf. `done` stays only on the safe-step arm (not a join across both). |
 | `route-demo-multi-loop-targets` | `09-multi-loop-targets.pipeline.yaml` | Two *different* stages (`review`, `qa`) each declaring their own loop entry back to the *same* ancestor — `qa` loops to a stage two hops back, not its immediate parent. |
 | `route-demo-uses-dialect-fork` | `10-uses-dialect-fork.pipeline.yaml` | `route`/`entry` combined with the `uses:` external-stage-file dialect — every other pipeline here uses inline `system_prompt`/`model` bodies instead. Both branches always run. |
@@ -221,7 +221,7 @@ npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected
 ```
 Expect: `pipeline.io_incompatible` — `draft.out` `$ref` `#/schemas/produced` vs `review.in` `$ref` `#/schemas/consumed` (`consumed` requires extra field `extra`).
 
-## Run from the UI
+## Run from the UI / CLI
 
 All 13 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
 
@@ -229,23 +229,64 @@ All 13 valid pipelines and `smoke-test.task.yaml` are registered in the repo-roo
 npx tsx src/cli.ts ui
 ```
 
-Start a new run, pick any of the 13 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`sf providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike `sf validate` above.
+Start a new run, pick any of the 13 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`npx tsx src/cli.ts providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike the validate command above.
 
-- Want to watch a larger fan-out (triage plus three follow-ups from quick-fix)? Run `route-demo-fork-choice`.
-- Want to watch true parallel fan-out/fan-in? Run `route-demo-fan-out-fan-in`.
-- Want to practice the human-in-the-loop decision flow? Run `route-demo-loop-human-decision` — it *will* stop and wait for you; that's expected, use `sf runs waiting` to find it and `sf runs answer --run <runId> --stage review --answer '{"action":"continue"}'` (or the UI's own decide control) to unblock it.
-- Want to see both arms of a fan-out run, with `done` only on the safe-step arm? Run `route-demo-skip-and-multi-on`.
-- Want to see two loop points converging on one ancestor? Run `route-demo-multi-loop-targets` — it also parks briefly for a replay, same idea as `07`, but resolves itself (`require_continue`) rather than needing a human.
-- Want to confirm the `uses:` dialect works the same as inline stage bodies? Run `route-demo-uses-dialect-fork`.
-- Want the broadest single flow, including notify stages that all run after ship? Run `route-demo-core`.
+From the repo git root, run a pipeline with this worktree's CLI (never global `sf`):
 
-Or run one directly from the CLI instead of the UI:
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
 
 ```bash
 npx tsx src/cli.ts run \
   --pipeline examples/route-wiring-smoke-test/06-fan-out-fan-in.pipeline.yaml \
   --task examples/route-wiring-smoke-test/smoke-test.task.yaml
 ```
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/07-loop-human-decision.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+Pipeline `07` *will* stop and wait for a human — that's expected (`on_max_replays: wait_for_human`). Unstick it:
+
+```bash
+npx tsx src/cli.ts runs waiting
+npx tsx src/cli.ts runs answer --run <runId> --stage review --answer '{"action":"continue"}'
+```
+
+(or the UI's own decide control).
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+Pipelines **11–13** require the agent to emit the example payloads in each stage prompt (`11` draft: `{ "title": "<short string>" }`; `12` draft/analyze copy the `#/schemas/report` / `#/schemas/analyzed` examples; `13` draft/review copy the `#/schemas/doc` / `#/schemas/analyzed` examples). Review/summarize/ship may emit `payload: {}`.
+
+- Want to watch a larger fan-out (triage plus three follow-ups from quick-fix)? Run `route-demo-fork-choice`.
+- Want to watch true parallel fan-out/fan-in? Run `route-demo-fan-out-fan-in`.
+- Want to practice the human-in-the-loop decision flow? Run `route-demo-loop-human-decision`.
+- Want to see both arms of a fan-out run, with `done` only on the safe-step arm? Run `route-demo-skip-and-multi-on`.
+- Want to see two loop points converging on one ancestor? Run `route-demo-multi-loop-targets` — it also parks briefly for a replay, same idea as `07`, but resolves itself (`require_continue`) rather than needing a human.
+- Want to confirm the `uses:` dialect works the same as inline stage bodies? Run `route-demo-uses-dialect-fork`.
+- Want the broadest single flow, including notify stages that all run after ship? Run `route-demo-core`.
 
 ## What's still out of scope
 

@@ -85,7 +85,10 @@ stages:
     entry: true
     route:
       - to: analyze
-    system_prompt: Draft a findings report and emit it as payload.
+    system_prompt: |
+      Draft a findings report in one or two sentences.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/report. Copy this example:
+      {"title":"Smoke report","status":"draft","findings":[{"id":"f1","severity":"low","detail":"none"}],"score":80,"metadata":{"source":"smoke-test"}}
     model: cursor/auto
     io:
       input:
@@ -97,7 +100,10 @@ stages:
   - id: analyze
     route:
       - to: summarize
-    system_prompt: Keep the report fields and add a summary string.
+    system_prompt: |
+      Keep the report fields and add a summary string.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/analyzed. Copy this example:
+      {"title":"Smoke report","status":"review","findings":[{"id":"f1","severity":"low","detail":"none"}],"score":80,"metadata":{"source":"smoke-test"},"summary":"One low finding; score 80."}
     model: cursor/auto
     io:
       input:
@@ -107,7 +113,9 @@ stages:
         schema:
           $ref: "#/schemas/analyzed"
   - id: summarize
-    system_prompt: Summarize using title, summary, and score from the prior payload.
+    system_prompt: |
+      Summarize using title, summary, and score from the prior payload. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

@@ -2,7 +2,9 @@ id: route-demo-two-entries
 stages:
   - id: news-digest
     entry: true
-    system_prompt: Gather a news digest.
+    system_prompt: |
+      Gather a one-sentence news digest.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -13,7 +15,9 @@ stages:
           type: object
   - id: weather-report
     entry: true
-    system_prompt: Gather a weather report.
+    system_prompt: |
+      Gather a one-sentence weather report.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

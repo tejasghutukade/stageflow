@@ -9,7 +9,9 @@ stages:
     entry: true
     route:
       - to: implement
-    system_prompt: Draft a one-sentence plan.
+    system_prompt: |
+      Draft a one-sentence plan.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -22,7 +24,9 @@ stages:
   - id: implement
     route:
       - to: review
-    system_prompt: Implement the plan in one sentence.
+    system_prompt: |
+      Implement the plan in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -40,13 +44,14 @@ stages:
         max_replays: 1
         on_max_replays: require_continue
         replay_session: resume
-    system_prompt: >
-      Review the implementation.
+    system_prompt: |
+      Review the implementation in one or two sentences.
       On success you MUST include feedback_loop in your envelope:
       {"action":"continue"} or {"action":"send_back","target":"implement"}.
       For this smoke test, ALWAYS continue -- never send back. This loop
       point exists in the wiring but stays dormant this run; qa (below) is
       the one that actually exercises a loop-back to implement.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"continue"}.
     model: cursor/auto
     io:
       input:
@@ -64,8 +69,8 @@ stages:
         max_replays: 1
         on_max_replays: require_continue
         replay_session: resume
-    system_prompt: >
-      QA the reviewed implementation.
+    system_prompt: |
+      QA the reviewed implementation in one or two sentences.
       On success you MUST include feedback_loop in your envelope:
       {"action":"continue"} or {"action":"send_back","target":"implement"}.
       For this smoke test: on your FIRST attempt, send_back to implement.
@@ -73,6 +78,7 @@ stages:
       looping back to an ancestor two stages back (implement), independently
       of review's own dormant loop point above -- both target the same
       stage from different points in the chain.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and the matching feedback_loop action.
     model: cursor/auto
     io:
       input:
@@ -83,7 +89,9 @@ stages:
           type: object
 
   - id: done
-    system_prompt: Close out the run.
+    system_prompt: |
+      Close out the run in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

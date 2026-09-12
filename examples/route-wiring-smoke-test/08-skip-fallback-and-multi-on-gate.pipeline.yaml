@@ -6,7 +6,9 @@ stages:
     route:
       - to: risky-step
       - to: safe-step
-    system_prompt: Run both the risky-step and safe-step follow-ups.
+    system_prompt: |
+      Run both the risky-step and safe-step follow-ups. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -19,7 +21,9 @@ stages:
   # Leaf: does not route onward. done is only on the safe-step arm, so
   # it does not wait on this sibling.
   - id: risky-step
-    system_prompt: The risky path. A leaf — no child runs from here.
+    system_prompt: |
+      The risky path. A leaf — no child runs from here. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -32,7 +36,9 @@ stages:
   - id: safe-step
     route:
       - to: notify-either-way
-    system_prompt: The safe path. Routes onward to notify-either-way, then done.
+    system_prompt: |
+      The safe path. Routes onward to notify-either-way, then done. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -45,7 +51,9 @@ stages:
   - id: notify-either-way
     route:
       - to: done
-    system_prompt: Runs after safe-step succeeds.
+    system_prompt: |
+      Runs after safe-step succeeds. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -56,7 +64,9 @@ stages:
           type: object
 
   - id: done
-    system_prompt: Close out the run.
+    system_prompt: |
+      Close out the run in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

@@ -4,7 +4,9 @@ stages:
     entry: true
     route:
       - to: implement
-    system_prompt: Draft a plan.
+    system_prompt: |
+      Draft a one-sentence plan.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -17,7 +19,9 @@ stages:
   - id: implement
     route:
       - to: review
-    system_prompt: Implement the plan.
+    system_prompt: |
+      Implement the plan in one or two sentences.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -37,7 +41,10 @@ stages:
         max_replays: 2
         on_max_replays: require_continue
         replay_session: resume
-    system_prompt: Review the change. Continue to qa, or send it back to implement.
+    system_prompt: |
+      Review the change in one or two sentences. Prefer continue so the rest of the pipeline runs.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"continue"}.
+      To send work back instead, use feedback_loop: {"action":"send_back","target":"implement"}.
     model: cursor/auto
     io:
       input:
@@ -52,7 +59,9 @@ stages:
     route:
       - to: ship
       - to: request-changes
-    system_prompt: Record the QA outcome. Ship and request-changes both run next.
+    system_prompt: |
+      Record the QA outcome in one sentence. Ship and request-changes both run next.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -68,7 +77,9 @@ stages:
       - to: notify-slack
       - to: notify-email
       - to: update-changelog
-    system_prompt: Ship the change. Slack, email, and changelog notifications all run next.
+    system_prompt: |
+      Ship the change in one sentence. Slack, email, and changelog notifications all run next.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -81,7 +92,9 @@ stages:
   - id: request-changes
     route:
       - to: close
-    system_prompt: Note the requested changes.
+    system_prompt: |
+      Note the requested changes in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -94,7 +107,9 @@ stages:
   - id: notify-slack
     route:
       - to: close
-    system_prompt: Notify Slack.
+    system_prompt: |
+      Pretend to notify Slack in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -107,7 +122,9 @@ stages:
   - id: notify-email
     route:
       - to: close
-    system_prompt: Notify email.
+    system_prompt: |
+      Pretend to notify email in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -120,7 +137,9 @@ stages:
   - id: update-changelog
     route:
       - to: close
-    system_prompt: Update the changelog.
+    system_prompt: |
+      Pretend to update the changelog in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -136,7 +155,9 @@ stages:
   # block; their envelopes are omitted). Stays pending if a parent failed.
   # Does not run if every parent skipped.
   - id: close
-    system_prompt: Close out the run.
+    system_prompt: |
+      Close out the run in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

@@ -4,14 +4,17 @@ id: route-demo-loop-human-decision
 # resume). max_replays: 1 plus review's prompt (always send_back) makes this
 # reliably exhaust its replay budget and PARK the run waiting for a human
 # decision -- a genuine "waiting for input" state, not a bug. Use
-# `sf runs waiting` / `sf runs answer` (or the UI's own decide flow) to
-# unstick it: `npx tsx src/cli.ts runs answer --run <runId> --stage review`.
+# `npx tsx src/cli.ts runs waiting` / `npx tsx src/cli.ts runs answer` (or the
+# UI's own decide flow) to unstick it:
+# `npx tsx src/cli.ts runs answer --run <runId> --stage review`.
 stages:
   - id: plan
     entry: true
     route:
       - to: implement
-    system_prompt: Draft a one-sentence plan.
+    system_prompt: |
+      Draft a one-sentence plan.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -24,7 +27,9 @@ stages:
   - id: implement
     route:
       - to: review
-    system_prompt: Implement the plan in one sentence.
+    system_prompt: |
+      Implement the plan in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
@@ -43,7 +48,7 @@ stages:
         on_max_replays: wait_for_human
         replay_session: new_session
     system_prompt: |
-      Review the upstream work against the task goal.
+      Review the upstream work against the task goal in one or two sentences.
       On success you MUST include feedback_loop in your envelope:
       - {"action":"continue"} when the work is good enough to submit
       - {"action":"send_back","target":"implement"} when another pass is needed
@@ -53,6 +58,7 @@ stages:
       decision (on_max_replays: wait_for_human), which is exactly what this
       pipeline exists to demonstrate.
       Do not combine send_back with fork_choice or clone_forks.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"send_back","target":"implement"}.
     model: cursor/auto
     io:
       input:
@@ -64,7 +70,9 @@ stages:
 
   - id: submit
     replay_safe: false
-    system_prompt: Submit the approved change.
+    system_prompt: |
+      Submit the approved change in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:

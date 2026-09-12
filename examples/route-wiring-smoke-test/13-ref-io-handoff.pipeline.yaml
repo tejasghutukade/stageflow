@@ -45,7 +45,9 @@ stages:
     entry: true
     route:
       - to: review
-    system_prompt: Draft a document and emit it as payload.
+    system_prompt: |
+      Draft a document in one or two sentences.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/doc: {"title":"Smoke doc","body":"A short body."}.
     model: cursor/auto
     io:
       input:
@@ -57,7 +59,9 @@ stages:
   - id: review
     route:
       - to: ship
-    system_prompt: Keep the document fields and add a verdict.
+    system_prompt: |
+      Keep the document fields and add a verdict of approve or request-changes.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/analyzed: {"title":"Smoke doc","body":"A short body.","verdict":"approve"}.
     model: cursor/auto
     io:
       input:
@@ -67,7 +71,9 @@ stages:
         schema:
           $ref: "#/schemas/analyzed"
   - id: ship
-    system_prompt: Ship using title from the prior payload.
+    system_prompt: |
+      Ship using title from the prior payload. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
     model: cursor/auto
     io:
       input:
