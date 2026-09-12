@@ -97,6 +97,61 @@ describe("joinAllowsRun", () => {
     expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
   });
 
+  it("runs a join when one parent skipped even if the succeeded inbound if missed", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "skipped"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: false } })],
+    ]);
+    expect(joinAllowsRun(dag, "assemble", states, envelopes)).toBe(true);
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+
+  it("runs a join when one parent skipped and the succeeded inbound if fired", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "skipped"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: true } })],
+    ]);
+    expect(joinAllowsRun(dag, "assemble", states, envelopes)).toBe(true);
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+
+  it("does not run or stalled-skip a join when a succeeded inbound is missing_field", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "succeeded"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: {} })],
+      ["draw", okEnvelope("draw-ok", { payload: { complete: true } })],
+    ]);
+    expect(joinAllowsRun(dag, "assemble", states, envelopes)).toBe(false);
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+
   it("does not run or stalled-skip a join when a parent failed", async () => {
     const loaded = await loadPipeline(pipelinePath("route-if-join"), {
       cwd: fixtures,
