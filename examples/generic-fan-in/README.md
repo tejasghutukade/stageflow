@@ -6,12 +6,16 @@ a free-text gate, then emit distinct payloads. `synthesize` waits for both and
 must copy `priorEnvelopesByStage` into `payload.received` so you can inspect
 what was handed across the join.
 
+Catalog wiring is outbound `route`: `research` and `validation` each list `to: synthesize`. Join rules (shipped runtime): the child waits until every parent is terminal; it **runs** if at least one parent succeeded (skipped siblings do not block); it stays **pending** if any parent failed (even when `on` lists `failed`); it force-skips only if every parent skipped. Including `failed` or `skipped` in `on:` opts that edge out of skip-cascade; it does not launch the Join from a failed parent.
+
+These YAML files may still use inbound `needs` and fail `sf validate` until rewritten to `route`. Current shapes: [`diamond-fan-in.pipeline.yaml`](../../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml), [`docs/yaml-catalog.md#generic-fan-in`](../../docs/yaml-catalog.md#generic-fan-in).
+
 Two pipelines:
 
 | Pipeline | What it exercises |
 |----------|-------------------|
-| `generic-fan-in` | String `needs: [research, validation]` — both parents must succeed |
-| `generic-fan-in-accepted` | Structured `on` — research may fail or skip; validation must succeed |
+| `generic-fan-in` | Default succeeded-only edges into `synthesize` |
+| `generic-fan-in-accepted` | Structured `on` on the research edge — still does **not** run the Join after research fails |
 
 ## Prerequisites
 
@@ -93,7 +97,7 @@ The synthesize payload is the join copy of `priorEnvelopesByStage`. That field i
 
 ---
 
-## Scenario B — unaccepted failure skips the join
+## Scenario B — failed parent leaves the join pending
 
 New run of **generic-fan-in**. At research, answer:
 
@@ -111,13 +115,13 @@ ok citations
 
 1. **research** is failed (open its handoff envelope — failure status, no finding).
 2. **validation** still finishes; its envelope is success with `citations`.
-3. **synthesize** is **skipped** (this pipeline's `needs` array accepts success only).
+3. **synthesize** stays **pending** (not skip-cascaded). A failed parent blocks the Join.
 4. Run outcome **failed**.
-5. Open synthesize anyway: there is no join envelope. The skipped join did not receive `priorEnvelopesByStage`.
+5. Open synthesize anyway: there is no join envelope. The Join did not receive `priorEnvelopesByStage`.
 
 ---
 
-## Scenario C — accepted failure still joins
+## Scenario C — listing `failed` on `on:` still does not open the join
 
 New run:
 
@@ -132,10 +136,8 @@ At research, answer `fail`. At validation, answer `ok citations`.
 ### What to verify
 
 1. **research** stays visibly **failed**. **validation** succeeds.
-2. **synthesize** still runs. Open its handoff envelope:
-   - `received.research.status` is `failure` (no finding).
-   - `received.validation.status` is `success` and `finding` is `citations`.
-3. Run outcome **succeeded** — the accepted research failure does not independently fail the run.
+2. **synthesize** stays **pending**. Listing `failed` on the research edge only opts that edge out of skip-cascade; it does not launch `synthesize`.
+3. Run outcome **failed**. Skipped siblings would not block a Join that has a succeeded parent; a **failed** parent still does.
 
 ---
 

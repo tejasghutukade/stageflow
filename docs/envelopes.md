@@ -33,19 +33,19 @@ type FeedbackLoopAction =
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `status` | yes | `"success"` advances the pipeline. `"failure"` on a named stage skips successors whose `needs` do not accept `failed` (legacy scalar `needs` accepts `succeeded` only). A [generic fan-in](yaml-catalog.md#generic-fan-in) join that lists `failed` in that parent's `on` set continues. A parallel clone failure lets sibling clones finish and skips the clone-list join and its descendants |
+| `status` | yes | `"success"` advances the pipeline. Catalog wiring is `route` on the source, not inbound `needs`. `"failure"` skip-cascades single-parent successors whose `on` does not include `failed`. Including `failed` in `on:` opts that edge out of cascade; it does not launch that successor — launch still requires a succeeded parent. A [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending if any parent failed, even when that parent's `on` includes `failed`; the run fails. Skipped siblings do not block a Join that has a succeeded parent. A parallel clone failure lets sibling clones finish and skips the clone-list join and its descendants |
 | `summary` | yes | Non-empty human-readable summary |
 | `artifacts` | yes | Array of run-relative artifact paths (may be empty `[]`) |
 | `payload` | no | Structured data for downstream stages; required on success (`io.output.schema` is required on every stage body) |
 | `fork_choice` | no* | Non-clonable immediate successor ids to run; required on success when the stage has a `fork` field and at least one non-clonable child |
 | `clone_forks` | no* | Clone actions for clonable successors; required on success when any immediate successor is `clonable`; illegal items are rejected by emit |
-| `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares `feedback_loop` policy |
+| `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares a `{ type: loop }` route entry |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
 \* Required for fork stages on success (`fork_choice`) and when any immediate successor is clonable (`clone_forks`). On failure, neither field is required or validated. Extra `clone_forks` is ignored only when the emitting stage has no clonable children; if any clonable child exists, `clone_forks` must cover every clonable successor exactly once (extra `successor_id`s are rejected).
 
-† Required on success for stages with a configured `feedback_loop` policy. Forbidden on failure and on stages without that policy. See [Feedback loops](#feedback-loops).
+† Required on success for stages that declare a `{ type: loop }` route entry. Forbidden on failure and on stages that do not declare a `{ type: loop }` route entry. See [Feedback loops](#feedback-loops).
 
 ## Emitting an envelope
 
@@ -65,13 +65,13 @@ Example success emit (conceptual):
 }
 ```
 
-On `status: "failure"`, the envelope is accepted. A named-stage failure skips paths whose dependency contract rejects `failed`. Independent siblings and [generic fan-in](yaml-catalog.md#generic-fan-in) joins that list `failed` in that parent's `on` set continue. A parallel clone failure does not stop sibling clones; the clone-list join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the clone-list join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
+On `status: "failure"`, the envelope is accepted. Catalog wiring is `route` on the source, not inbound `needs`. Single-parent successors whose `on` does not include `failed` are skip-cascaded. Including `failed` in `on:` opts that edge out of cascade; it does not launch that successor — launch still requires a succeeded parent. A [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending if any parent failed, even when that parent's `on` includes `failed`; the run fails. Skipped siblings do not block a Join that has a succeeded parent. A parallel clone failure does not stop sibling clones; the clone-list join successor and its descendants are skipped. Sequential clone failure skips remaining clones of that successor and the clone-list join. Neither `fork_choice` nor `clone_forks` is required or validated on failure.
 
 Every stage body declares `io.output.schema`. On success, `payload` is validated against that JSON Schema subset — see [io schemas](#io-schemas).
 
 ### Fork stages
 
-Catalog YAML `route` does **not** use `fork_choice`. Listed `to:` targets always run; do not emit `fork_choice` to pick YAML successors. `fork_choice` is only validated when the resolved DAG node has a `fork` field (not produced from catalog YAML).
+Catalog YAML `route` does **not** use `fork_choice`. Listed `to:` targets stay on the DAG; optional `if` can skip an edge. There is no agent exclusive pick. Do not emit `fork_choice` to select YAML successors. `fork_choice` is only validated when the resolved DAG node has a `fork` field (constructed DAGs, not catalog YAML).
 
 If a constructed DAG node has a `fork` field and at least one non-clonable child, the success emit **must** include `fork_choice: string[]` naming which of those successors to run. A fork parent whose every child is clonable does not require `fork_choice`. Absent or illegal choices cause the emit to be rejected (`isError: true`); the stage fails when no valid emit follows before the session ends.
 
@@ -89,7 +89,7 @@ Rules:
 - `fork_choice: []` is accepted only when `allow_none: true` is set with `select: subset`. `select: one` always requires exactly one choice — empty `fork_choice` fails emit even if `allow_none: true`.
 - On failure, `fork_choice` is not required or validated.
 
-Unchosen successors are `skipped` — the same status used when a parent fails. Catalog pipelines use [unconditional fan-out](yaml-catalog.md#route) instead of `fork_choice`.
+Unchosen successors are `skipped` — the same status used when a parent fails. Catalog pipelines use [route](yaml-catalog.md#route) instead of `fork_choice`.
 
 ### Clonable successors {#clonable-successors}
 
@@ -138,7 +138,7 @@ After fan-out, workspace paths and `--stage` keys use the instance id (`{catalog
 
 ### Feedback loops {#feedback-loops}
 
-When the emitting stage's pipeline entry declares `feedback_loop` (see [YAML catalog](yaml-catalog.md#feedback-loops)), a **successful** emit **must** include `feedback_loop`:
+When the emitting stage's pipeline entry declares a `{ type: loop }` route entry (see [YAML catalog](yaml-catalog.md#feedback-loops)), a **successful** emit **must** include `feedback_loop`:
 
 ```json
 { "action": "continue" }
@@ -159,7 +159,7 @@ Rules:
 
 - `feedback_loop` is **required** on success for a configured source; omitting it rejects the emit.
 - `feedback_loop` is **not allowed** when `status` is `failure`.
-- `feedback_loop` is **not allowed** on stages that do not declare a feedback-loop policy.
+- `feedback_loop` is **not allowed** on stages that do not declare a `{ type: loop }` route entry.
 - `send_back` **cannot** be combined with `fork_choice` or `clone_forks` on the same envelope.
 - `continue` may still carry `fork_choice` / `clone_forks` when those fields are otherwise required for the stage.
 - Nested clone-assignment envelopes must not include `feedback_loop`.
@@ -239,7 +239,7 @@ Later stages receive prior envelope context through the stage bootstrap (task + 
 
 Two join shapes — do not reuse one field for the other:
 
-1. **Keyed generic fan-in** — the stage `needs` array has length ≥ 2. Join input is `priorEnvelopesByStage`, a record keyed in YAML declaration order. A normal parent maps to one terminal envelope; a clonable parent maps to that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). `priorEnvelope` is `null`. `priorEnvelopes` is omitted. A failed parent uses its emitted failure envelope or a synthetic `{ status: "failure", summary, artifacts: [] }` from the persisted failure reason. A skipped parent uses a synthetic `{ status: "skipped", summary, artifacts: [] }` rebuilt from persisted lifecycle state — agents cannot emit `skipped`. See [YAML catalog — generic fan-in](yaml-catalog.md#generic-fan-in), [`examples/generic-fan-in/`](../examples/generic-fan-in/), and [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
+1. **Keyed generic fan-in** — two or more parents list a forward `to:` to this child. Join input is `priorEnvelopesByStage`, a record keyed in YAML declaration order. `priorEnvelope` is `null`. `priorEnvelopes` is omitted. Skipped and failed parents are omitted from join input (not synthesized). The Join does not run after a failed parent, so agents do not consume synthetic failure envelopes at the Join. A clonable parent maps to one key whose value is that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). See [YAML catalog — generic fan-in](yaml-catalog.md#generic-fan-in), [`examples/generic-fan-in/`](../examples/generic-fan-in/), and [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
 
 2. **Clone-list join** — still one catalog parent id. After clonable fan-out, the join successor receives every clone envelope as an ordered list in clone-list order (`priorEnvelopes`). The join stage only runs if every clone succeeded (parallel and sequential); those priors are success envelopes only (0.7). See [`examples/clonable-fanout/`](../examples/clonable-fanout/) collect checks.
 
@@ -264,7 +264,7 @@ sf envelope get --from sf-run.json --stage author-diagrams \
   --detect-stage detect-changes --format handoff --json > envelope.json
 ```
 
-When the detect stage emits `fork_choice: []`, handoff output is `{ "skipped": true }` and downstream deliver/upload steps can no-op.
+When the detect stage emits `fork_choice: []`, handoff output is `{ "skipped": true }` and downstream deliver/upload steps can no-op. Catalog YAML does not author fork; that skip shape is for constructed DAGs and the current Archify example until it is rewired.
 
 Typical CI flow:
 

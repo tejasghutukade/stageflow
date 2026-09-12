@@ -16,6 +16,9 @@ catalog:
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
     - examples/route-wiring-smoke-test
+    - examples/route-if-tour
+    - examples/verify-tour
+    - examples/retry-tour
   tasks:
     - examples/generic-fan-in
     - examples/stage-mcp
@@ -32,6 +35,9 @@ catalog:
     - examples/oss-issue-contribution
     - examples/oss-quick-fix
     - examples/route-wiring-smoke-test
+    - examples/route-if-tour
+    - examples/verify-tour
+    - examples/retry-tour
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

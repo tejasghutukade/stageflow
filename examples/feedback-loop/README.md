@@ -3,6 +3,8 @@
 Source-owned feedback loop: `review` may `continue` or `send_back` to `implement`.
 `submit` is `replay_safe: false` so it is never on a replay route.
 
+Catalog policy is a `{ type: loop }` entry on `route` (not a top-level `feedback_loop:` key). The envelope field is still `feedback_loop`. This directory’s YAML may still use the old key and fail `sf validate` until rewritten — see [Upgrading older catalogs](../../docs/yaml-catalog.md#upgrading-older-catalogs) and [`feedback-loop.pipeline.yaml`](../../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
+
 Domain-neutral — the same wiring works for release notes, research digests, content review, or an SDLC-style plan/implement pass.
 
 ## Prerequisites

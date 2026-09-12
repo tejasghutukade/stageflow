@@ -4,6 +4,8 @@ status: ready-for-agent
 
 # Spec: Route-based pipeline wiring
 
+**Shipped:** Catalog authoring is `route` + `entry` + `{ type: loop }`. Listed forward `to:` stay on the DAG; optional deterministic `if` is specified in deterministic-route-if.md. `fork` / `route_select` / `allow_none` / `needs` / `feedback_loop` are rejected. Agent `fork_choice` does not select catalog successors. Join: skipped siblings do not block; a failed parent leaves the Join pending. Do not treat `route_select` as current authoring.
+
 ## Problem Statement
 
 Wiring a Stageflow pipeline today means using three separate, disconnected mechanisms: `needs` (a stage declares its own predecessors, inbound), `fork` (a stage declares that its own runtime envelope will pick which of its children run), and `feedback_loop` (a stage declares that it may replay back to an earlier stage, with its own retry policy). These point in different directions and are authored on different stages for what is, conceptually, all the same thing — what happens after a stage finishes. A pipeline author has to hold all three vocabularies in their head at once, coordinate declarations across stages to express a single branch or loop, and there is no coherent place to hang a future "route to the next stage based on a condition" feature without adding a fourth disconnected mechanism.

@@ -147,7 +147,7 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 
 ## See also
 
-- [YAML catalog](yaml-catalog.md) — author dialect `io` / `verify` / `on_verify_fail`
+- [YAML catalog](yaml-catalog.md) — author dialect `io` / `verify` / `on_verify_fail` and `route` / `entry` / `{ type: loop }`
 - [hello-world example](../examples/hello-world/) — `task.input` ↔ entry `io.input.schema`
 - [feature-loop example](../examples/feature-loop/) — pipeline `schemas:` + `$ref`
 - [CLI reference](cli-reference.md) — all `sf` commands and selected env vars
@@ -156,4 +156,4 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
 
-Older catalogs: [upgrading](yaml-catalog.md#upgrading-older-catalogs) and [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (optional `STAGEFLOW_LEGACY_YAML=0`).
+Older catalogs: [upgrading](yaml-catalog.md#upgrading-older-catalogs) — `sf migrate-yaml` converts contract keys (`io` / `verify` / `on_verify_fail`); wiring (`needs` / `fork` / `feedback_loop`) is a hard cutover to `route` (optional `STAGEFLOW_LEGACY_YAML=0` after the contract migrate).

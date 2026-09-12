@@ -1,0 +1,162 @@
+id: verify-tour
+model: cursor/auto
+schemas:
+  empty:
+    type: object
+  ok-flag:
+    type: object
+    required: [ok]
+    properties:
+      ok:
+        type: boolean
+  changed:
+    type: object
+    required: [changed_files]
+    properties:
+      changed_files:
+        type: array
+        items:
+          type: string
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: artifact-check
+    system_prompt: |
+      Start the verify tour in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: artifact-check
+    route:
+      - to: command-check
+    system_prompt: |
+      Cover type: artifact (emit list check and after on-disk check).
+      1. Call write_stage_artifact with path note.md and a short nonempty markdown body.
+      2. Call emit_stage_envelope with status: success, a one-sentence summary, artifacts listing the path returned by write_stage_artifact, and payload: {}.
+      Do not call ask_operator. Do not edit the project checkout.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: note-declared
+        type: artifact
+        basename: note.md
+        when: [emit]
+      - id: note-on-disk
+        type: artifact
+        path: note.md
+        nonempty: true
+        when: [after]
+
+  - id: command-check
+    route:
+      - to: checklist-check
+    system_prompt: |
+      Cover type: command. Stageflow runs the declared command after you emit. Do not run it yourself.
+      Call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: {}.
+      Do not call ask_operator. Do not edit the project checkout.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: echo-ok
+        type: command
+        run: echo verify-tour-ok
+
+  - id: checklist-check
+    route:
+      - to: payload-check
+    system_prompt: |
+      Cover type: checklist. The attestation must match the declared items exactly.
+      Call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], payload: {}, and checklist_attestations:
+        - check_id: self-review
+          items:
+            - Tour steps completed
+            - No extra checkout edits
+      Do not call ask_operator. Do not edit the project checkout.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: self-review
+        type: checklist
+        items:
+          - Tour steps completed
+          - No extra checkout edits
+
+  - id: payload-check
+    route:
+      - to: gate-check
+    system_prompt: |
+      Cover type: payload_schema. Emit a payload that matches io.output.schema.
+      Call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: { "ok": true }.
+      Do not call ask_operator. Do not edit the project checkout.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/ok-flag"
+    verify:
+      - id: payload-ok
+        type: payload_schema
+
+  - id: gate-check
+    route:
+      - to: checkout-check
+    gate_kinds: [confirm]
+    system_prompt: |
+      Cover type: gate kind confirm (emit and after).
+      1. Call ask_operator with kind: confirm and message: "Accept to continue the verify tour."
+      2. Wait for the operator to accept. If they reject, ask again. Do not emit until accepted.
+      3. After accept, call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: operator-ok
+        type: gate
+        kind: confirm
+        when: [emit, after]
+
+  - id: checkout-check
+    system_prompt: |
+      Cover type: checkout_changes. Edit the project checkout, not a stage artifact.
+      1. Create or overwrite verify-tour-marker.txt at the checkout root (the Project checkout path in this prompt) with one unique line (include a timestamp or random token).
+      2. Call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: { "changed_files": ["verify-tour-marker.txt"] }.
+      Do not gitignore that file. Do not commit, push, or delete other files. Do not call ask_operator.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/changed"
+    verify:
+      - id: repo-touched
+        type: checkout_changes
+        path_fields: [changed_files]

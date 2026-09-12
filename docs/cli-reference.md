@@ -423,7 +423,7 @@ With no flags, validates **all pipelines and tasks** declared in `stageflow.yaml
 |------|-------------|
 | `--pipeline` | Validate that pipeline file and its stages (`uses:` / `include:` transitively). Does not validate all tasks. |
 | `--task` | Validate that task file only |
-| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors. Does not promote `catalog.legacy_yaml`. |
+| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors. Does not promote `catalog.legacy_yaml`, `pipeline.model_applies`, or `pipeline.route_all_gated`. Validate can pass (`ok: true`, exit 0) with warnings > 0. |
 | `--json` | Machine-readable findings |
 
 Use at most one of `--pipeline` or `--task`. The CLI rejects both.
@@ -441,6 +441,8 @@ sf validate --strict --json
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
 For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
+
+Converts **contract keys only** (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema` → `io` / `verify` / `on_verify_fail`). It does **not** rewrite `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none`. Those fail load until rewritten to `route` / `entry` / `{ type: loop }`. See [Upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs) (wiring subsection).
 
 ```bash
 sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]

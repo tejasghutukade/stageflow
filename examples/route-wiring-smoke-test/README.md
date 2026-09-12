@@ -7,11 +7,11 @@ Seventeen small, self-contained pipelines that together cover the `route`-based 
 
 ## Patterns covered — which pipeline for which feature
 
-`route` is declarative wiring. Listed forward `to:` targets run when the source reaches a matching `on:` state (default `succeeded` only). Optional `if` on a forward Route Entry is a runtime gate against the source output payload after success: a match fires that edge; a miss **skips** that target (the run can still succeed); an entry without `if` still always fires. `if` may be a leaf (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`) or nested `all` / `any` / `not`. The DAG still shows every listed `to:`. There is no agent `fork_choice` for catalog pipelines, and `route_select` / `allow_none` are rejected.
+`route` is declarative wiring. Listed forward `to:` stay on the DAG. After a **succeeded** source, each forward entry is eligible (an entry without `if` fires; `if` match fires; `if` miss **skips** that target — the run can still succeed). Single-parent launch still requires succeeded. `on:` is skip-cascade policy, not launch-from-failed. `if` may be a leaf (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`) or nested `all` / `any` / `not`. There is no agent `fork_choice` for catalog pipelines, and `route_select` / `allow_none` are rejected.
 
-A Join (two or more parents name the same child) waits for *every* parent to become terminal. A false inbound `if` (leaf or `all` / `any` / `not` composition) does **not** skip the child while another parent is still running. After every parent **succeeded**, the child runs only if every inbound edge fired (`if` true, or no `if`); it then opens with every parent's success envelope. If any inbound `if` missed, the child is **skipped** — not pending forever, not opened with a partial envelope set. A failed parent still blocks. Pipelines with **no** forward `if` keep today's Join: skipped sibling + succeeded sibling can still run; all-skipped still force-skip.
+A Join (two or more parents name the same child) waits for *every* parent to become terminal. A false inbound `if` (leaf or `all` / `any` / `not` composition) does **not** skip the child while another parent is still running. After every parent **succeeded**, the child runs only if every inbound edge fired (`if` true, or no `if`); it then opens with every parent's success envelope. If any inbound `if` missed, the child is **skipped** — not pending forever, not opened with a partial envelope set. A failed parent still blocks. Pipelines with **no** forward `if` keep today's Join: skipped sibling + succeeded sibling can still run; all-skipped still force-skip. Mixed skip + a succeeded arm’s `if` miss still runs — the all-fired check is only when every parent succeeded.
 
-State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), which is still allowed.
+State-gated routing uses `on:` on the source stage (`succeeded` / `failed`) as skip-cascade policy.
 
 | Pipeline ID | File | Demonstrates |
 |---|---|---|
@@ -61,7 +61,7 @@ Expect: **Validation passed.** One pipeline, most of the new surface in one real
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/02-on-gating.pipeline.yaml --strict
 ```
-Expect: **Validation passed.** `run-tests` routes to `ship` on `succeeded` and to `hotfix` on `failed` — the `on` gate is declared on the *source* stage now, not the target's old `needs`. This is the supported way to run different successors for success vs failure.
+Expect: **Validation passed.** `run-tests` lists `ship` (default succeeded) and `hotfix` with `on: [failed]`. `on: [failed]` opts hotfix out of skip-cascade when tests fail; hotfix does not launch; launch still needs a succeeded parent. Deterministic branching after success uses `if`.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/03-two-entry-points.pipeline.yaml --strict

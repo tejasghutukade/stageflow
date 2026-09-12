@@ -1,7 +1,10 @@
 # conditional-fork
 
-Exclusive fork: the operator picks **branch-a** or **branch-b** at a HITL gate;
-`decide` emits `fork_choice`, and the unchosen branch is `skipped`.
+This walkthrough still teaches exclusive `fork` + envelope `fork_choice`. Catalog YAML on this branch **rejects** `fork` / `route_select` / `allow_none`; listed `route` `to:` stay on the DAG, and optional `if` skips a successor after success. Do not emit `fork_choice` to pick YAML successors.
+
+Current wiring tours: [`../route-wiring-smoke-test/`](../route-wiring-smoke-test/), [`../route-if-tour/`](../route-if-tour/). See [Upgrading older catalogs](../../docs/yaml-catalog.md#upgrading-older-catalogs).
+
+Historical demo (will fail `sf validate` until rewritten): the operator picks **branch-a** or **branch-b** at a HITL gate.
 
 ## Prerequisites
 

@@ -499,7 +499,7 @@ Describe a pipeline DAG from a filesystem pipeline path (same locator style as `
 }
 ```
 
-Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items:
+Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` (inverted from `route`). Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items:
 
 ```json
 {

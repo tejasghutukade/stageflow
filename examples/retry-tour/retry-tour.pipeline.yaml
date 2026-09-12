@@ -1,0 +1,122 @@
+id: retry-tour
+model: cursor/auto
+schemas:
+  empty:
+    type: object
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: emit-retry
+    system_prompt: |
+      Start the retry tour in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: emit-retry
+    route:
+      - to: auto-repair
+    system_prompt: |
+      Cover emit-phase verify soft reject (same attempt, not a new attempt).
+      You MUST call emit_stage_envelope twice:
+      1. First call: status: success, a one-sentence summary, artifacts: [], payload: {}. Do not write any artifact yet. This emit is rejected because note.md is missing — that is the scenario.
+      2. After that tool error: call write_stage_artifact with path note.md and a short nonempty markdown body. Then emit_stage_envelope again with status: success, a one-sentence summary, artifacts listing the path returned by write_stage_artifact, and payload: {}.
+      Do not skip the failing first emit. Do not call ask_operator.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: note-declared
+        type: artifact
+        basename: note.md
+        when: [emit]
+
+  - id: auto-repair
+    route:
+      - to: manual-recover
+    system_prompt: |
+      Cover on_verify_fail.mode: repair. Look at the artifacts path in this prompt (stages/auto-repair/attempts/N/artifacts/).
+      If N is 1: call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: {}. Do not write proof.md. After-phase verify will fail and Stageflow will start attempt 2 by itself.
+      If N is 2 or greater, or the user message contains "This is recovery attempt": call write_stage_artifact with path proof.md and a short nonempty body, then emit_stage_envelope with status: success, a one-sentence summary, artifacts listing that path, and payload: {}.
+      Do not call ask_operator. Do not "helpfully" write proof.md on attempt 1.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: proof-on-disk
+        type: artifact
+        path: proof.md
+        nonempty: true
+        when: [after]
+    on_verify_fail:
+      mode: repair
+      max_attempts: 2
+      retry_safety: idempotent
+      include_failed_checks: true
+
+  - id: manual-recover
+    route:
+      - to: ordinary-retry
+    system_prompt: |
+      Cover on_verify_fail.mode: manual. Look at the artifacts path in this prompt (stages/manual-recover/attempts/N/artifacts/).
+      If N is 1: call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: {}. Do not write proof.md. After-phase verify will fail and this stage stays failed until the operator uses Retry with guidance.
+      If N is 2 or greater, or the user message contains "This is recovery attempt": call write_stage_artifact with path proof.md and a short nonempty body, then emit_stage_envelope with status: success, a one-sentence summary, artifacts listing that path, and payload: {}.
+      Do not call ask_operator. Do not "helpfully" write proof.md on attempt 1.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+    verify:
+      - id: proof-on-disk
+        type: artifact
+        path: proof.md
+        nonempty: true
+        when: [after]
+    on_verify_fail:
+      mode: manual
+      retry_safety: side_effecting
+      include_failed_checks: true
+
+  - id: ordinary-retry
+    route:
+      - to: done
+    system_prompt: |
+      Cover ordinary Retry (no on_verify_fail). Look at the artifacts path in this prompt (stages/ordinary-retry/attempts/N/artifacts/).
+      If N is 1: call emit_stage_envelope with status: failure, a one-sentence summary that you failed on purpose, artifacts: [], and payload: {}. Do not emit success.
+      If N is 2 or greater: call emit_stage_envelope with status: success, a one-sentence summary, artifacts: [], and payload: {}.
+      Do not call ask_operator.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"
+
+  - id: done
+    system_prompt: |
+      The retry tour finished. Emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/empty"

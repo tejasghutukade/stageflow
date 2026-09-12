@@ -76,9 +76,9 @@ Each stage is an object with one of:
 
 ### Upgrading older catalogs {#upgrading-older-catalogs}
 
-**Write Author YAML only:** `io` / `verify` / `on_verify_fail`. That is the catalog dialect for new and migrated files.
+**Write Author YAML only:** `io` / `verify` / `on_verify_fail` for contracts, and `route` / `entry` / `{ type: loop }` for wiring.
 
-This release still **loads** catalogs that use the previous authoring keys (second column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load — do not author both spellings.
+This release still **loads** catalogs that use the previous **contract** keys (second column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load — do not author both spellings. Wiring (`needs` / `fork` / `feedback_loop`) is a separate hard cutover — see [Wiring](#upgrading-wiring).
 
 Runtime IR names in TypeScript/JSON after load (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`) are **not** what you write in catalog YAML.
 
@@ -124,6 +124,43 @@ verify:
 ```
 
 After you migrate, you can optionally set `STAGEFLOW_LEGACY_YAML=0` to reject leftover legacy authoring keys (`sf migrate-yaml` still reads them). You do not need that env var to author `io` / `verify` / `on_verify_fail`.
+
+#### Wiring: `needs` / `fork` / `feedback_loop` → `route` {#upgrading-wiring}
+
+Contract dual-read is only for `payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`. [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) converts those keys only. It does **not** rewrite wiring.
+
+`needs`, `fork`, `feedback_loop`, `route_select`, and `allow_none` are a hard cutover: load fails.
+
+- `"needs" is no longer supported — declare the wiring on the source stage's "route" instead`
+- `"fork" is no longer supported — use "route" instead; listed route targets always run`
+- `"feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`
+- `"route_select" is no longer supported — listed route targets always run`
+- `"allow_none" is no longer supported — listed route targets always run`
+
+Those “always run” phrases describe the catalog DAG (every listed `to:` stays on the graph). Optional `if` can still skip a listed successor at runtime.
+
+Cheat sheet:
+
+- `needs: [A]` on B → on A: `route: [{ to: B }]`; mark roots `entry: true`
+- structured need `{ id: A, on: [...] }` on Join → on A: `route: [{ to: Join, on: [...] }]`
+- `fork: { select: one|subset }` plus envelope `fork_choice` → list all `to:`; gate with `if` / `on:` — catalog YAML does not pick exclusive successors via `fork_choice`
+- top-level `feedback_loop:` → a `{ type: loop, to, max_replays, on_max_replays, replay_session }` entry inside `route`
+
+Join / skip (the child no longer declares parents; default edge is succeeded-only):
+
+- Single-parent: a skipped parent skip-cascades children whose `on` does **not** include `skipped`. Launch still requires a **succeeded** parent. Including `skipped` or `failed` in `on:` only opts that edge out of skip-cascade; it does not launch the child from a skipped or failed parent.
+- Multi-parent Join: never skip-cascaded from one parent. Wait until every parent is terminal. Runs if at least one parent succeeded (skipped siblings do not block). Stays pending if any parent failed (even if `on` lists `failed`). Force-skipped if every parent skipped.
+- Route `if` miss on a single-parent edge skips that successor (and cascade-skips its single-parent dependents). A required `if` field missing from the payload fails the run (`missing_field`); it is not treated as a miss.
+
+Validate:
+
+- `catalog.legacy_yaml` — contract dual-read warning; `--strict` does not promote
+- wiring keys above — hard errors
+- `pipeline.route_if_invalid` — error
+- `pipeline.route_all_gated` — warning, `ok: true`; `--strict` does not promote
+- `pipeline.model_applies` — warning
+
+See [Route wiring](#route), [Generic fan-in](#generic-fan-in), [Feedback loops](#feedback-loops), [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/), [`examples/route-if-tour/`](../examples/route-if-tour/).
 
 #### For contributors
 
@@ -300,7 +337,7 @@ stages:
 
 See also [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/).
 
-Parallel fan-out: multiple forward `to:` entries on the source. Listed targets run when the source reaches a matching `on:` state (default `succeeded` only), unless a forward entry has `if` and that predicate is false against the source output payload. The completing agent does not pick which successors run.
+Parallel fan-out: multiple forward `to:` entries on the source. Listed `to:` stay on the DAG. Default `on:` is succeeded-only. After the source **succeeds**, a single-parent successor can run (then `if`, if present, is evaluated). Including `failed` or `skipped` in `on:` opts that edge out of skip-cascade; it does not launch a child from a skipped or failed parent. Optional `if` can skip a listed successor after success. The completing agent does not pick which successors run.
 
 ```yaml
 stages:
@@ -318,11 +355,11 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default `succeeded` only), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Load and pipeline create invert preserve `if` on the matching outbound Route entry. HTTP create `needs` remains ungated (`id`/`on` or a parent id string). Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default succeeded-only skip-cascade policy), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Load and pipeline create invert preserve `if` on the matching outbound Route entry. HTTP create `needs` remains ungated (`id`/`on` or a parent id string). Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
 
 ### Generic fan-in {#generic-fan-in}
 
-A stage may wait for two or more catalog parents. Each parent lists a forward `to:` to the join. Optional `on:` on that route entry gates when the edge fires (default `succeeded` only). Optional `if` on that same entry is evaluated against **that parent's** output payload after success.
+A stage may wait for two or more catalog parents. Each parent lists a forward `to:` to the join. Optional `on:` on a **single-parent** edge is skip-cascade policy (default succeeded-only). On a Join inbound edge, `on` does **not** decide Join readiness. The Join waits until every parent is terminal; it stays pending if any parent failed (even if `on` lists `failed`); it force-skips if every parent skipped; otherwise it follows the succeeded / `if` rules below. Skipped siblings do not block a Join that has a succeeded parent. Optional `if` on that same entry is evaluated against **that parent's** output payload after success.
 
 ```yaml
 id: diamond-fan-in
@@ -345,7 +382,7 @@ stages:
     uses: ../stages/synthesize.yaml
 ```
 
-Structured `on` sets (accepted failure or skip):
+Listing `failed` / `skipped` on a Join inbound `on:` (skip-cascade policy, not a launch after failure):
 
 ```yaml
   - id: research
@@ -355,20 +392,26 @@ Structured `on` sets (accepted failure or skip):
         on: [succeeded, failed, skipped]
 ```
 
+Listing `failed` or `skipped` on a Join inbound edge does not run the Join after failure. Skipped siblings still do not block when another parent succeeded.
+
 The Join starts only after every declared parent (or every current clone instance of a clonable parent) is terminal. A false inbound `if` does **not** skip the child while another parent is still running.
 
 After every parent **succeeded**, the child **runs** only if every inbound edge fired (`if` true — including nested `all` / `any` / `not` composition — or no `if`). It then opens with **every** parent's success envelope (complete set, no hole). If any inbound `if` missed, the child is **skipped** — not pending forever, not failed, not opened with a partial envelope set. Sequential `io` subset checks still apply when the Join child runs; a skipped Join child is not opened.
 
 A failed parent still **blocks** the Join. `if` does not redefine failure joins.
 
-Pipelines whose Routes have **no** forward `if` keep today's Join: it **runs if at least one parent succeeded**. Skipped parents do not block, and their envelopes are omitted from join input. The Join stays pending if a parent failed. It is skipped if every parent skipped. The all-inbound-fired check applies only on top of “every parent succeeded.”
+Pipelines whose Routes have **no** forward `if` keep today's Join: it **runs if at least one parent succeeded**. Skipped parents do not block, and their envelopes are omitted from join input. The Join stays pending if a parent failed. It is skipped if every parent skipped.
+
+The all-inbound-fired check applies only when every parent succeeded. If some parents skipped and at least one succeeded, the Join can still run even if a succeeded parent's inbound `if` missed; skipped parents' envelopes stay omitted from join input.
+
+A false `if` on a single-parent edge skips that successor and skip-cascades its single-parent dependents. A Join with two or more parents is never skip-cascaded from one parent.
 
 Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. Do not reuse clone-list `priorEnvelopes` — that field stays for [clone-list joins](#clonable-successors). A clonable parent under generic fan-in maps to one key whose value is that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
 
 Fixtures:
 
 - [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond
-- [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — structured `on` including failed and skipped
+- [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — inbound `on` lists `failed` and `skipped` (skip-cascade policy; does not run the Join after a failed parent)
 - [`diamond-fan-in-clone.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-clone.pipeline.yaml) — clonable parent plus named sibling join
 - [`route-if-join.pipeline.yaml`](../tests/fixtures/pipelines/route-if-join.pipeline.yaml) — Join gated by inbound `if`s
 
@@ -395,9 +438,9 @@ Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../t
 
 ### Route wiring {#route}
 
-Wiring is declared on the **source** stage as `route`. Each forward entry names a `to:` target. Optional `on:` is a terminal-state gate (default `succeeded` only). Optional `if` is a payload predicate evaluated after the source **succeeds**, against that stage's output payload only. A pipeline that uses `route` must mark at least one `entry: true` root.
+Wiring is declared on the **source** stage as `route`. Each forward entry names a `to:` target. Optional `on:` is skip-cascade / acceptance policy (default succeeded-only), not a launch schedule for failed or skipped parents. Optional `if` is a payload predicate evaluated after the source **succeeds**, against that stage's output payload only. A pipeline that uses `route` must mark at least one `entry: true` root.
 
-Listed forward `to:` targets still appear on the DAG. A miss skips that successor at runtime; it does not remove the edge. An entry with no `if` still fires when the source reaches a matching `on:` state. Two matching `if`s on different targets both fire (not first-match-wins). Duplicate `to:` in one Route stays illegal. The completing agent does **not** pick which successors run, and catalog YAML does not produce a `fork` on the resolved DAG. HITL (`ask_operator`) inside a stage is not a parallel router: `if` still runs only after that stage succeeds and emits a payload.
+Listed forward `to:` targets still appear on the DAG. A miss skips that successor at runtime; it does not remove the edge. After success, an entry with no `if` is eligible to run (single-parent) or participates in Join readiness as above. `on` does not launch from failed or skipped. Two matching `if`s on different targets both fire (not first-match-wins). Duplicate `to:` in one Route stays illegal. The completing agent does **not** pick which successors run, and catalog YAML does not produce a `fork` on the resolved DAG. HITL (`ask_operator`) inside a stage is not a parallel router: `if` still runs only after that stage succeeds and emits a payload.
 
 `if` is a predicate, not a string: a leaf `{ field, op, value }` or a composition node `{ all: [...] }` | `{ any: [...] }` | `{ not: {...} }` (including nesting such as `not` around `all`, or `any` of `all`s). A node must be exactly one of those shapes; mixing leaf keys with `all` / `any` / `not`, or any unknown key, is `pipeline.route_if_invalid`. Empty `all` / `any` / `in` / `not_in` lists are invalid. There is no `exists` operator and no else/fallback arm.
 
@@ -407,7 +450,7 @@ Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`. `eq` / `ne` are
 
 Illegal `if` is error `pipeline.route_if_invalid` (not `pipeline.dag_error`). When every forward `to:` on a stage has `if`, validate warns `pipeline.route_all_gated` with `ok: true`; `--strict` does not promote that warning. Sequential `io` subset checks still apply on a gated edge that fires; a skipped child is not opened.
 
-`if` is legal only on a **forward** Route Entry after success. It is `pipeline.route_if_invalid` on a `{ type: loop }` entry, on an entry whose `to` is clonable, on a source that has any `if` and also names a clonable target, or when combined with `on` other than succeeded-only. Entries without `if` keep today's `on:` (including `on: [failed]`). Backward or circular forward `to:` without `type: loop` remains `pipeline.dag_error`.
+`if` is legal only on a **forward** Route Entry after success. It is `pipeline.route_if_invalid` on a `{ type: loop }` entry, on an entry whose `to` is clonable, on a source that has any `if` and also names a clonable target, or when combined with `on` other than succeeded-only. Entries without `if` keep `on:` as skip-cascade policy (including `on: [failed]`). Backward or circular forward `to:` without `type: loop` remains `pipeline.dag_error`.
 
 `fork`, `route_select`, and `allow_none` are rejected:
 
@@ -415,7 +458,9 @@ Illegal `if` is error `pipeline.route_if_invalid` (not `pipeline.dag_error`). Wh
 - `"route_select" is no longer supported — listed route targets always run`
 - `"allow_none" is no longer supported — listed route targets always run`
 
-Success vs failure still uses `on:` on the source stage:
+Those messages mean listed `to:` stay on the DAG (no agent exclusive pick); `if` can still skip a listed successor.
+
+`on: [failed]` on `hotfix` keeps hotfix from being skip-cascaded when `run-tests` fails; it does **not** launch hotfix. Launch still requires a succeeded parent. Prefer `if` on a succeeded payload for deterministic branching.
 
 ```yaml
 id: release-gate
@@ -741,11 +786,11 @@ Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (wi
 sf validate --strict                    # manifest-all: pipelines, stages, and tasks from git root
 sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and its stages
 sf validate --task path/to/x.task.yaml --strict           # that task
-sf migrate-yaml                         # dry-run convert legacy keys to io / verify / on_verify_fail
+sf migrate-yaml                         # dry-run convert contract keys to io / verify / on_verify_fail (not wiring)
 sf migrate-yaml --write                 # apply
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `--strict` does not promote `catalog.legacy_yaml`. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml).
+Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `sf migrate-yaml` converts contract keys (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`) only — it does not rewrite wiring. `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none` are hard errors. `pipeline.route_if_invalid` is an error. `catalog.legacy_yaml` is a contract dual-read warning; `--strict` does not promote it. `pipeline.route_all_gated` and `pipeline.model_applies` are warnings (`ok: true`); `--strict` does not promote them. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) and [Upgrading older catalogs](#upgrading-older-catalogs).
 
 ## CLI run
 

@@ -27,7 +27,7 @@ sf validate --strict --json
 | `0` | No errors |
 | `1` | Validation errors (warnings alone pass unless `--strict` promotes manifest warnings) |
 
-With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors. `--strict` does not promote `catalog.legacy_yaml` (only relevant if you still have pre-`io` catalogs). That warning names replacement fields (for example `payload_schema` → `io.output.schema`). Convert older catalogs with `sf migrate-yaml` (dry-run default; `--write` to apply). Finding codes are additive.
+With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors. `--strict` does not promote `catalog.legacy_yaml` (only relevant if you still have pre-`io` catalogs), `pipeline.model_applies`, or `pipeline.route_all_gated`. `catalog.legacy_yaml` names replacement fields (for example `payload_schema` → `io.output.schema`). Convert older **contract** keys with `sf migrate-yaml` (dry-run default; `--write` to apply). That command does not rewrite `needs` / `fork` / `feedback_loop` — see [Upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs). Finding codes are additive.
 
 Does not prove provider auth or checkout paths.
 
@@ -50,7 +50,7 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
 | `2` | `waiting` | Stage blocked on HITL |
 
-Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A parent that failed in a state a [generic fan-in](yaml-catalog.md#generic-fan-in) join explicitly accepts does not independently fail the run.
+A listed successor skipped by Route `if` (or skip-cascade from a skipped parent) is `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A failed parent still fails the run: a [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending even if that parent's `on` lists `failed`. Skipped siblings do not block a Join that has a succeeded parent.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md). The CI guest uses `sf run --json` / `--skip-gates` only — it does not wait or answer with `sf runs`. Outside CI, humans and agents can continue a parked run with [`sf runs`](cli-reference.md#sf-runs).
 

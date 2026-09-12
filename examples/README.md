@@ -4,7 +4,7 @@ Runnable Stageflow catalogs. Each directory is **pipeline-owned** (co-located `*
 
 Stages are **author-defined** in YAML; these walkthroughs show domain-neutral flows, release automation, and an SDLC-style plan review — not built-in product types. Author contracts with `io` / `verify` / `on_verify_fail` — see [YAML catalog](../docs/yaml-catalog.md).
 
-Upgrading older YAML: see [Upgrading older catalogs](../docs/yaml-catalog.md#upgrading-older-catalogs) and [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml).
+Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml) converts contract keys to `io` / `verify` / `on_verify_fail`. Wiring (`needs` / `fork` / `feedback_loop`) is a hard cutover to `route` / `entry` / `{ type: loop }` — see [Upgrading older catalogs](../docs/yaml-catalog.md#upgrading-older-catalogs) (wiring subsection). `sf migrate-yaml` does not rewrite wiring.
 
 ## Featured example: Archify on PR
 
@@ -37,6 +37,11 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
 | [archify-on-pr](archify-on-pr/) | **Featured** — PR diagrams via conditional fork + Archify handoff | [README](archify-on-pr/README.md), archify-pr-diagrams workflow |
 | [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |
+| [route-if-tour](route-if-tour/) | Deterministic `if` tour: operators, composition, skip, join fire/miss | `sf ui`, then pick `route-if-tour` |
+| [verify-tour](verify-tour/) | Verify check types: artifact, command, checklist, payload_schema, gate, checkout_changes | `sf ui`, then pick `verify-tour` |
+| [retry-tour](retry-tour/) | Retry surfaces: emit soft-reject, automatic repair, manual recover, ordinary Retry | `sf ui`, then pick `retry-tour` |
+
+Several older walkthroughs still use inbound `needs` / `fork` / `feedback_loop` and will fail `sf validate` on this branch until rewritten. Current wiring tours: [`route-wiring-smoke-test`](route-wiring-smoke-test/), [`route-if-tour`](route-if-tour/).
 
 Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). **`sf ui` started from any subdirectory** still uses `<repo>/.stageflow` for run state.
 
@@ -63,7 +68,9 @@ sf run \
   --task examples/hello-world/my-task.task.yaml
 ```
 
-North-star fork demo:
+Current wiring north star: [`examples/route-wiring-smoke-test/`](route-wiring-smoke-test/) and [`examples/route-if-tour/`](route-if-tour/).
+
+Legacy exclusive-`fork_choice` walkthrough (fails load on this branch until rewritten):
 
 ```bash
 sf run \

@@ -1,0 +1,9 @@
+id: retry-tour
+goal: Walk emit soft-reject, automatic repair, manual recover, and ordinary Retry.
+context: |
+  Retry tour — each stage covers one retry surface. First attempts are
+  supposed to fail the check or the stage; later attempts pass. Follow each
+  stage prompt, including intentional failing emits.
+constraints: |
+  Docs only; no checkout edits. One-sentence summaries.
+  Never emit fork_choice. Do not skip the failing first pass on a stage.

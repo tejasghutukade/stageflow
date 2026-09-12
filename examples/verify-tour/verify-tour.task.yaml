@@ -1,0 +1,11 @@
+id: verify-tour
+goal: Walk each verify type and leave a checkout marker file.
+context: |
+  Verify tour — each stage covers one check type. Payloads and tool calls
+  are spelled in the stage prompts. checkout_changes needs this bound git
+  checkout; Stageflow compares it before and after checkout-check.
+constraints: |
+  Docs and one marker file only. Do not commit or push.
+  One-sentence summaries. Use each prompt's payload and attestations verbatim.
+  Never emit fork_choice. On gate-check, wait for confirm accept before emit.
+checkout: .
