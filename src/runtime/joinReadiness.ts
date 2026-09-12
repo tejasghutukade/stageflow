@@ -8,7 +8,7 @@ import type {
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
-import { evaluateRouteIf } from "./routeIfEval.js";
+import { evaluateRouteIf, type RouteIfEval } from "./routeIfEval.js";
 
 function definitionInstances(
   dag: ResolvedPipelineDag,
@@ -178,16 +178,25 @@ export function joinAllowsRun(
   return inboundEdgeFired(edge, parentId, states, envelopes);
 }
 
+export type InboundAfterSuccess = RouteIfEval | "ungated";
+
+export function classifyInboundAfterSuccess(
+  node: Pick<ResolvedPipelineStageNode, "needs" | "needsEdges">,
+  parentId: string,
+  payload: Record<string, unknown> | undefined,
+): InboundAfterSuccess {
+  const inbound = predecessorEdges(node).find((edge) => edge.id === parentId);
+  if (inbound?.if === undefined) return "ungated";
+  return evaluateRouteIf(inbound.if, payload);
+}
+
 export function isEagerSingleParentIfSkip(
   node: Pick<ResolvedPipelineStageNode, "needs" | "needsEdges">,
   parentId: string,
   payload: Record<string, unknown> | undefined,
 ): boolean {
-  const edges = predecessorEdges(node);
-  const inbound = edges.find((edge) => edge.id === parentId);
-  if (inbound?.if === undefined) return false;
-  if (edges.length !== 1) return false;
-  return evaluateRouteIf(inbound.if, payload) === "miss";
+  if (predecessorEdges(node).length !== 1) return false;
+  return classifyInboundAfterSuccess(node, parentId, payload) === "miss";
 }
 
 /**

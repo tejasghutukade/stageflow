@@ -15,6 +15,7 @@ import {
 } from "../src/runtime/pipelineScheduler.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import type { ResolvedPipelineDag, ResolvedPipelineStageNode } from "../src/types/pipeline.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
@@ -274,6 +275,65 @@ describe("applyForkSkipsFromEnvelopes", () => {
     expect(states.get("design-doc")).toBe("pending");
     expect(states.get("implementation-plan")).toBe("skipped");
     expect(states.get("join-doc")).toBe("skipped");
+  });
+
+  it("stored fork_choice skip and if-skip do not clobber each other on a legacy forked snapshot", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "clarify",
+          needs: null,
+          needsEdges: [],
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        {
+          id: "design-doc",
+          needs: "clarify",
+          needsEdges: [
+            {
+              id: "clarify",
+              on: ["succeeded"],
+              if: { field: "ok", op: "eq", value: true },
+            },
+          ],
+          ancestors: ["clarify"],
+          stageIndex: 1,
+        },
+        {
+          id: "implementation-plan",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 2,
+        },
+      ],
+      roots: ["clarify"],
+      childrenOf: { clarify: ["design-doc", "implementation-plan"] },
+    };
+    const states = new Map([
+      ["clarify", "succeeded" as const],
+      ["design-doc", "skipped" as const],
+      ["implementation-plan", "pending" as const],
+    ]);
+
+    applyForkSkipsFromEnvelopes(
+      dag,
+      states,
+      new Map([
+        [
+          "clarify",
+          okEnvelope("ok", {
+            fork_choice: ["design-doc"],
+            payload: { ok: false },
+          }),
+        ],
+      ]),
+    );
+
+    expect(states.get("design-doc")).toBe("skipped");
+    expect(states.get("implementation-plan")).toBe("skipped");
   });
 });
 
@@ -640,6 +700,133 @@ describe("forward route if eq scheduling", () => {
     );
     expect(agent.openCounts.get("page")).toBeUndefined();
     expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("missing_field halts with today's reason string", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-missing-"));
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
+      cwd: fixtures,
+    });
+    loaded.dag = {
+      ...loaded.dag,
+      nodes: loaded.dag.nodes.map((node) =>
+        node.id === "page"
+          ? {
+              ...node,
+              needsEdges: node.needsEdges.map((edge) =>
+                edge.id === "triage"
+                  ? {
+                      ...edge,
+                      if: { field: "absent", op: "eq", value: true },
+                    }
+                  : edge,
+              ),
+            }
+          : node,
+      ),
+    };
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "high" } }),
+        },
+      ],
+      page: [{ type: "throw", message: "page must not run" }],
+      notify: [{ type: "throw", message: "notify must not run" }],
+    });
+
+    const result = await runPipelineDag({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe(
+      'stage "triage": route if field missing from payload',
+    );
+    expect(agent.openCounts.get("page") ?? 0).toBe(0);
+    expect(agent.openCounts.get("notify") ?? 0).toBe(0);
+  });
+
+  it("stored fork_choice skip and if-skip do not clobber each other", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-fork-"));
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
+      cwd: fixtures,
+    });
+    loaded.dag = {
+      ...loaded.dag,
+      nodes: loaded.dag.nodes.map((node) =>
+        node.id === "triage"
+          ? { ...node, fork: { select: "one", allow_none: false } }
+          : node,
+      ),
+    };
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            fork_choice: ["page"],
+            payload: { severity: "low" },
+          }),
+        },
+      ],
+      page: [{ type: "throw", message: "page must not run" }],
+      notify: [{ type: "throw", message: "notify must not run" }],
+    });
+
+    const result = await runPipelineDag({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe(
+      "skipped",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "skipped",
+    );
+    expect(agent.openCounts.get("page") ?? 0).toBe(0);
+    expect(agent.openCounts.get("notify") ?? 0).toBe(0);
   });
 
   it("two matching ifs on different targets both run", async () => {

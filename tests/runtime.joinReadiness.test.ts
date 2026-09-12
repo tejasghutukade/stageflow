@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { predecessorEdges } from "../src/config/pipelineNeeds.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
+  classifyInboundAfterSuccess,
   isEagerSingleParentIfSkip,
   joinAllowsRun,
   pickStalledJoinSkips,
@@ -170,6 +171,9 @@ describe("isEagerSingleParentIfSkip", () => {
     expect(
       isEagerSingleParentIfSkip(page!, "triage", { severity: "high" }),
     ).toBe(false);
+    expect(
+      classifyInboundAfterSuccess(page!, "triage", { severity: "high" }),
+    ).toBe("fire");
 
     const miss = new Map<string, StageEnvelope>([
       ["triage", okEnvelope("ok", { payload: { severity: "low" } })],
@@ -178,12 +182,24 @@ describe("isEagerSingleParentIfSkip", () => {
     expect(
       isEagerSingleParentIfSkip(page!, "triage", { severity: "low" }),
     ).toBe(true);
+    expect(
+      classifyInboundAfterSuccess(page!, "triage", { severity: "low" }),
+    ).toBe("miss");
 
     const missing = new Map<string, StageEnvelope>([
       ["triage", okEnvelope("ok", { payload: {} })],
     ]);
     expect(joinAllowsRun(dag, "page", states, missing)).toBe(false);
     expect(isEagerSingleParentIfSkip(page!, "triage", {})).toBe(false);
+    expect(classifyInboundAfterSuccess(page!, "triage", {})).toBe(
+      "missing_field",
+    );
+
+    const notify = dag.nodes.find((n) => n.id === "notify");
+    expect(notify).toBeDefined();
+    expect(
+      classifyInboundAfterSuccess(notify!, "triage", { severity: "low" }),
+    ).toBe("ungated");
   });
 });
 
