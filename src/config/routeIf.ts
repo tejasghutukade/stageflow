@@ -1,3 +1,4 @@
+import { resolvePayloadSchemaFieldPath } from "../envelope/payloadSchema.js";
 import type {
   PipelineRouteEntry,
   PipelineRouteForwardEntry,
@@ -26,7 +27,6 @@ const EQ_NE_TYPES = new Set(["string", "number", "integer", "boolean"]);
 const NUMERIC_TYPES = new Set(["number", "integer"]);
 const NUMERIC_OPS = new Set(["gt", "gte", "lt", "lte"]);
 const MEMBERSHIP_OPS = new Set(["in", "not_in"]);
-const INDEX_SEGMENT = /^\d+$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -170,23 +170,6 @@ export function parseRouteIf(
   return parseRouteIfNode(raw, `stage "${stageId}": route "${targetId}" if`);
 }
 
-type JsonSchemaObject = {
-  type?: unknown;
-  properties?: unknown;
-  required?: unknown;
-  items?: unknown;
-  $ref?: unknown;
-};
-
-function asSchemaObject(schema: unknown): JsonSchemaObject | undefined {
-  if (!isPlainObject(schema)) return undefined;
-  return schema as JsonSchemaObject;
-}
-
-function schemaTypeName(schema: JsonSchemaObject | undefined): string | undefined {
-  return typeof schema?.type === "string" ? schema.type : undefined;
-}
-
 function valueMatchesScalarType(value: unknown, typeName: string): boolean {
   if (typeName === "string") return typeof value === "string";
   if (typeName === "boolean") return typeof value === "boolean";
@@ -204,43 +187,18 @@ function routeIfLeafSchemaIssue(
   payloadSchema: unknown,
   prefix: string,
 ): string | undefined {
-  const segments = predicate.field.split(".");
-  if (segments.length === 0 || segments.some((segment) => segment === "")) {
-    return `${prefix}: field "${predicate.field}" is not a property of io.output.schema`;
-  }
-  if (segments.some((segment) => INDEX_SEGMENT.test(segment))) {
-    return `${prefix}: field "${predicate.field}" array index paths are not allowed`;
-  }
-
-  let current: unknown = payloadSchema;
-  for (const segment of segments) {
-    const schema = asSchemaObject(current);
-    if (schema?.$ref !== undefined && schema.properties === undefined) {
-      return `${prefix}: field "${predicate.field}" is not a property of io.output.schema`;
-    }
-    const typeName = schemaTypeName(schema);
-    if (typeName === "array" || (schema !== undefined && hasOwn(schema, "items") && typeName !== "object")) {
+  const path = resolvePayloadSchemaFieldPath(payloadSchema, predicate.field);
+  if (!path.ok) {
+    if (path.issue === "array_index") {
       return `${prefix}: field "${predicate.field}" array index paths are not allowed`;
     }
-    const properties =
-      schema && isPlainObject(schema.properties) ? schema.properties : undefined;
-    if (!properties || !hasOwn(properties, segment)) {
-      return `${prefix}: field "${predicate.field}" is not a property of io.output.schema`;
-    }
-    const required = Array.isArray(schema?.required)
-      ? schema.required.filter((item): item is string => typeof item === "string")
-      : [];
-    if (!required.includes(segment)) {
+    if (path.issue === "optional") {
       return `${prefix}: field "${predicate.field}" must be required on io.output.schema`;
     }
-    current = properties[segment];
-  }
-
-  const leaf = asSchemaObject(current);
-  const fieldType = schemaTypeName(leaf);
-  if (fieldType === undefined) {
     return `${prefix}: field "${predicate.field}" is not a property of io.output.schema`;
   }
+
+  const fieldType = path.type;
   if (NUMERIC_OPS.has(predicate.op)) {
     if (!NUMERIC_TYPES.has(fieldType)) {
       return `${prefix}: op ${predicate.op} is only valid for number or integer fields`;
@@ -377,86 +335,4 @@ export function collectRouteAllGatedWarnings(
     });
   }
   return issues;
-}
-
-export type RouteIfEval = "fire" | "miss" | "missing_field";
-
-function readPayloadPath(
-  payload: Record<string, unknown> | undefined,
-  field: string,
-): { ok: true; value: unknown } | { ok: false } {
-  if (payload === undefined) return { ok: false };
-  const segments = field.split(".");
-  let current: unknown = payload;
-  for (let i = 0; i < segments.length; i++) {
-    const segment = segments[i]!;
-    if (!isPlainObject(current) || !hasOwn(current, segment)) {
-      return { ok: false };
-    }
-    current = current[segment];
-    if (i < segments.length - 1 && !isPlainObject(current)) {
-      return { ok: false };
-    }
-  }
-  return { ok: true, value: current };
-}
-
-function compareLeaf(
-  op: RouteIfOp,
-  actual: unknown,
-  expected: unknown,
-): RouteIfEval {
-  if (op === "eq") return actual === expected ? "fire" : "miss";
-  if (op === "ne") return actual !== expected ? "fire" : "miss";
-  if (NUMERIC_OPS.has(op)) {
-    if (typeof actual !== "number" || !Number.isFinite(actual)) return "miss";
-    if (typeof expected !== "number" || !Number.isFinite(expected)) return "miss";
-    if (op === "gt") return actual > expected ? "fire" : "miss";
-    if (op === "gte") return actual >= expected ? "fire" : "miss";
-    if (op === "lt") return actual < expected ? "fire" : "miss";
-    if (op === "lte") return actual <= expected ? "fire" : "miss";
-  }
-  if (op === "in") {
-    if (!Array.isArray(expected)) return "miss";
-    return expected.includes(actual) ? "fire" : "miss";
-  }
-  if (op === "not_in") {
-    if (!Array.isArray(expected)) return "miss";
-    return expected.includes(actual) ? "miss" : "fire";
-  }
-  return "miss";
-}
-
-export function evaluateRouteIf(
-  predicate: RouteIfPredicate,
-  payload: Record<string, unknown> | undefined,
-): RouteIfEval {
-  if ("all" in predicate && predicate.all !== undefined) {
-    let anyMiss = false;
-    for (const child of predicate.all) {
-      const result = evaluateRouteIf(child, payload);
-      if (result === "missing_field") return "missing_field";
-      if (result === "miss") anyMiss = true;
-    }
-    return anyMiss ? "miss" : "fire";
-  }
-  if ("any" in predicate && predicate.any !== undefined) {
-    let anyFire = false;
-    for (const child of predicate.any) {
-      const result = evaluateRouteIf(child, payload);
-      if (result === "missing_field") return "missing_field";
-      if (result === "fire") anyFire = true;
-    }
-    return anyFire ? "fire" : "miss";
-  }
-  if ("not" in predicate && predicate.not !== undefined) {
-    const result = evaluateRouteIf(predicate.not, payload);
-    if (result === "missing_field") return "missing_field";
-    return result === "fire" ? "miss" : "fire";
-  }
-
-  if (!isRouteIfLeaf(predicate)) return "missing_field";
-  const read = readPayloadPath(payload, predicate.field);
-  if (!read.ok) return "missing_field";
-  return compareLeaf(predicate.op, read.value, predicate.value);
 }

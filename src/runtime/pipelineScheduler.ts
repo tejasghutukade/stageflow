@@ -4,7 +4,7 @@ import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstor
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
-import { evaluateRouteIf } from "../config/routeIf.js";
+import { evaluateRouteIf } from "./routeIfEval.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   LoadedPipeline,

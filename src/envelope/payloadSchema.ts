@@ -556,6 +556,86 @@ export function expandPayloadSchemaRefs(
   });
 }
 
+const INDEX_SEGMENT = /^\d+$/;
+
+export type PayloadSchemaFieldPathIssue =
+  | "empty_segment"
+  | "array_index"
+  | "missing"
+  | "optional"
+  | "untyped";
+
+export type PayloadSchemaFieldPathResult =
+  | { ok: true; type: string }
+  | { ok: false; issue: PayloadSchemaFieldPathIssue };
+
+function schemaNodeType(schema: JsonSchemaNode | undefined): string | undefined {
+  return typeof schema?.type === "string" ? schema.type : undefined;
+}
+
+function tryExpandSchema(
+  node: unknown,
+  options?: CompilePayloadSchemaOptions,
+): unknown {
+  try {
+    return expandPayloadSchemaRefs(node, options);
+  } catch {
+    return node;
+  }
+}
+
+export function resolvePayloadSchemaFieldPath(
+  schema: unknown,
+  field: string,
+  options?: CompilePayloadSchemaOptions,
+): PayloadSchemaFieldPathResult {
+  const segments = field.split(".");
+  if (segments.length === 0 || segments.some((segment) => segment === "")) {
+    return { ok: false, issue: "empty_segment" };
+  }
+  if (segments.some((segment) => INDEX_SEGMENT.test(segment))) {
+    return { ok: false, issue: "array_index" };
+  }
+
+  let current: unknown = tryExpandSchema(schema, options);
+  for (const segment of segments) {
+    if (!isPlainSchemaObject(current)) {
+      return { ok: false, issue: "missing" };
+    }
+    const node = current as JsonSchemaNode;
+    if (node.$ref !== undefined && node.properties === undefined) {
+      return { ok: false, issue: "missing" };
+    }
+    const typeName = schemaNodeType(node);
+    if (
+      typeName === "array" ||
+      (node.items !== undefined && typeName !== "object")
+    ) {
+      return { ok: false, issue: "array_index" };
+    }
+    const properties = readProperties(node);
+    if (!Object.prototype.hasOwnProperty.call(properties, segment)) {
+      return { ok: false, issue: "missing" };
+    }
+    if (!readRequiredKeys(node).includes(segment)) {
+      return { ok: false, issue: "optional" };
+    }
+    current = properties[segment];
+  }
+
+  const leaf = isPlainSchemaObject(current)
+    ? (tryExpandSchema(current, options) as JsonSchemaNode)
+    : undefined;
+  if (leaf?.$ref !== undefined && leaf.properties === undefined) {
+    return { ok: false, issue: "untyped" };
+  }
+  const fieldType = schemaNodeType(leaf);
+  if (fieldType === undefined) {
+    return { ok: false, issue: "untyped" };
+  }
+  return { ok: true, type: fieldType };
+}
+
 function expandSchemaNode(node: unknown, path: string, ctx: CompileCtx): unknown {
   const { schema, stack } = derefSchemaNode(node, path, ctx);
   const childCtx: CompileCtx = { schemas: ctx.schemas, stack };

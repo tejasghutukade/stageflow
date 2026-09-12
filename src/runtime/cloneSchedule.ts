@@ -1,5 +1,5 @@
 import { isNeedTerminalState, predecessorEdges } from "../config/pipelineNeeds.js";
-import { evaluateRouteIf } from "../config/routeIf.js";
+import { evaluateRouteIf } from "./routeIfEval.js";
 import type { RunPipelineDagSnapshot } from "../runstore/port.js";
 import {
   appendCloneInstances,
