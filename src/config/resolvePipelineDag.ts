@@ -266,7 +266,11 @@ function mergeRouteEdgesIntoNeeds(edges: NormalizedEdge[]): void {
   for (const edge of edges) {
     for (const route of edge.routeEdges) {
       const list = inbound.get(route.to) ?? [];
-      list.push({ id: edge.id, on: route.on });
+      list.push({
+        id: edge.id,
+        on: route.on,
+        ...(route.if !== undefined ? { if: route.if } : {}),
+      });
       inbound.set(route.to, list);
     }
   }

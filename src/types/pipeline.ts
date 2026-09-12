@@ -20,9 +20,47 @@ export type PipelineForkConfig = {
 
 export type NeedTerminalState = "succeeded" | "failed" | "skipped";
 
+export type RouteIfOp =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "not_in";
+
+export type RouteIfLeafPredicate = {
+  field: string;
+  op: RouteIfOp;
+  value: unknown;
+};
+
+export type RouteIfAllPredicate = {
+  all: RouteIfPredicate[];
+  field?: never;
+};
+
+export type RouteIfAnyPredicate = {
+  any: RouteIfPredicate[];
+  field?: never;
+};
+
+export type RouteIfNotPredicate = {
+  not: RouteIfPredicate;
+  field?: never;
+};
+
+export type RouteIfPredicate =
+  | RouteIfLeafPredicate
+  | RouteIfAllPredicate
+  | RouteIfAnyPredicate
+  | RouteIfNotPredicate;
+
 export type PipelineNeedEdge = {
   id: string;
   on: NeedTerminalState[];
+  if?: RouteIfPredicate;
 };
 
 export type PipelineNeedItem = string | { id: string; on?: NeedTerminalState[] };
@@ -43,6 +81,7 @@ export type RouteTerminalState = NeedTerminalState;
 export type PipelineRouteForwardEntry = {
   to: string;
   on?: RouteTerminalState | RouteTerminalState[];
+  if?: RouteIfPredicate;
 };
 
 /**
@@ -71,6 +110,7 @@ export type PipelineRoute = PipelineRouteEntry[];
 export type PipelineRouteEdge = {
   to: string;
   on: RouteTerminalState[];
+  if?: RouteIfPredicate;
 };
 
 /** Runtime feedback-loop policy declared by the stage that can send work back. */

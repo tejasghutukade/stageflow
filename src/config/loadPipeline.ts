@@ -27,6 +27,11 @@ import { predecessorEdges } from "./pipelineNeeds.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { recoveryRequiresCompletionIssue } from "./parseCompletionContract.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
+import {
+  collectRouteIfSchemaIssues,
+  collectRouteIfIllegalCombos,
+  collectRouteAllGatedWarnings,
+} from "./routeIf.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
@@ -272,6 +277,15 @@ async function loadPipelineFromPath(
 
   const schemaOutcome = attachPipelineSchemas(stages, pipelineSchemas, pipelineId);
   if (!schemaOutcome.ok) return schemaOutcome;
+
+  const routeIfIssues = [
+    ...collectRouteIfSchemaIssues(stages, wiringRefs, pipelineId),
+    ...collectRouteIfIllegalCombos(wiringRefs, pipelineId),
+  ];
+  if (routeIfIssues.length > 0) {
+    return loadFailure(routeIfIssues);
+  }
+  warnings.push(...collectRouteAllGatedWarnings(wiringRefs, pipelineId));
 
   const ioOutcome = checkSequentialIoCompatibility(stages, dag, pipelineId, pipelineSchemas);
   if (!ioOutcome.ok) return ioOutcome;

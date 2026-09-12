@@ -5,6 +5,7 @@ import type {
   PipelineNeeds,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
+import { parseRouteIf } from "./routeIf.js";
 
 export const NEED_TERMINAL_STATES: readonly NeedTerminalState[] = [
   "succeeded",
@@ -170,7 +171,15 @@ export function hydrateResolvedNeeds(node: {
             typeof state === "string" && NEED_TERMINAL_STATE_SET.has(state),
           )
         : (["succeeded"] as NeedTerminalState[]);
-      edges.push({ id: item.id, on: on.length > 0 ? on : ["succeeded"] });
+      const edge: PipelineNeedEdge = {
+        id: item.id,
+        on: on.length > 0 ? on : ["succeeded"],
+      };
+      if (item.if !== undefined) {
+        const parsedIf = parseRouteIf(item.if, item.id, item.id);
+        if (parsedIf.ok) edge.if = parsedIf.value;
+      }
+      edges.push(edge);
     }
     if (typeof node.needs === "string") {
       return { needs: node.needs, needsEdges: edges };

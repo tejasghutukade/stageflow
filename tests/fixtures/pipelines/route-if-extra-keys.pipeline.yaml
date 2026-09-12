@@ -1,0 +1,34 @@
+id: route-if-extra-keys
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: eq
+          value: high
+          extra: true
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: page
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

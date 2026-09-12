@@ -992,3 +992,270 @@ describe("generic fan-in scheduler", () => {
     );
   });
 });
+
+describe("route if join", () => {
+  it("does not launch or skip the join while a sibling parent is still running after a false if", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "pending"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: false } })],
+    ]);
+    expect(cloneScheduleAllowsRun(dag, "assemble", states, envelopes)).toBe(false);
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+
+  it("runs the join when every parent succeeded and every inbound if fired", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "succeeded"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: true } })],
+      ["draw", okEnvelope("draw-ok", { payload: { complete: true } })],
+    ]);
+    expect(cloneScheduleAllowsRun(dag, "assemble", states, envelopes)).toBe(
+      true,
+    );
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+
+  it("stalled-skips the join when every parent succeeded but an inbound if missed", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "succeeded"],
+      ["draw", "succeeded"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["write", okEnvelope("write-ok", { payload: { ready: true } })],
+      ["draw", okEnvelope("draw-ok", { payload: { complete: false } })],
+    ]);
+    expect(cloneScheduleAllowsRun(dag, "assemble", states, envelopes)).toBe(false);
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual(["assemble"]);
+  });
+
+  it("does not stalled-skip a join when a parent failed even if the other if would miss", async () => {
+    const loaded = await loadPipeline(pipelinePath("route-if-join"), {
+      cwd: fixtures,
+    });
+    const dag = loaded.dag;
+    const states = new Map<string, StageScheduleState>([
+      ["kickoff", "succeeded"],
+      ["write", "failed"],
+      ["draw", "succeeded"],
+      ["assemble", "pending"],
+    ]);
+    const envelopes = new Map<string, StageEnvelope>([
+      ["draw", okEnvelope("draw-ok", { payload: { complete: false } })],
+    ]);
+    expect(cloneScheduleAllowsRun(dag, "assemble", states, envelopes)).toBe(
+      false,
+    );
+    expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+});
+
+describe("route if join scheduler", () => {
+  it("keeps the join pending after a false if until the other parent is terminal", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-join-wait-"));
+    let releaseDraw: () => void = () => undefined;
+    const drawGate = new Promise<void>((resolve) => {
+      releaseDraw = resolve;
+    });
+    const agent = gatedFanInAgent({
+      behaviorsByStage: {
+        kickoff: [{ type: "emit", envelope: okEnvelope("kickoff-ok") }],
+        write: [
+          {
+            type: "emit",
+            envelope: okEnvelope("write-ok", { payload: { ready: false } }),
+          },
+        ],
+        draw: [
+          {
+            type: "gate",
+            gate: drawGate,
+            envelope: okEnvelope("draw-ok", { payload: { complete: true } }),
+          },
+        ],
+        assemble: [{ type: "throw", message: "assemble must not run" }],
+      },
+    });
+    const { prepared, store, runId } = await prepareInprocessPipeline(
+      root,
+      "route-if-join",
+      agent,
+    );
+    const runPromise = runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    await waitFor(() => (agent.openCounts.get("write") ?? 0) === 1);
+    await waitFor(() => (agent.openCounts.get("draw") ?? 0) === 1);
+    await waitFor(async () => {
+      const detail = await store.readRun(runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "write")?.status ===
+        "succeeded"
+      );
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(agent.openCounts.get("assemble") ?? 0).toBe(0);
+    {
+      const detail = await store.readRun(runId);
+      expect(detail.stages.find((s) => s.stage_id === "assemble")?.status).toBe(
+        "pending",
+      );
+    }
+
+    releaseDraw();
+    const result = await runPromise;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(agent.openCounts.get("assemble") ?? 0).toBe(0);
+    const detail = await store.readRun(runId);
+    expect(detail.stages.find((s) => s.stage_id === "assemble")?.status).toBe(
+      "skipped",
+    );
+  });
+
+  it("runs the join with both success envelopes when every inbound if fired", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-join-fire-"));
+    const agent = gatedFanInAgent({
+      behaviorsByStage: {
+        kickoff: [{ type: "emit", envelope: okEnvelope("kickoff-ok") }],
+        write: [
+          {
+            type: "emit",
+            envelope: okEnvelope("write-ok", { payload: { ready: true } }),
+          },
+        ],
+        draw: [
+          {
+            type: "emit",
+            envelope: okEnvelope("draw-ok", { payload: { complete: true } }),
+          },
+        ],
+        assemble: [{ type: "emit", envelope: okEnvelope("assemble-ok") }],
+      },
+    });
+    const { prepared, store, runId } = await prepareInprocessPipeline(
+      root,
+      "route-if-join",
+      agent,
+    );
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(agent.openCounts.get("assemble")).toBe(1);
+    const priors = agent.priorByStage.get("assemble");
+    expect(priors?.write).toMatchObject({ payload: { ready: true } });
+    expect(priors?.draw).toMatchObject({ payload: { complete: true } });
+    const detail = await store.readRun(runId);
+    expect(detail.stages.find((s) => s.stage_id === "assemble")?.status).toBe(
+      "succeeded",
+    );
+  });
+
+  it("skips the join when every parent succeeded but one inbound if missed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-join-miss-"));
+    const agent = gatedFanInAgent({
+      behaviorsByStage: {
+        kickoff: [{ type: "emit", envelope: okEnvelope("kickoff-ok") }],
+        write: [
+          {
+            type: "emit",
+            envelope: okEnvelope("write-ok", { payload: { ready: true } }),
+          },
+        ],
+        draw: [
+          {
+            type: "emit",
+            envelope: okEnvelope("draw-ok", { payload: { complete: false } }),
+          },
+        ],
+        assemble: [{ type: "throw", message: "assemble must not run" }],
+      },
+    });
+    const { prepared, store, runId } = await prepareInprocessPipeline(
+      root,
+      "route-if-join",
+      agent,
+    );
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(agent.openCounts.get("assemble") ?? 0).toBe(0);
+    const detail = await store.readRun(runId);
+    expect(detail.stages.find((s) => s.stage_id === "assemble")?.status).toBe(
+      "skipped",
+    );
+    expect(detail.status).toBe("succeeded");
+  });
+
+  it("keeps the join pending when a parent failed", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-join-fail-"));
+    const agent = gatedFanInAgent({
+      behaviorsByStage: {
+        kickoff: [{ type: "emit", envelope: okEnvelope("kickoff-ok") }],
+        write: [{ type: "fail", reason: "write boom" }],
+        draw: [
+          {
+            type: "emit",
+            envelope: okEnvelope("draw-ok", { payload: { complete: true } }),
+          },
+        ],
+        assemble: [{ type: "throw", message: "assemble must not run" }],
+      },
+    });
+    const { prepared, store, runId } = await prepareInprocessPipeline(
+      root,
+      "route-if-join",
+      agent,
+    );
+    const result = await runPipelineDag({
+      prepared,
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe("failed");
+    expect(agent.openCounts.get("assemble") ?? 0).toBe(0);
+    const detail = await store.readRun(runId);
+    expect(detail.stages.find((s) => s.stage_id === "write")?.status).toBe(
+      "failed",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "assemble")?.status).toBe(
+      "pending",
+    );
+  });
+});
+

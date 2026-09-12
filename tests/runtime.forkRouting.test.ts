@@ -566,3 +566,196 @@ describe("fork routing integration", () => {
     expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 });
+
+describe("forward route if eq scheduling", () => {
+  it("matching payload runs the gated target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "high" } }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-eq"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("non-matching payload skips the gated target and still runs the always-run sibling", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-miss-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "low" } }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-eq"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded" || meta.status === "failed";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBeUndefined();
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("two matching ifs on different targets both run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-two-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "high", escalate: true },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-two-match"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("composition miss skips the gated target and the run succeeds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-composition-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "low", source: "web" },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-composition"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded" || meta.status === "failed";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBeUndefined();
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("composition match runs the gated target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-comp-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "high", source: "web" },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-composition"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+});

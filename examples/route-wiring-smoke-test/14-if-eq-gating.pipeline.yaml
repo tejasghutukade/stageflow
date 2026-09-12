@@ -1,0 +1,50 @@
+id: route-demo-if-eq
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: eq
+          value: high
+      - to: notify
+    system_prompt: |
+      Triage in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"severity": "low"}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: page
+    system_prompt: |
+      Page on-call in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: notify
+    system_prompt: |
+      Notify the team in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

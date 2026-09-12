@@ -3,6 +3,8 @@ import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
+import { predecessorEdges } from "../config/pipelineNeeds.js";
+import { evaluateRouteIf } from "../config/routeIf.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   LoadedPipeline,
@@ -790,7 +792,7 @@ export async function runPipelineDag(
    */
   const applyStalledJoinSkips = async (): Promise<void> => {
     for (;;) {
-      const ids = pickStalledJoinSkips(dag, states);
+      const ids = pickStalledJoinSkips(dag, states, completedEnvelopes);
       if (ids.length === 0) return;
       for (const id of ids) {
         await persistSkipPending(id);
@@ -1157,6 +1159,26 @@ export async function runPipelineDag(
           cloneStageIds,
         });
         noteActiveCohort(feedbackSchedule, stageId, cloneStageIds);
+      }
+    }
+
+    const childIds = dag.childrenOf[stageId] ?? [];
+    for (const childId of childIds) {
+      const child = dag.nodes.find((node) => node.id === childId);
+      if (!child) continue;
+      const edges = predecessorEdges(child);
+      const inbound = edges.find((edge) => edge.id === stageId);
+      if (inbound?.if === undefined) continue;
+      const result = evaluateRouteIf(inbound.if, envelope.payload);
+      if (result === "missing_field") {
+        schedulingHalted = true;
+        if (firstFailureReason === undefined) {
+          firstFailureReason = `stage "${stageId}": route if field missing from payload`;
+        }
+        return;
+      }
+      if (result === "miss" && edges.length === 1) {
+        await persistSkipPending(childId);
       }
     }
   };

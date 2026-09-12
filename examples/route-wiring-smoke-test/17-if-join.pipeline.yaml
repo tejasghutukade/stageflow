@@ -1,0 +1,80 @@
+id: route-demo-if-join
+# Two-parent Join gated by inbound `if`s. Each parent evaluates `if` against
+# its own output payload. Both match → assemble runs with both envelopes.
+# Either misses → assemble is skipped; the run still succeeds.
+stages:
+  - id: kickoff
+    entry: true
+    route:
+      - to: write
+      - to: draw
+    system_prompt: |
+      Kick off write and draw in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: write
+    route:
+      - to: assemble
+        if:
+          field: ready
+          op: eq
+          value: true
+    system_prompt: |
+      Write the first half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"ready": true}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [ready]
+          properties:
+            ready:
+              type: boolean
+
+  - id: draw
+    route:
+      - to: assemble
+        if:
+          field: complete
+          op: eq
+          value: true
+    system_prompt: |
+      Draw the second half in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {"complete": true}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [complete]
+          properties:
+            complete:
+              type: boolean
+
+  - id: assemble
+    system_prompt: |
+      Combine both parents' work into one summary sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

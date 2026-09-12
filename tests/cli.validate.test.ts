@@ -603,6 +603,94 @@ describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () 
     expect(result.stdout + result.stderr).toMatch(/Validation passed/);
   });
 
+  it("validate --pipeline if eq gating --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/14-if-eq-gating.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it("validate --pipeline all-gated if --strict still exits 0 with pipeline.route_all_gated warning", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/15-if-all-gated.pipeline.yaml",
+        "--strict",
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; severity: string }>;
+    };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.summary.errors).toBe(0);
+    expect(
+      parsed.findings.some(
+        (finding) =>
+          finding.code === "pipeline.route_all_gated" && finding.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  it("validate --pipeline if composition --strict exits 0", () => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        "examples/route-wiring-smoke-test/16-if-composition.pipeline.yaml",
+        "--strict",
+      ],
+      root,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/Validation passed/);
+  });
+
+  it.each([
+    "22-reject-if-unknown-field.pipeline.yaml",
+    "23-reject-if-optional-field.pipeline.yaml",
+    "24-reject-if-empty-all.pipeline.yaml",
+    "25-reject-if-gt-on-string.pipeline.yaml",
+    "26-reject-if-optional-nested.pipeline.yaml",
+    "27-reject-if-on-loop.pipeline.yaml",
+    "28-reject-if-clonable.pipeline.yaml",
+    "29-reject-if-on-failed.pipeline.yaml",
+  ])("validate --pipeline %s --json reports pipeline.route_if_invalid", (file) => {
+    const result = runCli(
+      [
+        "validate",
+        "--pipeline",
+        `examples/route-wiring-smoke-test/rejected/${file}`,
+        "--json",
+      ],
+      root,
+    );
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      findings: Array<{ code: string }>;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.route_if_invalid"),
+    ).toBe(true);
+    expect(
+      parsed.findings.some((finding) => finding.code === "pipeline.dag_error"),
+    ).toBe(false);
+  });
+
   it("validate --pipeline incompatible io --json reports pipeline.io_incompatible", () => {
     const result = runCli(
       [

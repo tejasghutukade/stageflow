@@ -1,15 +1,15 @@
 # route wiring smoke test
 
-Thirteen small, self-contained pipelines that together cover the `route`-based pipeline wiring YAML surface, plus twenty-one deliberately-invalid ones that each trigger one specific rejection error.
+Seventeen small, self-contained pipelines that together cover the `route`-based pipeline wiring YAML surface, plus twenty-nine deliberately-invalid ones that each trigger one specific rejection error.
 
-- The 13 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog (the directory is listed once; new `*.pipeline.yaml` files dropped in here are picked up automatically), so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
-- The 21 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list — **they will not show up in the UI on purpose**, so they don't clutter the picker or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure; since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file. They're CLI-only, via `sf validate --pipeline <path>`.
+- The 17 **valid** ones live directly in this directory and are registered in the repo's `stageflow.yaml` catalog (the directory is listed once; new `*.pipeline.yaml` files dropped in here are picked up automatically), so they show up in `sf ui` / the pipeline picker and are runnable end-to-end with `smoke-test.task.yaml`.
+- The 29 **rejected** ones live in `rejected/` and are excluded from the catalog via `stageflow.yaml`'s `exclude:` list — **they will not show up in the UI on purpose**, so they don't clutter the picker or fail a catalog-wide validate/CI run. Each demonstrates one distinct pipeline-level failure; since a whole pipeline fails to load on its first error, these can't usefully be merged into fewer files without hiding all but one message per file. They're CLI-only, via `sf validate --pipeline <path>`.
 
 ## Patterns covered — which pipeline for which feature
 
-`route` is declarative wiring. Listed forward `to:` targets **always all run** when the source reaches a matching `on:` state (default `succeeded` only). That is unconditional fan-out. There is no agent `fork_choice` for catalog pipelines, and `route_select` / `allow_none` are rejected. Conditional / exclusive routing is future work.
+`route` is declarative wiring. Listed forward `to:` targets run when the source reaches a matching `on:` state (default `succeeded` only). Optional `if` on a forward Route Entry is a runtime gate against the source output payload after success: a match fires that edge; a miss **skips** that target (the run can still succeed); an entry without `if` still always fires. `if` may be a leaf (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`) or nested `all` / `any` / `not`. The DAG still shows every listed `to:`. There is no agent `fork_choice` for catalog pipelines, and `route_select` / `allow_none` are rejected.
 
-A join with multiple parents waits for *every* parent to become terminal. It runs if at least one parent succeeded (skipped parents do not block; their envelopes are omitted). It stays pending if a parent failed. It skips only if every parent skipped.
+A Join (two or more parents name the same child) waits for *every* parent to become terminal. A false inbound `if` (leaf or `all` / `any` / `not` composition) does **not** skip the child while another parent is still running. After every parent **succeeded**, the child runs only if every inbound edge fired (`if` true, or no `if`); it then opens with every parent's success envelope. If any inbound `if` missed, the child is **skipped** — not pending forever, not opened with a partial envelope set. A failed parent still blocks. Pipelines with **no** forward `if` keep today's Join: skipped sibling + succeeded sibling can still run; all-skipped still force-skip.
 
 State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), which is still allowed.
 
@@ -28,6 +28,10 @@ State-gated routing uses `on:` on the source stage (`succeeded` / `failed`), whi
 | `route-demo-sequential-io` | `11-sequential-io-handoff.pipeline.yaml` | Sequential `io` handoff: parent `draft` `io.output.schema` and child `review` `io.input.schema` share the same object contract (`required: [title]`). `sf validate` is how users see this compatibility check. |
 | `route-demo-complex-io` | `12-complex-io-schemas.pipeline.yaml` | Sequential `io` with pipeline `schemas:` (`finding`, `report`, `analyzed`): nested metadata, array of `$ref` items, enum/pattern/minLength/integer score. `draft → analyze → summarize`; summarize input is a subset (`title`/`summary`/`score` as number). Some `io` sides stay inline (`draft.in`, `summarize.in`/`out`). |
 | `route-demo-ref-io` | `13-ref-io-handoff.pipeline.yaml` | Sequential `io` where **both** every `io.input.schema` and every `io.output.schema` is `$ref: "#/schemas/..."`. `draft.out` and `review.in` share `#/schemas/doc`; `ship.in` is `#/schemas/title-only` (subset of `analyzed`). Unlike `12`, no inline schema sides. |
+| `route-demo-if-eq` | `14-if-eq-gating.pipeline.yaml` | Gated forward `if: { field: severity, op: eq, value: high }` to `page`, plus always-run `notify`. Default prompt emits `severity: low`, so `page` is skipped and the run succeeds. |
+| `route-demo-if-all-gated` | `15-if-all-gated.pipeline.yaml` | Every forward `to:` has `if`. `sf validate` warns `pipeline.route_all_gated` with `ok: true`; `--strict` does not fail. |
+| `route-demo-if-composition` | `16-if-composition.pipeline.yaml` | Nested `not` around `all`, dotted `customer.tier`, and `in`. Default prompt emits a miss, so `page` is skipped and always-run `notify` still runs. |
+| `route-demo-if-join` | `17-if-join.pipeline.yaml` | Two-parent Join gated by inbound `if`s. `write` fires when `ready` is true; `draw` fires when `complete` is true. Default prompts emit both true, so `assemble` runs with both envelopes. Either miss skips `assemble`; the run still succeeds. |
 
 ## Important: use the local build, not your global `sf`
 
@@ -52,7 +56,7 @@ If you want the bare `sf`/`stageflow` command itself to point at this worktree (
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/01-core-routing.pipeline.yaml --strict
 ```
 Expect: **Validation passed.** One pipeline, most of the new surface in one realistic flow:
-`plan -> implement -> review` (review's `route` mixes a normal forward entry to `qa` with a `type: loop` entry back to `implement`, `max_replays: 2`, `on_max_replays: require_continue`, `replay_session: resume`) `-> qa` (fans out to both `ship` and `request-changes`) `-> ship` (fans out to `notify-slack`/`notify-email`/`update-changelog`) `-> close` (fan-in of request-changes plus the three notify stages; all four run on the happy path. The join waits until every parent is terminal, then runs if at least one succeeded. It stays pending if a parent failed. It does not run if every parent skipped).
+`plan -> implement -> review` (review's `route` mixes a normal forward entry to `qa` with a `type: loop` entry back to `implement`, `max_replays: 2`, `on_max_replays: require_continue`, `replay_session: resume`) `-> qa` (fans out to both `ship` and `request-changes`) `-> ship` (fans out to `notify-slack`/`notify-email`/`update-changelog`) `-> close` (fan-in of request-changes plus the three notify stages; all four run on the happy path. The Join waits until every parent is terminal. With no inbound `if`, it runs if at least one succeeded. It stays pending if a parent failed. It does not run if every parent skipped).
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/02-on-gating.pipeline.yaml --strict
@@ -113,6 +117,26 @@ Expect: **Validation passed.** Three-stage `draft → analyze → summarize` wit
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml --strict
 ```
 Expect: **Validation passed.** Every `io.input.schema` and `io.output.schema` is `$ref: "#/schemas/..."`. `draft.out` and `review.in` share `#/schemas/doc`; `ship.in` is `#/schemas/title-only` (subset of `analyzed`). Unlike `12`, both sides of every stage are `$ref`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/14-if-eq-gating.pipeline.yaml --strict
+```
+Expect: **Validation passed.** `triage` routes to `page` only when `severity` equals `high`, and always to `notify`. Mixed gated + always-run siblings do not warn `pipeline.route_all_gated`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/15-if-all-gated.pipeline.yaml --strict --json
+```
+Expect: **Validation passed** (`ok: true`) with warning `pipeline.route_all_gated`. `--strict` does not promote that warning to an error.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/16-if-composition.pipeline.yaml --strict
+```
+Expect: **Validation passed.** `page` is gated by `not` / `all` over `severity` and `customer.tier` `in` `[bronze]`. `notify` always runs. Nested required object paths are legal.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/17-if-join.pipeline.yaml --strict
+```
+Expect: **Validation passed.** `write` and `draw` both route to `assemble` with inbound `if`. Default prompts emit `ready: true` and `complete: true`, so the Join child runs with both success envelopes. Change either payload so the predicate misses and `assemble` is skipped (run still succeeds). A false `if` on one parent does not skip `assemble` while the other parent is still running.
 
 ## Rejected pipelines (should fail with the given message)
 
@@ -221,15 +245,55 @@ npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected
 ```
 Expect: `pipeline.io_incompatible` — `draft.out` `$ref` `#/schemas/produced` vs `review.in` `$ref` `#/schemas/consumed` (`consumed` requires extra field `extra`).
 
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/22-reject-if-unknown-field.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — `if.field` is not a property of the source `io.output.schema`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/23-reject-if-optional-field.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — `if.field` is present on the output schema but not in `required`.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/24-reject-if-empty-all.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — empty `all:` list.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/25-reject-if-gt-on-string.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — numeric op `gt` on a string field.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/26-reject-if-optional-nested.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — nested path `customer.tier` is not required on the object schema.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/27-reject-if-on-loop.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — `if` on a `{ type: loop }` Route Entry.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/28-reject-if-clonable.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — `if` on a Route whose `to` is clonable.
+
+```bash
+npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/29-reject-if-on-failed.pipeline.yaml --json
+```
+Expect: `pipeline.route_if_invalid` — `if` combined with `on: [failed]`.
+
 ## Run from the UI / CLI
 
-All 13 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
+All 17 valid pipelines and `smoke-test.task.yaml` are registered in the repo-root `stageflow.yaml`. Point the UI at the local build (see "Important" above — either `npm link` first, or run the UI via `npx tsx src/cli.ts ui`):
 
 ```bash
 npx tsx src/cli.ts ui
 ```
 
-Start a new run, pick any of the 13 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`npx tsx src/cli.ts providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike the validate command above.
+Start a new run, pick any of the 17 pipeline IDs from the table above, `route-smoke-test` as the task. Requires a Pi-compatible provider connected (`npx tsx src/cli.ts providers login` or via the UI's own connect flow) — actually executing a stage calls a real model, unlike the validate command above.
 
 From the repo git root, run a pipeline with this worktree's CLI (never global `sf`):
 
@@ -278,6 +342,24 @@ npx tsx src/cli.ts run \
   --task examples/route-wiring-smoke-test/smoke-test.task.yaml
 ```
 
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/14-if-eq-gating.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/16-if-composition.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
+```bash
+npx tsx src/cli.ts run \
+  --pipeline examples/route-wiring-smoke-test/17-if-join.pipeline.yaml \
+  --task examples/route-wiring-smoke-test/smoke-test.task.yaml
+```
+
 Pipelines **11–13** require the agent to emit the example payloads in each stage prompt (`11` draft: `{ "title": "<short string>" }`; `12` draft/analyze copy the `#/schemas/report` / `#/schemas/analyzed` examples; `13` draft/review copy the `#/schemas/doc` / `#/schemas/analyzed` examples). Review/summarize/ship may emit `payload: {}`.
 
 - Want to watch a larger fan-out (triage plus three follow-ups from quick-fix)? Run `route-demo-fork-choice`.
@@ -286,6 +368,9 @@ Pipelines **11–13** require the agent to emit the example payloads in each sta
 - Want to see both arms of a fan-out run, with `done` only on the safe-step arm? Run `route-demo-skip-and-multi-on`.
 - Want to see two loop points converging on one ancestor? Run `route-demo-multi-loop-targets` — it also parks briefly for a replay, same idea as `07`, but resolves itself (`require_continue`) rather than needing a human.
 - Want to confirm the `uses:` dialect works the same as inline stage bodies? Run `route-demo-uses-dialect-fork`.
+- Want to see a payload-gated `page` skip while `notify` still runs? Run `route-demo-if-eq`. The skipped stage is skipped, not a failed run.
+- Want nested `all` / `not` and `customer.tier` `in`? Run `route-demo-if-composition`. Default payload misses, so `page` skips.
+- Want to see a two-parent Join gated by inbound `if`s? Run `route-demo-if-join`. Default payloads match, so `assemble` runs with both envelopes.
 - Want the broadest single flow, including notify stages that all run after ship? Run `route-demo-core`.
 
 ## What's still out of scope

@@ -1,0 +1,46 @@
+id: route-demo-reject-if-on-failed
+stages:
+  - id: run-tests
+    entry: true
+    route:
+      - to: ship
+        on: [succeeded]
+      - to: hotfix
+        on: [failed]
+        if:
+          field: severity
+          op: eq
+          value: high
+    system_prompt: Run tests.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: ship
+    system_prompt: Ship.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: hotfix
+    system_prompt: Hotfix.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

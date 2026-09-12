@@ -1,0 +1,55 @@
+id: route-if-composition
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          not:
+            all:
+              - field: severity
+                op: eq
+                value: low
+              - field: source
+                op: eq
+                value: web
+      - to: notify
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity, source]
+          properties:
+            severity:
+              type: string
+            source:
+              type: string
+  - id: page
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+      output:
+        schema:
+          type: object
+  - id: notify
+    system_prompt: Notify the team.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

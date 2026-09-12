@@ -8,6 +8,7 @@ export type LoadIssue =
       message: string;
       category: "pipeline";
       pipelineId?: string;
+      stageId?: string;
     }
   | {
       code: ValidationFindingCode;

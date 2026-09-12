@@ -276,6 +276,33 @@ describe("resolvePipelineDag: route (ticket 01, forward routing only)", () => {
       expect(node.entry).toBeUndefined();
     }
   });
+
+  it("copies a forward if eq predicate onto the inverted inbound edge", () => {
+    const { dag } = resolvePipelineDag(
+      [
+        {
+          id: "triage",
+          entry: true,
+          route: [
+            {
+              to: "page",
+              if: { field: "severity", op: "eq", value: "high" },
+            },
+          ],
+        },
+        { id: "page" },
+      ],
+      ctx("route-if-eq-parse"),
+    );
+    const byId = new Map(dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("page")?.needsEdges).toEqual([
+      {
+        id: "triage",
+        on: ["succeeded"],
+        if: { field: "severity", op: "eq", value: "high" },
+      },
+    ]);
+  });
 });
 
 describe("loadPipeline: route YAML fixtures (ticket 01)", () => {

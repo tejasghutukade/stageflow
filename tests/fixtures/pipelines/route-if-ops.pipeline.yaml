@@ -1,0 +1,65 @@
+id: route-if-ops
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: ne
+          value: low
+      - to: notify
+        if:
+          field: score
+          op: gte
+          value: 10
+      - to: archive
+        if:
+          field: severity
+          op: in
+          value: [high, critical]
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity, score]
+          properties:
+            severity:
+              type: string
+            score:
+              type: integer
+  - id: page
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: notify
+    system_prompt: Notify the team.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: archive
+    system_prompt: Archive the ticket.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

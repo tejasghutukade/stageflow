@@ -300,7 +300,7 @@ stages:
 
 See also [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/).
 
-Parallel fan-out: multiple forward `to:` entries on the source. **Every listed target always runs** when the source reaches a matching `on:` state (default `succeeded` only). The completing agent does not pick which successors run.
+Parallel fan-out: multiple forward `to:` entries on the source. Listed targets run when the source reaches a matching `on:` state (default `succeeded` only), unless a forward entry has `if` and that predicate is false against the source output payload. The completing agent does not pick which successors run.
 
 ```yaml
 stages:
@@ -318,11 +318,11 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`route` is a list of entries. Forward entries name `to:` and optional `on:` (`succeeded` | `failed` | `skipped`; default `succeeded` only). Multiple `to:` entries are unconditional fan-out. Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default `succeeded` only), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
 
 ### Generic fan-in {#generic-fan-in}
 
-A stage may wait for two or more catalog parents. Each parent lists a forward `to:` to the join. Optional `on:` on that route entry gates when the edge fires (default `succeeded` only).
+A stage may wait for two or more catalog parents. Each parent lists a forward `to:` to the join. Optional `on:` on that route entry gates when the edge fires (default `succeeded` only). Optional `if` on that same entry is evaluated against **that parent's** output payload after success.
 
 ```yaml
 id: diamond-fan-in
@@ -355,7 +355,13 @@ Structured `on` sets (accepted failure or skip):
         on: [succeeded, failed, skipped]
 ```
 
-The join starts only after every declared parent (or every current clone instance of a clonable parent) is terminal. It **runs if at least one parent succeeded**. Skipped parents do not block, and their envelopes are omitted from join input. The join stays pending if a parent failed. It is skipped only if every parent skipped.
+The Join starts only after every declared parent (or every current clone instance of a clonable parent) is terminal. A false inbound `if` does **not** skip the child while another parent is still running.
+
+After every parent **succeeded**, the child **runs** only if every inbound edge fired (`if` true — including nested `all` / `any` / `not` composition — or no `if`). It then opens with **every** parent's success envelope (complete set, no hole). If any inbound `if` missed, the child is **skipped** — not pending forever, not failed, not opened with a partial envelope set. Sequential `io` subset checks still apply when the Join child runs; a skipped Join child is not opened.
+
+A failed parent still **blocks** the Join. `if` does not redefine failure joins.
+
+Pipelines whose Routes have **no** forward `if` keep today's Join: it **runs if at least one parent succeeded**. Skipped parents do not block, and their envelopes are omitted from join input. The Join stays pending if a parent failed. It is skipped if every parent skipped. The all-inbound-fired check applies only on top of “every parent succeeded.”
 
 Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. Do not reuse clone-list `priorEnvelopes` — that field stays for [clone-list joins](#clonable-successors). A clonable parent under generic fan-in maps to one key whose value is that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
 
@@ -364,6 +370,7 @@ Fixtures:
 - [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond
 - [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — structured `on` including failed and skipped
 - [`diamond-fan-in-clone.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-clone.pipeline.yaml) — clonable parent plus named sibling join
+- [`route-if-join.pipeline.yaml`](../tests/fixtures/pipelines/route-if-join.pipeline.yaml) — Join gated by inbound `if`s
 
 Runtime coverage: [`tests/runtime.genericFanIn.schedule.test.ts`](../tests/runtime.genericFanIn.schedule.test.ts), [`tests/runtime.genericFanIn.retry.test.ts`](../tests/runtime.genericFanIn.retry.test.ts), [`tests/runtime.envelopeRouting.test.ts`](../tests/runtime.envelopeRouting.test.ts), [`tests/runstore.trackProjection.test.ts`](../tests/runstore.trackProjection.test.ts).
 
@@ -388,9 +395,19 @@ Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../t
 
 ### Route wiring {#route}
 
-Wiring is declared on the **source** stage as `route`. Each forward entry names a `to:` target. Optional `on:` is a terminal-state gate (default `succeeded` only). A pipeline that uses `route` must mark at least one `entry: true` root.
+Wiring is declared on the **source** stage as `route`. Each forward entry names a `to:` target. Optional `on:` is a terminal-state gate (default `succeeded` only). Optional `if` is a payload predicate evaluated after the source **succeeds**, against that stage's output payload only. A pipeline that uses `route` must mark at least one `entry: true` root.
 
-Listed forward `to:` targets **always all run** when the source reaches a matching `on:` state. That is unconditional fan-out. The completing agent does **not** pick which successors run, and catalog YAML does not produce a `fork` on the resolved DAG.
+Listed forward `to:` targets still appear on the DAG. A miss skips that successor at runtime; it does not remove the edge. An entry with no `if` still fires when the source reaches a matching `on:` state. Two matching `if`s on different targets both fire (not first-match-wins). Duplicate `to:` in one Route stays illegal. The completing agent does **not** pick which successors run, and catalog YAML does not produce a `fork` on the resolved DAG. HITL (`ask_operator`) inside a stage is not a parallel router: `if` still runs only after that stage succeeds and emits a payload.
+
+`if` is a predicate, not a string: a leaf `{ field, op, value }` or a composition node `{ all: [...] }` | `{ any: [...] }` | `{ not: {...} }` (including nesting such as `not` around `all`, or `any` of `all`s). A node must be exactly one of those shapes; mixing leaf keys with `all` / `any` / `not`, or any unknown key, is `pipeline.route_if_invalid`. Empty `all` / `any` / `in` / `not_in` lists are invalid. There is no `exists` operator and no else/fallback arm.
+
+Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`. `eq` / `ne` are only for `string` | `number` | `integer` | `boolean` schema fields. `gt` / `gte` / `lt` / `lte` are only for `number` | `integer`. Comparison is type-strict (`1` is not `"1"`). `in` / `not_in` mean the **scalar** field is a member of a non-empty literal list whose items share the field's scalar type — not array-contains. `value` is required for every operator.
+
+`field` is a dot-separated path into the source output payload. Validate walks the source `io.output.schema` after `$ref` / pipeline `schemas:` expansion. Every segment must be a property of an object schema and listed in that object's `required`. Array schemas and index segments (`items.0`) are `pipeline.route_if_invalid`. Optional path segments (not in `required`) are also invalid, including after `$ref` inlining.
+
+Illegal `if` is error `pipeline.route_if_invalid` (not `pipeline.dag_error`). When every forward `to:` on a stage has `if`, validate warns `pipeline.route_all_gated` with `ok: true`; `--strict` does not promote that warning. Sequential `io` subset checks still apply on a gated edge that fires; a skipped child is not opened.
+
+`if` is legal only on a **forward** Route Entry after success. It is `pipeline.route_if_invalid` on a `{ type: loop }` entry, on an entry whose `to` is clonable, on a source that has any `if` and also names a clonable target, or when combined with `on` other than succeeded-only. Entries without `if` keep today's `on:` (including `on: [failed]`). Backward or circular forward `to:` without `type: loop` remains `pipeline.dag_error`.
 
 `fork`, `route_select`, and `allow_none` are rejected:
 
@@ -398,7 +415,7 @@ Listed forward `to:` targets **always all run** when the source reaches a matchi
 - `"route_select" is no longer supported — listed route targets always run`
 - `"allow_none" is no longer supported — listed route targets always run`
 
-Conditional / exclusive routing is future work. Success vs failure still uses `on:` on the source stage:
+Success vs failure still uses `on:` on the source stage:
 
 ```yaml
 id: release-gate
@@ -432,14 +449,40 @@ stages:
     uses: ./branch-b.yaml
 ```
 
+```yaml
+id: gated-page
+stages:
+  - id: triage
+    uses: ./triage.yaml
+    entry: true
+    route:
+      - to: page
+        if:
+          all:
+            - field: severity
+              op: eq
+              value: high
+            - field: customer.tier
+              op: in
+              value: [gold, silver]
+      - to: notify
+  - id: page
+    uses: ./page.yaml
+  - id: notify
+    uses: ./notify.yaml
+```
+
 Fixtures:
 
 - [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml) — two listed targets, both run
 - [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml) — fan-out plus a downstream child of one arm
 - [`fork-route-subset.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-subset.pipeline.yaml) — three listed targets, all run
 - [`parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) — same fan-out shape
+- [`route-if-eq.pipeline.yaml`](../tests/fixtures/pipelines/route-if-eq.pipeline.yaml) — gated `eq` plus always-run sibling
+- [`route-if-composition.pipeline.yaml`](../tests/fixtures/pipelines/route-if-composition.pipeline.yaml) — `not` around `all`, nested required paths, `in`
+- [`route-if-two-match.pipeline.yaml`](../tests/fixtures/pipelines/route-if-two-match.pipeline.yaml) — two matching `if`s both run
 
-Walkthrough: [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/).
+Walkthrough: [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/) (`14-if-eq-gating.pipeline.yaml`, `16-if-composition.pipeline.yaml`).
 
 ### Clonable successors {#clonable-successors}
 
@@ -465,7 +508,7 @@ stages:
 
 A clone may skip, run once, or fan out its own successor only when that successor is also `clonable`. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). v1 does not support two clones both fanning out the same successor.
 
-A clonable successor is not selected via catalog `route` — listed `to:` targets still all run, and `clone_forks` is the only include/skip/N control for that successor. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (fan-out to clonable `design-doc` and named `implementation-plan`).
+A clonable successor is not selected via catalog `route` — listed `to:` targets still all run, and `clone_forks` is the only include/skip/N control for that successor. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (fan-out to clonable `design-doc` and named `implementation-plan`). Mixing `if` with a clonable target (or a sibling clonable target on a source that has any `if`) is `pipeline.route_if_invalid`.
 
 #### Instance ids {#clonable-instance-ids}
 
@@ -530,6 +573,7 @@ Optional on any stage entry: `replay_safe` (boolean). **Omitted means safe** —
 - The policy lives on the **source** stage (the one that emits `feedback_loop` in its envelope). The target must already be declared and must be an ancestor — not the source itself, not a sibling, not a descendant.
 - Neither the source nor the target may be `clonable: true`.
 - A stage may declare at most one `type: loop` route entry.
+- `if` is not allowed on a `{ type: loop }` entry (`pipeline.route_if_invalid`).
 - The top-level `feedback_loop` field is rejected — use a `type: loop` entry inside `route`.
 - Clonable successors are not valid loop targets.
 

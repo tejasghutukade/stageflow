@@ -47,6 +47,7 @@ docs/providers/*
 !docs/specs/
 docs/specs/*
 !docs/specs/*.md
+docs/specs/deterministic-route-if.md
 !docs/tickets/
 docs/tickets/*
 !docs/tickets/**/

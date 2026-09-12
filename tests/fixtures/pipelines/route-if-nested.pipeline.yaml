@@ -1,0 +1,48 @@
+id: route-if-nested
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: customer.tier
+          op: eq
+          value: gold
+      - to: notify
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [customer]
+          properties:
+            customer:
+              type: object
+              required: [tier]
+              properties:
+                tier:
+                  type: string
+  - id: page
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: notify
+    system_prompt: Notify the team.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

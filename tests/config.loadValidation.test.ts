@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPipeline, loadPipelineOutcome } from "../src/config/loadPipeline.js";
-import { loadPipelineValidated } from "../src/config/validateCatalog.js";
+import { loadPipelineValidated, validatePipeline } from "../src/config/validateCatalog.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
 import { compilePayloadSchema } from "../src/envelope/payloadSchema.js";
+import { pipelinePath, REPO_ROOT } from "./helpers/fixturePaths.js";
 
 const owned = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -1130,5 +1131,198 @@ describe("io $ref and sequential compatibility", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.issues[0]?.message).toMatch(/schemas/);
+  });
+});
+
+describe("forward route if eq", () => {
+  it("loads a legal top-level required field with if eq and no pipeline.route_if_invalid", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-if-eq"));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(
+      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_if_invalid"),
+    ).toBe(false);
+    const byId = new Map(outcome.value.dag.nodes.map((node) => [node.id, node]));
+    expect(byId.get("page")?.needsEdges).toEqual([
+      {
+        id: "triage",
+        on: ["succeeded"],
+        if: { field: "severity", op: "eq", value: "high" },
+      },
+    ]);
+    expect(byId.get("notify")?.needsEdges).toEqual([
+      { id: "triage", on: ["succeeded"] },
+    ]);
+  });
+
+  it("a pipeline with no forward if gains no route_if findings", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-linear"));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const codes = (outcome.issues ?? []).map((issue) => issue.code);
+    expect(codes).not.toContain("pipeline.route_if_invalid");
+    expect(codes).not.toContain("pipeline.route_all_gated");
+  });
+
+  it.each([
+    ["route-if-unknown-field", "triage"],
+    ["route-if-optional-field", "triage"],
+    ["route-if-unknown-op", "triage"],
+    ["route-if-missing-value", "triage"],
+    ["route-if-extra-keys", "triage"],
+    ["route-if-gt-on-string", "triage"],
+    ["route-if-empty-in", "triage"],
+    ["route-if-in-wrong-type", "triage"],
+    ["route-if-array-index", "triage"],
+    ["route-if-nested-optional", "triage"],
+    ["route-if-ref-optional", "triage"],
+    ["route-if-empty-all", "triage"],
+    ["route-if-on-loop", "review"],
+    ["route-if-on-failed", "run-tests"],
+    ["route-if-clonable", "triage"],
+    ["route-if-clonable-sibling", "triage"],
+  ] as const)(
+    "%s reports pipeline.route_if_invalid not dag_error",
+    async (fixture, stageId) => {
+      const outcome = await loadPipelineOutcome(pipelinePath(fixture));
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(
+        false,
+      );
+      const issue = outcome.issues.find(
+        (item) => item.code === "pipeline.route_if_invalid",
+      );
+      expect(issue).toMatchObject({
+        code: "pipeline.route_if_invalid",
+        category: "pipeline",
+        pipelineId: fixture,
+        stageId,
+      });
+
+      const validated = await loadPipelineValidated(pipelinePath(fixture), {
+        validateStages: false,
+      });
+      expect(validated.ok).toBe(false);
+      const finding = validated.findings.find(
+        (item) => item.code === "pipeline.route_if_invalid",
+      );
+      expect(finding).toMatchObject({
+        severity: "error",
+        code: "pipeline.route_if_invalid",
+        pipelineId: fixture,
+        stageId,
+      });
+    },
+  );
+
+  it("duplicate to: still reports pipeline.dag_error", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-if-duplicate-to"));
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(
+        true,
+      );
+      expect(
+        outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
+      ).toBe(false);
+    }
+  });
+
+  it("loads remaining operators without pipeline.route_if_invalid", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-if-ops"));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(
+      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_if_invalid"),
+    ).toBe(false);
+  });
+
+  it("mixed gated and always-run siblings does not emit pipeline.route_all_gated", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-if-eq"));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(
+      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_all_gated"),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["route-if-all-gated", "triage"],
+    ["route-if-all-gated-loop", "review"],
+  ] as const)(
+    "%s warns pipeline.route_all_gated with ok true",
+    async (fixture, stageId) => {
+      const outcome = await loadPipelineOutcome(pipelinePath(fixture));
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) return;
+      const issue = (outcome.issues ?? []).find(
+        (item) => item.code === "pipeline.route_all_gated",
+      );
+      expect(issue).toMatchObject({
+        code: "pipeline.route_all_gated",
+        category: "pipeline",
+        pipelineId: fixture,
+        stageId,
+      });
+
+      const result = await validatePipeline(pipelinePath(fixture), {
+        validateStages: false,
+      });
+      expect(result.ok).toBe(true);
+      const finding = result.findings.find(
+        (item) => item.code === "pipeline.route_all_gated",
+      );
+      expect(finding).toMatchObject({
+        severity: "warning",
+        code: "pipeline.route_all_gated",
+        pipelineId: fixture,
+        stageId,
+      });
+
+      const strict = await validatePipeline(pipelinePath(fixture), {
+        validateStages: false,
+        strict: true,
+      });
+      expect(strict.ok).toBe(true);
+      expect(strict.summary.errors).toBe(0);
+      expect(
+        strict.findings.some(
+          (item) =>
+            item.code === "pipeline.route_all_gated" && item.severity === "warning",
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("loads on: [failed] without if", async () => {
+    const outcome = await loadPipelineOutcome(
+      path.join(REPO_ROOT, "examples/route-wiring-smoke-test/02-on-gating.pipeline.yaml"),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(
+      (outcome.issues ?? []).some((issue) => issue.code === "pipeline.route_if_invalid"),
+    ).toBe(false);
+  });
+
+  it("circular forward to without type: loop stays pipeline.dag_error", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-cycle"));
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(true);
+    expect(
+      outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
+    ).toBe(false);
+  });
+
+  it("unknown loop key stays pipeline.dag_error", async () => {
+    const outcome = await loadPipelineOutcome(pipelinePath("route-loop-unknown-key"));
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues.some((issue) => issue.code === "pipeline.dag_error")).toBe(true);
+    expect(
+      outcome.issues.some((issue) => issue.code === "pipeline.route_if_invalid"),
+    ).toBe(false);
   });
 });

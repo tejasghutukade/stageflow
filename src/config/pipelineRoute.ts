@@ -22,6 +22,7 @@ import type {
   RouteTerminalState,
 } from "../types/pipeline.js";
 import { isNeedTerminalState } from "./pipelineNeeds.js";
+import { parseRouteIf } from "./routeIf.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -46,7 +47,15 @@ const ALLOWED_LOOP_ITEM_KEYS = new Set([
 function parseRouteLoopEntry(
   item: Record<string, unknown>,
   stageId: string,
-): { ok: true; value: PipelineRouteLoopEntry } | { ok: false; message: string } {
+): { ok: true; value: PipelineRouteLoopEntry } | ParsePipelineRouteFailure {
+  if ("if" in item) {
+    return {
+      ok: false,
+      message: `stage "${stageId}": if is not allowed on a loop route entry`,
+      code: "pipeline.route_if_invalid",
+    };
+  }
+
   for (const key of Object.keys(item)) {
     if (!ALLOWED_LOOP_ITEM_KEYS.has(key)) {
       return {
@@ -132,10 +141,16 @@ function parseRouteOn(
  * max_replays, on_max_replays, replay_session }`); entries are never bare
  * strings (route entries are always structured objects, per the spec).
  */
+export type ParsePipelineRouteFailure = {
+  ok: false;
+  message: string;
+  code?: "pipeline.route_if_invalid";
+};
+
 export function parsePipelineRoute(
   raw: unknown,
   stageId: string,
-): { ok: true; value: PipelineRouteEntry[] } | { ok: false; message: string } {
+): { ok: true; value: PipelineRouteEntry[] } | ParsePipelineRouteFailure {
   if (!Array.isArray(raw)) {
     return {
       ok: false,
@@ -183,7 +198,7 @@ export function parsePipelineRoute(
     }
 
     for (const key of Object.keys(item)) {
-      if (key !== "to" && key !== "on") {
+      if (key !== "to" && key !== "on" && key !== "if") {
         return {
           ok: false,
           message: `stage "${stageId}": route item: unknown key "${key}"`,
@@ -208,8 +223,26 @@ export function parsePipelineRoute(
     const onResult = parseRouteOn(item.on, stageId, item.to);
     if (!onResult.ok) return onResult;
 
+    let routeIf: PipelineRouteForwardEntry["if"];
+    if (item.if !== undefined) {
+      const ifResult = parseRouteIf(item.if, stageId, item.to);
+      if (!ifResult.ok) return ifResult;
+      if (onResult.value.length !== 1 || onResult.value[0] !== "succeeded") {
+        return {
+          ok: false,
+          message: `stage "${stageId}": route "${item.to}": if is only allowed with on succeeded`,
+          code: "pipeline.route_if_invalid",
+        };
+      }
+      routeIf = ifResult.value;
+    }
+
     seenTargets.add(item.to);
-    entries.push({ to: item.to, on: onResult.value });
+    entries.push({
+      to: item.to,
+      on: onResult.value,
+      ...(routeIf !== undefined ? { if: routeIf } : {}),
+    });
   }
 
   return { ok: true, value: entries };
@@ -227,7 +260,11 @@ export function toRouteEdges(route: PipelineRoute | undefined): PipelineRouteEdg
   for (const item of route) {
     if (!isForwardRouteEntry(item)) continue;
     const on = item.on === undefined ? ["succeeded"] : Array.isArray(item.on) ? item.on : [item.on];
-    edges.push({ to: item.to, on: on as RouteTerminalState[] });
+    edges.push({
+      to: item.to,
+      on: on as RouteTerminalState[],
+      ...(item.if !== undefined ? { if: item.if } : {}),
+    });
   }
   return edges;
 }

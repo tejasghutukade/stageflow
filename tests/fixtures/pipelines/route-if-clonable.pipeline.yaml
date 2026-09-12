@@ -1,0 +1,46 @@
+id: route-if-clonable
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: eq
+          value: high
+    system_prompt: Triage the payload.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: page
+    clonable: true
+    route:
+      - to: collect
+    system_prompt: Page on-call.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: collect
+    system_prompt: Collect results.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

@@ -1,0 +1,32 @@
+id: route-demo-reject-if-optional-field
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: eq
+          value: high
+    system_prompt: Triage.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          properties:
+            severity:
+              type: string
+  - id: page
+    system_prompt: Page.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

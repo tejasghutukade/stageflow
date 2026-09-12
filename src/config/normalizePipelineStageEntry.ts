@@ -289,10 +289,11 @@ export function normalizePipelineStageEntries(
       if (!parsedRoute.ok) {
         return loadFailure([
           {
-            code: "pipeline.dag_error",
+            code: parsedRoute.code ?? "pipeline.dag_error",
             message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedRoute.message}`,
             category: "pipeline",
             pipelineId: ctx.pipelineId,
+            ...(parsedRoute.code === "pipeline.route_if_invalid" ? { stageId: id } : {}),
           },
         ]);
       }
