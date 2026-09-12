@@ -1,19 +1,20 @@
 import type {
   PipelineNeedEdge,
   PipelineRouteEdge,
-  PipelineRouteEntry,
   PipelineRouteLoopEntry,
   PipelineStageRef,
-  PipelineStageYamlEntry,
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
   FeedbackLoopConfig,
 } from "../types/pipeline.js";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
-import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
-import { parseExecutionPolicy } from "./parseCompletionContract.js";
-import { predecessorEdges } from "./pipelineNeeds.js";
-import { parsePipelineRoute, toRouteEdges, toRouteLoopEntries } from "./pipelineRoute.js";
+import { BODY_KEYS, isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
+import { invertRouteToPredecessorEdges, predecessorEdges } from "./pipelineNeeds.js";
+import {
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "./normalizePipelineStageEntry.js";
+import { toRouteEdges, toRouteLoopEntries } from "./pipelineRoute.js";
 
 type NormalizedEdge = {
   id: string;
@@ -49,140 +50,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function parsePipelineStageEntries(
-  raw: unknown,
+function wrapRawStagesForNormalize(
+  rawStages: unknown[],
   ctx: ResolvePipelineDagContext,
-): PipelineStageYamlEntry[] {
-  if (!Array.isArray(raw)) {
-    throw new Error(formatError(ctx, "stages[] is required"));
-  }
-  if (raw.length === 0) {
-    throw new Error(formatError(ctx, "stages must be non-empty"));
-  }
-
-  const entries: PipelineStageYamlEntry[] = [];
-  for (let index = 0; index < raw.length; index++) {
-    const entry = raw[index];
-    if (typeof entry === "string") {
-      const hint = entry
-        ? `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "${entry}", uses: "./${entry}.yaml" } or inline body`
-        : `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`;
-      throw new Error(formatError(ctx, hint));
+): { raw: unknown; declaringPath: string }[] {
+  return rawStages.map((raw) => {
+    if (!isPlainObject(raw)) {
+      return { raw, declaringPath: ctx.path };
     }
-
-    if (!isPlainObject(entry)) {
-      throw new Error(formatError(ctx, `invalid stage entry at index ${index}`));
+    const id = typeof raw.id === "string" && raw.id ? raw.id : undefined;
+    const hasUses = typeof raw.uses === "string";
+    const hasBody = Object.keys(raw).some(
+      (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp",
+    );
+    if (hasUses || hasBody || !id) {
+      return { raw, declaringPath: ctx.path };
     }
-
-    const keys = Object.keys(entry);
-    for (const key of keys) {
-      if (!isAllowedPipelineStageEntryKey(key)) {
-        throw new Error(
-          formatError(ctx, `invalid stage entry "${String(entry.id ?? index)}": unknown key "${key}"`),
-        );
-      }
-    }
-
-    if (typeof entry.id !== "string" || !entry.id) {
-      throw new Error(formatError(ctx, `invalid stage entry at index ${index}: id must be a non-empty string`));
-    }
-
-    if (entry.needs !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${entry.id}": "needs" is no longer supported — declare the wiring on the source stage's "route" instead`,
-        ),
-      );
-    }
-    if (entry.fork !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${entry.id}": "fork" is no longer supported — use "route" instead; listed route targets always run`,
-        ),
-      );
-    }
-    if (entry.feedback_loop !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${entry.id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
-        ),
-      );
-    }
-    if (entry.route_select !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${entry.id}": "route_select" is no longer supported — listed route targets always run`,
-        ),
-      );
-    }
-    if (entry.allow_none !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${entry.id}": "allow_none" is no longer supported — listed route targets always run`,
-        ),
-      );
-    }
-
-    const clonableFields: Pick<PipelineStageYamlEntry, "clonable" | "clone_cap"> = {
-      ...(entry.clonable !== undefined ? { clonable: entry.clonable as boolean } : {}),
-      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap as number } : {}),
+    return {
+      raw: { ...raw, uses: `./${id}.yaml` },
+      declaringPath: ctx.path,
     };
-    const policyOutcome = parseExecutionPolicy(entry, entry.id);
-    if (!policyOutcome.ok) {
-      throw new Error(
-        formatError(
-          ctx,
-          policyOutcome.issues[0]?.message ?? "invalid execution policy",
-        ),
-      );
-    }
-    const policyFields = {
-      ...(policyOutcome.value.completion !== undefined
-        ? { completion: policyOutcome.value.completion }
-        : {}),
-      ...(policyOutcome.value.recovery !== undefined
-        ? { recovery: policyOutcome.value.recovery }
-        : {}),
-    };
-    if (entry.replay_safe !== undefined && typeof entry.replay_safe !== "boolean") {
-      throw new Error(
-        formatError(ctx, `stage "${entry.id}": replay_safe must be a boolean`),
-      );
-    }
-    const replaySafetyFields =
-      entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {};
-
-    let routeValue: PipelineRouteEntry[] | undefined;
-    if (entry.route !== undefined) {
-      const parsedRoute = parsePipelineRoute(entry.route, entry.id);
-      if (!parsedRoute.ok) {
-        throw new Error(formatError(ctx, parsedRoute.message));
-      }
-      routeValue = parsedRoute.value;
-    }
-    const routeFields = routeValue !== undefined ? { route: routeValue } : {};
-
-    if (entry.entry !== undefined && typeof entry.entry !== "boolean") {
-      throw new Error(formatError(ctx, `stage "${entry.id}": entry must be a boolean`));
-    }
-    const entryFields = entry.entry !== undefined ? { entry: entry.entry as boolean } : {};
-
-    entries.push({
-      id: entry.id,
-      ...clonableFields,
-      ...policyFields,
-      ...replaySafetyFields,
-      ...routeFields,
-      ...entryFields,
-    });
-  }
-
-  return entries;
+  });
 }
 
 function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
@@ -261,19 +149,9 @@ function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipeli
  */
 function mergeRouteEdgesIntoNeeds(edges: NormalizedEdge[]): void {
   const byId = new Map(edges.map((edge) => [edge.id, edge]));
-  const inbound = new Map<string, PipelineNeedEdge[]>();
-
-  for (const edge of edges) {
-    for (const route of edge.routeEdges) {
-      const list = inbound.get(route.to) ?? [];
-      list.push({
-        id: edge.id,
-        on: route.on,
-        ...(route.if !== undefined ? { if: route.if } : {}),
-      });
-      inbound.set(route.to, list);
-    }
-  }
+  const inbound = invertRouteToPredecessorEdges(
+    edges.map((edge) => ({ id: edge.id, route: edge.routeEdges })),
+  );
 
   for (const [targetId, incoming] of inbound) {
     const target = byId.get(targetId);
@@ -608,8 +486,22 @@ export function resolvePipelineDag(
   rawStages: unknown,
   ctx: ResolvePipelineDagContext,
 ): { stages: string[]; dag: ResolvedPipelineDag } {
-  const entries = parsePipelineStageEntries(rawStages, ctx);
-  return resolvePipelineDagFromRefs(entries, ctx);
+  if (!Array.isArray(rawStages)) {
+    throw new Error(formatError(ctx, "stages[] is required"));
+  }
+  if (rawStages.length === 0) {
+    throw new Error(formatError(ctx, "stages must be non-empty"));
+  }
+  const outcome = normalizePipelineStageEntries(
+    wrapRawStagesForNormalize(rawStages, ctx),
+    ctx,
+  );
+  if (!outcome.ok) {
+    throw new Error(
+      outcome.issues[0]?.message ?? formatError(ctx, "invalid stage entries"),
+    );
+  }
+  return resolvePipelineDagFromRefs(toWiringRefs(outcome.value), ctx);
 }
 
 export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPipelineDag): boolean {

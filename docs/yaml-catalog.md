@@ -318,7 +318,7 @@ stages:
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default `succeeded` only), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default `succeeded` only), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Load and pipeline create invert preserve `if` on the matching outbound Route entry. HTTP create `needs` remains ungated (`id`/`on` or a parent id string). Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
 
 ### Generic fan-in {#generic-fan-in}
 

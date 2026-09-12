@@ -79,14 +79,21 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
   });
 
-  it("rejects wiring-only entry", () => {
+  it("rejects authored needs on a uses stage", () => {
     const outcome = normalizePipelineStageEntries(
-      [{ raw: { id: "orphan", needs: "decide" }, declaringPath: "/tmp/pipeline.yaml" }],
+      [
+        {
+          raw: { id: "child", uses: "./child.yaml", needs: "decide" },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
       ctx,
     );
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("pipeline.stage_missing_body");
+    expect(outcome.issues[0]?.message).toMatch(
+      /stage "child": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
+    );
   });
 
   it("rejects unknown keys", () => {

@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadPipeline } from "../src/config/loadPipeline.js";
+import {
+  invertPredecessorEdgesToRoute,
+  invertRouteToPredecessorEdges,
+  toPipelineNeeds,
+} from "../src/config/pipelineNeeds.js";
 import { resolvePipelineDag } from "../src/config/resolvePipelineDag.js";
 import { pipelinePath } from "./helpers/fixturePaths.js";
 
@@ -302,6 +307,58 @@ describe("resolvePipelineDag: route (ticket 01, forward routing only)", () => {
         if: { field: "severity", op: "eq", value: "high" },
       },
     ]);
+  });
+
+  it("keeps if on Route ↔ predecessor-edge invert and does not collapse a gated succeeded-only edge", () => {
+    const inbound = invertRouteToPredecessorEdges([
+      {
+        id: "triage",
+        route: [{ to: "page", if: { field: "ok", op: "eq", value: true } }],
+      },
+      { id: "page" },
+    ]);
+    expect(inbound.get("page")).toEqual([
+      {
+        id: "triage",
+        on: ["succeeded"],
+        if: { field: "ok", op: "eq", value: true },
+      },
+    ]);
+    expect(toPipelineNeeds(inbound.get("page")!)).toEqual([
+      {
+        id: "triage",
+        on: ["succeeded"],
+        if: { field: "ok", op: "eq", value: true },
+      },
+    ]);
+
+    const outbound = invertPredecessorEdgesToRoute([
+      { id: "triage" },
+      { id: "page", needs: inbound.get("page") },
+    ]);
+    expect(outbound.get("triage")).toEqual({
+      entry: true,
+      route: [
+        {
+          to: "page",
+          on: ["succeeded"],
+          if: { field: "ok", op: "eq", value: true },
+        },
+      ],
+    });
+  });
+
+  it("inverts ungated HTTP-style needs to route/entry with no if", () => {
+    const outbound = invertPredecessorEdgesToRoute([
+      { id: "recon" },
+      { id: "improve-a", needs: "recon" },
+    ]);
+    expect(outbound.get("recon")).toEqual({
+      entry: true,
+      route: [{ to: "improve-a", on: ["succeeded"] }],
+    });
+    expect(outbound.get("recon")?.route?.[0]?.if).toBeUndefined();
+    expect(toPipelineNeeds([{ id: "recon", on: ["succeeded"] }])).toBe("recon");
   });
 });
 

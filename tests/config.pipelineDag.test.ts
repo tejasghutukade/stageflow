@@ -9,9 +9,12 @@ import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   areResolvedDagsEquivalent,
   extractPipelineStageIds,
-  parsePipelineStageEntries,
   resolvePipelineDag,
 } from "../src/config/resolvePipelineDag.js";
+import {
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "../src/config/normalizePipelineStageEntry.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const owned = path.join(fixtures, "pipeline-owned");
@@ -167,7 +170,7 @@ describe("resolvePipelineDag", () => {
         [{ id: "clarify" }, { id: "design-doc" }, { id: "clarify" }],
         ctx("duplicate-stage.pipeline"),
       ),
-    ).toThrow(/duplicate stage "clarify"/i);
+    ).toThrow(/duplicate stage id "clarify"/i);
   });
 
   it("accepts multiple route entries into the same target and normalizes on gates", () => {
@@ -326,7 +329,7 @@ describe("resolvePipelineDag", () => {
     expect(() => resolvePipelineDag([""], ctx("blank-id"))).toThrow(/bare string stage refs/i);
     expect(() =>
       resolvePipelineDag([{ route: [{ to: "clarify" }] }], ctx("missing-id")),
-    ).toThrow(/id must be a non-empty string/i);
+    ).toThrow(/no uses: path or inline body/i);
     expect(() =>
       resolvePipelineDag([{ id: "clarify", route: 42 }], ctx("bad-route")),
     ).toThrow(/route must be a non-empty array/i);
@@ -422,26 +425,70 @@ describe("resolvePipelineDag", () => {
     expect(extractPipelineStageIds([])).toBeNull();
   });
 
-  it("parsePipelineStageEntries preserves declaration order for object refs", () => {
-    const entries = parsePipelineStageEntries(
+  it("toWiringRefs preserves declaration order for object refs", () => {
+    const dagCtx = ctx("object-form");
+    const outcome = normalizePipelineStageEntries(
       [
-        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
-        { id: "design-doc" },
+        {
+          raw: {
+            id: "clarify",
+            entry: true,
+            route: [{ to: "design-doc" }],
+            uses: "./clarify.yaml",
+          },
+          declaringPath: dagCtx.path,
+        },
+        {
+          raw: { id: "design-doc", uses: "./design-doc.yaml" },
+          declaringPath: dagCtx.path,
+        },
       ],
-      ctx("object-form"),
+      dagCtx,
     );
-    expect(entries).toEqual([
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(toWiringRefs(outcome.value)).toEqual([
       { id: "clarify", entry: true, route: [{ to: "design-doc", on: ["succeeded"] }] },
       { id: "design-doc" },
     ]);
   });
 
-  it("parsePipelineStageEntries copies clonable and clone_cap when present", () => {
-    const entries = parsePipelineStageEntries(
-      [{ id: "author", clonable: true, clone_cap: 3 }],
-      ctx("clonable-parse"),
+  it("toWiringRefs copies clonable and clone_cap when present", () => {
+    const dagCtx = ctx("clonable-parse");
+    const outcome = normalizePipelineStageEntries(
+      [
+        {
+          raw: { id: "author", clonable: true, clone_cap: 3, uses: "./author.yaml" },
+          declaringPath: dagCtx.path,
+        },
+      ],
+      dagCtx,
     );
-    expect(entries).toEqual([{ id: "author", clonable: true, clone_cap: 3 }]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(toWiringRefs(outcome.value)).toEqual([
+      { id: "author", clonable: true, clone_cap: 3 },
+    ]);
+  });
+
+  it("rejects authored needs through the shared normalize wiring seam", () => {
+    const stages = [
+      { id: "clarify", entry: true, route: [{ to: "design-doc" }], uses: "./clarify.yaml" },
+      { id: "design-doc", needs: "clarify", uses: "./design-doc.yaml" },
+    ];
+    const dagCtx = ctx("legacy-needs");
+    const outcome = normalizePipelineStageEntries(
+      stages.map((raw) => ({ raw, declaringPath: dagCtx.path })),
+      dagCtx,
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(
+      /stage "design-doc": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
+    );
+    expect(() => resolvePipelineDag(stages, dagCtx)).toThrow(
+      /stage "design-doc": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
+    );
   });
 
   it("extractPipelineStageIds accepts clonable keys on object entries", () => {
@@ -467,20 +514,38 @@ describe("resolvePipelineDag", () => {
     ).toEqual(["design-doc"]);
   });
 
-  it("parsePipelineStageEntries normalizes route on gates", () => {
-    const entries = parsePipelineStageEntries(
+  it("toWiringRefs normalizes route on gates", () => {
+    const dagCtx = ctx("parse-mixed-route");
+    const outcome = normalizePipelineStageEntries(
       [
-        { id: "research", entry: true, route: [{ to: "synthesize" }] },
         {
-          id: "validation",
-          entry: true,
-          route: [{ to: "synthesize", on: ["failed", "skipped"] }],
+          raw: {
+            id: "research",
+            entry: true,
+            route: [{ to: "synthesize" }],
+            uses: "./research.yaml",
+          },
+          declaringPath: dagCtx.path,
         },
-        { id: "synthesize" },
+        {
+          raw: {
+            id: "validation",
+            entry: true,
+            route: [{ to: "synthesize", on: ["failed", "skipped"] }],
+            uses: "./validation.yaml",
+          },
+          declaringPath: dagCtx.path,
+        },
+        {
+          raw: { id: "synthesize", uses: "./synthesize.yaml" },
+          declaringPath: dagCtx.path,
+        },
       ],
-      ctx("parse-mixed-route"),
+      dagCtx,
     );
-    expect(entries).toEqual([
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(toWiringRefs(outcome.value)).toEqual([
       { id: "research", entry: true, route: [{ to: "synthesize", on: ["succeeded"] }] },
       { id: "validation", entry: true, route: [{ to: "synthesize", on: ["failed", "skipped"] }] },
       { id: "synthesize" },

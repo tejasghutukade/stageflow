@@ -145,6 +145,33 @@ describe("parseCreatePipelineBody", () => {
     });
   });
 
+  it("rejects HTTP needs items that include if", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "gated",
+        stages: [
+          { id: "triage", uses: "./triage.yaml" },
+          {
+            id: "page",
+            uses: "./page.yaml",
+            needs: [
+              {
+                id: "triage",
+                on: ["succeeded"],
+                if: { field: "ok", op: "eq", value: true },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: 'stages[1].needs item: unknown key "if"',
+    });
+  });
+
   it("accepts inline stage without model", () => {
     expect(
       parseCreatePipelineBody({
@@ -382,6 +409,94 @@ describe("pipelineConfigToYaml", () => {
         "    uses: ./recon.yaml",
         "  - id: improve-a",
         "    uses: ./improve-a.yaml",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("round-trips a succeeded-only gated Route if through create YAML emit", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: true },
+                },
+              ],
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: gated-page",
+        "stages:",
+        "  - id: triage",
+        "    entry: true",
+        "    route:",
+        "      - to: page",
+        "        if:",
+        "          field: ok",
+        "          op: eq",
+        "          value: true",
+        "    uses: ./triage.yaml",
+        "  - id: page",
+        "    uses: ./page.yaml",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes if only on the gated outbound entry among always-run siblings", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: true },
+                },
+              ],
+            },
+            { id: "notify", uses: "./notify.yaml", needs: "triage" },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: gated-page",
+        "stages:",
+        "  - id: triage",
+        "    entry: true",
+        "    route:",
+        "      - to: page",
+        "        if:",
+        "          field: ok",
+        "          op: eq",
+        "          value: true",
+        "      - to: notify",
+        "    uses: ./triage.yaml",
+        "  - id: page",
+        "    uses: ./page.yaml",
+        "  - id: notify",
+        "    uses: ./notify.yaml",
         "",
       ].join("\n"),
     );

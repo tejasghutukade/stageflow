@@ -2,13 +2,16 @@ import { access, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   NormalizedPipelineStageEntry,
-  PipelineNeedEdge,
   PipelineNeeds,
-  PipelineRouteEntry,
-  PipelineRouteForwardEntry,
+  RouteIfPredicate,
 } from "../types/pipeline.js";
-import { parsePipelineNeeds, toNeedEdges } from "./pipelineNeeds.js";
-import { toRouteEdges } from "./pipelineRoute.js";
+import {
+  invertPredecessorEdgesToRoute,
+  invertRouteToPredecessorEdges,
+  parsePipelineNeeds,
+  toPipelineNeeds,
+  type OutboundRouteInversion,
+} from "./pipelineNeeds.js";
 import type { StageGateKind } from "../types/stage.js";
 import { STAGE_ID_PATTERN } from "./createStage.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
@@ -80,80 +83,9 @@ export function normalizeCreatePipelineStages(
   }));
 }
 
-type RouteInversion = { route?: PipelineRouteForwardEntry[]; entry?: boolean };
-
-/**
- * Invert each stage's `needs` (authored inbound, on the child) into outbound
- * `route`/`entry` entries — the mirror image of `mergeRouteEdgesIntoNeeds`
- * in resolvePipelineDag.ts, which inverts the other direction. A stage with
- * no `needs` at all becomes a `route`-vocabulary entry stage (`entry: true`);
- * a stage named as a predecessor by some other stage's `needs` gets that
- * edge appended to its own outbound `route`. Returns an empty map when no
- * stage in the list declares `needs` at all, so pipelines with zero wiring
- * synthesize nothing (no `entry`/`route` fields at all), matching prior
- * behavior for stage lists with no `needs:` output either.
- */
-function invertNeedsToRoute(
-  stages: CreatePipelineStageRef[],
-): Map<string, RouteInversion> {
-  const result = new Map<string, RouteInversion>();
-  if (!stages.some((stage) => stage.needs !== undefined)) {
-    return result;
-  }
-
-  const outbound = new Map<string, PipelineRouteForwardEntry[]>();
-  for (const stage of stages) {
-    if (stage.needs === undefined) {
-      result.set(stage.id, { entry: true });
-      continue;
-    }
-    for (const parent of toNeedEdges(stage.needs)) {
-      const list = outbound.get(parent.id) ?? [];
-      list.push({ to: stage.id, on: parent.on });
-      outbound.set(parent.id, list);
-    }
-  }
-
-  for (const [id, route] of outbound) {
-    result.set(id, { ...(result.get(id) ?? {}), route });
-  }
-
-  return result;
-}
-
-/**
- * Invert `route`/`entry`-shaped normalized entries back into `needs`-shaped
- * `CreatePipelineStageRef.needs` values — the same direction as
- * `mergeRouteEdgesIntoNeeds` in resolvePipelineDag.ts, just targeting this
- * endpoint's own bespoke wire-contract shape instead of `ResolvedPipelineStageNode`.
- */
-function routeEntriesToNeeds(
-  entries: NormalizedPipelineStageEntry[],
-): Map<string, PipelineNeeds> {
-  const inbound = new Map<string, PipelineNeedEdge[]>();
-  for (const entry of entries) {
-    for (const edge of toRouteEdges(entry.route)) {
-      const list = inbound.get(edge.to) ?? [];
-      list.push({ id: entry.id, on: edge.on });
-      inbound.set(edge.to, list);
-    }
-  }
-
-  const result = new Map<string, PipelineNeeds>();
-  for (const [id, edges] of inbound) {
-    result.set(
-      id,
-      edges.length === 1 && edges[0]!.on.length === 1 && edges[0]!.on[0] === "succeeded"
-        ? edges[0]!.id
-        : edges,
-    );
-  }
-  return result;
-}
-
 function stageRefToRaw(
   ref: CreatePipelineStageRef,
-  routeInfo: RouteInversion | undefined,
+  routeInfo: OutboundRouteInversion | undefined,
 ): Record<string, unknown> {
   const raw: Record<string, unknown> = { id: ref.id };
   if (routeInfo?.entry) raw.entry = true;
@@ -175,7 +107,7 @@ function toAuthoringRawEntries(
   stages: CreatePipelineStageRef[],
   declaringPath: string,
 ): RawMergedEntry[] {
-  const routeById = invertNeedsToRoute(stages);
+  const routeById = invertPredecessorEdgesToRoute(stages);
   return stages.map((stage) => ({
     raw: stageRefToRaw(stage, routeById.get(stage.id)),
     declaringPath,
@@ -185,10 +117,11 @@ function toAuthoringRawEntries(
 function normalizedToCreateRefs(
   entries: NormalizedPipelineStageEntry[],
 ): CreatePipelineStageRef[] {
-  const needsById = routeEntriesToNeeds(entries);
+  const inbound = invertRouteToPredecessorEdges(entries);
   return entries.map((entry) => {
     const ref: CreatePipelineStageRef = { id: entry.id };
-    const needs = needsById.get(entry.id);
+    const edges = inbound.get(entry.id);
+    const needs = edges !== undefined ? toPipelineNeeds(edges) : undefined;
     if (needs !== undefined) ref.needs = needs;
     if (entry.body.kind === "uses") {
       ref.uses = entry.body.path;
@@ -403,7 +336,71 @@ export function parseCreatePipelineBody(
   };
 }
 
-function appendRouteYaml(lines: string[], routeInfo: RouteInversion): void {
+function formatRouteIfValue(value: unknown): string {
+  if (typeof value === "string") return formatInlineYamlScalar(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => formatRouteIfValue(item)).join(", ")}]`;
+  }
+  return JSON.stringify(value);
+}
+
+function appendRouteIfYamlListItem(
+  lines: string[],
+  indent: string,
+  predicate: RouteIfPredicate,
+): void {
+  if ("all" in predicate) {
+    lines.push(`${indent}- all:`);
+    for (const child of predicate.all) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("any" in predicate) {
+    lines.push(`${indent}- any:`);
+    for (const child of predicate.any) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("not" in predicate) {
+    lines.push(`${indent}- not:`);
+    appendRouteIfYaml(lines, `${indent}    `, predicate.not);
+    return;
+  }
+  lines.push(`${indent}- field: ${formatInlineYamlScalar(predicate.field)}`);
+  lines.push(`${indent}  op: ${predicate.op}`);
+  lines.push(`${indent}  value: ${formatRouteIfValue(predicate.value)}`);
+}
+
+function appendRouteIfYaml(lines: string[], indent: string, predicate: RouteIfPredicate): void {
+  if ("all" in predicate) {
+    lines.push(`${indent}all:`);
+    for (const child of predicate.all) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("any" in predicate) {
+    lines.push(`${indent}any:`);
+    for (const child of predicate.any) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("not" in predicate) {
+    lines.push(`${indent}not:`);
+    appendRouteIfYaml(lines, `${indent}  `, predicate.not);
+    return;
+  }
+  lines.push(`${indent}field: ${formatInlineYamlScalar(predicate.field)}`);
+  lines.push(`${indent}op: ${predicate.op}`);
+  lines.push(`${indent}value: ${formatRouteIfValue(predicate.value)}`);
+}
+
+function appendRouteYaml(lines: string[], routeInfo: OutboundRouteInversion): void {
   if (routeInfo.entry) {
     lines.push("    entry: true");
   }
@@ -413,14 +410,16 @@ function appendRouteYaml(lines: string[], routeInfo: RouteInversion): void {
   lines.push("    route:");
   for (const item of routeInfo.route) {
     const on = item.on === undefined ? ["succeeded"] : Array.isArray(item.on) ? item.on : [item.on];
-    if (on.length === 1 && on[0] === "succeeded") {
-      lines.push(`      - to: ${item.to}`);
-      continue;
-    }
     lines.push(`      - to: ${item.to}`);
-    lines.push("        on:");
-    for (const state of on) {
-      lines.push(`          - ${state}`);
+    if (!(on.length === 1 && on[0] === "succeeded")) {
+      lines.push("        on:");
+      for (const state of on) {
+        lines.push(`          - ${state}`);
+      }
+    }
+    if (item.if !== undefined) {
+      lines.push("        if:");
+      appendRouteIfYaml(lines, "          ", item.if);
     }
   }
 }
@@ -443,7 +442,7 @@ export function pipelineConfigToYaml(
   pipeline: { id: string; stages: CreatePipelineStageRef[] },
   options: { format: "linear" | "dag" },
 ): string {
-  const routeById = invertNeedsToRoute(pipeline.stages);
+  const routeById = invertPredecessorEdgesToRoute(pipeline.stages);
   const lines: string[] = [`id: ${pipeline.id}`, "stages:"];
   for (const stage of pipeline.stages) {
     if (options.format === "linear" && !stage.needs && !stage.inline && stage.uses) {
