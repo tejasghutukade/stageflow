@@ -4,10 +4,10 @@
 
 **Blocked by:** 02 (Stage worker owns per-attempt container lifecycle), 03 (New minimal sandbox image)
 
-**Status:** ready-for-agent
+**Status:** done — implemented and verified (typecheck clean, full suite green)
 
-- [ ] `spawnContainer`, `buildContainerRunArgs`, `buildContainerName`, `buildCacheMountArgs`, `StageContainerOptions`, and the launcher's `container` option are deleted from `stageProcessLauncher.ts`; `spawnAndWait` always uses `spawnHostProcess`.
-- [ ] `tests/runtime.stageContainerLauncher.test.ts` and `tests/fixtures/mockDockerBin.mjs` are removed (superseded by tests added in tickets 01/02).
-- [ ] v1's `Dockerfile` is removed or clearly repointed at ticket 03's image so there's exactly one image-build path left in the repo.
-- [ ] Full test suite passes with no reference to the removed container-mode launcher surface anywhere (including `resolveContainerOptions`, `nextContainerNameSuffix`, `sanitizeContainerNameSegment` if unused elsewhere).
-- [ ] Any leftover env var docs/comments describing "container mode runs the whole worker" are updated to reflect the new meaning (sandboxed Bash only).
+- [x] `spawnContainer`, `buildContainerRunArgs`, `buildContainerName` (v1's copy), `buildCacheMountArgs`, `StageContainerOptions`/`StageContainerCacheMount`, `resolveContainerOptions`, `nextContainerNameSuffix`, and the launcher's `container` constructor option are all deleted from `stageProcessLauncher.ts`; `spawnAndWait` now always calls `spawnHostProcess` — no branch left. `buildContainerName`/`sanitizeContainerNameSegment` still exist, but relocated into `src/runtime/sandboxContainer.ts`, their one remaining consumer (ticket 02's real usage), not left dangling in the deleted file.
+- [x] `tests/runtime.stageContainerLauncher.test.ts` and `tests/fixtures/mockDockerBin.mjs` removed.
+- [x] v1's `Dockerfile` replaced by ticket 03's `stageflow-bash:v1` image content — one image-build path left in the repo, confirmed rebuilding from the new canonical `Dockerfile` path is a clean cache hit against the same image.
+- [x] Full suite: 195 files / 2117 tests passed (down from 196/2137 pre-removal — exactly the 1 file / 22 tests deleted, no other regressions); typecheck clean; repo-wide grep confirms zero references left to any removed symbol.
+- [x] `SANDBOX_CONTAINER_IMAGE_ENV`/`SANDBOX_CONTAINER_DOCKER_BIN_ENV` (`sandboxContainer.ts`) are now the only definitions of these env var names in the repo — the "reuses v1's names, temporarily duplicated" comment from tickets 01/02 was removed since there's no longer a second definition to reconcile with.

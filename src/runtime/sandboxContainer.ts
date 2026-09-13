@@ -1,21 +1,27 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
-import { buildContainerName } from "./stageProcessLauncher.js";
 
-/**
- * Bash-in-a-Box (V2) intentionally reuses v1's env var names: once this
- * mechanism replaces v1's "run the whole worker in a container" mode
- * (ticket 04), `STAGEFLOW_STAGE_CONTAINER_IMAGE` simply comes to mean
- * "sandbox Bash calls in a container" instead. Until then the two live
- * side by side under the same string values — see
- * docs/specs/stage-container-sandbox.md's "V2 — Bash-in-a-Box" section.
- */
 export const SANDBOX_CONTAINER_IMAGE_ENV = "STAGEFLOW_STAGE_CONTAINER_IMAGE";
 export const SANDBOX_CONTAINER_DOCKER_BIN_ENV =
   "STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN";
 
 const execFileAsync = promisify(execFile);
+
+/** Docker container names allow only `[a-zA-Z0-9_.-]`. */
+export function sanitizeContainerNameSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "-");
+}
+
+export function buildContainerName(
+  input: { runId: string; stageId: string; attempt?: number },
+  suffix: string,
+): string {
+  const runId = sanitizeContainerNameSegment(input.runId);
+  const stageId = sanitizeContainerNameSegment(input.stageId);
+  const attempt = input.attempt ?? 1;
+  return `stageflow-${runId}-${stageId}-${attempt}-${suffix}`;
+}
 
 export type SandboxContainerOptions = {
   image: string;
