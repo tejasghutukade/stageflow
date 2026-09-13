@@ -23,9 +23,15 @@ system_prompt: |
     in the emitted artifacts list, and records the final story set, the
     implementation order, what changed in which plan, and remaining
     risks.
-  - implementation_order lists every story_id exactly once. The first
-    story has no unmet neighbor dependency; later stories may depend
-    only on earlier ones in that list.
+  - payload.stories is a Clone Array of story-work objects, one per
+    aligned story, in implementation order. Each item has story_id,
+    title, plan_artifact, order (1-based), depends_on, planned_files, and
+    validation_commands. The first item has no unmet neighbor
+    dependency; later items may depend only on earlier story_ids.
+    Encode order in each item; do not emit a sibling implementation_order
+    or story_ids array.
+  - remaining_risks is a string. approved is a boolean. alignment_notes
+    is a string.
   - The operator accepted aligned-plans.md through artifact_backed, and
     that accepted decision is recorded inside the artifact.
 
@@ -36,7 +42,8 @@ system_prompt: |
      story-plan-<story_id>.md via write_stage_artifact. Unchanged plans
      are still copied so implement reads from this attempt.
   3. Choose a sequential order that respects neighbor_dependencies and
-     file coupling (shared types and contracts first).
+     file coupling (shared types and contracts first). Put that order
+     on each stories item as order and depends_on.
   4. Call write_stage_artifact with path aligned-plans.md covering the
      matrix of stories, order, diffs you made, and why sequential
      implement will not thrash shared files.
@@ -46,6 +53,8 @@ system_prompt: |
      again in this same stage. Never emit before accept.
   6. After explicit acceptance, rewrite aligned-plans.md to include an
      operator-decision section (accepted wording and any conditions).
+     Then emit the stories Clone Array plus approved, alignment_notes,
+     and remaining_risks as scalars.
 
   Required files must be created with write_stage_artifact. Checkout
   write/edit does not satisfy after-phase verify.
@@ -70,30 +79,21 @@ io:
     schema:
       type: object
       required:
+        - stories
         - approved
-        - story_ids
-        - implementation_order
         - alignment_notes
         - remaining_risks
       properties:
+        stories:
+          type: array
+          items:
+            $ref: "#/schemas/story-work"
         approved:
           type: boolean
-        story_ids:
-          type: array
-          minItems: 1
-          items:
-            type: string
-        implementation_order:
-          type: array
-          minItems: 1
-          items:
-            type: string
         alignment_notes:
           type: string
         remaining_risks:
-          type: array
-          items:
-            type: string
+          type: string
 verify:
   - id: plans-approved
     type: gate

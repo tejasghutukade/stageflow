@@ -75,37 +75,7 @@ timeout_ms: 3600000
 io:
   input:
     schema:
-      type: object
-      required:
-        - story_id
-        - title
-        - plan_artifact
-        - order
-        - depends_on
-        - planned_files
-        - validation_commands
-      properties:
-        story_id:
-          type: string
-        title:
-          type: string
-        plan_artifact:
-          type: string
-        order:
-          type: integer
-          minimum: 1
-        depends_on:
-          type: array
-          items:
-            type: string
-        planned_files:
-          type: array
-          items:
-            type: string
-        validation_commands:
-          type: array
-          items:
-            type: string
+      $ref: "#/schemas/story-work"
   output:
     schema:
       type: object

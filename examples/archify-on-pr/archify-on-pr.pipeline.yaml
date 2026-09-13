@@ -2,9 +2,13 @@ id: archify-on-pr
 stages:
   - id: detect-changes
     uses: ./detect-changes.yaml
-    fork:
-      select: subset
-      allow_none: true
+    entry: true
+    route:
+      - to: author-diagrams
+        if:
+          field: author_diagrams
+          op: eq
+          value: true
     on_verify_fail:
       mode: repair
       max_attempts: 2
@@ -13,4 +17,3 @@ stages:
   - id: author-diagrams
     uses: ./author-diagrams.yaml
     skill: archify
-    needs: detect-changes

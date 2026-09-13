@@ -30,8 +30,8 @@ template you must follow.
    human gate here, this is the one automated fan-out in the middle
 4. Address every blocking review finding in one fixup stage — sweeping for
    every instance of the same category of problem, not only the ones
-   reviewers happened to cite — since the pipeline is a DAG and cannot loop
-   back to `feat-implement` or send the fix through a second review pass
+   reviewers happened to cite. This catalog stays a DAG; it does not
+   declare `{ type: loop }` back to `feat-implement` or a second review pass
    (`feat-address-feedback`).
 5. Assemble a ship package, ask for final approval, and — once the operator
    accepts — push the current branch and open the pull request in that same
@@ -72,9 +72,8 @@ and [YAML catalog — Verify](../../docs/yaml-catalog.md#verify).
 
 it must partition the diff into two to four independent review assignments
 and fan them out; it cannot skip review or hand it to a single clone.
-`feat-review` declares `io.input.schema` (`review_id` / `objective` /
-`paths` / `questions` / `constraints`) so those assignment payloads are
-validated at emit against a required shape. See
+`feat-review` `io.input` is an empty object so it stays a subset of
+`feat-implement` `io.output`. See
 
 Every stage but `feat-ship` uses `on_verify_fail: { mode: repair, max_attempts: 3,
 retry_safety: idempotent, include_failed_checks: true }` on the pipeline
@@ -86,21 +85,20 @@ until an operator explicitly retries or stops via `on_verify_fail` manual
 handling. See
 [Verified Stage Execution — Recovery policy](../../docs/verified-stage-execution.md#recovery-policy).
 
-### Review feedback has no way back upstream
+### Review feedback has no loop in this catalog
 
-Stageflow pipelines are DAGs — there is no supported way for a stage to loop
-back to an earlier one yet. If `feat-review` finds a blocking problem, the
-pipeline cannot resume `feat-implement` automatically. `feat-address-feedback`
-is the accommodation for that: a single fixup stage, positioned after review
-and before shipping, that addresses every blocking finding — sweeping for
-other instances of the same category of problem, not only the ones a
-reviewer happened to cite — then hands off to `feat-ship`, which
-independently re-checks the fix before accepting it. It cannot get a fresh
-review of its own fix, though: if its patch introduces something new,
+Loops exist via `{ type: loop }` on `route` (see
+[`examples/feedback-loop/`](../feedback-loop/)). This pipeline does not use
+one. If `feat-review` finds a blocking problem, the run does not resume
+`feat-implement`. `feat-address-feedback` is the accommodation: a single
+fixup stage after review and before shipping that addresses every blocking
+finding — sweeping for other instances of the same category of problem, not
+only the ones a reviewer happened to cite — then hands off to `feat-ship`,
+which independently re-checks the fix before accepting it. It cannot get a
+fresh review of its own fix, though: if its patch introduces something new,
 `feat-ship`'s fail-closed check is the backstop, and the operator has to
 intervene by hand — see [`sf runs retry`](../../docs/cli-reference.md), which
 can retry a succeeded stage in place and reset everything downstream.
-Automatic loop-back is future work, not something this example papers over.
 
 ## Prepare a worktree
 

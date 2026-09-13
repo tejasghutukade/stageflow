@@ -1,6 +1,10 @@
 id: oss-issue-contribution
 stages:
   - id: oss-issue-intake
+    entry: true
+    route:
+      - to: oss-explain-issue
+      - to: oss-reproduce-issue
     uses: ./oss-issue-intake.yaml
     on_verify_fail:
       mode: repair
@@ -10,63 +14,70 @@ stages:
   - id: oss-explain-issue
     uses: ./oss-explain-issue.yaml
     skill: ce-explain
-    needs: oss-issue-intake
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-reproduce-issue
+    route:
+      - to: oss-plan-investigation
     uses: ./oss-reproduce-issue.yaml
-    needs: oss-issue-intake
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-plan-investigation
+    route:
+      - to: oss-investigate-area
     uses: ./oss-plan-investigation.yaml
-    needs: oss-reproduce-issue
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-investigate-area
+    route:
+      - to: oss-approve-plan
     uses: ./oss-investigate-area.yaml
-    needs: oss-plan-investigation
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-approve-plan
+    route:
+      - to: oss-write-regression-test
     uses: ./oss-approve-plan.yaml
-    needs: oss-investigate-area
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-write-regression-test
+    route:
+      - to: oss-implement-source-fix
     uses: ./oss-write-regression-test.yaml
-    needs: oss-approve-plan
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-implement-source-fix
+    route:
+      - to: oss-verify-fix
     uses: ./oss-implement-source-fix.yaml
-    needs: oss-write-regression-test
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-verify-fix
+    route:
+      - to: oss-explain-fix
+      - to: oss-plan-review
     uses: ./oss-verify-fix.yaml
-    needs: oss-implement-source-fix
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -75,31 +86,33 @@ stages:
   - id: oss-explain-fix
     uses: ./oss-explain-fix.yaml
     skill: ce-explain
-    needs: oss-verify-fix
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-plan-review
+    route:
+      - to: oss-review-change
     uses: ./oss-plan-review.yaml
-    needs: oss-verify-fix
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-review-change
+    route:
+      - to: oss-address-review-feedback
     uses: ./oss-review-change.yaml
-    needs: oss-plan-review
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: oss-address-review-feedback
+    route:
+      - to: oss-approve-contribution
     uses: ./oss-address-review-feedback.yaml
-    needs: oss-review-change
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -107,7 +120,6 @@ stages:
       include_failed_checks: true
   - id: oss-approve-contribution
     uses: ./oss-approve-contribution.yaml
-    needs: oss-address-review-feedback
     on_verify_fail:
       mode: manual
       retry_safety: side_effecting

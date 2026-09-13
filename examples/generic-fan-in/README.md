@@ -8,14 +8,14 @@ what was handed across the join.
 
 Catalog wiring is outbound `route`: `research` and `validation` each list `to: synthesize`. Join rules (shipped runtime): the child waits until every parent is terminal; it **runs** if at least one parent succeeded (skipped siblings do not block); it stays **pending** if any parent failed (even when `on` lists `failed`); it force-skips only if every parent skipped. Including `failed` or `skipped` in `on:` opts that edge out of skip-cascade; it does not launch the Join from a failed parent.
 
-These YAML files may still use inbound `needs` and fail `sf validate` until rewritten to `route`. Current shapes: [`diamond-fan-in.pipeline.yaml`](../../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml), [`docs/yaml-catalog.md#generic-fan-in`](../../docs/yaml-catalog.md#generic-fan-in).
+Wiring matches the fixture twins: [`diamond-fan-in.pipeline.yaml`](../../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) and [`diamond-fan-in-accepted.pipeline.yaml`](../../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml). See [`docs/yaml-catalog.md#generic-fan-in`](../../docs/yaml-catalog.md#generic-fan-in).
 
 Two pipelines:
 
 | Pipeline | What it exercises |
 |----------|-------------------|
 | `generic-fan-in` | Default succeeded-only edges into `synthesize` |
-| `generic-fan-in-accepted` | Structured `on` on the research edge — still does **not** run the Join after research fails |
+| `generic-fan-in-accepted` | Research edge `on: [succeeded, failed, skipped]` — still does **not** run the Join after research fails |
 
 ## Prerequisites
 

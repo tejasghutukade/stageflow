@@ -65,29 +65,6 @@ io:
   input:
     schema:
       type: object
-      required:
-        - review_id
-        - objective
-        - paths
-        - questions
-        - constraints
-      properties:
-        review_id:
-          type: string
-        objective:
-          type: string
-        paths:
-          type: array
-          items:
-            type: string
-        questions:
-          type: array
-          items:
-            type: string
-        constraints:
-          type: array
-          items:
-            type: string
   output:
     schema:
       type: object

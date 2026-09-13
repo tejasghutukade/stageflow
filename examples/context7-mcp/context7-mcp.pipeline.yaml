@@ -1,12 +1,15 @@
 id: context7-mcp
 stages:
   - id: resolve-library
+    entry: true
+    route:
+      - to: fetch-docs
     uses: ./resolve-library.yaml
     mcp: [context7]
   - id: fetch-docs
+    route:
+      - to: write-brief
     uses: ./fetch-docs.yaml
     mcp: [context7]
-    needs: resolve-library
   - id: write-brief
     uses: ./write-brief.yaml
-    needs: fetch-docs

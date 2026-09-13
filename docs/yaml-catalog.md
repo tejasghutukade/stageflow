@@ -569,7 +569,7 @@ In both modes a failed or skipped Clone Instance is a failed Join parent. The Jo
 
 A pipeline may have many Clone Chains if they share no emitter, clone child, or Join. A Join may later be the emitter of a following Clone Chain.
 
-Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml).
+Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml). Walkthrough: [`examples/feature-loop/`](../examples/feature-loop/).
 
 ```yaml
 id: clone-chain-smallest
@@ -634,7 +634,7 @@ Older `#clonable-successors` links should use this heading.
 
 `clonable`, `clone_actions`, and envelope `clone_forks` are not accepted. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter fail load. Those fields fail with a message naming the field and pointing at a Clone Chain. There is no dual-read of `skip` / `once` / `fanout`.
 
-Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; that example remains a single `author-diagrams` session until a later change.
+[`examples/archify-on-pr`](../examples/archify-on-pr/) gates `author-diagrams` with Route `if` on `author_diagrams`. It remains a single `author-diagrams` session, not a Clone Chain.
 
 ### Feedback loops {#feedback-loops}
 

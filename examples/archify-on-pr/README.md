@@ -8,7 +8,7 @@ for GHA to deliver as HTML.
 
 | Path | Role |
 |------|------|
-| `archify-on-pr.pipeline.yaml` | detect-changes fork → author-diagrams; `verify` + `on_verify_fail` on detect |
+| `archify-on-pr.pipeline.yaml` | detect-changes Route `if` → author-diagrams; `verify` + `on_verify_fail` on detect |
 | `detect-changes.yaml` | Thin copy/emit from `ci-context.json` → `changes.json` + envelope |
 | `author-diagrams.yaml` | Writes `{type}.spec.json` per selected type (skill: archify on pipeline entry) |
 | `archify-on-pr.task.yaml` | Task bound at run time |
@@ -30,10 +30,21 @@ Selection is **deterministic** in `prepare-ci-context.sh` from path rules on
 
 A path may map to more than one type. If `relevant_files` is non-empty but no
 rule matches, the script defaults to `architecture`. Empty `relevant_files`
-yields empty `diagram_types` / `expected_fork_choice`.
+yields empty `diagram_types` / `author_diagrams: false` (and empty
+`expected_fork_choice` as a CI-side signal).
 
-detect-changes copies those types into `changes.json` and the envelope;
-author-diagrams writes one spec artifact per type.
+detect-changes copies those types into `changes.json` and the envelope and
+sets `author_diagrams` true iff `diagram_types` is non-empty. The pipeline
+gates a single author-diagrams session with Route `if` (not a Clone Chain):
+
+```yaml
+route:
+  - to: author-diagrams
+    if:
+      field: author_diagrams
+      op: eq
+      value: true
+```
 
 ## Prerequisites
 
@@ -59,15 +70,16 @@ Before Stageflow runs, GHA executes `scripts/prepare-ci-context.sh`. It resolves
 | `verified_paths` | Whether each changed path exists at `head_sha` |
 | `diagram_types` | Deterministic types from path rules on `relevant_files` |
 | `change_summary` | Short summary derived from the relevant set |
-| `expected_fork_choice` | `["author-diagrams"]` when types non-empty, else `[]` |
+| `expected_fork_choice` | CI-side list: `["author-diagrams"]` when types non-empty, else `[]` |
 
 `relevant_files` excludes `docs/**`, `*.md` (except `skills/**`), lockfiles,
 `tests/**` except `tests/fixtures/**/*.{yaml,yml}`, pitch-deck / pitch-assets,
 and editor noise (`.editorconfig`, `.vscode/`, `.idea/`). When that list is
 empty, `diagram_types` and `expected_fork_choice` are empty and GHA early-skips
 the `sf-run` step. detect-changes copies `relevant_files` into
-`changes.json` as `changed_files` and sets `fork_choice` from
-`expected_fork_choice`.
+`changes.json` as `changed_files` and emits `author_diagrams` true iff
+`diagram_types` is non-empty. Catalog routing uses that boolean, not
+`fork_choice`.
 
 Both pipeline stages read this file — agents do not use `GITHUB_SHA` or run
 their own git diff. detect-changes does not re-derive types; it only copies and
@@ -119,9 +131,9 @@ sf run \
   --json > sf-run.json
 ```
 
-When prepare-ci-context selects no types (`expected_fork_choice: []`),
-detect-changes copies that through and `author-diagrams` is skipped. When types
-are selected, inspect `{type}.spec.json` files in the run workspace.
+When prepare-ci-context selects no types (`author_diagrams: false`),
+Route `if` skips `author-diagrams`. When types are selected, inspect
+`{type}.spec.json` files in the run workspace.
 
 ### Extract envelope
 
@@ -132,8 +144,10 @@ node dist/cli.js envelope get --from sf-run.json --stage author-diagrams \
   --detect-stage detect-changes --format handoff --json > envelope.json
 ```
 
-Outputs `{ "skipped": true }` when detect skipped downstream, or
+When author-diagrams ran, output is
 `{ "skipped": false, "diagrams": [{ diagram_type, spec_path, summary }, …] }`.
+When `author_diagrams` is false, Route `if` skips that stage; GHA usually
+early-skips the whole `sf-run` step when `relevant_files` is empty.
 Deliver manually:
 
 ```bash

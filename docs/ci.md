@@ -287,19 +287,21 @@ Provider auth uses **OpenRouter** (`OPENROUTER_API_KEY`), not OpenAI.
 `relevant_files`, and deterministic `diagram_types` / `change_summary` /
 `expected_fork_choice` from path rules; when the relevant set is empty, GHA
 skips the pipeline early. **detect-changes** copies that context into
-`changes.json` and the envelope (no type-selection heuristics); pipeline
+`changes.json` and the envelope (no type-selection heuristics) and sets
+`author_diagrams` true iff `diagram_types` is non-empty. Pipeline
 completion checks the handoff against ci-context via
-`scripts/validate-detect-envelope.mjs`. **author-diagrams** then writes
-`{type}.spec.json` per type. The workflow uses
+`scripts/validate-detect-envelope.mjs`. Route `if` on `author_diagrams`
+skips **author-diagrams** when no types were selected; otherwise that
+stage writes `{type}.spec.json` per type in one session. The workflow uses
 [`.github/actions/sf-run`](../.github/actions/sf-run) with `export-run: true`,
 then runs Archify `deliver` for each spec via `scripts/deliver-diagrams.sh`,
 uploads per-type HTML (unzipped for in-browser viewing) plus a `diagrams/`
 bundle, and updates a sticky PR comment when applicable. Skill provisioning uses
 `sf skills install --from-zip`; agents do not install Archify or post comments.
 
-When detect emits `fork_choice: []`, GHA skips deliver, upload, and comment.
-Fork PRs cannot receive bot comments with the default token; see the example
-README.
+When `relevant_files` is empty, GHA skips deliver, upload, and comment before
+`sf run`. Fork PRs cannot receive bot comments with the default token; see the
+example README.
 
 ## See also
 

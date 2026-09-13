@@ -211,14 +211,14 @@ In headless CI, downstream shell steps read envelopes via the CLI instead of que
 sf envelope get --from sf-run.json --stage detect-changes --format envelope --json
 ```
 
-**Handoff deliverables** (normalized shape for GHA scripts — absolute artifact paths, fork skip detection):
+**Handoff deliverables** (normalized shape for GHA scripts — absolute artifact paths; `--detect-stage` skip is constructed-DAG `fork_choice: []`):
 
 ```bash
 sf envelope get --from sf-run.json --stage author-diagrams \
   --detect-stage detect-changes --format handoff --json > envelope.json
 ```
 
-When the detect stage emits `fork_choice: []`, handoff output is `{ "skipped": true }` and downstream deliver/upload steps can no-op. Catalog YAML does not author fork; that skip shape is for constructed DAGs and the current Archify example until it is rewired.
+When `--detect-stage` is set and that stage emits `fork_choice: []`, handoff output is `{ "skipped": true }` and downstream deliver/upload steps can no-op. That skip shape is for constructed DAGs. Catalog YAML does not author `fork` / `fork_choice`. [`examples/archify-on-pr`](../examples/archify-on-pr/) skips `author-diagrams` with Route `if` on `author_diagrams`.
 
 Typical CI flow:
 

@@ -13,12 +13,14 @@ system_prompt: |
   Definition of done — every line must hold before you emit success:
   - epic-split.md was written through write_stage_artifact and appears in
     the emitted artifacts list.
-  - story_count equals the length of story_ids (1–8). A mismatch is a contract violation.
+  - payload.stories is an array of 1–8 story-assignment objects. Each item
+    has story_id, title, epic_slice, acceptance, neighboring_story_ids, and
+    constraints. Do not emit a parallel story_ids string array.
   - Each story is a slice the next stage can plan in isolation: one
     story_id (stable kebab-case), a title, an epic_slice that quotes or
     paraphrases only the epic text that slice owns, acceptance the
-    implementer can falsify, and neighboring_story_ids it must not steal
-    work from.
+    implementer can falsify, neighboring_story_ids it must not steal
+    work from, and constraints that clone must honor.
   - Stories do not overlap files or acceptance. Together they cover the
     epic; leftover epic text with no owner is a contract violation.
   - Emit 1–8 stories. Never zero stories, never more than eight.
@@ -33,7 +35,9 @@ system_prompt: |
      story_id, title, owned epic text, likely files, acceptance, and why
      the slices can be planned in parallel.
   4. Emit exactly one success envelope with payload matching the schema,
-     artifacts containing epic-split.md, and story_ids in deterministic order.
+     artifacts containing epic-split.md, and stories as those objects in
+     deterministic order. Sibling fields requirements_source and
+     split_rationale are strings only.
 
   Required files must be created with write_stage_artifact. Checkout
   write/edit does not satisfy after-phase verify.
@@ -55,20 +59,14 @@ io:
     schema:
       type: object
       required:
-        - story_ids
-        - story_count
+        - stories
         - requirements_source
         - split_rationale
       properties:
-        story_ids:
+        stories:
           type: array
-          minItems: 1
           items:
-            type: string
-        story_count:
-          type: integer
-          minimum: 1
-          maximum: 8
+            $ref: "#/schemas/story-assignment"
         requirements_source:
           type: string
         split_rationale:

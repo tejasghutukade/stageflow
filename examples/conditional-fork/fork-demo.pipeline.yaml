@@ -2,11 +2,19 @@ id: fork-demo
 stages:
   - id: decide
     uses: ./decide.yaml
-    fork:
-      select: one
+    entry: true
+    route:
+      - to: branch-a
+        if:
+          field: branch
+          op: eq
+          value: branch-a
+      - to: branch-b
+        if:
+          field: branch
+          op: eq
+          value: branch-b
   - id: branch-a
     uses: ./branch-a.yaml
-    needs: decide
   - id: branch-b
     uses: ./branch-b.yaml
-    needs: decide

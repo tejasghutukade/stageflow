@@ -9,10 +9,12 @@ The pipeline is repository-neutral. Point the task's `checkout` at a dedicated,
 clean branch in Mastra, Pydantic AI, or another project. It reads that project's
 own contribution instructions before acting.
 
-**Not a Clone Chain yet.** One run per investigation or review item is a
+This catalog is **route-wired** (`entry` / `route` / multiple `to:`). Investigation
+and review are parallel DAG fan-out, not a sealed
 [Clone Chain](../../docs/yaml-catalog.md#clone-chain) (emitter → clone child → Join).
-The YAML in this directory is **not** a sealed Clone Chain. Author that shape
-from [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtures/pipelines/).
+One Clone Instance per investigation or review item remains intended future
+wiring; author that shape from
+[`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtures/pipelines/).
 
 ## Flow
 
@@ -31,9 +33,9 @@ from [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtur
 9. Intended Clone Chain: one Clone Instance per focused review (parallel).
 10. Address every blocking review finding in one fixup stage — sweeping for
     every instance of the same category of problem, not only the ones
-    reviewers happened to cite — since the pipeline is a DAG and cannot loop
-    back to oss-implement-source-fix or send the fix through a second review
-    pass.
+    reviewers happened to cite. This catalog stays a DAG (parallel fan-out
+    via multiple `to:`); it does not declare `{ type: loop }` back to
+    oss-implement-source-fix or a second review pass.
 11. Join into a PR-ready package, ask for final approval, and — once the
     operator accepts — push the branch and open the pull request against the
     fork in that same stage.
@@ -56,22 +58,22 @@ operator input or offer to substitute a report for real work. Only
 `oss-approve-plan` and `oss-approve-contribution` keep
 `gate_kinds: [artifact_backed]`.
 
-### Review feedback has no way back upstream
+### Review feedback has no loop in this catalog
 
-Stageflow pipelines are DAGs — there is no supported way for a stage to loop
-back to an earlier one yet. If `oss-review-change` finds a blocking problem,
-the pipeline cannot resume `oss-implement-source-fix` or `oss-verify-fix`
-automatically. `oss-address-review-feedback` is the accommodation for that: a
-single fixup stage, positioned after review and before approval, that
-addresses every blocking finding — sweeping for other instances of the same
-category of problem, not only the ones a reviewer happened to cite — then
+Loops exist via `{ type: loop }` on `route` (see
+[`examples/feedback-loop/`](../feedback-loop/)). This pipeline does not use
+one: it stays a DAG with parallel fan-out via multiple `to:`. If
+`oss-review-change` finds a blocking problem, the run does not resume
+`oss-implement-source-fix` or `oss-verify-fix`. `oss-address-review-feedback`
+is the accommodation: a single fixup stage after review and before approval
+that addresses every blocking finding — sweeping for other instances of the
+same category of problem, not only the ones a reviewer happened to cite — then
 hands off to `oss-approve-contribution`, which independently re-checks the
-fix before accepting it. It cannot get a fresh review of its own fix, though:
-if its patch introduces something new, `oss-approve-contribution`'s
+fix before accepting it. It cannot get a fresh review of its own fix,
+though: if its patch introduces something new, `oss-approve-contribution`'s
 fail-closed check is the backstop, and the operator has to intervene by hand —
 see [docs/cli-reference.md](../../docs/cli-reference.md) for `sf runs retry`,
 which can retry a succeeded stage in place and reset everything downstream.
-Automatic loop-back is future work, not something this example papers over.
 
 Every stage declares `verify` with at least one `type: artifact` check, so a
 success emit is rejected unless the named file appears in the envelope's
@@ -100,7 +102,7 @@ operator instead of silently advancing.
 
 Intended Clone Chains: `oss-plan-investigation` → `oss-investigate-area` → `oss-approve-plan`, and `oss-plan-review` → `oss-review-change` → join at address/approve. This directory's YAML is not yet that shape. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain).
 
-`oss-investigate-area` and `oss-review-change` declare `io.input.schema` so each Clone Instance assignment matches a required shape (`area_id`/`objective`/`paths`/`questions`/`constraints` or the review equivalent).
+`oss-investigate-area` and `oss-review-change` use empty `io.input` (a subset of each parent's `io.output`). Assignment fields (`area_id`/`objective`/`paths`/`questions`/`constraints` or the review equivalent) belong on intended Clone Chain payloads, not this DAG.
 
 Plan approval (`oss-approve-plan`) and contribution approval
 (`oss-approve-contribution`) use `artifact_backed` HITL and cannot self-approve;

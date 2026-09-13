@@ -52,6 +52,7 @@ io:
         - diagram_types
         - change_summary
         - content_hash
+        - author_diagrams
       properties:
         pr_number:
           type: string
@@ -77,6 +78,8 @@ io:
           type: string
         content_hash:
           type: string
+        author_diagrams:
+          type: boolean
       additionalProperties: false
   output:
     schema:
