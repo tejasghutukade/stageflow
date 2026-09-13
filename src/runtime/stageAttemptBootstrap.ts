@@ -19,12 +19,9 @@ import {
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
-import { instancesOfDefinition } from "../runstore/pipelineDagSnapshot.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
-import { cloneInstanceOrdinal } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
-import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -36,6 +33,7 @@ import {
   resolvePriorEnvelope,
   type ResolvePriorEnvelopeResult,
 } from "./envelopeRouting.js";
+import { assignment } from "./cloneSchedule.js";
 import { resumeSessionFilePath, type StageAttemptContext } from "./stageAttemptContext.js";
 import {
   buildStageRoots,
@@ -167,84 +165,6 @@ async function openStageWithOperatorCatalog(
       reason: err instanceof Error ? err.message : String(err),
     };
   }
-}
-
-function cloneAssignmentIndex(
-  dag: ResolvedPipelineDag,
-  stageId: string,
-  definitionId: string,
-  arrayLength: number,
-): number | undefined {
-  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
-  if (ordinal === undefined) return undefined;
-  const snapshot = dag as RunPipelineDagSnapshot;
-  if (!Array.isArray(snapshot.stage_ids) || arrayLength < 1) {
-    return ordinal - 1;
-  }
-  const siblings = instancesOfDefinition(snapshot, definitionId)
-    .map((id) => ({ id, ordinal: cloneInstanceOrdinal(id, definitionId) }))
-    .filter((row): row is { id: string; ordinal: number } => row.ordinal !== undefined)
-    .sort((a, b) => a.ordinal - b.ordinal);
-  const cohort = siblings.slice(-arrayLength);
-  const index = cohort.findIndex((row) => row.id === stageId);
-  return index === -1 ? undefined : index;
-}
-
-function cloneAssignmentPrior(
-  dag: ResolvedPipelineDag,
-  stageId: string,
-  definitionId: string,
-  completedEnvelopes: Map<string, StageEnvelope>,
-): ResolvePriorEnvelopeResult | undefined {
-  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
-  if (ordinal === undefined) return undefined;
-  const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return undefined;
-  const emitterId =
-    typeof node.needs === "string" && node.needs
-      ? node.needs
-      : predecessorEdges(node)[0]?.id;
-  if (emitterId === undefined) return undefined;
-  const emitter = dag.nodes.find((n) => n.id === emitterId);
-  const field = emitter?.clone_array_field;
-  if (field === undefined) return undefined;
-  const parent = completedEnvelopes.get(emitterId);
-  if (parent === undefined || parent.status !== "success") {
-    return {
-      ok: false,
-      reason: `missing envelope for Clone Chain emitter "${emitterId}"`,
-    };
-  }
-  const arr = parent.payload?.[field];
-  if (!Array.isArray(arr)) {
-    return {
-      ok: false,
-      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
-    };
-  }
-  const index = cloneAssignmentIndex(dag, stageId, definitionId, arr.length);
-  if (index === undefined || index >= arr.length) {
-    return {
-      ok: false,
-      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
-    };
-  }
-  const element = arr[index];
-  if (element === null || typeof element !== "object" || Array.isArray(element)) {
-    return {
-      ok: false,
-      reason: `Clone Array element ${index + 1} is not an object`,
-    };
-  }
-  return {
-    ok: true,
-    prior: {
-      status: "success",
-      summary: parent.summary,
-      artifacts: [],
-      payload: structuredClone(element) as Record<string, unknown>,
-    },
-  };
 }
 
 function assertPriorsMatchCloneInput(
@@ -382,14 +302,14 @@ export async function openStageAttempt(
       undefined,
       input.dag,
     ));
-  const assignment = cloneAssignmentPrior(
+  const assigned = assignment(
     input.dag,
     stageId,
     definitionId,
     completedEnvelopes,
   );
   const priorResult =
-    assignment ??
+    assigned ??
     (await resolvePriorEnvelope({
       dag: input.dag,
       stageId,
@@ -428,10 +348,9 @@ export async function openStageAttempt(
   const isDynamicCloneInstance =
     runtimeNode?.definition_id !== undefined &&
     runtimeNode.definition_id !== runtimeNode.id;
-  const feedbackLoopEmitContext =
-    isDynamicCloneInstance || runtimeNode?.clonable === true
-      ? undefined
-      : runtimeNode?.feedback_loop;
+  const feedbackLoopEmitContext = isDynamicCloneInstance
+    ? undefined
+    : runtimeNode?.feedback_loop;
   const repairContext = await repairContextForAttempt(input, stageId, attempt);
   const readQaTrail = createAttemptQaTrailReader(
     input.store,

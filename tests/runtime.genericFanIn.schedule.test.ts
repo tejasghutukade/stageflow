@@ -10,8 +10,7 @@ import {
 } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
-import { cloneScheduleAllowsRun } from "../src/runtime/cloneSchedule.js";
-import { pickStalledJoinSkips } from "../src/runtime/joinReadiness.js";
+import { pickStalledJoinSkips, joinAllowsRun } from "../src/runtime/joinReadiness.js";
 import {
   applyForkSkipsFromEnvelopes,
   runPipelineDag,
@@ -316,7 +315,7 @@ describe("generic fan-in skip cascade", () => {
       ["synthesize", "pending"],
     ]);
     expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
       true,
     );
   });
@@ -337,7 +336,7 @@ describe("generic fan-in skip cascade", () => {
       ["synthesize", "pending"],
     ]);
     expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
       false,
     );
   });
@@ -358,7 +357,7 @@ describe("generic fan-in skip cascade", () => {
       ["synthesize", "pending"],
     ]);
     expect(pickStalledJoinSkips(dag, states)).toEqual(["synthesize"]);
-    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
       false,
     );
   });
@@ -374,7 +373,7 @@ describe("generic fan-in skip cascade", () => {
       ["synthesize", "pending"],
     ]);
     expect(pickStalledJoinSkips(dag, states)).toEqual([]);
-    expect(cloneScheduleAllowsRun(dag, "synthesize", states, new Map())).toBe(
+    expect(joinAllowsRun(dag, "synthesize", states, new Map())).toBe(
       true,
     );
   });

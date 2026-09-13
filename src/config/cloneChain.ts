@@ -426,7 +426,7 @@ export function applyCloneChains(
   refs: PipelineStageRef[],
   dag: ResolvedPipelineDag,
   pipelineId: string,
-): LoadOutcome<{ cloneChildIds: Set<string> }> {
+): LoadOutcome<void> {
   const detected = detectCloneChains(stages, refs, pipelineId);
   if (!detected.ok) return detected;
   const chains = detected.value;
@@ -488,7 +488,5 @@ export function applyCloneChains(
     }
   }
 
-  return loadSuccess({
-    cloneChildIds: new Set(chains.map((chain) => chain.cloneChildId)),
-  });
+  return loadSuccess(undefined);
 }

@@ -1,7 +1,13 @@
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { RunPipelineDagSnapshot } from "../runstore/port.js";
-import { instancesOfDefinition } from "../runstore/pipelineDagSnapshot.js";
-import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
+import {
+  appendCloneInstances,
+  instancesOfDefinition,
+} from "../runstore/pipelineDagSnapshot.js";
+import {
+  cloneInstanceOrdinal,
+  definitionIdForInstance,
+} from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   NeedTerminalState,
@@ -10,15 +16,7 @@ import type {
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
 import { collectDownstreamStageIds } from "./dagTraversal.js";
-import {
-  activeCohortFromCloneIds,
-  filterJoinInputs,
-  type ActiveCohort,
-} from "./forkGeneration.js";
-import {
-  inboundEdgeFired,
-  joinAllowsRun,
-} from "./joinReadiness.js";
+import type { ResolvePriorEnvelopeResult } from "./envelopeRouting.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
 function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
@@ -220,17 +218,7 @@ function joinAndDownstreamIds(
   return ids;
 }
 
-export function cloneFanoutConflict(
-  _dag: ResolvedPipelineDag,
-  _envelope: StageEnvelope,
-  _states: Map<string, StageScheduleState>,
-  _retryDownstreamIds: ReadonlySet<string>,
-  _options?: { forceFreshCloneIds?: boolean },
-): string | undefined {
-  return undefined;
-}
-
-export function nextFreeCloneSuffix(
+function nextFreeCloneSuffix(
   snapshot: RunPipelineDagSnapshot,
   catalogId: string,
 ): number {
@@ -244,15 +232,154 @@ export function nextFreeCloneSuffix(
   return max + 1;
 }
 
+function catalogCloneChildId(
+  dag: ResolvedPipelineDag,
+  emitterId: string,
+): string | undefined {
+  const catalogChildId = (dag.childrenOf[emitterId] ?? []).find((id) => {
+    const child = dag.nodes.find((n) => n.id === id);
+    return child !== undefined && (child.definition_id ?? child.id) === child.id;
+  });
+  if (catalogChildId !== undefined) return catalogChildId;
+  const instanceChild = (dag.childrenOf[emitterId] ?? []).find((id) => {
+    const child = dag.nodes.find((n) => n.id === id);
+    return child?.definition_id !== undefined && child.definition_id !== child.id;
+  });
+  return instanceChild
+    ? dag.nodes.find((n) => n.id === instanceChild)?.definition_id
+    : undefined;
+}
+
+export type MintResult =
+  | { kind: "none" }
+  | { kind: "error"; reason: string }
+  | {
+      kind: "minted";
+      dag: RunPipelineDagSnapshot;
+      catalogChildId: string;
+      instanceIds: string[];
+    };
+
+export function mint(
+  dag: ResolvedPipelineDag,
+  emitterId: string,
+  envelope: StageEnvelope,
+): MintResult {
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  const field = emitter?.clone_array_field;
+  if (field === undefined) return { kind: "none" };
+  const catalogChildId = catalogCloneChildId(dag, emitterId);
+  if (catalogChildId === undefined) return { kind: "none" };
+  const arr = envelope.payload?.[field];
+  if (!Array.isArray(arr) || arr.length < 1) {
+    return {
+      kind: "error",
+      reason: `Clone Array "${field}" must contain at least one item`,
+    };
+  }
+  const snapshot = asDagSnapshot(dag);
+  const { snapshot: next, instanceIds } = appendCloneInstances(snapshot, {
+    catalogId: catalogChildId,
+    predecessorId: emitterId,
+    count: arr.length,
+    startAt: nextFreeCloneSuffix(snapshot, catalogChildId),
+  });
+  return {
+    kind: "minted",
+    dag: next,
+    catalogChildId,
+    instanceIds,
+  };
+}
+
+function cloneAssignmentIndex(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  definitionId: string,
+  arrayLength: number,
+): number | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (!Array.isArray(snapshot.stage_ids) || arrayLength < 1) {
+    return ordinal - 1;
+  }
+  const siblings = instancesOfDefinition(snapshot, definitionId)
+    .map((id) => ({ id, ordinal: cloneInstanceOrdinal(id, definitionId) }))
+    .filter((row): row is { id: string; ordinal: number } => row.ordinal !== undefined)
+    .sort((a, b) => a.ordinal - b.ordinal);
+  const cohort = siblings.slice(-arrayLength);
+  const index = cohort.findIndex((row) => row.id === stageId);
+  return index === -1 ? undefined : index;
+}
+
+export function assignment(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  definitionId: string,
+  completedEnvelopes: Map<string, StageEnvelope>,
+): ResolvePriorEnvelopeResult | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
+  const node = dag.nodes.find((n) => n.id === stageId);
+  if (!node) return undefined;
+  const emitterId =
+    typeof node.needs === "string" && node.needs
+      ? node.needs
+      : predecessorEdges(node)[0]?.id;
+  if (emitterId === undefined) return undefined;
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  const field = emitter?.clone_array_field;
+  if (field === undefined) return undefined;
+  const parent = completedEnvelopes.get(emitterId);
+  if (parent === undefined || parent.status !== "success") {
+    return {
+      ok: false,
+      reason: `missing envelope for Clone Chain emitter "${emitterId}"`,
+    };
+  }
+  const arr = parent.payload?.[field];
+  if (!Array.isArray(arr)) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const index = cloneAssignmentIndex(dag, stageId, definitionId, arr.length);
+  if (index === undefined || index >= arr.length) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const element = arr[index];
+  if (element === null || typeof element !== "object" || Array.isArray(element)) {
+    return {
+      ok: false,
+      reason: `Clone Array element ${index + 1} is not an object`,
+    };
+  }
+  return {
+    ok: true,
+    prior: {
+      status: "success",
+      summary: parent.summary,
+      artifacts: [],
+      payload: structuredClone(element) as Record<string, unknown>,
+    },
+  };
+}
+
 export function protectedClonableChildIds(
   dag: ResolvedPipelineDag,
   predecessorId: string,
   _envelope: StageEnvelope,
 ): Set<string> {
   const ids = new Set<string>();
+  const predecessor = dag.nodes.find((n) => n.id === predecessorId);
+  if (predecessor?.clone_array_field === undefined) return ids;
   for (const childId of dag.childrenOf[predecessorId] ?? []) {
-    const child = dag.nodes.find((n) => n.id === childId);
-    if (child?.clonable === true) ids.add(childId);
+    ids.add(childId);
   }
   return ids;
 }
@@ -329,63 +456,9 @@ export function cloneScheduleAllowsRun(
   stageId: string,
   states: Map<string, StageScheduleState>,
   completedEnvelopes: Map<string, StageEnvelope>,
-  options?: {
-    activeCohortForNeeds?: (needsId: string) => ActiveCohort;
-    activeCloneIdsForNeeds?: (needsId: string) => Set<string> | null;
-  },
 ): boolean {
-  const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return false;
   if (definitionInstances(dag, stageId).some((id) => id !== stageId)) {
     return false;
-  }
-  const edges = predecessorEdges(node);
-  if (edges.length === 0) {
-    return !sequentialPreviousUnsatisfied(
-      dag,
-      stageId,
-      states,
-      completedEnvelopes,
-    );
-  }
-  if (edges.length >= 2) {
-    if (!joinAllowsRun(dag, stageId, states, completedEnvelopes)) {
-      return false;
-    }
-  } else {
-    const parentNeedId =
-      typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
-    const allInstances = definitionInstances(dag, parentNeedId);
-    const cohort =
-      options?.activeCohortForNeeds?.(parentNeedId) ??
-      activeCohortFromCloneIds(options?.activeCloneIdsForNeeds?.(parentNeedId));
-    if (cohort.kind === "awaiting_mint") {
-      return false;
-    }
-    const instances = filterJoinInputs(allInstances, cohort);
-    if (instances.length <= 1) {
-      const parentId = instances[0] ?? parentNeedId;
-      if (states.get(parentId) !== "succeeded") return false;
-    } else if (cohort.kind === "active") {
-      if (!instances.every((id) => states.get(id) === "succeeded")) {
-        return false;
-      }
-    } else if (
-      !instances.every(
-        (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
-      ) ||
-      !instances.some((id) => states.get(id) === "succeeded")
-    ) {
-      return false;
-    }
-  }
-  if (edges.length === 1 && edges[0]!.if !== undefined) {
-    const parentNeedId =
-      typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
-    const parentId = definitionInstances(dag, parentNeedId)[0] ?? parentNeedId;
-    if (!inboundEdgeFired(edges[0]!, parentId, states, completedEnvelopes)) {
-      return false;
-    }
   }
   return !sequentialPreviousUnsatisfied(
     dag,

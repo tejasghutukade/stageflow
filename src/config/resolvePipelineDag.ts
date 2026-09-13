@@ -452,24 +452,6 @@ export function resolvePipelineDag(
     );
   }
   const refs = toWiringRefs(outcome.value);
-  for (const ref of refs) {
-    if (ref.clone_cap !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${ref.id}": "clone_cap" is no longer supported — use a Clone Chain instead`,
-        ),
-      );
-    }
-    if (ref.clone_mode !== undefined) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${ref.id}": "clone_mode" is only valid on a Clone Chain emitter`,
-        ),
-      );
-    }
-  }
   return resolvePipelineDagFromRefs(refs, ctx);
 }
 

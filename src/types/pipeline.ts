@@ -200,7 +200,6 @@ export type ResolvedPipelineStageNode = {
   ancestors: string[];
   stageIndex: number;
   fork?: PipelineForkConfig;
-  clonable?: boolean;
   clone_cap?: number;
   clone_mode?: CloneMode;
   clone_array_field?: string;

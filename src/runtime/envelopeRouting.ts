@@ -1,8 +1,5 @@
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { RunStore, RunPipelineDagSnapshot, StageSnapshot } from "../runstore/port.js";
-import {
-  instancesOfDefinition,
-} from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type {
   StageEnvelope,
@@ -20,17 +17,7 @@ import {
   selectActiveInput,
   type ActiveCohort,
 } from "./forkGeneration.js";
-
-function definitionInstances(
-  dag: ResolvedPipelineDag,
-  catalogId: string,
-): string[] {
-  const snapshot = dag as RunPipelineDagSnapshot;
-  if (Array.isArray(snapshot.stage_ids)) {
-    return instancesOfDefinition(snapshot, catalogId);
-  }
-  return dag.nodes.some((n) => n.id === catalogId) ? [catalogId] : [];
-}
+import { expandJoinParent } from "./joinReadiness.js";
 
 async function resolveActiveCohortForNeeds(
   dag: ResolvedPipelineDag,
@@ -121,15 +108,6 @@ type ResolvePriorEnvelopeOptions = {
   scheduleOverride?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
-function mintedCloneInstances(dag: ResolvedPipelineDag, parentId: string): string[] {
-  return definitionInstances(dag, parentId).filter((id) => id !== parentId);
-}
-
-function isClonableParent(dag: ResolvedPipelineDag, parentId: string): boolean {
-  const node = dagNode(dag, parentId);
-  return node?.clonable === true || mintedCloneInstances(dag, parentId).length > 0;
-}
-
 async function loadStageSnapshots(
   options: ResolvePriorEnvelopeOptions,
 ): Promise<StageSnapshot[]> {
@@ -209,33 +187,22 @@ async function resolveGenericJoinPriors(
 
   for (const edge of predecessorEdges(node)) {
     const parentId = edge.id;
-    if (isClonableParent(options.dag, parentId)) {
-      const minted = mintedCloneInstances(options.dag, parentId);
-      if (minted.length > 0) {
-        const list: TerminalEnvelope[] = [];
-        for (const id of minted) {
-          const terminal = await successTerminalForPersistedStage(
-            options,
-            snapshots,
-            id,
-          );
-          if (!terminal.ok) return terminal;
-          if ("omit" in terminal) continue;
-          list.push(terminal.value);
-        }
-        if (list.length > 0) {
-          priorEnvelopesByStage[parentId] = list;
-        }
-        continue;
+    const expanded = expandJoinParent(options.dag, parentId);
+    if (expanded.length > 1 || expanded[0] !== parentId) {
+      const list: TerminalEnvelope[] = [];
+      for (const id of expanded) {
+        const terminal = await successTerminalForPersistedStage(
+          options,
+          snapshots,
+          id,
+        );
+        if (!terminal.ok) return terminal;
+        if ("omit" in terminal) continue;
+        list.push(terminal.value);
       }
-      const once = await successTerminalForPersistedStage(
-        options,
-        snapshots,
-        parentId,
-      );
-      if (!once.ok) return once;
-      if ("omit" in once) continue;
-      priorEnvelopesByStage[parentId] = [once.value];
+      if (list.length > 0) {
+        priorEnvelopesByStage[parentId] = list;
+      }
       continue;
     }
 
@@ -273,9 +240,8 @@ export async function resolvePriorEnvelope(
 
   const parentId =
     typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
-  const allJoinInstances = definitionInstances(options.dag, parentId);
-  const minted = allJoinInstances.filter((id) => id !== parentId);
-  if (minted.length > 0) {
+  const expanded = expandJoinParent(options.dag, parentId);
+  if (expanded.length > 1 || expanded[0] !== parentId) {
     const cohort = await resolveActiveCohortForNeeds(
       options.dag,
       parentId,
@@ -284,7 +250,7 @@ export async function resolvePriorEnvelope(
       options.activeCloneIds,
       options.scheduleOverride,
     );
-    const joinInstances = filterJoinInputs(allJoinInstances, cohort);
+    const joinInstances = filterJoinInputs(expanded, cohort);
     const snapshots = new Map(
       (await loadStageSnapshots(options)).map((snap) => [snap.stage_id, snap]),
     );

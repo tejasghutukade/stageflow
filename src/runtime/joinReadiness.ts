@@ -21,15 +21,23 @@ function definitionInstances(
   return dag.nodes.some((n) => n.id === catalogId) ? [catalogId] : [];
 }
 
-function collectJoinParentInstances(
+export function expandJoinParent(
+  dag: ResolvedPipelineDag,
+  catalogParentId: string,
+): string[] {
+  const minted = definitionInstances(dag, catalogParentId).filter(
+    (id) => id !== catalogParentId,
+  );
+  return minted.length > 0 ? minted : [catalogParentId];
+}
+
+function expandJoinParents(
   dag: ResolvedPipelineDag,
   edges: PipelineNeedEdge[],
-): string[] | undefined {
+): string[] {
   const ids: string[] = [];
   for (const edge of edges) {
-    const instances = definitionInstances(dag, edge.id);
-    if (instances.length === 0) return undefined;
-    ids.push(...instances);
+    ids.push(...expandJoinParent(dag, edge.id));
   }
   return ids;
 }
@@ -47,8 +55,8 @@ function joinParentDisposition(
       hasSkipped: boolean;
     }
   | undefined {
-  const instances = collectJoinParentInstances(dag, edges);
-  if (instances === undefined) return undefined;
+  const instances = expandJoinParents(dag, edges);
+  if (instances.length === 0) return undefined;
   let hasFailed = false;
   let hasSucceeded = false;
   let hasSkipped = false;
@@ -91,9 +99,7 @@ function everySucceededInboundEdgeFired(
   envelopes: Map<string, StageEnvelope>,
 ): boolean {
   for (const edge of edges) {
-    const instances = collectJoinParentInstances(dag, [edge]);
-    const ids = instances ?? [edge.id];
-    for (const id of ids) {
+    for (const id of expandJoinParent(dag, edge.id)) {
       if (!inboundEdgeFired(edge, id, states, envelopes)) return false;
     }
   }
@@ -106,9 +112,7 @@ function anySucceededInboundEdgeMissed(
   envelopes: Map<string, StageEnvelope>,
 ): boolean {
   for (const edge of edges) {
-    const instances = collectJoinParentInstances(dag, [edge]);
-    const ids = instances ?? [edge.id];
-    for (const id of ids) {
+    for (const id of expandJoinParent(dag, edge.id)) {
       if (inboundEdgeMissed(edge, id, envelopes)) return true;
     }
   }
@@ -122,7 +126,7 @@ function multiParentJoinAllowsRun(
   envelopes: Map<string, StageEnvelope>,
 ): boolean {
   const edges = predecessorEdges(node);
-  if (edges.length < 2) return false;
+  if (expandJoinParents(dag, edges).length < 2) return false;
   const disposition = joinParentDisposition(dag, edges, states);
   if (disposition === undefined || !disposition.allTerminal) return false;
   if (disposition.hasFailed) return false;
@@ -165,14 +169,14 @@ export function joinAllowsRun(
   const node = dag.nodes.find((n) => n.id === stageId);
   if (!node) return false;
   const edges = predecessorEdges(node);
-  if (edges.length >= 2) {
+  if (edges.length === 0) return true;
+  if (expandJoinParents(dag, edges).length >= 2) {
     return multiParentJoinAllowsRun(dag, node, states, envelopes);
   }
-  if (edges.length !== 1) return false;
   const edge = edges[0]!;
   const parentNeedId =
     typeof node.needs === "string" && node.needs ? node.needs : edge.id;
-  const parentId = definitionInstances(dag, parentNeedId)[0] ?? parentNeedId;
+  const parentId = expandJoinParent(dag, parentNeedId)[0]!;
   if (states.get(parentId) !== "succeeded") return false;
   if (edge.if === undefined) return true;
   return inboundEdgeFired(edge, parentId, states, envelopes);

@@ -92,17 +92,17 @@ function checkSequentialIoCompatibility(
   dag: ResolvedPipelineDag,
   pipelineId: string,
   schemas: PayloadSchemaMap | undefined,
-  cloneChildIds: ReadonlySet<string> = new Set(),
 ): LoadOutcome<void> {
   const stageById = new Map(stages.map((stage) => [stage.id, stage]));
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
   const options = schemas !== undefined ? { schemas } : undefined;
 
   for (const child of stages) {
-    if (cloneChildIds.has(child.id)) continue;
     const node = nodeById.get(child.id);
     if (!node) continue;
     for (const parentEdge of predecessorEdges(node)) {
+      const parentNode = nodeById.get(parentEdge.id);
+      if (parentNode?.clone_array_field !== undefined) continue;
       const parent = stageById.get(parentEdge.id);
       if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
       if (
@@ -277,7 +277,6 @@ async function loadPipelineFromPath(
 
   const cloneChainOutcome = applyCloneChains(stages, wiringRefs, dag, pipelineId);
   if (!cloneChainOutcome.ok) return cloneChainOutcome;
-  const cloneChildIds = cloneChainOutcome.value.cloneChildIds;
 
   const schemaOutcome = attachPipelineSchemas(stages, pipelineSchemas, pipelineId);
   if (!schemaOutcome.ok) return schemaOutcome;
@@ -296,7 +295,6 @@ async function loadPipelineFromPath(
     dag,
     pipelineId,
     pipelineSchemas,
-    cloneChildIds,
   );
   if (!ioOutcome.ok) return ioOutcome;
 

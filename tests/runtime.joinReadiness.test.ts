@@ -5,6 +5,7 @@ import { predecessorEdges } from "../src/config/pipelineNeeds.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   classifyInboundAfterSuccess,
+  expandJoinParent,
   isEagerSingleParentIfSkip,
   joinAllowsRun,
   pickStalledJoinSkips,
@@ -202,6 +203,67 @@ describe("joinAllowsRun", () => {
     states.set("validation", "succeeded");
     expect(joinAllowsRun(dag, "synthesize", states, envelopes)).toBe(true);
     expect(pickStalledJoinSkips(dag, states, envelopes)).toEqual([]);
+  });
+});
+
+describe("Clone Chain Join parent expansion", () => {
+  it("expands a catalog clone child to minted instances, else the catalog id", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
+      cwd: fixtures,
+    });
+    expect(expandJoinParent(loaded.dag, "handle-item")).toEqual(["handle-item"]);
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "handle-item",
+      predecessorId: "emit-items",
+      count: 2,
+    });
+    expect(expandJoinParent(snapshot, "handle-item")).toEqual([
+      "handle-item~1",
+      "handle-item~2",
+    ]);
+    expect(expandJoinParent(snapshot, "emit-items")).toEqual(["emit-items"]);
+  });
+
+  it("does not run the Join until every minted instance succeeded", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
+      cwd: fixtures,
+    });
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "handle-item",
+      predecessorId: "emit-items",
+      count: 2,
+    });
+    const states = new Map<string, StageScheduleState>([
+      ["emit-items", "succeeded"],
+      ["handle-item~1", "succeeded"],
+      ["handle-item~2", "pending"],
+      ["gather", "pending"],
+    ]);
+    expect(joinAllowsRun(snapshot, "gather", states, new Map())).toBe(false);
+    states.set("handle-item~2", "succeeded");
+    expect(joinAllowsRun(snapshot, "gather", states, new Map())).toBe(true);
+  });
+
+  it("does not run the Join when a minted instance failed", async () => {
+    const loaded = await loadPipeline(pipelinePath("clone-chain-smallest"), {
+      cwd: fixtures,
+    });
+    const frozen = buildPipelineDagSnapshotFromLoaded(loaded);
+    const { snapshot } = appendCloneInstances(frozen, {
+      catalogId: "handle-item",
+      predecessorId: "emit-items",
+      count: 2,
+    });
+    const states = new Map<string, StageScheduleState>([
+      ["emit-items", "succeeded"],
+      ["handle-item~1", "succeeded"],
+      ["handle-item~2", "failed"],
+      ["gather", "pending"],
+    ]);
+    expect(joinAllowsRun(snapshot, "gather", states, new Map())).toBe(false);
+    expect(pickStalledJoinSkips(snapshot, states)).toEqual([]);
   });
 });
 

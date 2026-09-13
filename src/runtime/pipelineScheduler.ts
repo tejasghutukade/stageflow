@@ -1,7 +1,7 @@
 import type { AgentPort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
-import { buildPipelineDagSnapshotFromLoaded, appendCloneInstances } from "../runstore/pipelineDagSnapshot.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -17,7 +17,7 @@ import {
   cloneScheduleAllowsRun,
   failureIsAccepted,
   isCloneInstance,
-  nextFreeCloneSuffix,
+  mint,
   protectedClonableChildIds,
   sequentialLaterCloneIds,
   skipRejectedNeedDependents,
@@ -29,6 +29,7 @@ import {
 import {
   classifyInboundAfterSuccess,
   isEagerSingleParentIfSkip,
+  joinAllowsRun,
   pickStalledJoinSkips,
 } from "./joinReadiness.js";
 import type {
@@ -36,16 +37,13 @@ import type {
   ResolveFeedbackLoopDecisionResult,
 } from "./feedbackLoopDecision.js";
 import {
-  activeCohortFromCloneIds,
   forkChoicePreservesReplaySource,
-  forkParentForNeedsStage,
   mintCohortForFanout,
 } from "./forkGeneration.js";
 import {
   activeReplayId,
   activeSourceStageId,
   applySendBack,
-  cohortOverrideMap,
   createReplaySchedule,
   hydrateFromStore,
   isHeld,
@@ -567,19 +565,8 @@ function isRunnable(
   if (feedback !== undefined && isHeld(feedback, stageId)) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes, {
-    activeCohortForNeeds: (needsId) => {
-      const override = feedback !== undefined ? cohortOverrideMap(feedback) : undefined;
-      if (override === undefined || override.size === 0) {
-        return { kind: "untracked" };
-      }
-      const forkParentId = forkParentForNeedsStage(dag, needsId);
-      if (forkParentId === null) return { kind: "untracked" };
-      const tracked = override.get(forkParentId);
-      if (tracked === undefined) return { kind: "untracked" };
-      return activeCohortFromCloneIds(tracked);
-    },
-  });
+  if (!joinAllowsRun(dag, stageId, states, completedEnvelopes)) return false;
+  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
 }
 
 export function hydratedScheduleHasRunnableWork(
@@ -762,7 +749,7 @@ export async function runPipelineDag(
   /**
    * Finalizes multi-parent (implicit-AND) join nodes that are permanently
    * stuck in `pending`: every predecessor edge has reached a terminal state,
-   * but `cloneScheduleAllowsRun` still can't be satisfied, and terminal
+   * but `joinAllowsRun` still can't be satisfied, and terminal
    * states never change back. `shouldSkipForObservedNeed` deliberately
    * refuses to decide these nodes from a single resolving parent (see its
    * comment in cloneSchedule.ts), so this is the only place their fate gets
@@ -946,63 +933,28 @@ export async function runPipelineDag(
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
 
-    const emitterNode = dag.nodes.find((n) => n.id === stageId);
-    if (
-      emitterNode?.clone_array_field !== undefined &&
-      emitterNode.clone_cap !== undefined
-    ) {
-      let catalogChildId = (dag.childrenOf[stageId] ?? []).find((id) => {
-        const child = dag.nodes.find((n) => n.id === id);
-        return child !== undefined && (child.definition_id ?? child.id) === child.id;
-      });
-      if (catalogChildId === undefined) {
-        const instanceChild = (dag.childrenOf[stageId] ?? []).find((id) => {
-          const child = dag.nodes.find((n) => n.id === id);
-          return (
-            child?.definition_id !== undefined && child.definition_id !== child.id
-          );
-        });
-        catalogChildId = instanceChild
-          ? dag.nodes.find((n) => n.id === instanceChild)?.definition_id
-          : undefined;
+    const minted = mint(dag, stageId, envelope);
+    if (minted.kind === "error") {
+      await handlePostSuccessError(stageId, minted.reason);
+      return;
+    }
+    if (minted.kind === "minted") {
+      dag = minted.dag;
+      await store.updatePipelineDag(run.runId, dag);
+      states.delete(minted.catalogChildId);
+      for (const id of minted.instanceIds) {
+        states.set(id, "pending");
       }
-      if (catalogChildId !== undefined) {
-        const field = emitterNode.clone_array_field;
-        const arr = envelope.payload?.[field];
-        if (!Array.isArray(arr) || arr.length < 1) {
-          await handlePostSuccessError(
-            stageId,
-            `Clone Array "${field}" must contain at least one item`,
-          );
-          return;
-        }
-        const snapshotDag = dag as RunPipelineDagSnapshot;
-        const startAt = Array.isArray(snapshotDag.stage_ids)
-          ? nextFreeCloneSuffix(snapshotDag, catalogChildId)
-          : 1;
-        const { snapshot, instanceIds } = appendCloneInstances(dag, {
-          catalogId: catalogChildId,
-          predecessorId: stageId,
-          count: arr.length,
-          startAt,
+      const replayId = activeReplayId(feedbackSchedule);
+      if (replayId !== undefined) {
+        noteActiveCohort(feedbackSchedule, stageId, minted.instanceIds);
+        await mintCohortForFanout({
+          store,
+          runId: run.runId,
+          replayId,
+          forkParent: stageId,
+          cloneStageIds: minted.instanceIds,
         });
-        dag = snapshot;
-        await store.updatePipelineDag(run.runId, dag);
-        states.delete(catalogChildId);
-        for (const id of instanceIds) {
-          states.set(id, "pending");
-        }
-        const replayId = activeReplayId(feedbackSchedule);
-        if (replayId !== undefined) {
-          noteActiveCohort(feedbackSchedule, stageId, instanceIds);
-          await mintCohortForFanout({
-            store,
-            runId: run.runId,
-            replayId,
-            forkParent: stageId,
-            cloneStageIds: instanceIds,
-          });
-        }
       }
     }
 

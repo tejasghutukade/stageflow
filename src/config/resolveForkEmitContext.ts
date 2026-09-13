@@ -24,10 +24,7 @@ export function resolveForkEmitContext(
 ): ForkEmitContext | undefined {
   const dagNode = dag.nodes.find((n) => n.id === stageId);
   if (!dagNode?.fork) return undefined;
-  const immediateSuccessorIds = (dag.childrenOf[stageId] ?? []).filter((childId) => {
-    const child = dag.nodes.find((n) => n.id === childId);
-    return child?.clonable !== true;
-  });
+  const immediateSuccessorIds = dag.childrenOf[stageId] ?? [];
   if (immediateSuccessorIds.length === 0) return undefined;
   return {
     immediateSuccessorIds,

@@ -13,9 +13,15 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolvePipelineDag } from "../src/config/resolvePipelineDag.js";
+import { applyCloneChains } from "../src/config/cloneChain.js";
+import {
+  resolvePipelineDag,
+  resolvePipelineDagFromRefs,
+} from "../src/config/resolvePipelineDag.js";
 import { loadPipelineOutcome } from "../src/config/loadPipeline.js";
 import { loadStageOutcome } from "../src/config/loadStage.js";
+import type { PipelineStageRef } from "../src/types/pipeline.js";
+import type { StageConfig } from "../src/types/stage.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -46,8 +52,8 @@ const STAGE_BODY = [
   "          type: object",
 ].join("\n");
 
-describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path (resolvePipelineDag)", () => {
-  it('rejects "clonable" with a message naming the field and pointing at Clone Chain', () => {
+describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path", () => {
+  it('rejects "clonable" at normalize with a message naming the field and pointing at Clone Chain', () => {
     expect(() =>
       resolvePipelineDag(
         [
@@ -62,17 +68,21 @@ describe("legacy clonable/clone_cap fields are hard-rejected: raw-ref path (reso
     );
   });
 
-  it('rejects child "clone_cap" without clonable with a message naming the field and pointing at Clone Chain', () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "triage", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", clone_cap: 4, route: [{ to: "join-doc" }] },
-          { id: "join-doc" },
-        ],
-        ctx("legacy-clone-cap"),
-      ),
-    ).toThrow(
+  it('rejects child "clone_cap" without clonable at apply', () => {
+    const refs: PipelineStageRef[] = [
+      { id: "triage", entry: true, route: [{ to: "implement" }] },
+      { id: "implement", clone_cap: 4, route: [{ to: "join-doc" }] },
+      { id: "join-doc" },
+    ];
+    const { dag } = resolvePipelineDagFromRefs(refs, ctx("legacy-clone-cap"));
+    const stages: StageConfig[] = refs.map((ref) => ({
+      id: ref.id,
+      system_prompt: "Work",
+    }));
+    const outcome = applyCloneChains(stages, refs, dag, "legacy-clone-cap");
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.issues[0]?.message).toMatch(
       /stage "implement": "clone_cap" is no longer supported — use a Clone Chain instead/,
     );
   });
