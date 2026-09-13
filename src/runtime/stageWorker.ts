@@ -7,8 +7,14 @@ import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
   rootsForStageWorker,
+  withContainerName,
   withResolvedAuthPath,
 } from "./stageRoots.js";
+import {
+  resolveSandboxContainerOptions,
+  startSandboxContainer,
+  stopSandboxContainer,
+} from "./sandboxContainer.js";
 import {
   runStage,
   type RunStageOutcome,
@@ -61,7 +67,7 @@ export async function runStageWorker(
   const attemptCtx =
     input.attempt !== undefined ? attemptContext(input.attempt) : undefined;
   const eventOptions = { attempt };
-  const roots = withResolvedAuthPath(
+  let roots = withResolvedAuthPath(
     rootsForStageWorker(
       workspaceDir,
       input.stageId,
@@ -73,7 +79,32 @@ export async function runStageWorker(
   );
   const unbindAgentDir = bindPiAgentDirEnv(roots.agentDir);
 
+  // Bash-in-a-Box (V2, docs/specs/stage-container-sandbox.md): the worker
+  // owns the sandbox container's lifecycle, scoped to exactly this stage
+  // attempt. Only the Claude adapter ever reads roots.containerName, so
+  // leaving it unset (the default, no image configured) is a complete
+  // no-op for every other agent backend and every existing test.
+  const sandboxContainerOptions = resolveSandboxContainerOptions(process.env);
+  let sandboxContainerName: string | undefined;
+
   try {
+    if (sandboxContainerOptions) {
+      const started = await startSandboxContainer({
+        rootDir: input.rootDir,
+        image: sandboxContainerOptions.image,
+        dockerBin: sandboxContainerOptions.dockerBin,
+        runId: input.runId,
+        stageId: input.stageId,
+        attempt,
+      });
+      sandboxContainerName = started.containerName;
+      roots = withContainerName(
+        roots,
+        sandboxContainerName,
+        sandboxContainerOptions.dockerBin,
+      );
+    }
+
     if (mode === "resume") {
       const opened = await openStageAttempt({
         agent,
@@ -212,6 +243,20 @@ export async function runStageWorker(
     });
   } finally {
     unbindAgentDir();
+    if (sandboxContainerName !== undefined) {
+      try {
+        await stopSandboxContainer({
+          containerName: sandboxContainerName,
+          dockerBin: sandboxContainerOptions?.dockerBin,
+        });
+      } catch (err) {
+        process.stderr.write(
+          `[stageWorker] failed to stop sandbox container ${sandboxContainerName}: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`,
+        );
+      }
+    }
   }
 }
 

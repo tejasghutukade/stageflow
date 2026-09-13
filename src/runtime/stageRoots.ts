@@ -16,6 +16,15 @@ export type StageRoots = {
   attempt?: number;
   /** Durable Pi auth.json path for ModelRuntime.create({ authPath }). */
   authPath?: string;
+  /**
+   * Bash-in-a-Box (V2, docs/specs/stage-container-sandbox.md): the sandbox
+   * container `stageWorker.ts` started for this attempt, if any. Only the
+   * Claude adapter reads this (to alias `Bash` calls onto `sandbox_bash`);
+   * undefined preserves today's host-Bash behavior exactly.
+   */
+  containerName?: string;
+  /** The docker binary the container above was started with (see STAGEFLOW_STAGE_CONTAINER_DOCKER_BIN). */
+  containerDockerBin?: string;
 };
 
 export const STAGEFLOW_RUN_WORKSPACE = "STAGEFLOW_RUN_WORKSPACE";
@@ -46,6 +55,16 @@ export function rootsForStageWorker(
     ...roots,
     cwd: stageDir(runWorkspaceDir, stageId),
   };
+}
+
+export function withContainerName(
+  roots: StageRoots,
+  containerName: string | undefined,
+  containerDockerBin?: string,
+): StageRoots {
+  return containerName === undefined
+    ? roots
+    : { ...roots, containerName, containerDockerBin };
 }
 
 export function bindPiAgentDirEnv(agentDirPath: string): () => void {
