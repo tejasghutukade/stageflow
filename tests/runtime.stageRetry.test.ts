@@ -433,27 +433,6 @@ describe("assertStageRetryEligible", () => {
     }
   });
 
-  it("rejects a succeeded clonable-fanout stage with declared clone_forks", () => {
-    const result = assertStageRetryEligible(
-      eligibilityDetail({
-        runStatus: "succeeded",
-        stageStatus: "succeeded",
-        envelope: {
-          status: "success",
-          summary: "fanout",
-          artifacts: [],
-          clone_forks: [{ successor_id: "next", action: "skip" }],
-        },
-      }),
-      "design-doc",
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.status).toBe(409);
-      expect(result.reason).toMatch(/clonable-fanout/i);
-    }
-  });
-
   it("rejects a succeeded fork stage with a recorded fork_choice", () => {
     const result = assertStageRetryEligible(
       eligibilityDetail({
@@ -498,20 +477,6 @@ describe("succeededStageRetryBlocker", () => {
     expect(reason).toMatch(/clone instance/i);
   });
 
-  it("blocks a clonable-fanout parent with non-empty clone_forks", () => {
-    const reason = succeededStageRetryBlocker(
-      stageSnap({
-        envelope: {
-          status: "success",
-          summary: "fanout",
-          artifacts: [],
-          clone_forks: [{ successor_id: "next", action: "skip" }],
-        },
-      }),
-    );
-    expect(reason).toMatch(/clonable-fanout/i);
-  });
-
   it("blocks a fork stage with a recorded fork_choice", () => {
     const reason = succeededStageRetryBlocker(
       stageSnap({
@@ -538,19 +503,6 @@ describe("succeededStageRetryBlocker", () => {
     expect(reason).toBeUndefined();
   });
 
-  it("does not block an empty clone_forks array", () => {
-    const reason = succeededStageRetryBlocker(
-      stageSnap({
-        envelope: {
-          status: "success",
-          summary: "fanout",
-          artifacts: [],
-          clone_forks: [],
-        },
-      }),
-    );
-    expect(reason).toBeUndefined();
-  });
 });
 
 describe("RunRetryCoordinator.retryStage", () => {

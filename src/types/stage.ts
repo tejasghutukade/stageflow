@@ -1,5 +1,4 @@
 import type { PreEmitCheck } from "./preEmitCheck.js";
-import type { CloneAction } from "./forkChoice.js";
 
 /** Typed emit/schema fields from `compileTargetContract`. Not catalog YAML keys. */
 export type CompiledStageEmitBody = {
@@ -39,9 +38,8 @@ export type StageConfig = {
   gate_kinds?: StageGateKind[];
   /** IR: emit-phase checks. YAML: `verify` items whose `when` includes `emit`. */
   pre_emit_checks?: PreEmitCheck[];
-  /** IR: clone/fan-out assignment schema. YAML: `io.input.schema`. */
+  /** IR: inbound assignment schema. YAML: `io.input.schema`. */
   clone_input_schema?: unknown;
-  clone_actions?: CloneAction[];
   /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
   timeout_ms?: number;
   skill?: string;

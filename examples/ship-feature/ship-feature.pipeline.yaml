@@ -18,8 +18,6 @@ stages:
   - id: feat-review
     uses: ./feat-review.yaml
     needs: feat-implement
-    clonable: true
-    clone_cap: 4
     on_verify_fail:
       mode: repair
       max_attempts: 3

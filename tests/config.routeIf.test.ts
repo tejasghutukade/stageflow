@@ -227,8 +227,6 @@ describe("route if illegal combos", () => {
   it.each([
     ["route-if-on-loop", "review"],
     ["route-if-on-failed", "run-tests"],
-    ["route-if-clonable", "triage"],
-    ["route-if-clonable-sibling", "triage"],
   ] as const)("%s is pipeline.route_if_invalid not dag_error", async (fixture, stageId) => {
     const outcome = await loadPipelineOutcome(pipelinePath(fixture));
     expect(outcome.ok).toBe(false);

@@ -50,11 +50,12 @@ export const STAGE_FILE_WIRING_KEYS = [
   "completion",
   "recovery",
   "fork",
-  "clonable",
   "route",
   "entry",
   "route_select",
   "allow_none",
+  "clone_cap",
+  "clone_mode",
 ] as const;
 
 export type YamlDialect = "legacy" | "target" | "invalid" | "neutral";

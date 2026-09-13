@@ -27,6 +27,7 @@ import { predecessorEdges } from "./pipelineNeeds.js";
 import { resolvePipelineDagFromRefs } from "./resolvePipelineDag.js";
 import { recoveryRequiresCompletionIssue } from "./parseCompletionContract.js";
 import { validateCompletionContractForStage } from "./validateCompletionContract.js";
+import { applyCloneChains } from "./cloneChain.js";
 import {
   collectRouteIfSchemaIssues,
   collectRouteIfIllegalCombos,
@@ -91,18 +92,17 @@ function checkSequentialIoCompatibility(
   dag: ResolvedPipelineDag,
   pipelineId: string,
   schemas: PayloadSchemaMap | undefined,
+  cloneChildIds: ReadonlySet<string> = new Set(),
 ): LoadOutcome<void> {
   const stageById = new Map(stages.map((stage) => [stage.id, stage]));
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
   const options = schemas !== undefined ? { schemas } : undefined;
 
   for (const child of stages) {
+    if (cloneChildIds.has(child.id)) continue;
     const node = nodeById.get(child.id);
     if (!node) continue;
-    if (node.clonable) continue;
     for (const parentEdge of predecessorEdges(node)) {
-      const parentNode = nodeById.get(parentEdge.id);
-      if (parentNode?.clonable) continue;
       const parent = stageById.get(parentEdge.id);
       if (!parent?.payload_schema || child.clone_input_schema === undefined) continue;
       if (
@@ -275,6 +275,10 @@ async function loadPipelineFromPath(
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
   }
 
+  const cloneChainOutcome = applyCloneChains(stages, wiringRefs, dag, pipelineId);
+  if (!cloneChainOutcome.ok) return cloneChainOutcome;
+  const cloneChildIds = cloneChainOutcome.value.cloneChildIds;
+
   const schemaOutcome = attachPipelineSchemas(stages, pipelineSchemas, pipelineId);
   if (!schemaOutcome.ok) return schemaOutcome;
 
@@ -287,7 +291,13 @@ async function loadPipelineFromPath(
   }
   warnings.push(...collectRouteAllGatedWarnings(wiringRefs, pipelineId));
 
-  const ioOutcome = checkSequentialIoCompatibility(stages, dag, pipelineId, pipelineSchemas);
+  const ioOutcome = checkSequentialIoCompatibility(
+    stages,
+    dag,
+    pipelineId,
+    pipelineSchemas,
+    cloneChildIds,
+  );
   if (!ioOutcome.ok) return ioOutcome;
 
   if (pipelineModel !== undefined) {

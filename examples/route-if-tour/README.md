@@ -196,7 +196,6 @@ These are real cases, but putting them here would either fail validate or fail t
 | `gt` on a string | same | `rejected/25-reject-if-gt-on-string.pipeline.yaml` |
 | Nested optional path | same | `rejected/26-reject-if-optional-nested.pipeline.yaml` |
 | `if` on `{ type: loop }` | same | `rejected/27-reject-if-on-loop.pipeline.yaml` |
-| `if` + clonable | same | `rejected/28-reject-if-clonable.pipeline.yaml` |
 | `if` + `on: [failed]` | same | `rejected/29-reject-if-on-failed.pipeline.yaml` |
 | Failed parent blocks a Join | a failed parent fails/blocks the run | runtime tests / yaml-catalog Generic fan-in |
 | Payload-gated loops (`if` on `{ type: loop }`) | out of scope; would fail validate | `rejected/27-reject-if-on-loop.pipeline.yaml` |

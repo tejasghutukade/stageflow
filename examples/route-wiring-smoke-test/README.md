@@ -186,14 +186,10 @@ npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected
 Expect: `stage "decide": "route_select" is no longer supported — listed route targets always run` — the field itself is unsupported, including on a leaf.
 
 ```bash
-npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/10-reject-loop-clonable-source.pipeline.yaml --strict
 ```
-Expect: `stage "review": feedback_loop source cannot be clonable` — the looping stage itself is `clonable: true`.
 
 ```bash
-npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/11-reject-loop-clonable-target.pipeline.yaml --strict
 ```
-Expect: `stage "review": feedback_loop target "implement" cannot be clonable` — same check, the other side: the loop's target is `clonable: true`.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/12-reject-loop-replay-unsafe.pipeline.yaml --strict
@@ -276,9 +272,7 @@ npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected
 Expect: `pipeline.route_if_invalid` — `if` on a `{ type: loop }` Route Entry.
 
 ```bash
-npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/28-reject-if-clonable.pipeline.yaml --json
 ```
-Expect: `pipeline.route_if_invalid` — `if` on a Route whose `to` is clonable.
 
 ```bash
 npx tsx src/cli.ts validate --pipeline examples/route-wiring-smoke-test/rejected/29-reject-if-on-failed.pipeline.yaml --json
@@ -377,7 +371,6 @@ Pipelines **11–13** require the agent to emit the example payloads in each sta
 
 A few things intentionally aren't in this catalog because they're orthogonal to the `route` migration (pre-existing features the migration didn't touch, not gaps in route coverage):
 
-- **`clonable`/`clone_cap`** (parallel/sequential clone fan-out) — a separate mechanism from `route`. See `examples/clonable-fanout/` instead (currently still on legacy `needs` syntax — one of the pre-existing examples affected by the CI-breaking gap noted in the handoff doc).
 - **`gate_kinds`** / non-`feedback_loop` HITL gates — a stage-body concept, unrelated to wiring.
 - **`verify`/`on_verify_fail`** completion contracts interacting with `route` — these fields pass through the migration completely unchanged; already covered by the existing (non-route) test suite.
 - **`skill`/`mcp`** fields on a routed stage — capability wiring, unrelated to routing wiring.

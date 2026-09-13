@@ -28,7 +28,6 @@ template you must follow.
    stage with edit access to the checkout).
 3. Fan out two to four focused, non-overlapping reviews in parallel — no
    human gate here, this is the one automated fan-out in the middle
-   (`feat-review`, clonable).
 4. Address every blocking review finding in one fixup stage — sweeping for
    every instance of the same category of problem, not only the ones
    reviewers happened to cite — since the pipeline is a DAG and cannot loop
@@ -71,14 +70,11 @@ their `ask_operator` approval is independently verified, not just
 self-reported. See [Verified Stage Execution](../../docs/verified-stage-execution.md)
 and [YAML catalog — Verify](../../docs/yaml-catalog.md#verify).
 
-`feat-review` is `clonable` with `clone_cap: 4`. Its parent, `feat-implement`,
-restricts its own `clone_actions` to `[fanout]` — after the checkout is green,
 it must partition the diff into two to four independent review assignments
 and fan them out; it cannot skip review or hand it to a single clone.
 `feat-review` declares `io.input.schema` (`review_id` / `objective` /
 `paths` / `questions` / `constraints`) so those assignment payloads are
 validated at emit against a required shape. See
-[YAML catalog — Clonable successors](../../docs/yaml-catalog.md#clonable-successors).
 
 Every stage but `feat-ship` uses `on_verify_fail: { mode: repair, max_attempts: 3,
 retry_safety: idempotent, include_failed_checks: true }` on the pipeline

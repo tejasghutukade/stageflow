@@ -31,6 +31,7 @@ type JsonSchemaNode = {
   items?: unknown;
   additionalProperties?: unknown;
   minItems?: unknown;
+  maxItems?: unknown;
   enum?: unknown;
   minimum?: unknown;
   maximum?: unknown;
@@ -262,10 +263,23 @@ function compileNode(node: unknown, path: string, ctx: CompileCtx): TSchema {
           `${path}: minItems must be a non-negative integer when present`,
         );
       }
+      if (
+        schema.maxItems !== undefined &&
+        (typeof schema.maxItems !== "number" ||
+          !Number.isInteger(schema.maxItems) ||
+          schema.maxItems < 0)
+      ) {
+        throw new Error(
+          `${path}: maxItems must be a non-negative integer when present`,
+        );
+      }
       const items = compileNode(schema.items, `${path}.items`, childCtx);
+      const arrayOpts: { minItems?: number; maxItems?: number } = {};
+      if (schema.minItems !== undefined) arrayOpts.minItems = schema.minItems;
+      if (schema.maxItems !== undefined) arrayOpts.maxItems = schema.maxItems;
       base =
-        schema.minItems !== undefined
-          ? Type.Array(items, { minItems: schema.minItems })
+        Object.keys(arrayOpts).length > 0
+          ? Type.Array(items, arrayOpts)
           : Type.Array(items);
       break;
     }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const installer = path.join(root, "skills", "install-suite.sh");
 const skillsRoot = path.join(root, "skills");
-const verifyScript = path.join(root, "scripts", "verify-pack.ts");
-const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 
 const SKILLS = [
   "stageflow",
@@ -88,40 +86,5 @@ describe("install-suite.sh", () => {
     expect(`${result.stderr}\n${result.stdout}`).toContain(
       path.join(source, "stageflow", "SKILL.md"),
     );
-  });
-});
-
-describe("skills suite packaging", () => {
-  it("lists skills in package.json files and verify-pack REQUIRED", () => {
-    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")) as {
-      files: string[];
-    };
-    expect(pkg.files).toContain("skills");
-    expect(readFileSync(verifyScript, "utf8")).toContain('"skills/stageflow/SKILL.md"');
-  });
-
-  it("fails verify-pack when skills is removed from package.json files", () => {
-    const pkgPath = path.join(root, "package.json");
-    const original = readFileSync(pkgPath, "utf8");
-    const pkg = JSON.parse(original) as { files: string[] };
-    if (!pkg.files.includes("skills")) {
-      expect(pkg.files).toContain("skills");
-      return;
-    }
-
-    try {
-      writeFileSync(
-        pkgPath,
-        `${JSON.stringify({ ...pkg, files: pkg.files.filter((f) => f !== "skills") }, null, 2)}\n`,
-      );
-      const result = spawnSync(process.execPath, [tsxCli, verifyScript], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      expect(result.status).not.toBe(0);
-      expect(`${result.stderr}\n${result.stdout}`).toMatch(/skills\/stageflow\/SKILL\.md/);
-    } finally {
-      writeFileSync(pkgPath, original);
-    }
   });
 });

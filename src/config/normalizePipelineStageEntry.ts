@@ -7,6 +7,7 @@
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
 import type {
+  CloneMode,
   NormalizedPipelineStageEntry,
   PipelineRouteEntry,
 } from "../types/pipeline.js";
@@ -238,6 +239,58 @@ export function normalizePipelineStageEntries(
         },
       ]);
     }
+    if (raw.clonable !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "clonable" is no longer supported — use a Clone Chain instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    let cloneCap: number | undefined;
+    if (raw.clone_cap !== undefined) {
+      if (
+        typeof raw.clone_cap !== "number" ||
+        !Number.isInteger(raw.clone_cap) ||
+        raw.clone_cap < 1
+      ) {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": clone_cap must be an integer >= 1`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+      cloneCap = raw.clone_cap;
+    }
+    let cloneMode: CloneMode | undefined;
+    if (raw.clone_mode !== undefined) {
+      if (raw.clone_mode !== "parallel" && raw.clone_mode !== "sequential") {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": clone_mode must be "parallel" or "sequential"`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+      cloneMode = raw.clone_mode;
+    }
+    if (raw.clone_actions !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "clone_actions" is no longer supported — use a Clone Chain instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
 
     let policyOutcome: ReturnType<typeof parseExecutionPolicy>;
     if (dialect === "target") {
@@ -320,8 +373,6 @@ export function normalizePipelineStageEntries(
       id,
       declaringPath,
       body,
-      ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
-      ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
       ...(policyOutcome.value.completion !== undefined
         ? { completion: policyOutcome.value.completion }
         : {}),
@@ -335,6 +386,8 @@ export function normalizePipelineStageEntries(
       ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
+      ...(cloneCap !== undefined ? { clone_cap: cloneCap } : {}),
+      ...(cloneMode !== undefined ? { clone_mode: cloneMode } : {}),
     };
 
     const priorPath = normalized.find((e) => e.id === id)?.declaringPath;
@@ -359,22 +412,22 @@ export function toWiringRefs(
   entries: NormalizedPipelineStageEntry[],
 ): Array<{
   id: string;
-  clonable?: boolean;
-  clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
-    ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
-    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
     ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
     ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     ...(entry.route !== undefined ? { route: entry.route } : {}),
     ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
+    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+    ...(entry.clone_mode !== undefined ? { clone_mode: entry.clone_mode } : {}),
   }));
 }

@@ -134,7 +134,7 @@ stages:
 
 Canonical example: [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
 
-Multiple `to:` entries are unconditional fan-out — every listed target runs. See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog — route](yaml-catalog.md#route). Success vs failure uses `on:` on the source stage. Clonable fan-out clones one successor N times at completion — see [Clonable successors](yaml-catalog.md#clonable-successors).
+Multiple `to:` entries are unconditional fan-out — every listed target runs. See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) and [YAML catalog — route](yaml-catalog.md#route). Success vs failure uses `on:` on the source stage.
 
 ## Headless / CI
 

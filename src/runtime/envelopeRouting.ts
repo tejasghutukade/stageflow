@@ -274,7 +274,8 @@ export async function resolvePriorEnvelope(
   const parentId =
     typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
   const allJoinInstances = definitionInstances(options.dag, parentId);
-  if (allJoinInstances.length > 1) {
+  const minted = allJoinInstances.filter((id) => id !== parentId);
+  if (minted.length > 0) {
     const cohort = await resolveActiveCohortForNeeds(
       options.dag,
       parentId,
@@ -339,35 +340,6 @@ export async function resolvePriorEnvelope(
       ok: false,
       reason: `missing envelope for upstream stage "${parentId}"`,
     };
-  }
-
-  for (const item of parent.clone_forks ?? []) {
-    if (item.action === "once" && item.successor_id === options.stageId) {
-      return { ok: true, prior: structuredClone(item.envelope) };
-    }
-    if (item.action === "fanout") {
-      const allInstanceIds = definitionInstances(options.dag, item.successor_id);
-      const cohort = await resolveActiveCohortForNeeds(
-        options.dag,
-        item.successor_id,
-        options.store,
-        options.runId,
-        options.activeCloneIds,
-        options.scheduleOverride,
-      );
-      const instanceIds = filterJoinInputs(allInstanceIds, cohort);
-      const index = instanceIds.indexOf(options.stageId);
-      if (index >= 0) {
-        const clone = item.clones[index];
-        if (clone === undefined) {
-          return {
-            ok: false,
-            reason: `missing clone envelope for instance "${options.stageId}"`,
-          };
-        }
-        return { ok: true, prior: structuredClone(clone.envelope) };
-      }
-    }
   }
 
   return { ok: true, prior: structuredClone(parent) };

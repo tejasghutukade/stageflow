@@ -170,40 +170,6 @@ describe("resolvePipelineDag: route loop entries (ticket 03)", () => {
     ).toThrow(/not declared/i);
   });
 
-  it("rejects a loop entry whose target stage is clonable", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "prepare", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", clonable: true, route: [{ to: "review" }] },
-          {
-            id: "review",
-            route: [{ type: "loop", to: "implement", ...loopPolicy }],
-          },
-        ],
-        ctx("route-loop-clonable-target-ref"),
-      ),
-    ).toThrow(/cannot be clonable/i);
-  });
-
-  it("rejects a loop entry whose source stage is clonable", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "prepare", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", route: [{ to: "review" }] },
-          {
-            id: "review",
-            clonable: true,
-            route: [{ to: "submit" }, { type: "loop", to: "implement", ...loopPolicy }],
-          },
-          { id: "submit" },
-        ],
-        ctx("route-loop-clonable-source-ref"),
-      ),
-    ).toThrow(/source cannot be clonable/i);
-  });
-
   it("rejects a loop entry whose replay route includes a replay_safe: false stage", () => {
     expect(() =>
       resolvePipelineDag(
@@ -348,12 +314,6 @@ describe("loadPipeline: route loop YAML fixtures (ticket 03)", () => {
   it("rejects a non-ancestor loop target via YAML fixture", async () => {
     await expect(loadPipeline(pipelinePath("route-loop-non-ancestor"))).rejects.toThrow(
       /earlier ancestor/i,
-    );
-  });
-
-  it("rejects a clonable stage on the loop route via YAML fixture", async () => {
-    await expect(loadPipeline(pipelinePath("route-loop-clonable"))).rejects.toThrow(
-      /clonable/i,
     );
   });
 

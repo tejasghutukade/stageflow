@@ -11,30 +11,11 @@ export type ResolveCloneEmitOptions = {
 };
 
 export function resolveCloneEmitContext(
-  dag: ResolvedPipelineDag,
-  stageId: string,
-  options?: ResolveCloneEmitOptions,
+  _dag: ResolvedPipelineDag,
+  _stageId: string,
+  _options?: ResolveCloneEmitOptions,
 ): CloneEmitContext | undefined {
-  const childIds = dag.childrenOf[stageId] ?? [];
-  const clonableSuccessors: CloneEmitContext["clonableSuccessors"] = [];
-  for (const childId of childIds) {
-    const node = dag.nodes.find((n) => n.id === childId);
-    if (node?.clonable === true) {
-      const cloneInputSchema = options?.successorCloneInputSchemas?.[childId];
-      clonableSuccessors.push({
-        successorId: childId,
-        cloneCap: node.clone_cap as number,
-        ...(cloneInputSchema !== undefined ? { cloneInputSchema } : {}),
-      });
-    }
-  }
-  if (clonableSuccessors.length === 0) return undefined;
-  return {
-    clonableSuccessors,
-    ...(options?.allowedActions !== undefined
-      ? { allowedActions: options.allowedActions }
-      : {}),
-  };
+  return undefined;
 }
 
 export function resolveForkEmitContext(

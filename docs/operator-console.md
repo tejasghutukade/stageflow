@@ -88,17 +88,9 @@ Use the envelope view to read `summary`, `payload`, and artifact paths without p
 
 A [generic fan-in](yaml-catalog.md#generic-fan-in) join renders as a diamond: two (or more) incoming wires into the join node. While the join is blocked, `blocked_by` lists every unresolved parent — not only the first. After one parent reaches an accepted terminal, that parent drops off `blocked_by` and the remaining wires stay.
 
-Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/). Fixture: [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). Clone-list joins stay one catalog parent with instance nodes — see [Clone tracks](#clone-tracks).
+Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/). Fixture: [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
 
-### Clone tracks {#clone-tracks}
-
-Fan-out clones appear as distinct spatial nodes labeled `definition · N` (for example `work · 1`). Selecting a node uses the instance id (`work~1`) as the key. A run-once successor stays the catalog id (`work`).
-
-When the selected stage has an envelope, the first Files row is **Handoff envelope** — it opens the envelope inspector; meta is the instance id. Artifact rows keep that same instance id. Walkthrough: [`examples/clonable-fanout/`](../examples/clonable-fanout/) scenario A, step 6.
-
-Run detail keeps refreshing a run whose overall status is failed while another clone is still `waiting_for_input` or running after retry.
-
-Answering HITL on a selected clone: [HITL](hitl.md#console-reply).
+When the selected stage has an envelope, the first Files row is **Handoff envelope** — it opens the envelope inspector. Artifact rows keep that same stage id.
 
 ## Capacity indicator
 
@@ -128,7 +120,6 @@ MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (s
 
 - [Quick start](quickstart.md) — first console session
 - [HITL](hitl.md) — answering gates from Today or the run workspace
-- [`examples/clonable-fanout/`](../examples/clonable-fanout/) — clone walkthrough
 - [`examples/generic-fan-in/`](../examples/generic-fan-in/) — diamond join + envelope inspector
 - [Providers](providers.md) — Settings → Providers
 - [MCP](mcp.md) — automation alongside the UI

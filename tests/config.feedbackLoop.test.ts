@@ -104,7 +104,7 @@ describe("feedback_loop pipeline wiring (route type: loop entries)", () => {
     ).toThrow(message);
   });
 
-  it("rejects targets that are undeclared, not ancestors, or clonable", () => {
+  it("rejects targets that are undeclared or not ancestors", () => {
     expect(() =>
       resolvePipelineDag(
         [
@@ -125,20 +125,22 @@ describe("feedback_loop pipeline wiring (route type: loop entries)", () => {
         ctx,
       ),
     ).toThrow(/earlier ancestor/i);
+  });
+
+  it("rejects unknown policy keys", () => {
     expect(() =>
       resolvePipelineDag(
         [
-          { id: "prepare", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", clonable: true, route: [{ to: "review" }] },
+          { id: "plan", entry: true, route: [{ to: "implement" }] },
+          { id: "implement", route: [{ to: "review" }] },
           {
             id: "review",
-            route: [{ to: "submit" }, { type: "loop", to: "implement", ...loopPolicy }],
+            route: [{ type: "loop", to: "implement", ...loopPolicy, unknown: true }],
           },
-          { id: "submit" },
         ],
         ctx,
       ),
-    ).toThrow(/cannot be clonable/i);
+    ).toThrow(/unknown key "unknown"/i);
   });
 
   it("rejects replay paths with replay_safe: false", () => {
@@ -174,37 +176,6 @@ describe("feedback_loop pipeline wiring (route type: loop entries)", () => {
         ctx,
       ),
     ).toThrow(/replay_safe must be a boolean/i);
-  });
-
-  it("rejects unknown policy keys and clonable feedback sources", () => {
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "plan", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", route: [{ to: "review" }] },
-          {
-            id: "review",
-            route: [{ type: "loop", to: "implement", ...loopPolicy, unknown: true }],
-          },
-        ],
-        ctx,
-      ),
-    ).toThrow(/unknown key "unknown"/i);
-    expect(() =>
-      resolvePipelineDag(
-        [
-          { id: "plan", entry: true, route: [{ to: "implement" }] },
-          { id: "implement", route: [{ to: "review" }] },
-          {
-            id: "review",
-            clonable: true,
-            route: [{ to: "submit" }, { type: "loop", to: "implement", ...loopPolicy }],
-          },
-          { id: "submit" },
-        ],
-        ctx,
-      ),
-    ).toThrow(/source cannot be clonable/i);
   });
 
   it("uses the same route-loop and replay_safe validation while normalizing YAML entries", () => {

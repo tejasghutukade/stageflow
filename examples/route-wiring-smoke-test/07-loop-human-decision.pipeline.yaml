@@ -57,7 +57,6 @@ stages:
       exhaust the replay budget and park the run waiting for a human
       decision (on_max_replays: wait_for_human), which is exactly what this
       pipeline exists to demonstrate.
-      Do not combine send_back with fork_choice or clone_forks.
       Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], payload: {}, and feedback_loop: {"action":"send_back","target":"implement"}.
     model: cursor/auto
     io:

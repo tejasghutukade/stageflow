@@ -11,7 +11,6 @@ system_prompt: |
   - {"action":"send_back","target":"review"} when you changed the
     checkout to address blockers — review must re-read the whole diff
     before publish. Do not combine send_back with fork_choice or
-    clone_forks.
 
   Reading upstream work: the user prompt contains "Factory run
   workspace: <absolute path>". review-report.md and review payload

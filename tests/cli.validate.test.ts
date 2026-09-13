@@ -665,7 +665,6 @@ describe("sequential io compatibility via sf validate", { timeout: 30_000 }, () 
     "25-reject-if-gt-on-string.pipeline.yaml",
     "26-reject-if-optional-nested.pipeline.yaml",
     "27-reject-if-on-loop.pipeline.yaml",
-    "28-reject-if-clonable.pipeline.yaml",
     "29-reject-if-on-failed.pipeline.yaml",
   ])("validate --pipeline %s --json reports pipeline.route_if_invalid", (file) => {
     const result = runCli(

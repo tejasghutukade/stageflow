@@ -207,7 +207,6 @@ export type StageEnvelopeView = {
   payload?: Record<string, unknown>;
   stage_id?: string;
   fork_choice?: string[];
-  clone_forks?: unknown[];
   feedback_loop?:
     | { action: "continue" }
     | { action: "send_back"; target: string };

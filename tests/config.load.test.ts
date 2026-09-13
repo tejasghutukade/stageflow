@@ -276,8 +276,8 @@ checkout: 42
     await expect(loadStage(badKind)).rejects.toThrow(/\.kind must be one of/);
   });
 
-  it("loads optional clone_input_schema and clone_actions from stage YAML", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-fields-"));
+  it("loads optional clone_input_schema from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-input-"));
     const filePath = path.join(dir, "investigate-area.yaml");
     await writeFile(
       filePath,
@@ -285,38 +285,15 @@ checkout: 42
         "id: investigate-area",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
-        "payload_schema:",
-        "  type: object",
-        "clone_input_schema:",
-        "  type: object",
-        "  properties:",
-        "    area_id:",
-        "      type: string",
-        "    objective:",
-        "      type: string",
-        "    paths:",
-        "      type: array",
-        "      items:",
-        "        type: string",
-        "  required:",
-        "    - area_id",
-        "    - objective",
-        "    - paths",
-        "clone_actions:",
-        "  - once",
-        "  - fanout",
+        ...FILE_IO,
         "",
       ].join("\n"),
     );
     const loaded = await loadStage(filePath);
-    expect(loaded.clone_input_schema).toMatchObject({
-      type: "object",
-      required: ["area_id", "objective", "paths"],
-    });
-    expect(loaded.clone_actions).toEqual(["once", "fanout"]);
+    expect(loaded.clone_input_schema).toMatchObject({ type: "object" });
   });
 
-  it("rejects invalid clone_input_schema and empty or non-array clone_actions", async () => {
+  it("rejects invalid clone_input_schema", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-bad-"));
     const badSchema = path.join(dir, "bad-schema.yaml");
     await writeFile(
@@ -325,55 +302,17 @@ checkout: 42
         "id: bad-schema",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
-        "clone_input_schema:",
-        "  type: not-a-valid-type",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: not-a-valid-type",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
     await expect(loadStage(badSchema)).rejects.toThrow(/io\.input\.schema/);
-
-    const emptyActions = path.join(dir, "empty-actions.yaml");
-    await writeFile(
-      emptyActions,
-      [
-        "id: empty-actions",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        ...FILE_IO,
-        "clone_actions: []",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(emptyActions)).rejects.toThrow(/clone_actions/);
-
-    const stringAction = path.join(dir, "string-action.yaml");
-    await writeFile(
-      stringAction,
-      [
-        "id: string-action",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        ...FILE_IO,
-        'clone_actions: "skip"',
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(stringAction)).rejects.toThrow(/clone_actions/);
-
-    const unknownAction = path.join(dir, "unknown-action.yaml");
-    await writeFile(
-      unknownAction,
-      [
-        "id: unknown-action",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        ...FILE_IO,
-        "clone_actions:",
-        "  - explode",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(unknownAction)).rejects.toThrow(/clone_actions/);
   });
 
   it("loads optional skill name from stage YAML", async () => {

@@ -41,7 +41,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 
 **[Archify on PR](../examples/archify-on-pr/)** — pull-request diagram automation dogfooding Stageflow in GitHub Actions: unused-path skip, pipeline skill binding, `sf envelope get --format handoff`, and deterministic Archify deliver outside the agent. See [CI: PR diagrams (Archify)](ci.md#pr-diagrams-archify) and [examples/archify-on-pr/README.md](../examples/archify-on-pr/README.md).
 
-For clonable fan-out (clone one successor N times at completion), see [`examples/clonable-fanout/`](../examples/clonable-fanout/) and [YAML catalog — Clonable successors](yaml-catalog.md#clonable-successors). For join skip vs fail (two named parents into one child, inspect keyed envelopes) and a runnable tour of deterministic route `if` (operators, composition, skip, join fire and miss), see [YAML catalog — Generic fan-in](yaml-catalog.md#generic-fan-in) and [`examples/route-if-tour/`](../examples/route-if-tour/). For a short spine of every `verify` check type (artifact, command, checklist, payload_schema, gate, checkout_changes), see [`examples/verify-tour/`](../examples/verify-tour/). For emit soft-reject, automatic repair, manual recover, and ordinary Retry, see [`examples/retry-tour/`](../examples/retry-tour/).
+For join skip vs fail (two named parents into one child, inspect keyed envelopes) and a runnable tour of deterministic route `if` (operators, composition, skip, join fire and miss), see [YAML catalog — Generic fan-in](yaml-catalog.md#generic-fan-in) and [`examples/route-if-tour/`](../examples/route-if-tour/). For a short spine of every `verify` check type (artifact, command, checklist, payload_schema, gate, checkout_changes), see [`examples/verify-tour/`](../examples/verify-tour/). For emit soft-reject, automatic repair, manual recover, and ordinary Retry, see [`examples/retry-tour/`](../examples/retry-tour/).
 
 For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedback-loop/`](../examples/feedback-loop/) and [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops). For stage agents consuming project MCP servers, see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp), [`examples/stage-mcp/`](../examples/stage-mcp/), [`examples/playwright-mcp/`](../examples/playwright-mcp/), and [`examples/context7-mcp/`](../examples/context7-mcp/).
 
@@ -49,7 +49,7 @@ For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedb
 
 Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of truth for valid catalog shapes:
 
-- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — source of truth for current `route` / `entry` shapes (fan-out, diamond fan-in, loops, clonable fan-out), plus HITL and validation edge cases (`*.pipeline.yaml`)
+- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — source of truth for current `route` / `entry` shapes (fan-out, diamond fan-in, loops), plus HITL and validation edge cases (`*.pipeline.yaml`)
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, `io` / `verify` shapes (referenced via `uses:`)
 - [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 

@@ -1,4 +1,3 @@
-import type { CloneAction } from "./forkChoice.js";
 import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
@@ -121,10 +120,10 @@ export type FeedbackLoopConfig = {
   replay_session: "resume" | "new_session";
 };
 
+export type CloneMode = "parallel" | "sequential";
+
 export type PipelineStageRef = {
   id: string;
-  clonable?: boolean;
-  clone_cap?: number;
   /** IR: after-phase checks. YAML: `verify` items whose `when` includes `after`. */
   completion?: CompletionContract;
   /** IR: after-phase failure policy. YAML: `on_verify_fail`. */
@@ -135,6 +134,8 @@ export type PipelineStageRef = {
   route?: PipelineRouteEntry[];
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
 };
 
 /**
@@ -148,15 +149,14 @@ export type PipelineStageYamlEntry = {
   system_prompt?: string;
   model?: string;
   gate_kinds?: StageGateKind[];
-  clone_actions?: CloneAction[];
   timeout_ms?: number;
   skill?: string;
   mcp?: string[];
-  clonable?: boolean;
-  clone_cap?: number;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
   io?: StageIoYaml;
   verify?: unknown;
   on_verify_fail?: RecoveryPolicy;
@@ -173,8 +173,6 @@ export type PipelineFragmentConfig = {
 
 export type NormalizedPipelineStageEntry = {
   id: string;
-  clonable?: boolean;
-  clone_cap?: number;
   /** IR after compile. YAML `verify` after-phase / `on_verify_fail`. */
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
@@ -183,6 +181,8 @@ export type NormalizedPipelineStageEntry = {
   entry?: boolean;
   skill?: string;
   mcp?: string[];
+  clone_cap?: number;
+  clone_mode?: CloneMode;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
     | { kind: "uses"; path: string; absolutePath: string };
@@ -202,6 +202,8 @@ export type ResolvedPipelineStageNode = {
   fork?: PipelineForkConfig;
   clonable?: boolean;
   clone_cap?: number;
+  clone_mode?: CloneMode;
+  clone_array_field?: string;
   definition_id?: string;
   /** Persisted on pipeline_dag. YAML `verify` after-phase. */
   completion?: CompletionContract;

@@ -212,7 +212,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "describe_pipeline",
     {
       description:
-        "Describe a pipeline DAG: stages with needs, fork, clonable, clone_cap, and gate_kinds. Input is a filesystem pipeline path (same as start_run).",
+        "Describe a pipeline DAG: stages with needs, fork, and gate_kinds. Input is a filesystem pipeline path (same as start_run).",
       inputSchema: z.object({
         pipeline: z.string(),
       }),

@@ -23,7 +23,6 @@ system_prompt: |
 
   Rules:
   - Copy from priorEnvelopesByStage only. Do not use a single priorEnvelope.
-  - Do not emit clone_forks.
 model: cursor/auto
 io:
   input:

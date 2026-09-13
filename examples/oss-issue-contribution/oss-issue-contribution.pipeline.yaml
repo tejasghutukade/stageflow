@@ -35,8 +35,6 @@ stages:
   - id: oss-investigate-area
     uses: ./oss-investigate-area.yaml
     needs: oss-plan-investigation
-    clonable: true
-    clone_cap: 5
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -94,8 +92,6 @@ stages:
   - id: oss-review-change
     uses: ./oss-review-change.yaml
     needs: oss-plan-review
-    clonable: true
-    clone_cap: 4
     on_verify_fail:
       mode: repair
       max_attempts: 3

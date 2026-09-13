@@ -1,7 +1,7 @@
 import type { AgentPort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
-import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import { buildPipelineDagSnapshotFromLoaded, appendCloneInstances } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -11,15 +11,13 @@ import type {
 } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import {
-  applyCloneForksFromEnvelopes,
-  applyCloneForksToSchedule,
   cloneFailureContinuesSchedule,
-  cloneFanoutConflict,
   cloneRetryDownstream,
   cloneFailFastSkipIds,
   cloneScheduleAllowsRun,
   failureIsAccepted,
   isCloneInstance,
+  nextFreeCloneSuffix,
   protectedClonableChildIds,
   sequentialLaterCloneIds,
   skipRejectedNeedDependents,
@@ -87,8 +85,6 @@ type SchedulerPreparedPipeline = {
 
 export type { SchedulerPreparedPipeline };
 
-const EMPTY_RETRY_DOWNSTREAM: ReadonlySet<string> = new Set();
-
 type RetryContext = {
   retryRoots: Map<string, number>;
 };
@@ -136,12 +132,6 @@ function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
     stage_ids: dag.nodes.map((n) => n.id),
   };
 }
-
-export {
-  applyCloneForksFromEnvelopes,
-  applyCloneForksToSchedule,
-};
-export type { ApplyCloneForksResult } from "./cloneSchedule.js";
 
 function synthesizedFailureEnvelope(reason: string): StageEnvelope {
   return { status: "failure", summary: reason, artifacts: [] };
@@ -730,17 +720,6 @@ export async function runPipelineDag(
   }
 
   applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-  {
-    const applied = applyCloneForksFromEnvelopes(
-      dag,
-      states,
-      completedEnvelopes,
-    );
-    if (applied.dag !== dag) {
-      await store.updatePipelineDag(run.runId, applied.dag);
-    }
-    dag = applied.dag;
-  }
 
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
@@ -963,28 +942,69 @@ export async function runPipelineDag(
   };
 
   const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
-    const retryDownstreamIds = retryContext
-      ? cloneRetryDownstream(dag, [...retryContext.retryRoots.keys()])
-      : EMPTY_RETRY_DOWNSTREAM;
-    const forceFreshCloneIds = activeReplayId(feedbackSchedule) !== undefined;
-    const conflict = cloneFanoutConflict(
-      dag,
-      envelope,
-      states,
-      retryDownstreamIds,
-      { forceFreshCloneIds },
-    );
-    if (conflict !== undefined) {
-      await store.appendStageEvent(run.runId, stageId, {
-        event: "failed",
-        reason: conflict,
-      });
-      await onStageFailure(stageId, conflict);
-      return;
-    }
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
+
+    const emitterNode = dag.nodes.find((n) => n.id === stageId);
+    if (
+      emitterNode?.clone_array_field !== undefined &&
+      emitterNode.clone_cap !== undefined
+    ) {
+      let catalogChildId = (dag.childrenOf[stageId] ?? []).find((id) => {
+        const child = dag.nodes.find((n) => n.id === id);
+        return child !== undefined && (child.definition_id ?? child.id) === child.id;
+      });
+      if (catalogChildId === undefined) {
+        const instanceChild = (dag.childrenOf[stageId] ?? []).find((id) => {
+          const child = dag.nodes.find((n) => n.id === id);
+          return (
+            child?.definition_id !== undefined && child.definition_id !== child.id
+          );
+        });
+        catalogChildId = instanceChild
+          ? dag.nodes.find((n) => n.id === instanceChild)?.definition_id
+          : undefined;
+      }
+      if (catalogChildId !== undefined) {
+        const field = emitterNode.clone_array_field;
+        const arr = envelope.payload?.[field];
+        if (!Array.isArray(arr) || arr.length < 1) {
+          await handlePostSuccessError(
+            stageId,
+            `Clone Array "${field}" must contain at least one item`,
+          );
+          return;
+        }
+        const snapshotDag = dag as RunPipelineDagSnapshot;
+        const startAt = Array.isArray(snapshotDag.stage_ids)
+          ? nextFreeCloneSuffix(snapshotDag, catalogChildId)
+          : 1;
+        const { snapshot, instanceIds } = appendCloneInstances(dag, {
+          catalogId: catalogChildId,
+          predecessorId: stageId,
+          count: arr.length,
+          startAt,
+        });
+        dag = snapshot;
+        await store.updatePipelineDag(run.runId, dag);
+        states.delete(catalogChildId);
+        for (const id of instanceIds) {
+          states.set(id, "pending");
+        }
+        const replayId = activeReplayId(feedbackSchedule);
+        if (replayId !== undefined) {
+          noteActiveCohort(feedbackSchedule, stageId, instanceIds);
+          await mintCohortForFanout({
+            store,
+            runId: run.runId,
+            replayId,
+            forkParent: stageId,
+            cloneStageIds: instanceIds,
+          });
+        }
+      }
+    }
 
     const feedbackAction = envelope.feedback_loop;
     if (feedbackAction?.action === "send_back") {
@@ -1135,32 +1155,6 @@ export async function runPipelineDag(
       });
       for (const id of skippedIds) {
         await store.appendStageEvent(run.runId, id, { event: "skipped" });
-      }
-    }
-    const applied = applyCloneForksToSchedule(dag, stageId, envelope, states, {
-      forceFreshCloneIds,
-    });
-    const dagChanged = applied.dag !== dag;
-    dag = applied.dag;
-    if (dagChanged) {
-      await store.updatePipelineDag(run.runId, dag);
-    }
-    for (const id of applied.skippedIds) {
-      notifyRetryRootTerminal(id, "skipped");
-      await store.appendStageEvent(run.runId, id, { event: "skipped" });
-    }
-    if (applied.mintedBySuccessor !== undefined) {
-      for (const [, cloneStageIds] of applied.mintedBySuccessor) {
-        if (cloneStageIds.length === 0) continue;
-        const replayId = activeReplayId(feedbackSchedule);
-        await mintCohortForFanout({
-          store,
-          runId: run.runId,
-          ...(replayId !== undefined ? { replayId } : {}),
-          forkParent: stageId,
-          cloneStageIds,
-        });
-        noteActiveCohort(feedbackSchedule, stageId, cloneStageIds);
       }
     }
 

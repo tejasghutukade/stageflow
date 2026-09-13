@@ -24,16 +24,12 @@ decompose ──fanout parallel──► plan~N ──join──► align
 ```
 
 1. **decompose** — Read the epic (task + requirements doc). Cut 1–8
-   independent stories. Emit `clone_forks` to `plan` (`once` or
    `fanout` / `parallel`). Writes `epic-split.md`.
-2. **plan** (clonable) — One clone per story. Research the checkout and
    write `story-plan.md` (edit sites, validation commands, neighbor
    boundaries). No source edits.
 3. **align** — Join every plan clone. Fix overlapping files and
    contradictions, choose **implementation order**, ask the operator to
-   accept `aligned-plans.md`, then emit `clone_forks` to `implement`
    with `mode: sequential`.
-4. **implement** (clonable, sequential) — Clone `~1` runs first; `~N`
    starts only after `~N-1` succeeded, so earlier edits are already in
    the tree. Each clone executes only its story (ce-work style) and
    must change the checkout.
@@ -55,9 +51,7 @@ creates or switches branches.
 
 | Stage | Clonable | Gate | Required artifacts | Other checks |
 |-------|----------|------|--------------------|--------------|
-| `decompose` | parent of `plan` | — | `epic-split.md` | `clone_forks` once/fanout parallel |
 | `plan` | yes, cap 8 | — | `story-plan.md` | `io.input` assignment |
-| `align` | parent of `implement` | `artifact_backed` | `aligned-plans.md` | sequential `clone_forks` |
 | `implement` | yes, cap 8 | — | `implementation-report.md` | `checkout_changes` |
 | `verify` | join | — | `coverage.md` | `io.output` |
 | `review` | — | — | `review-report.md` | whole-diff, report-only |
@@ -69,14 +63,8 @@ creates or switches branches.
 `on_verify_fail`.
 
 Shared JSON Schema lives on the pipeline under `schemas:` — `plan`'s
-`io.input.schema` is `$ref: "#/schemas/story-assignment"` (the
-decompose → plan clone assignment contract). See
+`io.input.schema` is `$ref: "#/schemas/story-assignment"`. See
 [YAML catalog — Pipeline schemas](../../docs/yaml-catalog.md#pipeline-schemas).
-
-`plan` clones are **parallel** so stories can be refined at the same
-time. `implement` clones are **sequential** so shared files do not
-race. A clone-list join still waits until every clone of that parent
-succeeded.
 
 ## Run
 

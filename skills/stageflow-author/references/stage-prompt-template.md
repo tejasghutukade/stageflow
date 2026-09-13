@@ -113,18 +113,6 @@ On success, emit the payload fields this stage's route if predicates read
 ids. Catalog if decides which children run.
 ```
 
-## Clonable parent
-
-When a successor is `clonable: true`, the parent success emit includes `clone_forks` with full envelopes matching that successor's `io.input.schema`. Add:
-
-```
-On success, include clone_forks covering every clonable successor exactly once.
-Each clone entry is a full envelope with status, summary, artifacts, and payload
-matching that successor's io.input.schema — not a stub object.
-```
-
-Clonable child stages use the base (or gated) prompt. Remind them they are one clone among others and must emit independently.
-
 ## Loop
 
 When `route` has `{ type: loop }`, the success emit includes envelope field `feedback_loop`: `{ action: continue }` or `{ action: send_back, target: <ancestor id> }`. Catalog YAML uses `{ type: loop }` inside `route`, not a `feedback_loop:` key. `if` is not allowed on the loop entry.

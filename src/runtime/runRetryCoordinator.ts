@@ -124,10 +124,6 @@ export function succeededStageRetryBlocker(
   ) {
     return `Cannot re-run a succeeded clone instance stage (stage=${stageSnap.stage_id}, definition=${stageSnap.definition_id}): clone instances are created by upstream fan-out and cannot be rebuilt in place. Use rerun to start a new run.`;
   }
-  const forks = stageSnap.envelope?.clone_forks;
-  if (Array.isArray(forks) && forks.length > 0) {
-    return `Cannot re-run a succeeded clonable-fanout stage (stage=${stageSnap.stage_id}): its envelope declared clone_forks and existing clone instances cannot be pruned. Use rerun to start a new run.`;
-  }
   if (stageSnap.envelope?.fork_choice !== undefined) {
     return `Cannot re-run a succeeded fork stage (stage=${stageSnap.stage_id}): its envelope recorded a fork_choice and skipped branches cannot be restored. Use rerun to start a new run.`;
   }

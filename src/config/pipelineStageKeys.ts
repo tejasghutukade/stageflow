@@ -13,8 +13,6 @@ export const WIRING_KEYS = new Set([
   "needs",
   "fork",
   "uses",
-  "clonable",
-  "clone_cap",
   "completion",
   "recovery",
   "on_verify_fail",
@@ -25,6 +23,8 @@ export const WIRING_KEYS = new Set([
   "entry",
   "route_select",
   "allow_none",
+  "clone_cap",
+  "clone_mode",
 ]);
 
 /** Stage body keys. Target: `io` / `verify`. IR/legacy: `payload_schema`, `pre_emit_checks`, `clone_input_schema`. */
@@ -35,7 +35,6 @@ export const BODY_KEYS = new Set([
   "gate_kinds",
   "pre_emit_checks",
   "clone_input_schema",
-  "clone_actions",
   "timeout_ms",
   "skill",
   "mcp",
@@ -43,10 +42,20 @@ export const BODY_KEYS = new Set([
   "verify",
 ]);
 
+/** Recognized only so catalog load can name the field and point at Clone Chain. */
+export const REJECTED_CLONE_PRODUCT_KEYS = new Set([
+  "clonable",
+  "clone_actions",
+]);
+
 export function isPipelineStageBodyKey(key: string): boolean {
   return BODY_KEYS.has(key);
 }
 
 export function isAllowedPipelineStageEntryKey(key: string): boolean {
-  return WIRING_KEYS.has(key) || BODY_KEYS.has(key);
+  return (
+    WIRING_KEYS.has(key) ||
+    BODY_KEYS.has(key) ||
+    REJECTED_CLONE_PRODUCT_KEYS.has(key)
+  );
 }

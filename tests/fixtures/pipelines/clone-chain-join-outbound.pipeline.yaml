@@ -1,0 +1,76 @@
+id: clone-chain-join-outbound
+schemas:
+  Issue:
+    type: object
+    required: [id, title]
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit a list of issues.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+            summary:
+              type: string
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one issue.
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+  - id: gather
+    route:
+      - to: summarize
+    system_prompt: Gather clone results.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [digest]
+          properties:
+            digest:
+              type: string
+  - id: summarize
+    system_prompt: Continue after the Join.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

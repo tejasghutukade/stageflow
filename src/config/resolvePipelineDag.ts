@@ -26,8 +26,6 @@ type NormalizedEdge = {
   routeLoopEntries: PipelineRouteLoopEntry[];
   entry?: boolean;
   stageIndex: number;
-  clonable?: boolean;
-  clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
   replay_safe?: boolean;
@@ -86,8 +84,6 @@ function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
       routeLoopEntries,
       stageIndex: index,
       ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
-      ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
-      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
       ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
       ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
       ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
@@ -369,9 +365,6 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
     ...(edge.entry === true ? { entry: true } : {}),
-    ...(edge.clonable === true
-      ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
-      : {}),
     ...(edge.completion !== undefined ? { completion: edge.completion } : {}),
     ...(edge.recovery !== undefined ? { recovery: edge.recovery } : {}),
     ...(edge.routeLoopEntries.length === 1
@@ -383,35 +376,6 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
   return { nodes, roots, childrenOf };
 }
 
-function validateClonableFields(
-  edges: NormalizedEdge[],
-  dag: ResolvedPipelineDag,
-  ctx: ResolvePipelineDagContext,
-): void {
-  for (const edge of edges) {
-    if (edge.clone_cap !== undefined && edge.clonable !== true) {
-      throw new Error(
-        formatError(ctx, `stage "${edge.id}": clone_cap requires clonable: true`),
-      );
-    }
-    if (edge.clonable === true && edge.clone_cap !== undefined) {
-      if (!Number.isInteger(edge.clone_cap) || edge.clone_cap < 2) {
-        throw new Error(
-          formatError(
-            ctx,
-            `stage "${edge.id}": clone_cap must be an integer greater than or equal to 2`,
-          ),
-        );
-      }
-    }
-    if (edge.clonable === true && (dag.childrenOf[edge.id] ?? []).length === 0) {
-      throw new Error(
-        formatError(ctx, `clonable on stage "${edge.id}": no children in the DAG`),
-      );
-    }
-  }
-}
-
 function validateFeedbackLoopFields(
   dag: ResolvedPipelineDag,
   ctx: ResolvePipelineDagContext,
@@ -420,14 +384,6 @@ function validateFeedbackLoopFields(
   for (const source of dag.nodes) {
     const policy = source.feedback_loop;
     if (!policy) continue;
-    if (source.clonable === true) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${source.id}": feedback_loop source cannot be clonable`,
-        ),
-      );
-    }
     const targetId = policy.target;
     const target = byId.get(targetId);
     if (!target) {
@@ -438,11 +394,6 @@ function validateFeedbackLoopFields(
     if (!source.ancestors.includes(targetId)) {
       throw new Error(
         formatError(ctx, `stage "${source.id}": feedback_loop target "${targetId}" must be an earlier ancestor`),
-      );
-    }
-    if (target.clonable === true) {
-      throw new Error(
-        formatError(ctx, `stage "${source.id}": feedback_loop target "${targetId}" cannot be clonable`),
       );
     }
     const targetIndex = source.ancestors.indexOf(targetId);
@@ -476,7 +427,6 @@ export function resolvePipelineDagFromRefs(
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
   const dag = buildResolvedPipelineDag(edges);
-  validateClonableFields(edges, dag, ctx);
   validateFeedbackLoopFields(dag, ctx);
 
   return { stages, dag };
@@ -501,7 +451,26 @@ export function resolvePipelineDag(
       outcome.issues[0]?.message ?? formatError(ctx, "invalid stage entries"),
     );
   }
-  return resolvePipelineDagFromRefs(toWiringRefs(outcome.value), ctx);
+  const refs = toWiringRefs(outcome.value);
+  for (const ref of refs) {
+    if (ref.clone_cap !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${ref.id}": "clone_cap" is no longer supported — use a Clone Chain instead`,
+        ),
+      );
+    }
+    if (ref.clone_mode !== undefined) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${ref.id}": "clone_mode" is only valid on a Clone Chain emitter`,
+        ),
+      );
+    }
+  }
+  return resolvePipelineDagFromRefs(refs, ctx);
 }
 
 function sameNeedIf(
@@ -586,7 +555,9 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
       entry.fork !== undefined ||
       entry.feedback_loop !== undefined ||
       entry.route_select !== undefined ||
-      entry.allow_none !== undefined
+      entry.allow_none !== undefined ||
+      entry.clonable !== undefined ||
+      entry.clone_actions !== undefined
     ) {
       return null;
     }

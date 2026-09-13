@@ -4,8 +4,6 @@ system_prompt: |
   plan for only the story in your assignment envelope. Work the way a
   compound-engineering ce-plan run would: research the checkout, capture
   decisions and edit sites, do not implement. Do not edit source, commit,
-  push, or open a pull request. Do not emit clone_forks — the next stage
-  is not clonable.
 
   Your assignment is the clone prior envelope payload: story_id, title,
   epic_slice, acceptance, neighboring_story_ids, constraints. That slice

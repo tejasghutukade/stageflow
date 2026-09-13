@@ -64,10 +64,8 @@ export type AskOperatorCapture = { prompt?: AskOperatorPrompt };
  * nothing else catches one drifting from the other.
  *
  * Field presence mirrors the typebox schema's own conditionality:
- * `clone_forks` only exists when a stage can clone-fork at all, and
  * `fork_choice` is required (not just present) when the stage has a fork
- * to route. Building this statically would silently offer the model a
- * `clone_forks` field on stages that have nowhere to route one.
+ * to route.
  */
 export function buildEmitStageEnvelopeShape(options: {
   forkEmitContext?: ForkEmitContext;
@@ -82,9 +80,6 @@ export function buildEmitStageEnvelopeShape(options: {
       options.forkEmitContext !== undefined
         ? z.array(z.string())
         : z.array(z.string()).optional(),
-    ...(options.cloneEmitContext !== undefined
-      ? { clone_forks: z.array(z.record(z.string(), z.unknown())) }
-      : {}),
     checklist_attestations: z
       .array(
         z.object({

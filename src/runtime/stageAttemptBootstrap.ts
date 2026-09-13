@@ -19,9 +19,12 @@ import {
 import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
+import { instancesOfDefinition } from "../runstore/pipelineDagSnapshot.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
+import { cloneInstanceOrdinal } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
+import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -166,30 +169,82 @@ async function openStageWithOperatorCatalog(
   }
 }
 
-function isCloneAssignmentPrior(
+function cloneAssignmentIndex(
   dag: ResolvedPipelineDag,
   stageId: string,
+  definitionId: string,
+  arrayLength: number,
+): number | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (!Array.isArray(snapshot.stage_ids) || arrayLength < 1) {
+    return ordinal - 1;
+  }
+  const siblings = instancesOfDefinition(snapshot, definitionId)
+    .map((id) => ({ id, ordinal: cloneInstanceOrdinal(id, definitionId) }))
+    .filter((row): row is { id: string; ordinal: number } => row.ordinal !== undefined)
+    .sort((a, b) => a.ordinal - b.ordinal);
+  const cohort = siblings.slice(-arrayLength);
+  const index = cohort.findIndex((row) => row.id === stageId);
+  return index === -1 ? undefined : index;
+}
+
+function cloneAssignmentPrior(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  definitionId: string,
   completedEnvelopes: Map<string, StageEnvelope>,
-): boolean {
+): ResolvePriorEnvelopeResult | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
   const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return false;
-  const parentId =
+  if (!node) return undefined;
+  const emitterId =
     typeof node.needs === "string" && node.needs
       ? node.needs
-      : node.needsEdges?.length === 1
-        ? node.needsEdges[0]?.id
-        : undefined;
-  if (parentId === undefined) return false;
-  const parent = completedEnvelopes.get(parentId);
-  if (parent === undefined) return false;
-  const definitionId = node.definition_id ?? node.id;
-  for (const item of parent.clone_forks ?? []) {
-    if (item.action === "once" && item.successor_id === stageId) return true;
-    if (item.action === "fanout" && item.successor_id === definitionId) {
-      return true;
-    }
+      : predecessorEdges(node)[0]?.id;
+  if (emitterId === undefined) return undefined;
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  const field = emitter?.clone_array_field;
+  if (field === undefined) return undefined;
+  const parent = completedEnvelopes.get(emitterId);
+  if (parent === undefined || parent.status !== "success") {
+    return {
+      ok: false,
+      reason: `missing envelope for Clone Chain emitter "${emitterId}"`,
+    };
   }
-  return false;
+  const arr = parent.payload?.[field];
+  if (!Array.isArray(arr)) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const index = cloneAssignmentIndex(dag, stageId, definitionId, arr.length);
+  if (index === undefined || index >= arr.length) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const element = arr[index];
+  if (element === null || typeof element !== "object" || Array.isArray(element)) {
+    return {
+      ok: false,
+      reason: `Clone Array element ${index + 1} is not an object`,
+    };
+  }
+  return {
+    ok: true,
+    prior: {
+      status: "success",
+      summary: parent.summary,
+      artifacts: [],
+      payload: structuredClone(element) as Record<string, unknown>,
+    },
+  };
 }
 
 function assertPriorsMatchCloneInput(
@@ -327,13 +382,21 @@ export async function openStageAttempt(
       undefined,
       input.dag,
     ));
-  const priorResult = await resolvePriorEnvelope({
-    dag: input.dag,
+  const assignment = cloneAssignmentPrior(
+    input.dag,
     stageId,
+    definitionId,
     completedEnvelopes,
-    store: input.store,
-    runId: input.runId,
-  });
+  );
+  const priorResult =
+    assignment ??
+    (await resolvePriorEnvelope({
+      dag: input.dag,
+      stageId,
+      completedEnvelopes,
+      store: input.store,
+      runId: input.runId,
+    }));
   if (!priorResult.ok) return priorResult;
 
   const priorInput = assertPriorsMatchCloneInput(
@@ -341,7 +404,7 @@ export async function openStageAttempt(
     stageId,
     priorResult,
     input.task,
-    isCloneAssignmentPrior(input.dag, stageId, completedEnvelopes),
+    false,
   );
   if (!priorInput.ok) return priorInput;
 
@@ -354,9 +417,6 @@ export async function openStageAttempt(
   const forkEmitContext = resolveForkEmitContext(input.dag, definitionId);
   const snapshot = input.dag as RunPipelineDagSnapshot;
   const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId, {
-    ...(input.stage.clone_actions !== undefined
-      ? { allowedActions: input.stage.clone_actions }
-      : {}),
     ...(snapshot.clone_input_schema !== undefined
       ? { successorCloneInputSchemas: snapshot.clone_input_schema }
       : {}),

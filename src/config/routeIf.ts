@@ -255,30 +255,10 @@ function isForwardRouteEntry(
 }
 
 export function collectRouteIfIllegalCombos(
-  refs: Array<{ id: string; route?: PipelineRouteEntry[]; clonable?: boolean }>,
-  pipelineId: string,
+  _refs: Array<{ id: string; route?: PipelineRouteEntry[] }>,
+  _pipelineId: string,
 ): LoadIssue[] {
-  const clonableIds = new Set(
-    refs.filter((ref) => ref.clonable === true).map((ref) => ref.id),
-  );
-  const issues: LoadIssue[] = [];
-  for (const ref of refs) {
-    if (ref.route === undefined) continue;
-    const forward = ref.route.filter(isForwardRouteEntry);
-    const hasAnyIf = forward.some((entry) => entry.if !== undefined);
-    if (!hasAnyIf) continue;
-    for (const entry of forward) {
-      if (!clonableIds.has(entry.to)) continue;
-      issues.push({
-        code: "pipeline.route_if_invalid",
-        message: `Pipeline ${pipelineId}: stage "${ref.id}": route "${entry.to}" if cannot target a clonable stage`,
-        category: "pipeline",
-        pipelineId,
-        stageId: ref.id,
-      });
-    }
-  }
-  return issues;
+  return [];
 }
 
 export function collectRouteIfSchemaIssues(

@@ -128,7 +128,7 @@ Optional `code` when the start failure reports one.
 
 ### Including stage projections {#including-stage-projections}
 
-Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`. `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`. `--include stages` without `--json` exits `1`.
 
 ```bash
 sf run --task examples/hello-world/my-task.task.yaml \

@@ -14,7 +14,7 @@ function assertForkChoiceLegality(
   for (const id of choices) {
     if (!immediateSuccessorIds.includes(id)) {
       throw new EnvelopeError(
-        `fork_choice contains non-immediate successor: ${id}; clonable successors belong in clone_forks`,
+        `fork_choice contains non-immediate successor: ${id}`,
       );
     }
   }

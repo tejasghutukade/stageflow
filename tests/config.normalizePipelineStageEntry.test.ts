@@ -117,29 +117,6 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.message).toMatch(/unknown key "label"/);
   });
 
-  it("accepts clonable and clone_cap on an object entry", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
-        {
-          raw: {
-            id: "author",
-            clonable: true,
-            clone_cap: 3,
-            system_prompt: "p",
-            model: "m",
-            ...REQUIRED_IO,
-          },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value[0]?.clonable).toBe(true);
-    expect(outcome.value[0]?.clone_cap).toBe(3);
-  });
-
   it("normalizes route entries with mixed on gates", () => {
     const outcome = normalizePipelineStageEntries(
       [
@@ -345,46 +322,6 @@ describe("normalizePipelineStageEntries", () => {
     });
   });
 
-  it("toWiringRefs copies clonable and clone_cap when present", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
-        {
-          raw: {
-            id: "author",
-            clonable: true,
-            clone_cap: 3,
-            system_prompt: "p",
-            model: "m",
-            ...REQUIRED_IO,
-          },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(toWiringRefs(outcome.value)).toEqual([
-      { id: "author", clonable: true, clone_cap: 3 },
-    ]);
-  });
-
-  it("omits clonable fields from wiring refs when absent", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
-        {
-          raw: { id: "clarify", system_prompt: "p", model: "m", ...REQUIRED_IO },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(toWiringRefs(outcome.value)).toEqual([{ id: "clarify" }]);
-    expect(outcome.value[0]?.clonable).toBeUndefined();
-    expect(outcome.value[0]?.clone_cap).toBeUndefined();
-  });
 });
 
 describe("inferIdFromUsesPath", () => {

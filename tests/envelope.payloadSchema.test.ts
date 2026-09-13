@@ -114,7 +114,7 @@ describe("payload_schema", () => {
           required: ["branch"],
         },
         "investigate",
-        "clone_forks[0].envelope",
+        "assignment",
       );
     } catch (err) {
       expect(err).toBeInstanceOf(EnvelopeError);
@@ -164,7 +164,6 @@ describe("payload_schema", () => {
       clone_input_schema: target.clone_input_schema,
       pre_emit_checks: target.pre_emit_checks,
       gate_kinds: target.gate_kinds,
-      clone_actions: target.clone_actions,
       timeout_ms: target.timeout_ms,
       skill: target.skill,
       mcp: target.mcp,
@@ -175,7 +174,6 @@ describe("payload_schema", () => {
       clone_input_schema: legacy.clone_input_schema,
       pre_emit_checks: legacy.pre_emit_checks,
       gate_kinds: legacy.gate_kinds,
-      clone_actions: legacy.clone_actions,
       timeout_ms: legacy.timeout_ms,
       skill: legacy.skill,
       mcp: legacy.mcp,
@@ -1118,9 +1116,9 @@ describe("payload_schema", () => {
         envelope,
         nameListSchema,
         "author-diagrams",
-        "clone_forks[0].envelope",
+        "assignment",
       ),
-    ).toThrow(/clone_forks\[0\]\.envelope: clone assignment payload is required by io\.input\.schema/);
+    ).toThrow(/assignment: clone assignment payload is required by io\.input\.schema/);
   });
 
   it("assertPriorInputPayload requires payload and names the child io.input.schema", () => {

@@ -173,7 +173,6 @@ const STAGE_BODY_ORDER = [
   "io",
   "verify",
   "gate_kinds",
-  "clone_actions",
   "skill",
   "mcp",
 ] as const;
@@ -185,8 +184,6 @@ const PIPELINE_WIRING_ORDER = [
   "mcp",
   "needs",
   "fork",
-  "clonable",
-  "clone_cap",
   "on_verify_fail",
   "feedback_loop",
   "replay_safe",

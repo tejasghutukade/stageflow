@@ -16,7 +16,6 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import type { StageEnvelope, TerminalEnvelope } from "../src/types/envelope.js";
-import type { CloneForkItem } from "../src/types/forkChoice.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
@@ -35,24 +34,6 @@ const okEnvelope = (
   payload: {},
   ...extra,
 });
-
-function cloneItem(summary: string): { envelope: StageEnvelope } {
-  return { envelope: okEnvelope(summary) };
-}
-
-function fanoutForks(
-  mode: "parallel" | "sequential",
-  summaries: string[],
-): CloneForkItem[] {
-  return [
-    {
-      successor_id: "research",
-      action: "fanout",
-      mode,
-      clones: summaries.map(cloneItem),
-    },
-  ];
-}
 
 async function waitFor(
   predicate: () => Promise<boolean> | boolean,
@@ -366,79 +347,6 @@ describe("generic fan-in retry invalidation", () => {
     expect(clarifyAfter?.envelope?.fork_choice).toEqual([...forkChoice]);
     expect(clarifyAfter?.attempt_count).toBe(1);
     expect(after.stages.find((s) => s.stage_id === "validation")?.attempt_count).toBe(1);
-  }, 15000);
-
-  it("retry one research clone instance resets synthesize, not the sibling clone", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-retry-clone-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = gatedFanInAgent({
-      behaviorsByStage: {
-        clarify: [
-          {
-            type: "emit",
-            envelope: okEnvelope("clarify-ok", {
-              clone_forks: fanoutForks("parallel", ["c1", "c2"]),
-            }),
-          },
-        ],
-        "research~1": [
-          { type: "emit", envelope: okEnvelope("r1-first") },
-          { type: "emit", envelope: okEnvelope("r1-retry") },
-        ],
-        "research~2": [{ type: "emit", envelope: okEnvelope("r2-kept") }],
-        validation: [{ type: "emit", envelope: okEnvelope("validation-kept") }],
-        synthesize: [
-          { type: "emit", envelope: okEnvelope("syn-first") },
-          { type: "emit", envelope: okEnvelope("syn-retry") },
-        ],
-      },
-    });
-    const manager = new RunManager({
-      agent,
-      store,
-      cwd: fixtures,
-      maxActiveStagesPerRun: 4,
-    });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("diamond-fan-in-clone"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => (await store.readRunMeta(started.runId)).status === "succeeded");
-
-    const beforeDag = (await store.readRunMeta(started.runId)).pipeline_dag;
-    expect(beforeDag?.stage_ids).toEqual(
-      expect.arrayContaining(["research~1", "research~2"]),
-    );
-    expect(beforeDag?.stage_ids).not.toContain("research~3");
-
-    await retryAncestorDirect(store, agent, started.runId, "research~1");
-
-    expect((await store.readRunMeta(started.runId)).status).toBe("succeeded");
-    expect(agent.openCounts.get("research~1")).toBe(2);
-    expect(agent.openCounts.get("research~2")).toBe(1);
-    expect(agent.openCounts.get("validation")).toBe(1);
-    expect(agent.openCounts.get("clarify")).toBe(1);
-    expect(agent.openCounts.get("synthesize")).toBe(2);
-
-    const retryPrior = (agent.priorByStage.get("synthesize") ?? [])[1];
-    expect(Object.keys(retryPrior ?? {})).toEqual(["research", "validation"]);
-    expect(
-      Array.isArray(retryPrior?.research)
-        ? retryPrior.research.map((e) => e.summary)
-        : undefined,
-    ).toEqual(["r1-retry", "r2-kept"]);
-    expect(retryPrior?.validation).toEqual(okEnvelope("validation-kept"));
-    expect(retryPrior?.["research~1"]).toBeUndefined();
-    expect(retryPrior?.["research~2"]).toBeUndefined();
-
-    const afterDag = (await store.readRunMeta(started.runId)).pipeline_dag;
-    expect(afterDag?.stage_ids).not.toContain("research~3");
-    expect(afterDag?.stage_ids?.filter((id) => id.startsWith("research~"))).toEqual(
-      ["research~1", "research~2"],
-    );
   }, 15000);
 
   it("retry of an accepted-failed parent that fails again does not run the join", async () => {

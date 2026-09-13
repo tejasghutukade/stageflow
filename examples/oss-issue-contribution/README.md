@@ -76,7 +76,6 @@ Pipeline entries wire `on_verify_fail` (repair for most stages; `manual` on
 `oss-approve-contribution`) so after-phase failures retry or wait for an
 operator instead of silently advancing.
 
-| Stage | `gate_kinds` | `verify` artifacts | `clone_actions` | `checkout_changes` `path_fields` |
 |-------|--------------|--------------------|-----------------|----------------------------------|
 | `oss-issue-intake` | `[]` | `issue-intake.md` | — | — |
 | `oss-explain-issue` | `[]` | `issue-explainer.html` | — | — |
@@ -93,7 +92,6 @@ operator instead of silently advancing.
 | `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — | — |
 | `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — | — |
 
-The two planner stages restrict `clone_actions` so they cannot select `skip`.
 `oss-plan-investigation` allows `once` or `fanout`; `oss-plan-review` allows
 `fanout` only. Clones are the point of the example; skipping them defeats the
 pipeline.

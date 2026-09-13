@@ -21,7 +21,7 @@ Write **Author YAML only**:
 - Wiring: `route` / `entry: true` / `{ type: loop }`
 - Contracts: `io` / `verify` / `on_verify_fail`
 - Every stage body has `io.input.schema` and `io.output.schema`
-- Sequential and fan-in non-clone edges: consumer `io.input` must be a structural subset of **each** non-clonable parent's `io.output`
+- Sequential and fan-in edges: consumer `io.input` must be a structural subset of **each** parent's `io.output`
 
 Wiring is declared on the **source** stage. Children do not list parents. A pipeline that uses `route` must mark at least one `entry: true` root.
 
@@ -63,7 +63,7 @@ Two matching `if`s both fire (not first-match-wins).
 
 When every forward `to:` on a stage has `if`, validate warns `pipeline.route_all_gated` (`ok: true`; `--strict` does not promote). That is acceptable for exclusive branches.
 
-`if` is illegal on `{ type: loop }`, on a clonable `to:`, mixed with a clonable sibling target, or combined with `on` other than succeeded-only.
+`if` is illegal on `{ type: loop }`, or combined with `on` other than succeeded-only.
 
 The completing agent does **not** pick which successors run. Do not emit `fork_choice`.
 
@@ -101,35 +101,13 @@ Put `verify` on the **stage body** (the `uses:` file or inline entry). Put `on_v
 
 `on_verify_fail` requires at least one after-phase `verify` item. Check `id` values must be unique within the stage. Check discriminator is `type:` (gate widgets still use `kind:`). Wire these for writer stages and final gates; prompts alone do not enforce them.
 
-## Clonable successors
+## Clone Chain
 
-A runtime clone count is not knowable from a vague description — leave `clonable` and `clone_forks` unset and prefer sibling stages or a single review.
+A Clone Chain is emitter → clone child → Join. The emitter output has exactly one array of a named `$ref`; the clone child's entire input is that same `$ref`. Put `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) on the **emitter pipeline entry**, not on the stage body. N=1 still mints `{child}~1`. See [Clone Chain spec](../../../docs/specs/clone-chain.md) and [`clone-chain-smallest.pipeline.yaml`](../../../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml).
 
-When the human explicitly wants N parallel instances of **one** successor catalog id (e.g. several review lenses, several prototype variants):
+## Rejected clone fields
 
-- Parent lists `route: [{ to: clonable-id }]`.
-- On that successor pipeline entry: `clonable: true`, `clone_cap` (integer ≥ 2), and at least one child via its own `route`. It cannot be a DAG leaf.
-- Parent success emit uses `clone_forks` for that successor. Each clone assignment is a full envelope; validate assignments with `io.input.schema` on the clonable stage body.
-- Join stages that wait on the clonable parent read clone-list `priorEnvelopes`, not `priorEnvelopesByStage`.
-
-`clone_forks` spawns N instances of one successor id. Listed `to:` still all run. `if` must not mix with clonable targets.
-
-```yaml
-stages:
-  - id: detect-changes
-    uses: ./detect-changes.yaml
-    entry: true
-    route:
-      - to: author-diagrams
-  - id: author-diagrams
-    uses: ./author-diagrams.yaml
-    clonable: true
-    clone_cap: 5
-    route:
-      - to: collect
-  - id: collect
-    uses: ./collect.yaml
-```
+Do not author `clonable`, `clone_actions`, or envelope `clone_forks`. Do not put `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter.
 
 ## Models
 
@@ -296,7 +274,7 @@ stages:
     uses: ./synthesize.yaml
 ```
 
-The join reads `priorEnvelopesByStage`, not clone-list `priorEnvelopes`. A skipped sibling does not block. A failed parent leaves the join pending.
+The join reads `priorEnvelopesByStage`, not a list of sibling envelopes. A skipped sibling does not block. A failed parent leaves the join pending.
 
 ### Optional / subset fan-out
 

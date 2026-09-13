@@ -191,7 +191,6 @@ describe("pipeline DAG snapshot persistence", () => {
           id: "plan",
           system_prompt: "x",
           model: "m",
-          clone_actions: ["once", "fanout"],
         },
         {
           id: "area",
@@ -209,8 +208,6 @@ describe("pipeline DAG snapshot persistence", () => {
             needs: "plan",
             ancestors: ["plan"],
             stageIndex: 1,
-            clonable: true,
-            clone_cap: 4,
           },
         ],
         roots: ["plan"],

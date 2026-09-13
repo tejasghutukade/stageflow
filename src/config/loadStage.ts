@@ -1,6 +1,5 @@
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
-import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import type { CompletionContract } from "../types/completion.js";
 import {
   STAGE_GATE_KINDS,
@@ -36,49 +35,6 @@ export function afterCompletionForStage(stage: StageConfig): CompletionContract 
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
-}
-
-function isCloneAction(value: string): value is CloneAction {
-  return (CLONE_ACTIONS as readonly string[]).includes(value);
-}
-
-function parseCloneActions(
-  raw: unknown,
-  label: string,
-): LoadOutcome<CloneAction[] | undefined> {
-  if (raw === undefined) return loadSuccess(undefined);
-  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
-    return loadFailure([
-      {
-        code: "stage.invalid_clone_actions",
-        message: `Invalid stage ${label}: clone_actions must be a non-empty array of strings`,
-        category: "stage",
-      },
-    ]);
-  }
-  if (raw.length === 0) {
-    return loadFailure([
-      {
-        code: "stage.invalid_clone_actions",
-        message: `Invalid stage ${label}: clone_actions must not be empty`,
-        category: "stage",
-      },
-    ]);
-  }
-  const actions: CloneAction[] = [];
-  for (const item of raw) {
-    if (!isCloneAction(item)) {
-      return loadFailure([
-        {
-          code: "stage.invalid_clone_actions",
-          message: `Invalid stage ${label}: unsupported clone_actions value "${item}" (allowed: ${CLONE_ACTIONS.join(", ")})`,
-          category: "stage",
-        },
-      ]);
-    }
-    actions.push(item);
-  }
-  return loadSuccess(actions);
 }
 
 function parseTimeoutMs(
@@ -223,6 +179,17 @@ function parseStageFields(
     system_prompt: raw.system_prompt,
   };
 
+  if (raw.clone_actions !== undefined) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: "clone_actions" is no longer supported — use a Clone Chain instead`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+
   const modelField = parseModelField(raw.model);
   if (!modelField.ok) {
     return loadFailure([
@@ -366,18 +333,6 @@ function parseStageFields(
         ]);
       }
     }
-  }
-
-  const cloneActionsOutcome = parseCloneActions(raw.clone_actions, label);
-  if (!cloneActionsOutcome.ok) {
-    const issues: LoadIssue[] = cloneActionsOutcome.issues.map((issue) => ({
-      ...issue,
-      stageId: entryId,
-    }));
-    return loadFailure(issues);
-  }
-  if (cloneActionsOutcome.value !== undefined) {
-    stage.clone_actions = cloneActionsOutcome.value;
   }
 
   const gateKindsOutcome = parseGateKinds(raw.gate_kinds, label);

@@ -37,8 +37,6 @@ stages:
   - id: plan
     uses: ./plan.yaml
     needs: decompose
-    clonable: true
-    clone_cap: 8
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -55,8 +53,6 @@ stages:
   - id: implement
     uses: ./implement.yaml
     needs: align
-    clonable: true
-    clone_cap: 8
     on_verify_fail:
       mode: repair
       max_attempts: 3

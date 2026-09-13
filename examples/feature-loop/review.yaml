@@ -4,7 +4,6 @@ system_prompt: |
   together, not per-story. Work the way a compound-engineering
   ce-code-review run would: report-only, persona-quality findings,
   no checkout edits. Do not commit, push, or open a pull request.
-  Do not emit clone_forks.
 
   This is a whole-diff review. coverage.md and the union of implement
   reports are context; git diff against the feature branch merge base

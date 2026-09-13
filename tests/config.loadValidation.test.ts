@@ -165,32 +165,6 @@ describe("load seam outcomes", () => {
     expect(outcome.issues[0]?.code).toBe("stage.invalid_clone_input_schema");
   });
 
-  it("assigns stage.invalid_clone_actions for empty or unknown actions", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-clone-actions-"));
-    const emptyPath = path.join(root, "empty-actions.yaml");
-    await writeFile(
-      emptyPath,
-      [
-        "id: empty-actions",
-        "system_prompt: test",
-        "model: anthropic/claude-sonnet-4-5",
-        "io:",
-        "  input:",
-        "    schema:",
-        "      type: object",
-        "  output:",
-        "    schema:",
-        "      type: object",
-        "clone_actions: []",
-        "",
-      ].join("\n"),
-    );
-    const empty = await loadStageOutcome(emptyPath);
-    expect(empty.ok).toBe(false);
-    if (empty.ok) return;
-    expect(empty.issues[0]?.code).toBe("stage.invalid_clone_actions");
-  });
-
   it("loadPipeline throws for missing uses target", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-load-throw-"));
     const pipelinePath = path.join(root, "broken.pipeline.yaml");
@@ -892,60 +866,6 @@ describe("io $ref and sequential compatibility", () => {
     );
   });
 
-  it("AE6: clonable child input is not subset-checked against parent output", async () => {
-    const root = await writeTempFiles({
-      "clone.pipeline.yaml": [
-        "id: clone-edge",
-        "model: anthropic/claude-sonnet-4-5",
-        "stages:",
-        "  - id: plan",
-        "    system_prompt: Plan",
-        "    entry: true",
-        "    route:",
-        "      - to: investigate",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "          required: [verdict]",
-        "          properties:",
-        "            verdict:",
-        "              type: string",
-        "  - id: investigate",
-        "    system_prompt: Investigate",
-        "    route:",
-        "      - to: collect",
-        "    clonable: true",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "          required: [area_id]",
-        "          properties:",
-        "            area_id:",
-        "              type: string",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "  - id: collect",
-        "    system_prompt: Join",
-        "    io:",
-        "      input:",
-        "        schema:",
-        "          type: object",
-        "      output:",
-        "        schema:",
-        "          type: object",
-        "",
-      ].join("\n"),
-    });
-    const outcome = await loadPipelineOutcome("clone.pipeline.yaml", { cwd: root });
-    expect(outcome.ok).toBe(true);
-  });
-
   it("fails pipeline.io_incompatible on a multi-parent join when child io.input is not a subset of each parent", async () => {
     const root = await writeTempFiles({
       "join.pipeline.yaml": [
@@ -1179,8 +1099,6 @@ describe("forward route if eq", () => {
     ["route-if-empty-all", "triage"],
     ["route-if-on-loop", "review"],
     ["route-if-on-failed", "run-tests"],
-    ["route-if-clonable", "triage"],
-    ["route-if-clonable-sibling", "triage"],
   ] as const)(
     "%s reports pipeline.route_if_invalid not dag_error",
     async (fixture, stageId) => {
