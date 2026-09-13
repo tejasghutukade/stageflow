@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 (Remove v1's whole-worker container mode)
 
-**Status:** ready-for-agent
+**Status:** blocked — needs a real model credential (ANTHROPIC_API_KEY or a logged-in Claude Code session) not available in this environment; the underlying mechanics (01-04) are implemented, code-reviewed, and unit/integration-tested, this ticket is the live, credentialed run against a real multi-stage pipeline that's left for whoever has that credential. Same blocker v1's own ticket 05 hit. Opening a real PR also needs explicit user go-ahead per this session's operating rules, independent of the credential.
 
 - [ ] A real multi-stage pipeline runs start to finish with every `Bash` call sandboxed via `sandbox_bash`/`toolAliases` — no container runs the worker process itself anywhere in the run.
 - [ ] `ANTHROPIC_API_KEY` is confirmed to never appear in any container's environment or args at any point in the run (only the host process holds it).
