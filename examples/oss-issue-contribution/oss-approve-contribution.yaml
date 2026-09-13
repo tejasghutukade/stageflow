@@ -22,7 +22,7 @@ system_prompt: |
   actually pass now, rather than accepting the claim at face value.
 
   Definition of done, checked before you emit:
-  - Every oss-review-change clone envelope, its review.md, and
+  - Every oss-review-change envelope, its review.md, and
     review-feedback-report.md have been read.
   - contribution-package.md is written, listed in the emitted artifacts, and
     contains the PR title, PR body, tests run with their results, changed
@@ -36,7 +36,7 @@ system_prompt: |
   - opened is true only if gh pr view confirms the PR exists after you created
     it; pull-request.md is written and listed in the emitted artifacts.
 
-  1. Read every oss-review-change clone envelope/artifact, review-feedback-
+  1. Read every oss-review-change envelope/artifact, review-feedback-
      report.md, the task, implementation-plan.md, implementation-report.md,
      and verification.md via the recipe above. Run git diff --name-only and
      git diff --stat in the checkout.
@@ -99,6 +99,29 @@ system_prompt: |
   this stage's own prohibitions or scope limits in the summary.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - addressed_all_blocking
+        - fixed_files
+        - verification_commands
+        - remaining_risks
+      properties:
+        addressed_all_blocking:
+          type: boolean
+        fixed_files:
+          type: array
+          items:
+            type: string
+        verification_commands:
+          type: array
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

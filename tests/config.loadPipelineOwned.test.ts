@@ -13,14 +13,15 @@ const owned = path.resolve(
 );
 
 describe("pipeline-owned loader", () => {
-  it("AE1: fork-uses loads 3 stages with fork dag", async () => {
+  it("AE1: fork-uses loads 3 stages as fan-out with no node.fork", async () => {
     const loaded = await loadPipeline(
       path.join(owned, "fork-uses/fork-demo.pipeline.yaml"),
     );
     expect(loaded.pipeline.stages).toEqual(["decide", "branch-a", "branch-b"]);
     expect(loaded.stages.map((s) => s.id)).toEqual(["decide", "branch-a", "branch-b"]);
     const decide = loaded.dag.nodes.find((n) => n.id === "decide");
-    expect(decide?.fork).toEqual({ select: "one", allow_none: false });
+    expect(decide?.fork).toBeUndefined();
+    expect(loaded.dag.childrenOf.decide).toEqual(["branch-a", "branch-b"]);
   });
 
   it("AE2: inline-leaf materializes inline branch-b", async () => {

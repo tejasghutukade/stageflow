@@ -71,7 +71,7 @@ Repo-root [`stageflow.yaml`](stageflow.yaml) lists example catalog roots and exc
 
 When changing pipeline/stage/task schema, validation, or doc examples:
 
-- Read **[docs/yaml-catalog.md](docs/yaml-catalog.md)** — authoritative schema reference, including `io` / `verify` / `on_verify_fail`, `clonable` / `clone_forks` ([Clonable successors](docs/yaml-catalog.md#clonable-successors)), and stage `mcp` / `.mcp.json` ([Stage MCP](docs/yaml-catalog.md#stage-mcp))
+- Read **[docs/yaml-catalog.md](docs/yaml-catalog.md)** — authoritative schema reference, including `io` / `verify` / `on_verify_fail`, [Clone Chain](docs/yaml-catalog.md#clone-chain), and stage `mcp` / `.mcp.json` ([Stage MCP](docs/yaml-catalog.md#stage-mcp)). Do not author `clonable` / `clone_forks` (rejected).
 - **YAML vs IR.** Author new catalog contracts as `io` / `verify` / `on_verify_fail` and map them in `compileTargetContract` (`src/config/yamlDialect.ts`). Runtime types, DAG snapshots, emit, and VSE keep `payload_schema` / `pre_emit_checks` / `completion` / `recovery`. Dual-read of old YAML keys: [`src/config/legacyYaml.ts`](src/config/legacyYaml.ts)
 - Treat **`tests/fixtures/`** as canonical YAML; keep `examples/` in sync when behavior changes
 - Runnable walkthroughs: **[examples/README.md](examples/README.md)**

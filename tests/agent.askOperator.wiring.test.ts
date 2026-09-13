@@ -32,6 +32,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 const freeTextPrompt: AskOperatorPrompt = {

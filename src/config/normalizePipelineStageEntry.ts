@@ -1,16 +1,20 @@
 /**
  * Normalize a pipeline `stages:` entry. Target YAML (`io` / `verify` /
- * `on_verify_fail`) compiles onto IR `completion` / `recovery` / body
- * `payload_schema`. Legacy YAML keys are dual-read via legacyYaml.ts.
+ * `on_verify_fail`) compiles onto IR `completion` / `recovery`. Emit/schema
+ * fields stay on the YAML-shaped inline body until `parseStageFields`.
+ * Legacy YAML keys are dual-read via legacyYaml.ts.
  */
 import path from "node:path";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
-import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
+import type {
+  CloneMode,
+  NormalizedPipelineStageEntry,
+  PipelineRouteEntry,
+} from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
 import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
 import {
-  applyCompiledBody,
   compileTargetContract,
   dialectFromKeys,
   mixedDialectIssue,
@@ -21,8 +25,7 @@ import {
 } from "./pipelineStageKeys.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
 import { parseExecutionPolicy } from "./parseCompletionContract.js";
-import { parsePipelineNeeds } from "./pipelineNeeds.js";
-import { parseFeedbackLoopConfig } from "./resolvePipelineDag.js";
+import { parsePipelineRoute } from "./pipelineRoute.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -186,7 +189,109 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
-    let compiledBody: Record<string, unknown> | undefined;
+    if (raw.needs !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "needs" is no longer supported — declare the wiring on the source stage's "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.fork !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "fork" is no longer supported — use "route" instead; listed route targets always run`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.feedback_loop !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.route_select !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "route_select" is no longer supported — listed route targets always run`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.allow_none !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "allow_none" is no longer supported — listed route targets always run`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    if (raw.clonable !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "clonable" is no longer supported — use a Clone Chain instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+    let cloneCap: number | undefined;
+    if (raw.clone_cap !== undefined) {
+      if (
+        typeof raw.clone_cap !== "number" ||
+        !Number.isInteger(raw.clone_cap) ||
+        raw.clone_cap < 1
+      ) {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": clone_cap must be an integer >= 1`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+      cloneCap = raw.clone_cap;
+    }
+    let cloneMode: CloneMode | undefined;
+    if (raw.clone_mode !== undefined) {
+      if (raw.clone_mode !== "parallel" && raw.clone_mode !== "sequential") {
+        return loadFailure([
+          {
+            code: "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": clone_mode must be "parallel" or "sequential"`,
+            category: "pipeline",
+            pipelineId: ctx.pipelineId,
+          },
+        ]);
+      }
+      cloneMode = raw.clone_mode;
+    }
+    if (raw.clone_actions !== undefined) {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": "clone_actions" is no longer supported — use a Clone Chain instead`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
+    }
+
     let policyOutcome: ReturnType<typeof parseExecutionPolicy>;
     if (dialect === "target") {
       const compiled = compileTargetContract(raw, {
@@ -194,6 +299,7 @@ export function normalizePipelineStageEntries(
         label: `entry at index ${index} in ${declaringPath}`,
         category: "pipeline",
         deferSchemaRefs: true,
+        requireIo: !uses,
       });
       if (!compiled.ok) return compiled;
       policyOutcome = loadSuccess({
@@ -204,9 +310,6 @@ export function normalizePipelineStageEntries(
           ? { recovery: compiled.value.recovery }
           : {}),
       });
-      if (!uses) {
-        compiledBody = applyCompiledBody(extractBodyRaw(raw), compiled.value);
-      }
     } else {
       const rejected = legacyAuthoringRejected(
         dialect,
@@ -217,24 +320,6 @@ export function normalizePipelineStageEntries(
       policyOutcome = parseExecutionPolicy(raw, id);
     }
     if (!policyOutcome.ok) return policyOutcome;
-
-    let needs: PipelineNeeds | undefined;
-
-    let feedbackLoop: NormalizedPipelineStageEntry["feedback_loop"] | undefined;
-    if (raw.feedback_loop !== undefined) {
-      try {
-        feedbackLoop = parseFeedbackLoopConfig(raw.feedback_loop, id, ctx);
-      } catch (err) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: err instanceof Error ? err.message : String(err),
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
-    }
 
     if (raw.replay_safe !== undefined && typeof raw.replay_safe !== "boolean") {
       return loadFailure([
@@ -247,66 +332,62 @@ export function normalizePipelineStageEntries(
       ]);
     }
 
-    if (raw.needs !== undefined) {
-      const parsedNeeds = parsePipelineNeeds(raw.needs, id);
-      if (!parsedNeeds.ok) {
+    let route: PipelineRouteEntry[] | undefined;
+    if (raw.route !== undefined) {
+      const parsedRoute = parsePipelineRoute(raw.route, id);
+      if (!parsedRoute.ok) {
         return loadFailure([
           {
-            code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedNeeds.message}`,
+            code: parsedRoute.code ?? "pipeline.dag_error",
+            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): ${parsedRoute.message}`,
             category: "pipeline",
             pipelineId: ctx.pipelineId,
+            ...(parsedRoute.code === "pipeline.route_if_invalid" ? { stageId: id } : {}),
           },
         ]);
       }
-      needs = parsedNeeds.value;
+      route = parsedRoute.value;
     }
 
-    let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
-    if (raw.fork !== undefined) {
-      if (!isPlainObject(raw.fork)) {
-        return loadFailure([
-          {
-            code: "pipeline.dag_error",
-            message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": fork must be an object`,
-            category: "pipeline",
-            pipelineId: ctx.pipelineId,
-          },
-        ]);
-      }
-      forkValue = raw.fork as { select: "one" | "subset"; allow_none?: boolean };
+    if (raw.entry !== undefined && typeof raw.entry !== "boolean") {
+      return loadFailure([
+        {
+          code: "pipeline.dag_error",
+          message: `Pipeline ${ctx.pipelineId} (${ctx.path}): stage "${id}": entry must be a boolean`,
+          category: "pipeline",
+          pipelineId: ctx.pipelineId,
+        },
+      ]);
     }
+    const entryFlag = raw.entry as boolean | undefined;
 
     let body: NormalizedPipelineStageEntry["body"];
     if (uses) {
       const absolutePath = path.resolve(path.dirname(declaringPath), uses);
       body = { kind: "uses", path: uses, absolutePath };
     } else {
-      body = { kind: "inline", raw: compiledBody ?? extractBodyRaw(raw) };
+      body = { kind: "inline", raw: extractBodyRaw(raw) };
     }
 
     const entry: NormalizedPipelineStageEntry = {
       id,
       declaringPath,
       body,
-      ...(needs !== undefined ? { needs } : {}),
-      ...(forkValue !== undefined ? { fork: forkValue } : {}),
-      ...(raw.clonable !== undefined ? { clonable: raw.clonable as boolean } : {}),
-      ...(raw.clone_cap !== undefined ? { clone_cap: raw.clone_cap as number } : {}),
       ...(policyOutcome.value.completion !== undefined
         ? { completion: policyOutcome.value.completion }
         : {}),
       ...(policyOutcome.value.recovery !== undefined
         ? { recovery: policyOutcome.value.recovery }
         : {}),
-      ...(feedbackLoop !== undefined
-        ? { feedback_loop: feedbackLoop }
-        : {}),
       ...(raw.replay_safe !== undefined
         ? { replay_safe: raw.replay_safe as boolean }
         : {}),
+      ...(route !== undefined ? { route } : {}),
+      ...(entryFlag !== undefined ? { entry: entryFlag } : {}),
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
+      ...(cloneCap !== undefined ? { clone_cap: cloneCap } : {}),
+      ...(cloneMode !== undefined ? { clone_mode: cloneMode } : {}),
     };
 
     const priorPath = normalized.find((e) => e.id === id)?.declaringPath;
@@ -331,26 +412,22 @@ export function toWiringRefs(
   entries: NormalizedPipelineStageEntry[],
 ): Array<{
   id: string;
-  needs?: PipelineNeeds;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
-  clonable?: boolean;
-  clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: NormalizedPipelineStageEntry["feedback_loop"];
   replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
 }> {
   return entries.map((entry) => ({
     id: entry.id,
-    ...(entry.needs !== undefined ? { needs: entry.needs } : {}),
-    ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
-    ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
-    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
     ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
     ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
-    ...(entry.feedback_loop !== undefined
-      ? { feedback_loop: entry.feedback_loop }
-      : {}),
     ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
+    ...(entry.route !== undefined ? { route: entry.route } : {}),
+    ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
+    ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+    ...(entry.clone_mode !== undefined ? { clone_mode: entry.clone_mode } : {}),
   }));
 }

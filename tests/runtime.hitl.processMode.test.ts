@@ -20,6 +20,7 @@ const okEnvelope = (): StageEnvelope => ({
   status: "success",
   summary: "clarify-ok",
   artifacts: [],
+  payload: {},
 });
 
 const answer = {

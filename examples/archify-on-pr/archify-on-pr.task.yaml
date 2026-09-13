@@ -7,8 +7,10 @@ context: |
   at the repo root with head_sha, repo_url, changed_files, relevant_files,
   diagram_types, change_summary, expected_fork_choice, and verified_paths.
   Diagram type selection is deterministic in prepare-ci-context — detect-changes only
-  copies those fields into the envelope. CI uses OpenRouter (OPENROUTER_API_KEY).
-  Stage 1 emits the detect handoff (after-phase verify). Stage 2 writes one spec
+  copies those fields into the envelope and sets author_diagrams from diagram_types.
+  CI uses OpenRouter (OPENROUTER_API_KEY).
+  Stage 1 emits the detect handoff (after-phase verify). Route if runs a single
+  author-diagrams session when author_diagrams is true. Stage 2 writes one spec
   artifact per selected type for GHA to deliver as HTML outside the agent.
 constraints: |
   No HITL. Do not call ask_operator. Stages use OpenRouter models; ensure

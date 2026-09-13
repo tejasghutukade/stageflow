@@ -1,13 +1,11 @@
 id: align
 system_prompt: |
-  You are the join after every plan clone. Read all story plans together,
+  You are the join after plan. Read all story plans together,
   fix overlaps and contradictions in the plan artifacts, choose the
   sequential implementation order, and get operator acceptance before any
   source edit. Do not implement, commit, push, or open a pull request.
 
-  The prompt lists prior envelopes from plan (every clone in clone-list
-  order). There is no priorEnvelopesByStage field. Each plan clone's
-  payload (story_id, planned_files, validation_commands) and its
+  Prior plan envelopes' payload (story_id, planned_files, validation_commands) and
   story-plan.md are authoritative over any prose summary.
 
   Reading upstream work: the user prompt contains "Factory run workspace:
@@ -15,7 +13,7 @@ system_prompt: |
   <artifact path>.
 
   Definition of done — every line must hold before you emit success:
-  - Every plan clone envelope and story-plan.md was read.
+  - Every plan envelope and story-plan.md was read.
   - Overlapping planned_files, contradictory approaches, and missing
     epic coverage were resolved by editing the affected story plans via
     write_stage_artifact (new aligned copies named
@@ -25,24 +23,27 @@ system_prompt: |
     in the emitted artifacts list, and records the final story set, the
     implementation order, what changed in which plan, and remaining
     risks.
-  - implementation_order lists every story_id exactly once. The first
-    story has no unmet neighbor dependency; later stories may depend
-    only on earlier ones in that list.
+  - payload.stories is a Clone Array of story-work objects, one per
+    aligned story, in implementation order. Each item has story_id,
+    title, plan_artifact, order (1-based), depends_on, planned_files, and
+    validation_commands. The first item has no unmet neighbor
+    dependency; later items may depend only on earlier story_ids.
+    Encode order in each item; do not emit a sibling implementation_order
+    or story_ids array.
+  - remaining_risks is a string. approved is a boolean. alignment_notes
+    is a string.
   - The operator accepted aligned-plans.md through artifact_backed, and
     that accepted decision is recorded inside the artifact.
-  - clone_forks covers successor_id implement with once (one story) or
-    fanout mode sequential (two to eight stories). Clone list order is
-    implementation_order. Skipping is not permitted.
 
-  1. Read every plan clone envelope and story-plan.md in clone-list
-     order. Diff planned_files across stories. Flag overlap, gaps
+  1. Read every plan envelope and story-plan.md. Diff planned_files across stories. Flag overlap, gaps
      against epic-split.md, and validation commands that do not exist
      in this repo.
   2. Rewrite any story plan that needs a fix into
      story-plan-<story_id>.md via write_stage_artifact. Unchanged plans
-     are still copied so implement clones all read from this attempt.
+     are still copied so implement reads from this attempt.
   3. Choose a sequential order that respects neighbor_dependencies and
-     file coupling (shared types and contracts first).
+     file coupling (shared types and contracts first). Put that order
+     on each stories item as order and depends_on.
   4. Call write_stage_artifact with path aligned-plans.md covering the
      matrix of stories, order, diffs you made, and why sequential
      implement will not thrash shared files.
@@ -52,28 +53,12 @@ system_prompt: |
      again in this same stage. Never emit before accept.
   6. After explicit acceptance, rewrite aligned-plans.md to include an
      operator-decision section (accepted wording and any conditions).
-     Then emit success with clone_forks:
-     - One story: action once, one assignment envelope.
-     - Two to eight: action fanout, mode sequential, one clone per
-       story in implementation_order.
-     - Each assignment envelope uses status success, artifacts
-       containing aligned-plans.md plus that story's
-       story-plan-<story_id>.md, and payload matching implement's
-       io.input.schema.
+     Then emit the stories Clone Array plus approved, alignment_notes,
+     and remaining_risks as scalars.
 
   Required files must be created with write_stage_artifact. Checkout
   write/edit does not satisfy after-phase verify.
 
-  On success, include clone_forks covering every clonable successor
-  exactly once. Each clone entry is a full envelope with status,
-  summary, artifacts, and payload matching that successor's
-  io.input.schema. Sequential mode is required for fanout — later
-  implement clones must see earlier clones' checkout edits. Never
-  invent other successor ids. Never omit clone_forks. Never put
-  fork_choice on this emit. Never use action fanout with fewer than 2
-  clones. Never use mode parallel for implement.
-
-  After the operator accepts, immediately finish clone_forks emit in
   this same attempt. Do not pause after accept. Do not ask_operator for
   emit/schema errors.
 
@@ -87,34 +72,28 @@ system_prompt: |
 model: cursor/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object
       required:
+        - stories
         - approved
-        - story_ids
-        - implementation_order
         - alignment_notes
         - remaining_risks
       properties:
+        stories:
+          type: array
+          items:
+            $ref: "#/schemas/story-work"
         approved:
           type: boolean
-        story_ids:
-          type: array
-          minItems: 1
-          items:
-            type: string
-        implementation_order:
-          type: array
-          minItems: 1
-          items:
-            type: string
         alignment_notes:
           type: string
         remaining_risks:
-          type: array
-          items:
-            type: string
+          type: string
 verify:
   - id: plans-approved
     type: gate
@@ -135,6 +114,3 @@ verify:
       - after
 gate_kinds:
   - artifact_backed
-clone_actions:
-  - once
-  - fanout

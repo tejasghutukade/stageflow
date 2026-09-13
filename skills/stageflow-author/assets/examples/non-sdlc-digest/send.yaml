@@ -8,6 +8,14 @@ system_prompt: |
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload describing who received the digest.
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - headline
+      properties:
+        headline:
+          type: string
   output:
     schema:
       type: object

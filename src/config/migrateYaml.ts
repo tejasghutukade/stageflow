@@ -391,7 +391,11 @@ async function refuseOutOfScopeUsesFolds(
       } catch {
         outsideId = undefined;
       }
-      const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+      const outcome = await loadPipelineOutcome(pipelinePath, {
+        cwd,
+        projectRoot,
+        requireIo: false,
+      });
       if (outcome.ok) {
         const other = new Map<string, UsesCompile>();
         const otherErrors: string[] = [];
@@ -488,7 +492,11 @@ async function planMigrateYamlInner(
       skipped.add(relPath(cwd, pipelinePath));
       continue;
     }
-    const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+    const outcome = await loadPipelineOutcome(pipelinePath, {
+      cwd,
+      projectRoot,
+      requireIo: false,
+    });
     if (!outcome.ok) {
       if (outcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
         skipped.add(relPath(cwd, pipelinePath));
@@ -602,7 +610,10 @@ async function planMigrateYamlInner(
       skipped.add(relPath(cwd, stagePath));
       continue;
     }
-    const outcome = await loadStageOutcome(stagePath, { deferSchemaRefs: true });
+    const outcome = await loadStageOutcome(stagePath, {
+      deferSchemaRefs: true,
+      requireIo: false,
+    });
     if (!outcome.ok) {
       if (outcome.issues.some((issue) => issue.code === "catalog.mixed_yaml_dialect")) {
         skipped.add(relPath(cwd, stagePath));

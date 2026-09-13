@@ -1,0 +1,24 @@
+id: route-demo-reject-missing-entry
+stages:
+  - id: draft
+    route:
+      - to: review
+    system_prompt: Draft.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: review
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

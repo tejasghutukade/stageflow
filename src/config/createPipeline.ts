@@ -1,7 +1,17 @@
 import { access, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { NormalizedPipelineStageEntry, PipelineNeeds } from "../types/pipeline.js";
-import { parsePipelineNeeds } from "./pipelineNeeds.js";
+import type {
+  NormalizedPipelineStageEntry,
+  PipelineNeeds,
+  RouteIfPredicate,
+} from "../types/pipeline.js";
+import {
+  invertPredecessorEdgesToRoute,
+  invertRouteToPredecessorEdges,
+  parsePipelineNeeds,
+  toPipelineNeeds,
+  type OutboundRouteInversion,
+} from "./pipelineNeeds.js";
 import type { StageGateKind } from "../types/stage.js";
 import { STAGE_ID_PATTERN } from "./createStage.js";
 import type { RawMergedEntry } from "./mergePipelineIncludes.js";
@@ -73,9 +83,13 @@ export function normalizeCreatePipelineStages(
   }));
 }
 
-function stageRefToRaw(ref: CreatePipelineStageRef): Record<string, unknown> {
+function stageRefToRaw(
+  ref: CreatePipelineStageRef,
+  routeInfo: OutboundRouteInversion | undefined,
+): Record<string, unknown> {
   const raw: Record<string, unknown> = { id: ref.id };
-  if (ref.needs !== undefined) raw.needs = ref.needs;
+  if (routeInfo?.entry) raw.entry = true;
+  if (routeInfo?.route && routeInfo.route.length > 0) raw.route = routeInfo.route;
   if (ref.uses !== undefined) raw.uses = ref.uses;
   if (ref.inline) {
     raw.system_prompt = ref.inline.system_prompt;
@@ -93,8 +107,9 @@ function toAuthoringRawEntries(
   stages: CreatePipelineStageRef[],
   declaringPath: string,
 ): RawMergedEntry[] {
+  const routeById = invertPredecessorEdgesToRoute(stages);
   return stages.map((stage) => ({
-    raw: stageRefToRaw(stage),
+    raw: stageRefToRaw(stage, routeById.get(stage.id)),
     declaringPath,
   }));
 }
@@ -102,9 +117,12 @@ function toAuthoringRawEntries(
 function normalizedToCreateRefs(
   entries: NormalizedPipelineStageEntry[],
 ): CreatePipelineStageRef[] {
+  const inbound = invertRouteToPredecessorEdges(entries);
   return entries.map((entry) => {
     const ref: CreatePipelineStageRef = { id: entry.id };
-    if (entry.needs !== undefined) ref.needs = entry.needs;
+    const edges = inbound.get(entry.id);
+    const needs = edges !== undefined ? toPipelineNeeds(edges) : undefined;
+    if (needs !== undefined) ref.needs = needs;
     if (entry.body.kind === "uses") {
       ref.uses = entry.body.path;
     } else {
@@ -318,21 +336,90 @@ export function parseCreatePipelineBody(
   };
 }
 
-function appendNeedsYaml(lines: string[], needs: PipelineNeeds): void {
-  if (typeof needs === "string") {
-    lines.push(`    needs: ${needs}`);
+function formatRouteIfValue(value: unknown): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => formatRouteIfValue(item)).join(", ")}]`;
+  }
+  return JSON.stringify(value);
+}
+
+function appendRouteIfYamlListItem(
+  lines: string[],
+  indent: string,
+  predicate: RouteIfPredicate,
+): void {
+  if ("all" in predicate) {
+    lines.push(`${indent}- all:`);
+    for (const child of predicate.all) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
     return;
   }
-  lines.push("    needs:");
-  for (const edge of needs) {
-    if (edge.on.length === 1 && edge.on[0] === "succeeded") {
-      lines.push(`      - ${edge.id}`);
-      continue;
+  if ("any" in predicate) {
+    lines.push(`${indent}- any:`);
+    for (const child of predicate.any) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
     }
-    lines.push(`      - id: ${edge.id}`);
-    lines.push("        on:");
-    for (const state of edge.on) {
-      lines.push(`          - ${state}`);
+    return;
+  }
+  if ("not" in predicate) {
+    lines.push(`${indent}- not:`);
+    appendRouteIfYaml(lines, `${indent}    `, predicate.not);
+    return;
+  }
+  lines.push(`${indent}- field: ${formatInlineYamlScalar(predicate.field)}`);
+  lines.push(`${indent}  op: ${predicate.op}`);
+  lines.push(`${indent}  value: ${formatRouteIfValue(predicate.value)}`);
+}
+
+function appendRouteIfYaml(lines: string[], indent: string, predicate: RouteIfPredicate): void {
+  if ("all" in predicate) {
+    lines.push(`${indent}all:`);
+    for (const child of predicate.all) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("any" in predicate) {
+    lines.push(`${indent}any:`);
+    for (const child of predicate.any) {
+      appendRouteIfYamlListItem(lines, `${indent}  `, child);
+    }
+    return;
+  }
+  if ("not" in predicate) {
+    lines.push(`${indent}not:`);
+    appendRouteIfYaml(lines, `${indent}  `, predicate.not);
+    return;
+  }
+  lines.push(`${indent}field: ${formatInlineYamlScalar(predicate.field)}`);
+  lines.push(`${indent}op: ${predicate.op}`);
+  lines.push(`${indent}value: ${formatRouteIfValue(predicate.value)}`);
+}
+
+function appendRouteYaml(lines: string[], routeInfo: OutboundRouteInversion): void {
+  if (routeInfo.entry) {
+    lines.push("    entry: true");
+  }
+  if (!routeInfo.route || routeInfo.route.length === 0) {
+    return;
+  }
+  lines.push("    route:");
+  for (const item of routeInfo.route) {
+    const on = item.on === undefined ? ["succeeded"] : Array.isArray(item.on) ? item.on : [item.on];
+    lines.push(`      - to: ${item.to}`);
+    if (!(on.length === 1 && on[0] === "succeeded")) {
+      lines.push("        on:");
+      for (const state of on) {
+        lines.push(`          - ${state}`);
+      }
+    }
+    if (item.if !== undefined) {
+      lines.push("        if:");
+      appendRouteIfYaml(lines, "          ", item.if);
     }
   }
 }
@@ -355,6 +442,7 @@ export function pipelineConfigToYaml(
   pipeline: { id: string; stages: CreatePipelineStageRef[] },
   options: { format: "linear" | "dag" },
 ): string {
+  const routeById = invertPredecessorEdgesToRoute(pipeline.stages);
   const lines: string[] = [`id: ${pipeline.id}`, "stages:"];
   for (const stage of pipeline.stages) {
     if (options.format === "linear" && !stage.needs && !stage.inline && stage.uses) {
@@ -363,8 +451,9 @@ export function pipelineConfigToYaml(
       continue;
     }
     lines.push(`  - id: ${stage.id}`);
-    if (stage.needs) {
-      appendNeedsYaml(lines, stage.needs);
+    const routeInfo = routeById.get(stage.id);
+    if (routeInfo) {
+      appendRouteYaml(lines, routeInfo);
     }
     if (stage.inline) {
       if (stage.inline.gate_kinds !== undefined) {
@@ -390,6 +479,13 @@ export function pipelineConfigToYaml(
       if (stage.inline.model !== undefined && stage.inline.model.length > 0) {
         lines.push(`    model: ${formatInlineYamlScalar(stage.inline.model)}`);
       }
+      lines.push("    io:");
+      lines.push("      input:");
+      lines.push("        schema:");
+      lines.push("          type: object");
+      lines.push("      output:");
+      lines.push("        schema:");
+      lines.push("          type: object");
     } else if (stage.uses) {
       lines.push(`    uses: ${stage.uses}`);
     }

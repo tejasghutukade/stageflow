@@ -212,7 +212,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "describe_pipeline",
     {
       description:
-        "Describe a pipeline DAG: stages with needs, fork, clonable, clone_cap, and gate_kinds. Input is a filesystem pipeline path (same as start_run).",
+        "Describe a pipeline DAG: stages with needs, fork, and gate_kinds. Input is a filesystem pipeline path (same as start_run).",
       inputSchema: z.object({
         pipeline: z.string(),
       }),
@@ -233,7 +233,6 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
               ? node.needsEdges.map((edge) => ({ id: edge.id, on: [...edge.on] }))
               : node.needs,
           ...(node.fork !== undefined ? { fork: node.fork } : {}),
-          ...(node.clonable !== undefined ? { clonable: node.clonable } : {}),
           ...(node.clone_cap !== undefined ? { clone_cap: node.clone_cap } : {}),
           ...(gateById.get(node.id) !== undefined
             ? { gate_kinds: gateById.get(node.id) }

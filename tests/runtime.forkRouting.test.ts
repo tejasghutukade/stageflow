@@ -15,6 +15,7 @@ import {
 } from "../src/runtime/pipelineScheduler.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import type { ResolvedPipelineDag, ResolvedPipelineStageNode } from "../src/types/pipeline.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
@@ -25,7 +26,7 @@ const fixtures = path.resolve(
 );
 
 function okEnvelope(summary: string, extra?: Partial<StageEnvelope>): StageEnvelope {
-  return { status: "success", summary, artifacts: [], ...extra };
+  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
 }
 
 function failEnvelope(summary: string): StageEnvelope {
@@ -275,21 +276,80 @@ describe("applyForkSkipsFromEnvelopes", () => {
     expect(states.get("implementation-plan")).toBe("skipped");
     expect(states.get("join-doc")).toBe("skipped");
   });
+
+  it("stored fork_choice skip and if-skip do not clobber each other on a legacy forked snapshot", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "clarify",
+          needs: null,
+          needsEdges: [],
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        {
+          id: "design-doc",
+          needs: "clarify",
+          needsEdges: [
+            {
+              id: "clarify",
+              on: ["succeeded"],
+              if: { field: "ok", op: "eq", value: true },
+            },
+          ],
+          ancestors: ["clarify"],
+          stageIndex: 1,
+        },
+        {
+          id: "implementation-plan",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 2,
+        },
+      ],
+      roots: ["clarify"],
+      childrenOf: { clarify: ["design-doc", "implementation-plan"] },
+    };
+    const states = new Map([
+      ["clarify", "succeeded" as const],
+      ["design-doc", "skipped" as const],
+      ["implementation-plan", "pending" as const],
+    ]);
+
+    applyForkSkipsFromEnvelopes(
+      dag,
+      states,
+      new Map([
+        [
+          "clarify",
+          okEnvelope("ok", {
+            fork_choice: ["design-doc"],
+            payload: { ok: false },
+          }),
+        ],
+      ]),
+    );
+
+    expect(states.get("design-doc")).toBe("skipped");
+    expect(states.get("implementation-plan")).toBe("skipped");
+  });
 });
 
 // ─── Section 2: Integration tests ──────────────────────────────────────────
 
 describe("fork routing integration", () => {
-  it("AE1+AE5: exclusive fork — chosen path runs, unchosen and cascade skipped, run succeeds", async () => {
+  it("AE1: exclusive catalog fan-out — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae1-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
-        { type: "emit", envelope: okEnvelope("clarify-ok", { fork_choice: ["design-doc"] }) },
+        { type: "emit", envelope: okEnvelope("clarify-ok") },
       ],
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "throw", message: "should not be opened" }],
-      "join-doc": [{ type: "throw", message: "should not be opened" }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -307,26 +367,26 @@ describe("fork routing integration", () => {
 
     expect(agent.openCounts.get("clarify")).toBe(1);
     expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
+    expect(agent.openCounts.get("join-doc")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE2: subset fork — two chosen run, one skipped, run succeeds", async () => {
+  it("AE2: subset catalog fan-out — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae2-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
         {
           type: "emit",
-          envelope: okEnvelope("clarify-ok", { fork_choice: ["design-doc", "implementation-plan"] }),
+          envelope: okEnvelope("clarify-ok"),
         },
       ],
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
-      "join-doc": [{ type: "throw", message: "should not be opened" }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -344,21 +404,21 @@ describe("fork routing integration", () => {
 
     expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("join-doc")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE3: empty choice allowed — all skipped, run succeeds", async () => {
+  it("AE3: catalog fan-out ignores empty fork_choice — all listed successors run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae3-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
       clarify: [
         { type: "emit", envelope: okEnvelope("clarify-ok", { fork_choice: [] }) },
       ],
-      "design-doc": [{ type: "throw", message: "should not be opened" }],
-      "implementation-plan": [{ type: "throw", message: "should not be opened" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
     });
 
     const manager = new RunManager({ agent, store, cwd: fixtures });
@@ -374,14 +434,14 @@ describe("fork routing integration", () => {
       return meta.status === "succeeded";
     });
 
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
 
     const detail = await store.readRun(started.runId);
     expect(detail.status).toBe("succeeded");
   });
 
-  it("AE8: retry re-decides fork — unchosen successors reset, new choice runs", async () => {
+  it("AE8: retry after failure then fans out all listed successors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae8-"));
     const store = createRunStore({ rootDir: root });
     const agent = stageKeyedAgent({
@@ -389,10 +449,10 @@ describe("fork routing integration", () => {
         { type: "emit", envelope: failEnvelope("clarify-fail") },
         {
           type: "emit",
-          envelope: okEnvelope("clarify-retry", { fork_choice: ["implementation-plan"] }),
+          envelope: okEnvelope("clarify-retry"),
         },
       ],
-      "design-doc": [{ type: "throw", message: "design-doc should not be opened" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
@@ -419,7 +479,7 @@ describe("fork routing integration", () => {
     });
 
     expect(agent.openCounts.get("clarify")).toBe(2);
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
     expect(agent.openCounts.get("join-doc")).toBe(1);
 
@@ -427,7 +487,7 @@ describe("fork routing integration", () => {
     expect(detail.status).toBe("succeeded");
   }, 15000);
 
-  it("AE8-success-retry: deciding stage succeeds choosing A, retried choosing B — previously skipped B now runs", async () => {
+  it("AE8-success-retry: retry of a succeeded fan-out parent re-runs listed successors", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-ae8-sr-"));
     const store = createRunStore({ rootDir: root });
 
@@ -474,10 +534,10 @@ describe("fork routing integration", () => {
       clarify: [
         {
           type: "emit",
-          envelope: okEnvelope("clarify-retry", { fork_choice: ["implementation-plan"] }),
+          envelope: okEnvelope("clarify-retry"),
         },
       ],
-      "design-doc": [{ type: "throw", message: "design-doc must not run after retry" }],
+      "design-doc": [{ type: "emit", envelope: okEnvelope("design-retry") }],
       "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
       "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
@@ -499,12 +559,12 @@ describe("fork routing integration", () => {
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("succeeded");
     expect(agent.openCounts.get("clarify")).toBe(1);
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
+    expect(agent.openCounts.get("design-doc")).toBe(1);
     expect(agent.openCounts.get("implementation-plan")).toBe(1);
     expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
-  it("AE-hydration: fork skips re-applied from stored envelope before first loop tick", async () => {
+  it("AE-hydration: catalog fan-out runs all listed successors from stored envelope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-fork-hydration-"));
     const store = createRunStore({ rootDir: root });
 
@@ -525,7 +585,7 @@ describe("fork routing integration", () => {
     await store.writeEnvelope(
       run.runId,
       "clarify",
-      okEnvelope("clarify-ok", { fork_choice: ["design-doc"] }),
+      okEnvelope("clarify-ok"),
     );
     await store.updateRunStatus(run.runId, "running");
 
@@ -541,8 +601,8 @@ describe("fork routing integration", () => {
 
     const agent = stageKeyedAgent({
       "design-doc": [{ type: "emit", envelope: okEnvelope("design-ok") }],
-      "implementation-plan": [{ type: "throw", message: "implementation-plan must not be opened" }],
-      "join-doc": [{ type: "throw", message: "join-doc must not be opened" }],
+      "implementation-plan": [{ type: "emit", envelope: okEnvelope("impl-ok") }],
+      "join-doc": [{ type: "emit", envelope: okEnvelope("join-ok") }],
     });
 
     const result = await runPipelineDag({
@@ -562,7 +622,327 @@ describe("fork routing integration", () => {
     expect(result.ok).toBe(true);
     expect(result.outcome).toBe("succeeded");
     expect(agent.openCounts.get("design-doc")).toBe(1);
-    expect(agent.openCounts.get("implementation-plan")).toBeUndefined();
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+    expect(agent.openCounts.get("implementation-plan")).toBe(1);
+    expect(agent.openCounts.get("join-doc")).toBe(1);
+  });
+});
+
+describe("forward route if eq scheduling", () => {
+  it("matching payload runs the gated target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "high" } }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-eq"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("non-matching payload skips the gated target and still runs the always-run sibling", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-miss-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "low" } }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-eq"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded" || meta.status === "failed";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBeUndefined();
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("missing_field halts with today's reason string", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-missing-"));
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
+      cwd: fixtures,
+    });
+    loaded.dag = {
+      ...loaded.dag,
+      nodes: loaded.dag.nodes.map((node) =>
+        node.id === "page"
+          ? {
+              ...node,
+              needsEdges: node.needsEdges.map((edge) =>
+                edge.id === "triage"
+                  ? {
+                      ...edge,
+                      if: { field: "absent", op: "eq", value: true },
+                    }
+                  : edge,
+              ),
+            }
+          : node,
+      ),
+    };
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", { payload: { severity: "high" } }),
+        },
+      ],
+      page: [{ type: "throw", message: "page must not run" }],
+      notify: [{ type: "throw", message: "notify must not run" }],
+    });
+
+    const result = await runPipelineDag({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.outcome).toBe("failed");
+    expect(result.reason).toBe(
+      'stage "triage": route if field missing from payload',
+    );
+    expect(agent.openCounts.get("page") ?? 0).toBe(0);
+    expect(agent.openCounts.get("notify") ?? 0).toBe(0);
+  });
+
+  it("stored fork_choice skip and if-skip do not clobber each other", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-fork-"));
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("route-if-eq"), {
+      cwd: fixtures,
+    });
+    loaded.dag = {
+      ...loaded.dag,
+      nodes: loaded.dag.nodes.map((node) =>
+        node.id === "triage"
+          ? { ...node, fork: { select: "one", allow_none: false } }
+          : node,
+      ),
+    };
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            fork_choice: ["page"],
+            payload: { severity: "low" },
+          }),
+        },
+      ],
+      page: [{ type: "throw", message: "page must not run" }],
+      notify: [{ type: "throw", message: "notify must not run" }],
+    });
+
+    const result = await runPipelineDag({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe(
+      "skipped",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "skipped",
+    );
+    expect(agent.openCounts.get("page") ?? 0).toBe(0);
+    expect(agent.openCounts.get("notify") ?? 0).toBe(0);
+  });
+
+  it("two matching ifs on different targets both run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-two-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "high", escalate: true },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-two-match"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("composition miss skips the gated target and the run succeeds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-composition-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "low", source: "web" },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-composition"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded" || meta.status === "failed";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("skipped");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBeUndefined();
+    expect(agent.openCounts.get("notify")).toBe(1);
+  });
+
+  it("composition match runs the gated target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-comp-match-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      triage: [
+        {
+          type: "emit",
+          envelope: okEnvelope("triage-ok", {
+            payload: { severity: "high", source: "web" },
+          }),
+        },
+      ],
+      page: [{ type: "emit", envelope: okEnvelope("page-ok") }],
+      notify: [{ type: "emit", envelope: okEnvelope("notify-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-composition"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "page")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "notify")?.status).toBe(
+      "succeeded",
+    );
+    expect(agent.openCounts.get("page")).toBe(1);
+    expect(agent.openCounts.get("notify")).toBe(1);
   });
 });

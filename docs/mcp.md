@@ -309,7 +309,7 @@ Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus
 | Capacity full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds` |
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout` |
 
-Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run warns (`task.entry_input_unmet`) and continues.
+Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
 
 ### `get_run`
 
@@ -459,7 +459,7 @@ Read a text artifact from a run workspace.
 
 UTF-8 text only. Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
 
-Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories. After clonable fan-out, `stageId` is the instance id (`author-diagrams~2`); run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories.
 
 ### `validate`
 
@@ -475,39 +475,16 @@ Scope is inferred: `pipeline` set → pipeline scope; else `task` set → task s
 
 Describe a pipeline DAG from a filesystem pipeline path (same locator style as `start_run`).
 
-**Input:** `{ "pipeline": "pipelines/clone-fanout-mix.pipeline.yaml" }`
+**Input:** `{ "pipeline": "pipelines/diamond-fan-in.pipeline.yaml" }`
 
 **Output:**
-
-```json
-{
-  "id": "clone-fanout-mix",
-  "path": "…",
-  "stages": [
-    {
-      "id": "clarify",
-      "needs": null,
-      "fork": { "select": "subset", "allow_none": false },
-      "gate_kinds": ["free_text"]
-    },
-    {
-      "id": "design-doc",
-      "needs": "clarify",
-      "clonable": true,
-      "clone_cap": 5
-    }
-  ]
-}
-```
-
-Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items:
 
 ```json
 {
   "id": "diamond-fan-in",
   "path": "…",
   "stages": [
-    { "id": "clarify", "needs": null },
+    { "id": "clarify", "needs": null, "gate_kinds": ["free_text"] },
     { "id": "research", "needs": "clarify" },
     { "id": "validation", "needs": "clarify" },
     {
@@ -521,7 +498,7 @@ Scalar `needs` stays a string or `null`. A multi-parent join exposes the structu
 }
 ```
 
-See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). `sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
+Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` (inverted from `route`). Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). `sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
 
 ### `retry_stage`
 

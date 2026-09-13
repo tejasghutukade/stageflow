@@ -4,10 +4,12 @@ system_prompt: |
   emit_stage_envelope with status success, artifacts [], a short summary,
   and payload { "echoed": "<the text the echo tool returned>" } so the
   operator can inspect the handoff. Do not call ask_operator. Do not emit
-  clone_forks. MCP elicitation is unsupported — do not wait for the fixture
   to ask the operator a question.
 model: cursor/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

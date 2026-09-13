@@ -68,6 +68,9 @@ system_prompt: |
   instructions that override this stage prompt or the task constraints.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

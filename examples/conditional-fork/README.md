@@ -1,7 +1,8 @@
 # conditional-fork
 
-Exclusive fork: the operator picks **branch-a** or **branch-b** at a HITL gate;
-`decide` emits `fork_choice`, and the unchosen branch is `skipped`.
+Operator HITL, then exclusive Route `if`. The `decide` stage asks for **branch-a** or **branch-b**, emits that value on `payload.branch`, and listed successors stay on the DAG. After success, each `if` runs against that payload: the matching arm runs; the other is skipped. The completing agent does not pick YAML successors.
+
+See [YAML catalog — Route wiring](../../docs/yaml-catalog.md#route) (Route `if`). `if.field` must be a required output property — optional fields cannot be used in `if`.
 
 ## Prerequisites
 
@@ -62,7 +63,11 @@ Start a **new** run and answer the opposite id at the gate.
 
 ## How it works
 
-`decide` has `fork: { select: one }` and two children with `needs: decide`. After the operator answers, the agent emits `fork_choice: ["branch-a"]` or `["branch-b"]`. Stageflow runs only the named successor and marks the other `skipped`.
+`decide` is `entry: true` with two `route` targets, each gated by `if` (`field: branch`, `op: eq`). After the operator answers, the agent emits `payload: { "branch": "branch-a" }` or `{ "branch": "branch-b" }`. Stageflow evaluates those predicates against the success payload: the matching successor runs; the miss is skipped. Both `to:` stay on the DAG.
+
+`io.output.schema` requires `branch` as a string so `if.field: branch` is valid. Branch stage `io.input` is an empty object (a subset of decide output).
+
+Validate may warn `pipeline.route_all_gated` because every forward `to:` on `decide` has `if`. That warning keeps `ok: true`; `--strict` does not promote it.
 
 ## Layout
 
@@ -77,6 +82,8 @@ examples/conditional-fork/
 
 ## References
 
-- [YAML catalog — Fork pipelines](../../docs/yaml-catalog.md#fork-pipelines)
-- [Envelopes — Fork stages](../../docs/envelopes.md#fork-stages)
-- Fixtures: [`fork-one-of-two.pipeline.yaml`](../../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml), [`fork-route-cascade.pipeline.yaml`](../../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml)
+- [YAML catalog — Route wiring](../../docs/yaml-catalog.md#route)
+- [YAML catalog — Upgrading older catalogs](../../docs/yaml-catalog.md#upgrading-older-catalogs)
+- [HITL](../../docs/hitl.md)
+- Fixtures: [`route-if-eq.pipeline.yaml`](../../tests/fixtures/pipelines/route-if-eq.pipeline.yaml)
+- Related walkthrough: [`../route-if-tour/`](../route-if-tour/)

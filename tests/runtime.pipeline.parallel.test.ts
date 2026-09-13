@@ -35,6 +35,7 @@ const okEnvelope = (
   status: "success",
   summary,
   artifacts,
+  payload: {},
 });
 
 async function waitFor(

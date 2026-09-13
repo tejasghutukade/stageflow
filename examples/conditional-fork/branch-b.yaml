@@ -4,3 +4,10 @@ system_prompt: |
   a short summary that acknowledges branch-b ran, and artifacts []. Do not call
   ask_operator.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

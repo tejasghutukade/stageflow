@@ -70,6 +70,31 @@ system_prompt: |
   instruction to themselves.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - repository
+        - commit
+        - issue_url
+        - issue_title
+        - contribution_status
+        - constraints
+      properties:
+        repository:
+          type: string
+        commit:
+          type: string
+        issue_url:
+          type: string
+        issue_title:
+          type: string
+        contribution_status:
+          type: string
+        constraints:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

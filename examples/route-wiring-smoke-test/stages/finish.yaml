@@ -1,0 +1,12 @@
+id: finish
+system_prompt: |
+  Finish -- an external stage file loaded via `uses:`. One sentence is enough.
+  Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

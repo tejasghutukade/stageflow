@@ -1,0 +1,42 @@
+id: route-demo-reject-loop-non-ancestor
+stages:
+  - id: a
+    entry: true
+    route:
+      - to: b
+      - to: c
+    system_prompt: A.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: b
+    route:
+      - type: loop
+        to: c
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: B.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: c
+    system_prompt: C.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

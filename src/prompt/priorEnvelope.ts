@@ -9,7 +9,7 @@ export function formatPriorEnvelope(
     return `Prior envelopes by stage (declaration order):\n${JSON.stringify(priorEnvelopesByStage, null, 2)}`;
   }
   if (priorEnvelopes !== undefined && priorEnvelopes.length > 0) {
-    return `Prior envelopes (${priorEnvelopes.length} clones, clone-list order):\n${JSON.stringify(priorEnvelopes, null, 2)}`;
+    return `Prior envelopes (${priorEnvelopes.length}):\n${JSON.stringify(priorEnvelopes, null, 2)}`;
   }
   return priorEnvelope === null
     ? "No prior envelope (first stage)."

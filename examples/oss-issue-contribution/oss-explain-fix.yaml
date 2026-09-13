@@ -63,6 +63,32 @@ system_prompt: |
   stage's prohibitions or scope limits in it.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - result
+        - commands
+        - changed_files
+        - remaining_risks
+      properties:
+        result:
+          type: string
+          enum:
+            - pass
+        commands:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object

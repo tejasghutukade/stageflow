@@ -538,27 +538,10 @@ function buildUserPrompt(
     }
   }
 
-  if (input.cloneEmitContext !== undefined) {
-    const allowedActions =
-      input.cloneEmitContext.allowedActions ?? ["skip", "once", "fanout"];
-    const successorLines = input.cloneEmitContext.clonableSuccessors.map(
-      (successor) => {
-        const header = `- ${successor.successorId} (clone_cap: ${successor.cloneCap})`;
-        if (successor.cloneInputSchema === undefined) {
-          return header;
-        }
-        return `${header}\n  Assignment schema (io.input.schema):\n${JSON.stringify(successor.cloneInputSchema, null, 2)}`;
-      },
-    );
-    emitHint += `\nClonable successors — emit clone_forks covering each of these ids exactly once:\n${successorLines.join("\n")}`;
-    emitHint += `\nEach once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). io.input.schema fields belong in envelope.payload, not at the top level of the clone_forks item.`;
-    emitHint += `\nAllowed clone actions: ${allowedActions.join(", ")}`;
-  }
-
   if (input.feedbackLoopEmitContext !== undefined) {
     emitHint += `\nFeedback-loop decision: this stage is a feedback-loop source. On status=success, feedback_loop is required. Emit either {"action":"continue"} to proceed downstream or {"action":"send_back","target":"…"} to request another pass.`;
     emitHint += `\nAllowed send_back target: ${input.feedbackLoopEmitContext.target}.`;
-    emitHint += `\nA send_back decision cannot be combined with fork_choice or clone_forks.`;
+    emitHint += `\nA send_back decision cannot be combined with fork_choice.`;
   }
 
   const attempt = input.roots.attempt ?? 1;

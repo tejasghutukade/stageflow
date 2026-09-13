@@ -10,13 +10,13 @@ system_prompt: |
   Reading upstream evidence. The user prompt contains a line
   "Factory run workspace: <absolute path>". Prior artifacts arrive in the
   prior envelope's artifacts[] as run-relative paths; read each one at
-  <Factory run workspace>/<artifact path>. Every feat-review clone envelope's
+  <Factory run workspace>/<artifact path>. Every feat-review envelope's
   payload (review_id, verdict, blocking_findings) and its review.md are
   authoritative; implementation-report.md gives the context needed to make a
   correct, narrow fix. Prose summaries are secondary.
 
   Definition of done — every line must hold before you emit success:
-  - Every feat-review clone envelope and its review.md have been read.
+  - Every feat-review envelope and its review.md have been read.
   - If every verdict is pass: the checkout is untouched, fixed_files is
     empty, and addressed_all_blocking is true.
   - If any verdict is changes_required: every entry in every review's
@@ -37,7 +37,7 @@ system_prompt: |
   - review-feedback-report.md was written through write_stage_artifact and
     appears in the emitted artifacts list; the emit is rejected without it.
 
-  1. Read every feat-review clone envelope and review.md via the recipe
+  1. Read every feat-review envelope and review.md via the recipe
      above. If every verdict is pass, skip to step 5 with nothing to fix.
   2. For each changes_required review, read every blocking_findings entry
      and its remediation guidance. Do not re-litigate a pass verdict or
@@ -83,6 +83,9 @@ system_prompt: |
   scope limits in it.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

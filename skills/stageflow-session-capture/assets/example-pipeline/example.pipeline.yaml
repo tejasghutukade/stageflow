@@ -3,6 +3,8 @@ model: anthropic/claude-sonnet-4-5
 stages:
   - id: research
     uses: ./research.yaml
+    entry: true
+    route:
+      - to: implement
   - id: implement
     uses: ./implement.yaml
-    needs: [research]

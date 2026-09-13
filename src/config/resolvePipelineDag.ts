@@ -1,29 +1,33 @@
 import type {
   PipelineNeedEdge,
+  PipelineRouteEdge,
+  PipelineRouteLoopEntry,
   PipelineStageRef,
-  PipelineStageYamlEntry,
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
   FeedbackLoopConfig,
 } from "../types/pipeline.js";
 import type { CompletionContract, RecoveryPolicy } from "../types/completion.js";
-import { isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
-import { parseExecutionPolicy } from "./parseCompletionContract.js";
-import { parsePipelineNeeds, predecessorEdges, toNeedEdges } from "./pipelineNeeds.js";
-
-const ALLOWED_FORK_KEYS = new Set(["select", "allow_none"]);
+import { BODY_KEYS, isAllowedPipelineStageEntryKey } from "./pipelineStageKeys.js";
+import { invertRouteToPredecessorEdges, predecessorEdges } from "./pipelineNeeds.js";
+import {
+  normalizePipelineStageEntries,
+  toWiringRefs,
+} from "./normalizePipelineStageEntry.js";
+import { toRouteEdges, toRouteLoopEntries } from "./pipelineRoute.js";
 
 type NormalizedEdge = {
   id: string;
   needs: string | null;
   needsEdges: PipelineNeedEdge[];
+  /** This stage's own outbound `route` entries (forward direction, not yet inverted). */
+  routeEdges: PipelineRouteEdge[];
+  /** This stage's own outbound `route` loop entries (ticket 03: no forward edge). */
+  routeLoopEntries: PipelineRouteLoopEntry[];
+  entry?: boolean;
   stageIndex: number;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
-  clonable?: boolean;
-  clone_cap?: number;
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
 };
 
@@ -44,202 +48,44 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-const ALLOWED_FEEDBACK_LOOP_KEYS = new Set([
-  "target",
-  "max_replays",
-  "on_max_replays",
-  "replay_session",
-]);
-
-export function parseFeedbackLoopConfig(
-  value: unknown,
-  stageId: string,
+function wrapRawStagesForNormalize(
+  rawStages: unknown[],
   ctx: ResolvePipelineDagContext,
-): FeedbackLoopConfig {
-  if (!isPlainObject(value)) {
-    throw new Error(formatError(ctx, `stage "${stageId}": feedback_loop must be an object`));
-  }
-  for (const key of Object.keys(value)) {
-    if (!ALLOWED_FEEDBACK_LOOP_KEYS.has(key)) {
-      throw new Error(
-        formatError(ctx, `stage "${stageId}": feedback_loop: unknown key "${key}"`),
-      );
+): { raw: unknown; declaringPath: string }[] {
+  return rawStages.map((raw) => {
+    if (!isPlainObject(raw)) {
+      return { raw, declaringPath: ctx.path };
     }
-  }
-  if (Array.isArray(value.target)) {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.target must be a single stage id string, not an array`,
-      ),
+    const id = typeof raw.id === "string" && raw.id ? raw.id : undefined;
+    const hasUses = typeof raw.uses === "string";
+    const hasBody = Object.keys(raw).some(
+      (key) => BODY_KEYS.has(key) && key !== "skill" && key !== "mcp",
     );
-  }
-  if (typeof value.target !== "string" || value.target.trim() === "") {
-    throw new Error(
-      formatError(ctx, `stage "${stageId}": feedback_loop.target must be a non-empty stage id`),
-    );
-  }
-  if (!Number.isInteger(value.max_replays) || (value.max_replays as number) < 1) {
-    throw new Error(
-      formatError(ctx, `stage "${stageId}": feedback_loop.max_replays must be a positive integer`),
-    );
-  }
-  if (
-    value.on_max_replays !== "require_continue" &&
-    value.on_max_replays !== "wait_for_human"
-  ) {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.on_max_replays must be "require_continue" or "wait_for_human"`,
-      ),
-    );
-  }
-  if (value.replay_session !== "resume" && value.replay_session !== "new_session") {
-    throw new Error(
-      formatError(
-        ctx,
-        `stage "${stageId}": feedback_loop.replay_session must be "resume" or "new_session"`,
-      ),
-    );
-  }
-  return {
-    target: value.target,
-    max_replays: value.max_replays as number,
-    on_max_replays: value.on_max_replays as FeedbackLoopConfig["on_max_replays"],
-    replay_session: value.replay_session as FeedbackLoopConfig["replay_session"],
-  };
-}
-
-export function parsePipelineStageEntries(
-  raw: unknown,
-  ctx: ResolvePipelineDagContext,
-): PipelineStageYamlEntry[] {
-  if (!Array.isArray(raw)) {
-    throw new Error(formatError(ctx, "stages[] is required"));
-  }
-  if (raw.length === 0) {
-    throw new Error(formatError(ctx, "stages must be non-empty"));
-  }
-
-  const entries: PipelineStageYamlEntry[] = [];
-  for (let index = 0; index < raw.length; index++) {
-    const entry = raw[index];
-    if (typeof entry === "string") {
-      const hint = entry
-        ? `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "${entry}", uses: "./${entry}.yaml" } or inline body`
-        : `invalid stage entry at index ${index}: bare string stage refs are not supported; use { id: "…", uses: "./….yaml" } or inline body`;
-      throw new Error(formatError(ctx, hint));
+    if (hasUses || hasBody || !id) {
+      return { raw, declaringPath: ctx.path };
     }
-
-    if (!isPlainObject(entry)) {
-      throw new Error(formatError(ctx, `invalid stage entry at index ${index}`));
-    }
-
-    const keys = Object.keys(entry);
-    for (const key of keys) {
-      if (!isAllowedPipelineStageEntryKey(key)) {
-        throw new Error(
-          formatError(ctx, `invalid stage entry "${String(entry.id ?? index)}": unknown key "${key}"`),
-        );
-      }
-    }
-
-    if (typeof entry.id !== "string" || !entry.id) {
-      throw new Error(formatError(ctx, `invalid stage entry at index ${index}: id must be a non-empty string`));
-    }
-
-    let forkValue: { select: "one" | "subset"; allow_none?: boolean } | undefined;
-    if (entry.fork !== undefined) {
-      if (!isPlainObject(entry.fork)) {
-        throw new Error(formatError(ctx, `stage "${entry.id}": fork must be an object`));
-      }
-      for (const fk of Object.keys(entry.fork)) {
-        if (!ALLOWED_FORK_KEYS.has(fk)) {
-          throw new Error(formatError(ctx, `stage "${entry.id}": fork: unknown key "${fk}"`));
-        }
-      }
-      forkValue = entry.fork as { select: "one" | "subset"; allow_none?: boolean };
-    }
-
-    const clonableFields: Pick<PipelineStageYamlEntry, "clonable" | "clone_cap"> = {
-      ...(entry.clonable !== undefined ? { clonable: entry.clonable as boolean } : {}),
-      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap as number } : {}),
+    return {
+      raw: { ...raw, uses: `./${id}.yaml` },
+      declaringPath: ctx.path,
     };
-    const policyOutcome = parseExecutionPolicy(entry, entry.id);
-    if (!policyOutcome.ok) {
-      throw new Error(
-        formatError(
-          ctx,
-          policyOutcome.issues[0]?.message ?? "invalid execution policy",
-        ),
-      );
-    }
-    const policyFields = {
-      ...(policyOutcome.value.completion !== undefined
-        ? { completion: policyOutcome.value.completion }
-        : {}),
-      ...(policyOutcome.value.recovery !== undefined
-        ? { recovery: policyOutcome.value.recovery }
-        : {}),
-    };
-    const feedbackLoopFields =
-      entry.feedback_loop !== undefined
-        ? { feedback_loop: parseFeedbackLoopConfig(entry.feedback_loop, entry.id, ctx) }
-        : {};
-    if (entry.replay_safe !== undefined && typeof entry.replay_safe !== "boolean") {
-      throw new Error(
-        formatError(ctx, `stage "${entry.id}": replay_safe must be a boolean`),
-      );
-    }
-    const replaySafetyFields =
-      entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {};
-
-    if (entry.needs === undefined) {
-      entries.push({
-        id: entry.id,
-        ...(forkValue !== undefined ? { fork: forkValue } : {}),
-        ...clonableFields,
-        ...policyFields,
-        ...feedbackLoopFields,
-        ...replaySafetyFields,
-      });
-      continue;
-    }
-
-    const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
-    if (!parsedNeeds.ok) {
-      throw new Error(formatError(ctx, parsedNeeds.message));
-    }
-
-    entries.push({
-      id: entry.id,
-      needs: parsedNeeds.value,
-      ...(forkValue !== undefined ? { fork: forkValue } : {}),
-      ...clonableFields,
-      ...policyFields,
-      ...feedbackLoopFields,
-      ...replaySafetyFields,
-    });
-  }
-
-  return entries;
+  });
 }
 
 function normalizeToEdges(entries: PipelineStageRef[]): NormalizedEdge[] {
   return entries.map((entry, index) => {
-    const needsEdges = toNeedEdges(entry.needs);
+    const needsEdges: PipelineNeedEdge[] = [];
+    const routeEdges = toRouteEdges(entry.route);
+    const routeLoopEntries = toRouteLoopEntries(entry.route);
     return {
       id: entry.id,
       needs: needsEdges.length === 1 ? needsEdges[0]!.id : null,
       needsEdges,
+      routeEdges,
+      routeLoopEntries,
       stageIndex: index,
-      ...(entry.fork !== undefined ? { fork: entry.fork } : {}),
-      ...(entry.clonable !== undefined ? { clonable: entry.clonable } : {}),
-      ...(entry.clone_cap !== undefined ? { clone_cap: entry.clone_cap } : {}),
+      ...(entry.entry !== undefined ? { entry: entry.entry } : {}),
       ...(entry.completion !== undefined ? { completion: entry.completion } : {}),
       ...(entry.recovery !== undefined ? { recovery: entry.recovery } : {}),
-      ...(entry.feedback_loop !== undefined ? { feedback_loop: entry.feedback_loop } : {}),
       ...(entry.replay_safe !== undefined ? { replay_safe: entry.replay_safe } : {}),
     };
   });
@@ -255,14 +101,95 @@ function detectDuplicateIds(edges: NormalizedEdge[], ctx: ResolvePipelineDagCont
   }
 }
 
-function validateNeedsTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+function validateRouteTargets(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
   const declared = new Set(edges.map((edge) => edge.id));
   for (const edge of edges) {
-    for (const parent of edge.needsEdges) {
-      if (!declared.has(parent.id)) {
-        throw new Error(formatError(ctx, `stage "${edge.id}" has unknown needs "${parent.id}"`));
+    for (const route of edge.routeEdges) {
+      if (!declared.has(route.to)) {
+        throw new Error(
+          formatError(ctx, `stage "${edge.id}" has unknown route target "${route.to}"`),
+        );
       }
     }
+  }
+}
+
+/**
+ * A stage's own resolved node can carry only one `feedback_loop`-shaped
+ * replay policy (`ResolvedPipelineStageNode.feedback_loop` is a single
+ * object, not a list — the shape the runtime already consumes and that this
+ * ticket must not change). A stage declaring more than one `type: loop`
+ * route entry has no unambiguous single replay policy to synthesize onto
+ * that field, so it is rejected at parse time rather than silently picking
+ * one and discarding the rest.
+ */
+function validateRouteLoopEntryCount(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+  for (const edge of edges) {
+    if (edge.routeLoopEntries.length > 1) {
+      throw new Error(
+        formatError(
+          ctx,
+          `stage "${edge.id}": route supports at most one loop entry, got ${edge.routeLoopEntries.length}`,
+        ),
+      );
+    }
+  }
+}
+
+/**
+ * Inverts each stage's own outbound `route` entries into predecessor edges on
+ * their targets, stored under the same `needs`/`needsEdges` fields the
+ * resolver already produces from `needs` — so cycle detection, ancestor
+ * computation, topological sort, and childrenOf all pick route-declared
+ * fan-in/fan-out up for free, with no changes to that machinery.
+ */
+function mergeRouteEdgesIntoNeeds(edges: NormalizedEdge[]): void {
+  const byId = new Map(edges.map((edge) => [edge.id, edge]));
+  const inbound = invertRouteToPredecessorEdges(
+    edges.map((edge) => ({ id: edge.id, route: edge.routeEdges })),
+  );
+
+  for (const [targetId, incoming] of inbound) {
+    const target = byId.get(targetId);
+    if (!target || incoming.length === 0) continue;
+    target.needsEdges = [...target.needsEdges, ...incoming];
+    target.needs = target.needsEdges.length === 1 ? target.needsEdges[0]!.id : null;
+  }
+}
+
+/**
+ * `entry`/unreachable-stage validation only applies to pipelines that opt into
+ * the `route`/`entry` vocabulary at all — a pipeline that only uses `needs`
+ * (and never declares `route` or `entry` anywhere) is left completely alone,
+ * so existing needs-based pipelines keep working unchanged.
+ */
+function validateEntryStageUsage(edges: NormalizedEdge[], ctx: ResolvePipelineDagContext): void {
+  const usesRouteVocabulary = edges.some(
+    (edge) => edge.entry === true || edge.routeEdges.length > 0,
+  );
+  if (!usesRouteVocabulary) return;
+
+  const hasEntry = edges.some((edge) => edge.entry === true);
+  if (!hasEntry) {
+    throw new Error(formatError(ctx, "no stage is marked entry: true"));
+  }
+
+  const targeted = new Set<string>();
+  for (const edge of edges) {
+    for (const route of edge.routeEdges) {
+      targeted.add(route.to);
+    }
+  }
+
+  for (const edge of edges) {
+    if (edge.entry === true) continue;
+    if (targeted.has(edge.id)) continue;
+    throw new Error(
+      formatError(
+        ctx,
+        `stage "${edge.id}" is unreachable: not marked entry: true and not targeted by any route entry`,
+      ),
+    );
   }
 }
 
@@ -387,6 +314,24 @@ function topologicalSort(edges: NormalizedEdge[]): NormalizedEdge[] {
   return sorted;
 }
 
+/**
+ * Ticket 03: a route loop entry carries the same replay-policy fields as
+ * today's `feedback_loop` (just `to` instead of `target`). Synthesizing it
+ * into the exact `FeedbackLoopConfig` shape here — onto the same
+ * `ResolvedPipelineStageNode.feedback_loop` field the legacy path populates
+ * — means `validateFeedbackLoopFields` below and every downstream
+ * runtime/executor consumer of `.feedback_loop` need zero changes to also
+ * support route-declared loops.
+ */
+function toFeedbackLoopConfigFromRouteLoopEntry(entry: PipelineRouteLoopEntry): FeedbackLoopConfig {
+  return {
+    target: entry.to,
+    max_replays: entry.max_replays,
+    on_max_replays: entry.on_max_replays,
+    replay_session: entry.replay_session,
+  };
+}
+
 function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag {
   const ancestorsById = computeAncestors(edges);
   const sortedEdges = topologicalSort(edges);
@@ -419,71 +364,16 @@ function buildResolvedPipelineDag(edges: NormalizedEdge[]): ResolvedPipelineDag 
     needsEdges: edge.needsEdges,
     ancestors: ancestorsById.get(edge.id) ?? [],
     stageIndex: edge.stageIndex,
-    ...(edge.fork !== undefined
-      ? { fork: { select: edge.fork.select, allow_none: edge.fork.allow_none ?? false } }
-      : {}),
-    ...(edge.clonable === true
-      ? { clonable: true, clone_cap: edge.clone_cap ?? 5 }
-      : {}),
+    ...(edge.entry === true ? { entry: true } : {}),
     ...(edge.completion !== undefined ? { completion: edge.completion } : {}),
     ...(edge.recovery !== undefined ? { recovery: edge.recovery } : {}),
-    ...(edge.feedback_loop !== undefined ? { feedback_loop: edge.feedback_loop } : {}),
+    ...(edge.routeLoopEntries.length === 1
+      ? { feedback_loop: toFeedbackLoopConfigFromRouteLoopEntry(edge.routeLoopEntries[0]!) }
+      : {}),
     ...(edge.replay_safe !== undefined ? { replay_safe: edge.replay_safe } : {}),
   }));
 
   return { nodes, roots, childrenOf };
-}
-
-function validateForkFields(
-  edges: NormalizedEdge[],
-  dag: ResolvedPipelineDag,
-  ctx: ResolvePipelineDagContext,
-): void {
-  for (const edge of edges) {
-    if (!edge.fork) continue;
-    if (edge.fork.select !== "one" && edge.fork.select !== "subset") {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${edge.id}": fork.select must be "one" or "subset"${edge.fork.select === undefined ? " (missing)" : `, got "${String(edge.fork.select)}"`}`,
-        ),
-      );
-    }
-    if ((dag.childrenOf[edge.id] ?? []).length === 0) {
-      throw new Error(
-        formatError(ctx, `fork on stage "${edge.id}": no children in the DAG`),
-      );
-    }
-  }
-}
-
-function validateClonableFields(
-  edges: NormalizedEdge[],
-  dag: ResolvedPipelineDag,
-  ctx: ResolvePipelineDagContext,
-): void {
-  for (const edge of edges) {
-    if (edge.clone_cap !== undefined && edge.clonable !== true) {
-      throw new Error(
-        formatError(ctx, `stage "${edge.id}": clone_cap requires clonable: true`),
-      );
-    }
-    if (edge.clonable === true && edge.clone_cap !== undefined) {
-      if (!Number.isInteger(edge.clone_cap) || edge.clone_cap < 2) {
-        throw new Error(
-          formatError(
-            ctx,
-            `stage "${edge.id}": clone_cap must be an integer greater than or equal to 2`,
-          ),
-        );
-      }
-    }
-    if (edge.clonable === true && (dag.childrenOf[edge.id] ?? []).length === 0) {
-      throw new Error(
-        formatError(ctx, `clonable on stage "${edge.id}": no children in the DAG`),
-      );
-    }
-  }
 }
 
 function validateFeedbackLoopFields(
@@ -494,14 +384,6 @@ function validateFeedbackLoopFields(
   for (const source of dag.nodes) {
     const policy = source.feedback_loop;
     if (!policy) continue;
-    if (source.clonable === true) {
-      throw new Error(
-        formatError(
-          ctx,
-          `stage "${source.id}": feedback_loop source cannot be clonable`,
-        ),
-      );
-    }
     const targetId = policy.target;
     const target = byId.get(targetId);
     if (!target) {
@@ -512,11 +394,6 @@ function validateFeedbackLoopFields(
     if (!source.ancestors.includes(targetId)) {
       throw new Error(
         formatError(ctx, `stage "${source.id}": feedback_loop target "${targetId}" must be an earlier ancestor`),
-      );
-    }
-    if (target.clonable === true) {
-      throw new Error(
-        formatError(ctx, `stage "${source.id}": feedback_loop target "${targetId}" cannot be clonable`),
       );
     }
     const targetIndex = source.ancestors.indexOf(targetId);
@@ -539,7 +416,10 @@ export function resolvePipelineDagFromRefs(
 ): { stages: string[]; dag: ResolvedPipelineDag } {
   const edges = normalizeToEdges(refs);
   detectDuplicateIds(edges, ctx);
-  validateNeedsTargets(edges, ctx);
+  validateRouteTargets(edges, ctx);
+  validateRouteLoopEntryCount(edges, ctx);
+  validateEntryStageUsage(edges, ctx);
+  mergeRouteEdgesIntoNeeds(edges);
   detectCycle(edges, ctx);
 
   const stages = edges
@@ -547,8 +427,6 @@ export function resolvePipelineDagFromRefs(
     .sort((a, b) => a.stageIndex - b.stageIndex)
     .map((edge) => edge.id);
   const dag = buildResolvedPipelineDag(edges);
-  validateForkFields(edges, dag, ctx);
-  validateClonableFields(edges, dag, ctx);
   validateFeedbackLoopFields(dag, ctx);
 
   return { stages, dag };
@@ -558,8 +436,32 @@ export function resolvePipelineDag(
   rawStages: unknown,
   ctx: ResolvePipelineDagContext,
 ): { stages: string[]; dag: ResolvedPipelineDag } {
-  const entries = parsePipelineStageEntries(rawStages, ctx);
-  return resolvePipelineDagFromRefs(entries, ctx);
+  if (!Array.isArray(rawStages)) {
+    throw new Error(formatError(ctx, "stages[] is required"));
+  }
+  if (rawStages.length === 0) {
+    throw new Error(formatError(ctx, "stages must be non-empty"));
+  }
+  const outcome = normalizePipelineStageEntries(
+    wrapRawStagesForNormalize(rawStages, ctx),
+    ctx,
+  );
+  if (!outcome.ok) {
+    throw new Error(
+      outcome.issues[0]?.message ?? formatError(ctx, "invalid stage entries"),
+    );
+  }
+  const refs = toWiringRefs(outcome.value);
+  return resolvePipelineDagFromRefs(refs, ctx);
+}
+
+function sameNeedIf(
+  a: PipelineNeedEdge["if"],
+  b: PipelineNeedEdge["if"],
+): boolean {
+  if (a === undefined && b === undefined) return true;
+  if (a === undefined || b === undefined) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPipelineDag): boolean {
@@ -586,6 +488,7 @@ export function areResolvedDagsEquivalent(a: ResolvedPipelineDag, b: ResolvedPip
       for (let j = 0; j < edgesA[i]!.on.length; j++) {
         if (edgesA[i]!.on[j] !== edgesB[i]!.on[j]) return false;
       }
+      if (!sameNeedIf(edgesA[i]!.if, edgesB[i]!.if)) return false;
     }
     if (nodeA.ancestors.length !== nodeB.ancestors.length) return false;
     for (let i = 0; i < nodeA.ancestors.length; i++) {
@@ -629,9 +532,16 @@ export function extractPipelineStageIds(rawStages: unknown[]): string[] | null {
       if (!isAllowedPipelineStageEntryKey(key)) return null;
     }
     if (typeof entry.id !== "string" || !entry.id) return null;
-    if (entry.needs !== undefined) {
-      const parsedNeeds = parsePipelineNeeds(entry.needs, entry.id);
-      if (!parsedNeeds.ok) return null;
+    if (
+      entry.needs !== undefined ||
+      entry.fork !== undefined ||
+      entry.feedback_loop !== undefined ||
+      entry.route_select !== undefined ||
+      entry.allow_none !== undefined ||
+      entry.clonable !== undefined ||
+      entry.clone_actions !== undefined
+    ) {
+      return null;
     }
     stageIds.push(entry.id);
   }

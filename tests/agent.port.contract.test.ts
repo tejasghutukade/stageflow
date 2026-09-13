@@ -226,7 +226,7 @@ describe("AgentPort contract", () => {
     if (done.status === "completed") {
       expect(done.result).toEqual({
         ok: true,
-        envelope: { status: "success", summary: "ok", artifacts: [] },
+        envelope: { status: "success", summary: "ok", artifacts: [], payload: {} },
       });
     }
     await resumed.close();

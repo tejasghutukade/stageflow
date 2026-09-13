@@ -5,6 +5,9 @@ system_prompt: |
   and a payload containing boy and girl string fields.
 model: anthropic/claude-sonnet-4-5
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

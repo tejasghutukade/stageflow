@@ -4,3 +4,10 @@ system_prompt: |
   of the plan. Call emit_stage_envelope once with a short summary. Do not call
   ask_operator. Do not perform further HITL.
 model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

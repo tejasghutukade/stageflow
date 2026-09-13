@@ -37,9 +37,6 @@ system_prompt: |
   - commands_run lists only commands you actually executed, each with its
     outcome — the full validation_commands list plus anything else you ran
     while diagnosing failures.
-  - The envelope carries exactly one clone_forks entry for successor_id
-    feat-review with action fanout, mode parallel, and two to four clones,
-    each a complete non-overlapping review assignment.
 
   1. Resolve implementation-plan.md from the prior envelope's artifacts[]
      against the Factory run workspace absolute path and read it. If it
@@ -76,11 +73,9 @@ system_prompt: |
      collectively cover every changed file.
   8. Emit exactly once, including implementation-report.md and all inherited
      evidence artifacts, with a payload matching the schema, and the
-     clone_forks fanout described above. Emit success only if every
      definition-of-done line holds; otherwise emit failure while preserving
      the working-tree evidence for the operator, and record in the summary
      exactly which validation_commands entries remain red and why. On
-     failure, clone_forks is not required.
 
   Contract violations — emit failure rather than presenting these as
   success:
@@ -93,11 +88,9 @@ system_prompt: |
   - commands_run listing commands you did not execute.
   - Treating a markdown map, excerpt file, or report as the deliverable.
     Exploration-only completion is a failure of this stage.
-  - clone_forks with action skip or once, fewer than two clones, more than
     four clones, overlapping scopes, or an assignment with empty paths or
     questions.
 
-  Never commit, push, or open a pull request. clone_actions allows fanout
   only — skipping review is not permitted.
 
   Write summary as outcomes and resulting state for downstream stages: what
@@ -109,6 +102,32 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - approved
+        - scope_summary
+        - planned_files
+        - validation_commands
+        - risks
+      properties:
+        approved:
+          type: boolean
+        scope_summary:
+          type: string
+        planned_files:
+          type: array
+          items:
+            type: string
+        validation_commands:
+          type: array
+          items:
+            type: string
+        risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object
@@ -159,5 +178,3 @@ verify:
     when:
       - after
 gate_kinds: []
-clone_actions:
-  - fanout

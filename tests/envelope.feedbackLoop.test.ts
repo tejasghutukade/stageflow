@@ -151,39 +151,9 @@ describe("feedback_loop envelope contract", () => {
     expect(
       await forkContinue.execute("fork-continue", envelope({ action: "continue" })),
     ).toMatchObject({ isError: true });
-
-    const cloneSource = createEmitStageEnvelopeTool(
-      {},
-      undefined,
-      undefined,
-      {
-        clonableSuccessors: [{ successorId: "next", cloneCap: 2 }],
-      },
-      undefined,
-      context,
-    );
-    expect(
-      await cloneSource.execute("clone-send-back", {
-        ...envelope({ action: "send_back", target: "implement" }),
-      }),
-    ).toMatchObject({ terminate: true });
-
-    const cloneContinue = createEmitStageEnvelopeTool(
-      {},
-      undefined,
-      undefined,
-      {
-        clonableSuccessors: [{ successorId: "next", cloneCap: 2 }],
-      },
-      undefined,
-      context,
-    );
-    expect(
-      await cloneContinue.execute("clone-continue", envelope({ action: "continue" })),
-    ).toMatchObject({ isError: true });
   });
 
-  it("rejects send_back combined with fork or clone routing", async () => {
+  it("rejects send_back combined with fork routing", async () => {
     const forkSource = createEmitStageEnvelopeTool(
       {},
       undefined,
@@ -198,51 +168,6 @@ describe("feedback_loop envelope contract", () => {
         fork_choice: ["next"],
       }),
     ).toMatchObject({ isError: true });
-
-    const cloneSource = createEmitStageEnvelopeTool(
-      {},
-      undefined,
-      undefined,
-      {
-        clonableSuccessors: [{ successorId: "next", cloneCap: 2 }],
-      },
-      undefined,
-      context,
-    );
-    expect(
-      await cloneSource.execute("clone-send-back", {
-        ...envelope({ action: "send_back", target: "implement" }),
-        clone_forks: [{ successor_id: "next", action: "skip" }],
-      }),
-    ).toMatchObject({ isError: true });
   });
 
-  it("rejects feedback_loop inside clone assignment envelopes", () => {
-    expect(() =>
-      assertRequiredEnvelope({
-        ...envelope(),
-        clone_forks: [
-          {
-            successor_id: "next",
-            action: "once",
-            envelope: envelope({ action: "continue" }),
-          },
-        ],
-      }),
-    ).toThrow(/clone assignment envelopes/i);
-
-    expect(() =>
-      assertRequiredEnvelope({
-        ...envelope(),
-        clone_forks: [
-          {
-            successor_id: "next",
-            action: "fanout",
-            mode: "parallel",
-            clones: [{ envelope: envelope({ action: "continue" }) }],
-          },
-        ],
-      }),
-    ).toThrow(/clone assignment envelopes/i);
-  });
 });

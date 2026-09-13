@@ -1001,6 +1001,7 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
   background: var(--color-background-surface);
   color: inherit;
   text-decoration: none;
+  overflow: hidden;
 }
 
 .rrow:hover { border-color: var(--color-border-emphasized); }
@@ -1019,6 +1020,13 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
 
 .rrow__track {
   grid-area: track;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.rrow__track > span {
+  display: block;
   min-width: 0;
 }
 
@@ -1042,6 +1050,8 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
 .mini {
   display: flex;
   align-items: center;
+  min-width: 100%;
+  width: max-content;
 }
 
 .mini__n {
@@ -1088,9 +1098,9 @@ button.block__peek:hover .block__peek-name { text-decoration: underline; }
 }
 
 .mini__w {
-  flex: 1;
+  flex: 1 1 12px;
   height: 1.5px;
-  min-width: 12px;
+  min-width: var(--spacing-1);
   background: var(--color-border-emphasized);
 }
 

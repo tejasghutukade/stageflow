@@ -22,7 +22,7 @@ function okEnvelope(
   summary: string,
   extra?: Partial<StageEnvelope>,
 ): StageEnvelope {
-  return { status: "success", summary, artifacts: [], ...extra };
+  return { status: "success", summary, artifacts: [], payload: {}, ...extra };
 }
 
 type FakeAgentBehavior =
@@ -75,12 +75,24 @@ function stageKeyedAgent(
   };
 }
 
-async function prepareFeedbackLoopRun() {
+async function waitFor(
+  predicate: () => Promise<boolean> | boolean,
+  timeoutMs = 8000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await predicate()) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("timeout waiting for condition");
+}
+
+async function prepareFeedbackLoopRun(pipelineId = "feedback-loop") {
   const root = await mkdtemp(path.join(tmpdir(), "sf-fb-sched-"));
   const store = createRunStore({ rootDir: root });
   const taskYaml = await readFile(SAMPLE_TASK, "utf8");
   const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
-  const loaded = await loadPipeline(pipelinePath("feedback-loop"), {
+  const loaded = await loadPipeline(pipelinePath(pipelineId), {
     cwd: fixtures,
   });
   const run = await store.createRun({
@@ -366,5 +378,86 @@ describe("runtime feedback-loop scheduler", () => {
       loaded.dag,
     );
     expect(ctx?.prior_stage_attempt).toBe(1);
+  });
+
+  it("AE4: send_back leaves gated forward children pending; continue then if-skip still applies", async () => {
+    const prepared = await prepareFeedbackLoopRun("route-if-all-gated-loop");
+    let releaseImplement2: () => void = () => undefined;
+    const implement2Gate = new Promise<void>((resolve) => {
+      releaseImplement2 = resolve;
+    });
+    let implement2Reached = false;
+    const agent = stageKeyedAgent({
+      implement: [
+        { type: "emit", envelope: okEnvelope("implement-1") },
+        { type: "emit", envelope: okEnvelope("implement-2") },
+      ],
+      review: [
+        {
+          type: "emit",
+          envelope: okEnvelope("send-back", {
+            payload: { verdict: "fail" },
+            feedback_loop: { action: "send_back", target: "implement" },
+          }),
+        },
+        {
+          type: "emit",
+          envelope: okEnvelope("continue", {
+            payload: { verdict: "fail" },
+            feedback_loop: { action: "continue" },
+          }),
+        },
+      ],
+      submit: [{ type: "throw", message: "submit must not run" }],
+    });
+    const gated: AgentPort = {
+      openStage(input) {
+        const handle = agent.openStage(input);
+        if (
+          input.stage.id === "implement" &&
+          (agent.openCounts.get("implement") ?? 0) === 2
+        ) {
+          implement2Reached = true;
+          return {
+            ...handle,
+            next: async () => {
+              await implement2Gate;
+              return handle.next();
+            },
+          };
+        }
+        return handle;
+      },
+      runStage: (input) => agent.runStage(input),
+    };
+
+    const runPromise = runPipelineDag({
+      prepared: {
+        ...prepared,
+        agent: gated,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      executionMode: "inprocess",
+    });
+
+    await waitFor(() => implement2Reached);
+    {
+      const detail = await prepared.store.readRun(prepared.run.runId);
+      expect(
+        detail.stages.find((s) => s.stage_id === "submit")?.status ?? "pending",
+      ).toBe("pending");
+    }
+    expect(agent.openCounts.get("submit") ?? 0).toBe(0);
+
+    releaseImplement2();
+    const result = await runPromise;
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(agent.openCounts.get("submit") ?? 0).toBe(0);
+    const detail = await prepared.store.readRun(prepared.run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "submit")?.status).toBe(
+      "skipped",
+    );
   });
 });

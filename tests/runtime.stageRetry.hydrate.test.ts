@@ -39,6 +39,7 @@ async function seedStageStatus(
       status: "success",
       summary: stageId,
       artifacts: [],
+      payload: {},
     });
     await store.appendStageEvent(runId, stageId, { event: "succeeded" });
     return;
@@ -433,51 +434,7 @@ describe("applyRetryRootDelta", () => {
   });
 });
 
-describe("cloneRetryDownstream diamond / clone-parent", () => {
-  it("Unit 3 childrenOf already lists synthesize under both diamond parents", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    expect(loaded.dag.childrenOf.research).toEqual(["synthesize"]);
-    expect(loaded.dag.childrenOf.validation).toEqual(["synthesize"]);
 
-    const fromResearch = cloneRetryDownstream(loaded.dag, ["research"]);
-    const fromValidation = cloneRetryDownstream(loaded.dag, ["validation"]);
-    expect(fromResearch.has("synthesize")).toBe(true);
-    expect(fromResearch.has("validation")).toBe(false);
-    expect(fromValidation.has("synthesize")).toBe(true);
-    expect(fromValidation.has("research")).toBe(false);
-  });
-
-  it("retrying one clone instance includes the join, not sibling clones", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-clone"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const { snapshot } = appendCloneInstances(base, {
-      catalogId: "research",
-      predecessorId: "clarify",
-      count: 2,
-    });
-    const downstream = cloneRetryDownstream(snapshot, ["research~1"]);
-    expect(downstream.has("synthesize")).toBe(true);
-    expect(downstream.has("research~2")).toBe(false);
-    expect(downstream.has("validation")).toBe(false);
-    expect(downstream.has("clarify")).toBe(false);
-
-    const states = new Map([
-      ["clarify", "succeeded" as const],
-      ["research~1", "failed" as const],
-      ["research~2", "succeeded" as const],
-      ["validation", "succeeded" as const],
-      ["synthesize", "pending" as const],
-    ]);
-    expect(hasWorkOutsideBranch(snapshot, "research~1", states)).toBe(false);
-    expect(
-      collectDownstreamStageIds(snapshot, "research~1").has("synthesize"),
-    ).toBe(false);
-  });
-});
 
 describe("hydrateScheduleForRetry diamond fan-in", () => {
   it("retry research resets synthesize and keeps the validation envelope", async () => {
@@ -571,62 +528,4 @@ describe("hydrateScheduleForRetry diamond fan-in", () => {
     expect(hydrated.completedEnvelopes.has("synthesize")).toBe(false);
   });
 
-  it("retry one research clone instance resets synthesize, not sibling clones", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-hydrate-diamond-clone-"));
-    const store = createRunStore({ rootDir: root });
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in-clone"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const { snapshot } = appendCloneInstances(base, {
-      catalogId: "research",
-      predecessorId: "clarify",
-      count: 2,
-    });
-    const run = await store.createRun({
-      pipelineId: loaded.pipeline.id,
-      taskYaml: "id: t\ngoal: g\n",
-      pipelineDag: snapshot,
-    });
-
-    await seedStageStatus(store, run.runId, "clarify", "succeeded");
-    await seedStageStatus(store, run.runId, "research~1", "succeeded", {
-      status: "success",
-      summary: "r1-stale",
-      artifacts: [],
-    });
-    await seedStageStatus(store, run.runId, "research~2", "succeeded", {
-      status: "success",
-      summary: "r2-kept",
-      artifacts: [],
-    });
-    await seedStageStatus(store, run.runId, "validation", "succeeded", {
-      status: "success",
-      summary: "validation-kept",
-      artifacts: [],
-    });
-    await seedStageStatus(store, run.runId, "synthesize", "succeeded", {
-      status: "success",
-      summary: "syn-stale",
-      artifacts: [],
-    });
-
-    const hydrated = await hydrateScheduleForRetry(
-      store,
-      run.runId,
-      snapshot,
-      "research~1",
-    );
-
-    expect(hydrated.states.get("research~1")).toBe("pending");
-    expect(hydrated.states.get("research~2")).toBe("succeeded");
-    expect(hydrated.states.get("validation")).toBe("succeeded");
-    expect(hydrated.states.get("synthesize")).toBe("pending");
-    expect(hydrated.completedEnvelopes.get("research~2")?.summary).toBe("r2-kept");
-    expect(hydrated.completedEnvelopes.get("validation")?.summary).toBe(
-      "validation-kept",
-    );
-    expect(hydrated.completedEnvelopes.has("research~1")).toBe(false);
-    expect(hydrated.completedEnvelopes.has("synthesize")).toBe(false);
-  });
 });

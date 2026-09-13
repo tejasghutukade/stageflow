@@ -1,15 +1,16 @@
 id: fork-route-cascade
 stages:
   - id: clarify
-    fork:
-      select: one
+    entry: true
+    route:
+      - to: design-doc
+      - to: implementation-plan
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
     uses: ../stages/design-doc.yaml
   - id: implementation-plan
-    needs: clarify
+    route:
+      - to: join-doc
     uses: ../stages/implementation-plan.yaml
   - id: join-doc
-    needs: implementation-plan
     uses: ../stages/join-doc.yaml

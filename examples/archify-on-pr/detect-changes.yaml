@@ -3,26 +3,28 @@ system_prompt: |
   Emit the detect-changes handoff from ci-context.json. Do not invent types or paths.
 
   1. Read ci-context.json at the repository root. It already has pr_number, base_ref,
-     head_sha, relevant_files, diagram_types, change_summary, content_hash, and
-     expected_fork_choice. Do not run git diff or re-derive diagram types.
+     head_sha, relevant_files, diagram_types, change_summary, and content_hash.
+     Do not run git diff or re-derive diagram types. Ignore expected_fork_choice.
 
   2. Write changes.json via write_stage_artifact with exactly:
      - pr_number, base_ref, head_sha, content_hash — copied from ci-context.json
      - changed_files — copy relevant_files as-is (same order)
      - diagram_types — copy diagram_types as-is
      - change_summary — copy change_summary as-is
-     - fork_choice — copy expected_fork_choice as-is
+     - author_diagrams — true when diagram_types is non-empty, false when empty
 
   3. Call emit_stage_envelope exactly once with status success, changes.json in
-     artifacts, a one-sentence summary, payload matching the stage schema
-     (same field values as changes.json, without fork_choice in the payload), and:
-     - fork_choice: [] when diagram_types is empty
-     - fork_choice: ["author-diagrams"] when diagram_types is non-empty
-     (must match expected_fork_choice / changes.json fork_choice)
+     artifacts, a one-sentence summary, and payload matching the stage schema
+     (same field values as changes.json). Set author_diagrams true iff
+     diagram_types is non-empty, false iff empty. Do not put fork_choice on
+     the envelope or in changes.json.
 
   Do not call ask_operator. Do not stop after a chat reply. Do not select types yourself.
 model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object
@@ -34,6 +36,7 @@ io:
         - diagram_types
         - change_summary
         - content_hash
+        - author_diagrams
       properties:
         pr_number:
           type: string
@@ -59,6 +62,8 @@ io:
           type: string
         content_hash:
           type: string
+        author_diagrams:
+          type: boolean
       additionalProperties: false
 verify:
   - id: changes-json-declared

@@ -50,12 +50,14 @@ const planReviewEnvelope = {
   status: "success" as const,
   summary: "plan accepted",
   artifacts: ["stages/plan-review/attempts/1/artifacts/plan.md"],
+  payload: {},
 };
 
 const followupEnvelope = {
   status: "success" as const,
   summary: "follow-up ack",
   artifacts: [] as string[],
+  payload: {},
 };
 
 async function loadPair(name: string): Promise<{

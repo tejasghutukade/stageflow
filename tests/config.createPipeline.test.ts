@@ -145,6 +145,33 @@ describe("parseCreatePipelineBody", () => {
     });
   });
 
+  it("rejects HTTP needs items that include if", () => {
+    expect(
+      parseCreatePipelineBody({
+        directory: "pipelines",
+        id: "gated",
+        stages: [
+          { id: "triage", uses: "./triage.yaml" },
+          {
+            id: "page",
+            uses: "./page.yaml",
+            needs: [
+              {
+                id: "triage",
+                on: ["succeeded"],
+                if: { field: "ok", op: "eq", value: true },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      status: 400,
+      error: 'stages[1].needs item: unknown key "if"',
+    });
+  });
+
   it("accepts inline stage without model", () => {
     expect(
       parseCreatePipelineBody({
@@ -296,6 +323,13 @@ describe("pipelineConfigToYaml", () => {
         "    gate_kinds: []",
         "    system_prompt: Implement only.",
         "    model: anthropic/claude-sonnet-4-5",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     );
@@ -339,13 +373,20 @@ describe("pipelineConfigToYaml", () => {
         "stages:",
         "  - id: hello",
         "    system_prompt: Say hello.",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
         "",
       ].join("\n"),
     );
     expect(yaml).not.toMatch(/^    model:/m);
   });
 
-  it("writes object-form DAG YAML with per-stage needs", () => {
+  it("writes object-form DAG YAML with per-stage route/entry inverted from needs", () => {
     expect(
       pipelineConfigToYaml(
         {
@@ -362,16 +403,131 @@ describe("pipelineConfigToYaml", () => {
         "id: recon-review",
         "stages:",
         "  - id: recon",
+        "    entry: true",
+        "    route:",
+        "      - to: improve-a",
         "    uses: ./recon.yaml",
         "  - id: improve-a",
-        "    needs: recon",
         "    uses: ./improve-a.yaml",
         "",
       ].join("\n"),
     );
   });
 
-  it("writes mixed multi-parent needs arrays", () => {
+  it("round-trips a succeeded-only gated Route if through create YAML emit", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: true },
+                },
+              ],
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: gated-page",
+        "stages:",
+        "  - id: triage",
+        "    entry: true",
+        "    route:",
+        "      - to: page",
+        "        if:",
+        "          field: ok",
+        "          op: eq",
+        "          value: true",
+        "    uses: ./triage.yaml",
+        "  - id: page",
+        "    uses: ./page.yaml",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("quotes string if values so YAML reload keeps string type", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: "true" },
+                },
+              ],
+            },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toContain('          value: "true"');
+  });
+
+  it("writes if only on the gated outbound entry among always-run siblings", () => {
+    expect(
+      pipelineConfigToYaml(
+        {
+          id: "gated-page",
+          stages: [
+            { id: "triage", uses: "./triage.yaml" },
+            {
+              id: "page",
+              uses: "./page.yaml",
+              needs: [
+                {
+                  id: "triage",
+                  on: ["succeeded"],
+                  if: { field: "ok", op: "eq", value: true },
+                },
+              ],
+            },
+            { id: "notify", uses: "./notify.yaml", needs: "triage" },
+          ],
+        },
+        { format: "dag" },
+      ),
+    ).toBe(
+      [
+        "id: gated-page",
+        "stages:",
+        "  - id: triage",
+        "    entry: true",
+        "    route:",
+        "      - to: page",
+        "        if:",
+        "          field: ok",
+        "          op: eq",
+        "          value: true",
+        "      - to: notify",
+        "    uses: ./triage.yaml",
+        "  - id: page",
+        "    uses: ./page.yaml",
+        "  - id: notify",
+        "    uses: ./notify.yaml",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("writes mixed multi-parent needs arrays inverted into per-source route entries", () => {
     expect(
       pipelineConfigToYaml(
         {
@@ -396,16 +552,19 @@ describe("pipelineConfigToYaml", () => {
         "id: diamond",
         "stages:",
         "  - id: research",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
         "    uses: ./research.yaml",
         "  - id: validation",
-        "    uses: ./validation.yaml",
-        "  - id: synthesize",
-        "    needs:",
-        "      - research",
-        "      - id: validation",
+        "    entry: true",
+        "    route:",
+        "      - to: synthesize",
         "        on:",
         "          - succeeded",
         "          - failed",
+        "    uses: ./validation.yaml",
+        "  - id: synthesize",
         "    uses: ./synthesize.yaml",
         "",
       ].join("\n"),
@@ -428,6 +587,13 @@ describe("createPipeline", () => {
         `id: ${id}`,
         "system_prompt: Do the thing.",
         "model: cursor/auto",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         extra,
         "",
       ].join("\n"),
@@ -474,6 +640,49 @@ describe("createPipeline", () => {
       expect(pathCollision.ok).toBe(false);
       if (pathCollision.ok) return;
       expect(pathCollision.status).toBe(409);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("writes route/entry YAML (not needs) for a needs-chain and loads it back", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const directory = "pipelines";
+
+    try {
+      await writeStage(root, directory, "alpha");
+      await writeStage(root, directory, "beta");
+      await writeStage(root, directory, "gamma");
+
+      const created = await createPipeline(root, {
+        directory,
+        id: "chain-pipeline",
+        stages: [
+          stageRef("alpha"),
+          stageRef("beta", "alpha"),
+          stageRef("gamma", "beta"),
+        ],
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+
+      const yaml = await readFile(
+        path.join(root, directory, "chain-pipeline.pipeline.yaml"),
+        "utf8",
+      );
+      expect(yaml).not.toMatch(/needs:/);
+      expect(yaml).toContain("entry: true");
+      expect(yaml).toContain("route:");
+      expect(yaml).toContain("- to: beta");
+      expect(yaml).toContain("- to: gamma");
+
+      await expect(
+        loadPipeline(path.join(root, directory, "chain-pipeline.pipeline.yaml"), {
+          cwd: root,
+        }),
+      ).resolves.toMatchObject({
+        pipeline: { id: "chain-pipeline", stages: ["alpha", "beta", "gamma"] },
+      });
     } finally {
       await cleanup();
     }

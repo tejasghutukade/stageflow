@@ -11,15 +11,13 @@ import type {
 } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import {
-  applyCloneForksFromEnvelopes,
-  applyCloneForksToSchedule,
   cloneFailureContinuesSchedule,
-  cloneFanoutConflict,
   cloneRetryDownstream,
   cloneFailFastSkipIds,
   cloneScheduleAllowsRun,
   failureIsAccepted,
   isCloneInstance,
+  mint,
   protectedClonableChildIds,
   sequentialLaterCloneIds,
   skipRejectedNeedDependents,
@@ -28,21 +26,24 @@ import {
   buildCompletedEnvelopesFromRun,
   buildStageConfigById,
 } from "./envelopeRouting.js";
+import {
+  classifyInboundAfterSuccess,
+  isEagerSingleParentIfSkip,
+  joinAllowsRun,
+  pickStalledJoinSkips,
+} from "./joinReadiness.js";
 import type {
   FeedbackLoopDecisionInput,
   ResolveFeedbackLoopDecisionResult,
 } from "./feedbackLoopDecision.js";
 import {
-  activeCohortFromCloneIds,
   forkChoicePreservesReplaySource,
-  forkParentForNeedsStage,
   mintCohortForFanout,
 } from "./forkGeneration.js";
 import {
   activeReplayId,
   activeSourceStageId,
   applySendBack,
-  cohortOverrideMap,
   createReplaySchedule,
   hydrateFromStore,
   isHeld,
@@ -81,8 +82,6 @@ type SchedulerPreparedPipeline = {
 };
 
 export type { SchedulerPreparedPipeline };
-
-const EMPTY_RETRY_DOWNSTREAM: ReadonlySet<string> = new Set();
 
 type RetryContext = {
   retryRoots: Map<string, number>;
@@ -131,12 +130,6 @@ function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
     stage_ids: dag.nodes.map((n) => n.id),
   };
 }
-
-export {
-  applyCloneForksFromEnvelopes,
-  applyCloneForksToSchedule,
-};
-export type { ApplyCloneForksResult } from "./cloneSchedule.js";
 
 function synthesizedFailureEnvelope(reason: string): StageEnvelope {
   return { status: "failure", summary: reason, artifacts: [] };
@@ -572,19 +565,8 @@ function isRunnable(
   if (feedback !== undefined && isHeld(feedback, stageId)) return false;
   const state = states.get(stageId);
   if (state !== "pending") return false;
-  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes, {
-    activeCohortForNeeds: (needsId) => {
-      const override = feedback !== undefined ? cohortOverrideMap(feedback) : undefined;
-      if (override === undefined || override.size === 0) {
-        return { kind: "untracked" };
-      }
-      const forkParentId = forkParentForNeedsStage(dag, needsId);
-      if (forkParentId === null) return { kind: "untracked" };
-      const tracked = override.get(forkParentId);
-      if (tracked === undefined) return { kind: "untracked" };
-      return activeCohortFromCloneIds(tracked);
-    },
-  });
+  if (!joinAllowsRun(dag, stageId, states, completedEnvelopes)) return false;
+  return cloneScheduleAllowsRun(dag, stageId, states, completedEnvelopes);
 }
 
 export function hydratedScheduleHasRunnableWork(
@@ -725,17 +707,6 @@ export async function runPipelineDag(
   }
 
   applyForkSkipsFromEnvelopes(dag, states, completedEnvelopes);
-  {
-    const applied = applyCloneForksFromEnvelopes(
-      dag,
-      states,
-      completedEnvelopes,
-    );
-    if (applied.dag !== dag) {
-      await store.updatePipelineDag(run.runId, applied.dag);
-    }
-    dag = applied.dag;
-  }
 
   let activeCount = 0;
   const inFlight = new Set<Promise<void>>();
@@ -773,6 +744,28 @@ export async function runPipelineDag(
     notifyRetryRootTerminal(id, "skipped");
     await store.appendStageEvent(run.runId, id, { event: "skipped" });
     await persistSkipRejected(id, "skipped");
+  };
+
+  /**
+   * Finalizes multi-parent (implicit-AND) join nodes that are permanently
+   * stuck in `pending`: every predecessor edge has reached a terminal state,
+   * but `joinAllowsRun` still can't be satisfied, and terminal
+   * states never change back. `shouldSkipForObservedNeed` deliberately
+   * refuses to decide these nodes from a single resolving parent (see its
+   * comment in cloneSchedule.ts), so this is the only place their fate gets
+   * sealed -- once we're sure every sibling has actually settled. Runs once
+   * per scheduler tick; loops until a pass finds nothing new, so a chain of
+   * stalled joins settles within a single tick rather than one per ~25ms
+   * poll.
+   */
+  const applyStalledJoinSkips = async (): Promise<void> => {
+    for (;;) {
+      const ids = pickStalledJoinSkips(dag, states, completedEnvelopes);
+      if (ids.length === 0) return;
+      for (const id of ids) {
+        await persistSkipPending(id);
+      }
+    }
   };
 
   for (const [stageId, state] of states) {
@@ -936,28 +929,34 @@ export async function runPipelineDag(
   };
 
   const onStageSuccess = async (stageId: string, envelope: StageEnvelope) => {
-    const retryDownstreamIds = retryContext
-      ? cloneRetryDownstream(dag, [...retryContext.retryRoots.keys()])
-      : EMPTY_RETRY_DOWNSTREAM;
-    const forceFreshCloneIds = activeReplayId(feedbackSchedule) !== undefined;
-    const conflict = cloneFanoutConflict(
-      dag,
-      envelope,
-      states,
-      retryDownstreamIds,
-      { forceFreshCloneIds },
-    );
-    if (conflict !== undefined) {
-      await store.appendStageEvent(run.runId, stageId, {
-        event: "failed",
-        reason: conflict,
-      });
-      await onStageFailure(stageId, conflict);
-      return;
-    }
     states.set(stageId, "succeeded");
     completedEnvelopes.set(stageId, envelope);
     notifyRetryRootTerminal(stageId, "succeeded");
+
+    const minted = mint(dag, stageId, envelope);
+    if (minted.kind === "error") {
+      await handlePostSuccessError(stageId, minted.reason);
+      return;
+    }
+    if (minted.kind === "minted") {
+      dag = minted.dag;
+      await store.updatePipelineDag(run.runId, dag);
+      states.delete(minted.catalogChildId);
+      for (const id of minted.instanceIds) {
+        states.set(id, "pending");
+      }
+      const replayId = activeReplayId(feedbackSchedule);
+      if (replayId !== undefined) {
+        noteActiveCohort(feedbackSchedule, stageId, minted.instanceIds);
+        await mintCohortForFanout({
+          store,
+          runId: run.runId,
+          replayId,
+          forkParent: stageId,
+          cloneStageIds: minted.instanceIds,
+        });
+      }
+    }
 
     const feedbackAction = envelope.feedback_loop;
     if (feedbackAction?.action === "send_back") {
@@ -1087,6 +1086,18 @@ export async function runPipelineDag(
         return;
       }
       const skippedIds: string[] = [];
+      // applyForkChoiceToSchedule (and everything it calls, including
+      // skipRejectedNeedDependents in cloneSchedule.ts) is fully synchronous
+      // -- no `await` anywhere in that call chain. So by the time this call
+      // returns, `states` already reflects every one of this stage's
+      // unchosen children as terminal, atomically, before the persistence
+      // loop below runs its first `await`. A downstream multi-parent join
+      // (see pickStalledJoinSkips) that depends on several of these children
+      // therefore always decides off fully-consistent in-memory state, even
+      // though its own `stage_events` row can end up persisted *between*
+      // two of these sequential appendStageEvent calls below (this loop) --
+      // that interleaving is only a SQLite write-ordering artifact, not a
+      // sign the join decided early.
       applyForkChoiceToSchedule(dag, stageId, chosen, states, {
         protectedIds,
         onSkip: (id) => {
@@ -1098,30 +1109,25 @@ export async function runPipelineDag(
         await store.appendStageEvent(run.runId, id, { event: "skipped" });
       }
     }
-    const applied = applyCloneForksToSchedule(dag, stageId, envelope, states, {
-      forceFreshCloneIds,
-    });
-    const dagChanged = applied.dag !== dag;
-    dag = applied.dag;
-    if (dagChanged) {
-      await store.updatePipelineDag(run.runId, dag);
-    }
-    for (const id of applied.skippedIds) {
-      notifyRetryRootTerminal(id, "skipped");
-      await store.appendStageEvent(run.runId, id, { event: "skipped" });
-    }
-    if (applied.mintedBySuccessor !== undefined) {
-      for (const [, cloneStageIds] of applied.mintedBySuccessor) {
-        if (cloneStageIds.length === 0) continue;
-        const replayId = activeReplayId(feedbackSchedule);
-        await mintCohortForFanout({
-          store,
-          runId: run.runId,
-          ...(replayId !== undefined ? { replayId } : {}),
-          forkParent: stageId,
-          cloneStageIds,
-        });
-        noteActiveCohort(feedbackSchedule, stageId, cloneStageIds);
+
+    const childIds = dag.childrenOf[stageId] ?? [];
+    for (const childId of childIds) {
+      const child = dag.nodes.find((node) => node.id === childId);
+      if (!child) continue;
+      const result = classifyInboundAfterSuccess(
+        child,
+        stageId,
+        envelope.payload,
+      );
+      if (result === "missing_field") {
+        schedulingHalted = true;
+        if (firstFailureReason === undefined) {
+          firstFailureReason = `stage "${stageId}": route if field missing from payload`;
+        }
+        return;
+      }
+      if (isEagerSingleParentIfSkip(child, stageId, envelope.payload)) {
+        await persistSkipPending(childId);
       }
     }
   };
@@ -1303,6 +1309,7 @@ export async function runPipelineDag(
 
   while (!allTerminal()) {
     drainRetryMutations();
+    await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
     }

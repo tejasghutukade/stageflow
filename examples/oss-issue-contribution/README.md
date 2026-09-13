@@ -9,12 +9,19 @@ The pipeline is repository-neutral. Point the task's `checkout` at a dedicated,
 clean branch in Mastra, Pydantic AI, or another project. It reads that project's
 own contribution instructions before acting.
 
+This catalog is **route-wired** (`entry` / `route` / multiple `to:`). Investigation
+and review are parallel DAG fan-out, not a sealed
+[Clone Chain](../../docs/yaml-catalog.md#clone-chain) (emitter → clone child → Join).
+One Clone Instance per investigation or review item remains intended future
+wiring; author that shape from
+[`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtures/pipelines/).
+
 ## Flow
 
 1. Capture the issue, repository baseline, and contribution rules.
 2. In parallel with reproduction, write a ce-explain HTML teaching artifact for the issue (no HITL).
 3. Reproduce the failure without editing tracked files.
-4. Fan out 1–5 read-only investigations in parallel.
+4. Intended Clone Chain: one Clone Instance per investigation item (parallel).
 5. Join the evidence into an implementation plan and ask for approval.
 6. Write the regression test in its own short stage, then implement the fix
    and drive the plan's full validation command list to green in one
@@ -23,12 +30,12 @@ own contribution instructions before acting.
    read-only stage that could only report the gap.
 7. Independently verify the diff and relevant tests.
 8. In parallel with review planning, write a ce-explain HTML teaching artifact for the verified fix (no HITL).
-9. Fan out 3–4 focused reviews in parallel.
+9. Intended Clone Chain: one Clone Instance per focused review (parallel).
 10. Address every blocking review finding in one fixup stage — sweeping for
     every instance of the same category of problem, not only the ones
-    reviewers happened to cite — since the pipeline is a DAG and cannot loop
-    back to oss-implement-source-fix or send the fix through a second review
-    pass.
+    reviewers happened to cite. This catalog stays a DAG (parallel fan-out
+    via multiple `to:`); it does not declare `{ type: loop }` back to
+    oss-implement-source-fix or a second review pass.
 11. Join into a PR-ready package, ask for final approval, and — once the
     operator accepts — push the branch and open the pull request against the
     fork in that same stage.
@@ -51,22 +58,22 @@ operator input or offer to substitute a report for real work. Only
 `oss-approve-plan` and `oss-approve-contribution` keep
 `gate_kinds: [artifact_backed]`.
 
-### Review feedback has no way back upstream
+### Review feedback has no loop in this catalog
 
-Stageflow pipelines are DAGs — there is no supported way for a stage to loop
-back to an earlier one yet. If `oss-review-change` finds a blocking problem,
-the pipeline cannot resume `oss-implement-source-fix` or `oss-verify-fix`
-automatically. `oss-address-review-feedback` is the accommodation for that: a
-single fixup stage, positioned after review and before approval, that
-addresses every blocking finding — sweeping for other instances of the same
-category of problem, not only the ones a reviewer happened to cite — then
+Loops exist via `{ type: loop }` on `route` (see
+[`examples/feedback-loop/`](../feedback-loop/)). This pipeline does not use
+one: it stays a DAG with parallel fan-out via multiple `to:`. If
+`oss-review-change` finds a blocking problem, the run does not resume
+`oss-implement-source-fix` or `oss-verify-fix`. `oss-address-review-feedback`
+is the accommodation: a single fixup stage after review and before approval
+that addresses every blocking finding — sweeping for other instances of the
+same category of problem, not only the ones a reviewer happened to cite — then
 hands off to `oss-approve-contribution`, which independently re-checks the
-fix before accepting it. It cannot get a fresh review of its own fix, though:
-if its patch introduces something new, `oss-approve-contribution`'s
+fix before accepting it. It cannot get a fresh review of its own fix,
+though: if its patch introduces something new, `oss-approve-contribution`'s
 fail-closed check is the backstop, and the operator has to intervene by hand —
 see [docs/cli-reference.md](../../docs/cli-reference.md) for `sf runs retry`,
 which can retry a succeeded stage in place and reset everything downstream.
-Automatic loop-back is future work, not something this example papers over.
 
 Every stage declares `verify` with at least one `type: artifact` check, so a
 success emit is rejected unless the named file appears in the envelope's
@@ -76,32 +83,26 @@ Pipeline entries wire `on_verify_fail` (repair for most stages; `manual` on
 `oss-approve-contribution`) so after-phase failures retry or wait for an
 operator instead of silently advancing.
 
-| Stage | `gate_kinds` | `verify` artifacts | `clone_actions` | `checkout_changes` `path_fields` |
-|-------|--------------|--------------------|-----------------|----------------------------------|
-| `oss-issue-intake` | `[]` | `issue-intake.md` | — | — |
-| `oss-explain-issue` | `[]` | `issue-explainer.html` | — | — |
-| `oss-reproduce-issue` | `[]` | `reproduction.md` | — | — |
-| `oss-plan-investigation` | `[]` | `investigation-map.md` | `[once, fanout]` | — |
-| `oss-investigate-area` | `[]` | `investigation.md` | — | — |
-| `oss-approve-plan` | `[artifact_backed]` | `implementation-plan.md` | — | — |
-| `oss-write-regression-test` | `[]` | `regression-test-report.md` | — | `[test_files]` |
-| `oss-implement-source-fix` | `[]` | `implementation-report.md` | — | `[changed_files]` |
-| `oss-verify-fix` | `[]` | `verification.md` | — | — |
-| `oss-explain-fix` | `[]` | `fix-explainer.html` | — | — |
-| `oss-plan-review` | `[]` | `review-plan.md` | `[fanout]` | — |
-| `oss-review-change` | `[]` | `review.md` | — | — |
-| `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — | — |
-| `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — | — |
+| Stage | Gate | Required artifacts | Other checks |
+|-------|------|--------------------|--------------|
+| `oss-issue-intake` | `[]` | `issue-intake.md` | — |
+| `oss-explain-issue` | `[]` | `issue-explainer.html` | — |
+| `oss-reproduce-issue` | `[]` | `reproduction.md` | — |
+| `oss-plan-investigation` | `[]` | `investigation-map.md` | intended Clone Chain emitter |
+| `oss-investigate-area` | `[]` | `investigation.md` | intended clone child |
+| `oss-approve-plan` | `[artifact_backed]` | `implementation-plan.md` | — |
+| `oss-write-regression-test` | `[]` | `regression-test-report.md` | `[test_files]` |
+| `oss-implement-source-fix` | `[]` | `implementation-report.md` | `[changed_files]` |
+| `oss-verify-fix` | `[]` | `verification.md` | — |
+| `oss-explain-fix` | `[]` | `fix-explainer.html` | — |
+| `oss-plan-review` | `[]` | `review-plan.md` | intended Clone Chain emitter |
+| `oss-review-change` | `[]` | `review.md` | intended clone child |
+| `oss-address-review-feedback` | `[]` | `review-feedback-report.md` | — |
+| `oss-approve-contribution` | `[artifact_backed]` | `contribution-package.md`, `pull-request.md` | — |
 
-The two planner stages restrict `clone_actions` so they cannot select `skip`.
-`oss-plan-investigation` allows `once` or `fanout`; `oss-plan-review` allows
-`fanout` only. Clones are the point of the example; skipping them defeats the
-pipeline.
+Intended Clone Chains: `oss-plan-investigation` → `oss-investigate-area` → `oss-approve-plan`, and `oss-plan-review` → `oss-review-change` → join at address/approve. This directory's YAML is not yet that shape. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain).
 
-Clone successors `oss-investigate-area` and `oss-review-change` declare
-`io.input.schema` so the planner's fanout assignment payloads are validated
-at emit against a required shape (`area_id`/`objective`/`paths`/`questions`/
-`constraints` or the review equivalent).
+`oss-investigate-area` and `oss-review-change` use empty `io.input` (a subset of each parent's `io.output`). Assignment fields (`area_id`/`objective`/`paths`/`questions`/`constraints` or the review equivalent) belong on intended Clone Chain payloads, not this DAG.
 
 Plan approval (`oss-approve-plan`) and contribution approval
 (`oss-approve-contribution`) use `artifact_backed` HITL and cannot self-approve;
@@ -198,16 +199,15 @@ dry-run mode and no extra flag. `gh` must be on `PATH` and authenticated
 (`GH_TOKEN` or `GITHUB_TOKEN`) before you accept, or the publish step will
 fail after approval.
 
-Run `sf ui` in another terminal to inspect envelopes, artifacts, clone fan-out,
+Run `sf ui` in another terminal to inspect envelopes, artifacts, Clone Instances,
 and answer the two artifact-backed gates. The explainer HTML files are ordinary
 stage artifacts; they do not appear as gates.
 
 ## Safety and interpretation
 
 - Plan approval authorizes only local edits in the task checkout.
-- Review clones always complete successfully and carry `pass` or
-  `changes_required` in their payload, allowing the join stage to see every
-  review.
+- Review Clone Instances always complete successfully and carry `pass` or
+  `changes_required` in their payload, allowing the Join to see every review.
 - Any blocking review fails the final stage closed.
 - The operator's accept through `oss-approve-contribution`'s `artifact_backed`
   gate is the only authorization to publish, and it happens moments before the

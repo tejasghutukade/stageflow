@@ -31,6 +31,26 @@ system_prompt: |
 model: openrouter/minimax/minimax-m3:free
 timeout_ms: 7200000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - root_cause
+        - target_files
+        - repro_confirmed
+        - fix_approach
+      properties:
+        root_cause:
+          type: string
+        target_files:
+          type: array
+          items:
+            type: string
+        repro_confirmed:
+          type: boolean
+        fix_approach:
+          type: string
+      additionalProperties: false
   output:
     schema:
       type: object

@@ -15,7 +15,7 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 |---|---|---|
 | Config loader | Load and validate manifests, tasks, stages, and resolved pipeline DAGs | `src/config/` |
 | Run manager | Start/resume coordination, run capacity, checkout leases, retries, startup reconciliation | `src/runtime/runManager.ts` |
-| DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, clone instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
+| DAG scheduler | Readiness, bounded parallelism, routing, fan-out/join, Clone Chain instances, failure propagation | `src/runtime/pipelineScheduler.ts` |
 | Stage runtime | Build attempt context, open the agent, validate handoff and optional after-phase `verify`, record activity, coordinate gates | `src/runtime/stageRunner.ts`, `src/runtime/verifiedStageExecution.ts`, `src/runtime/stageAttemptBootstrap.ts` |
 | Agent boundary | Stable stage input/result and live wait-or-complete session contract | `src/agent/port.ts` |
 | Backend selection | Resolves which adapter a stage runs on (stage > pipeline > global > Pi). **Model** (LLM id) resolves separately with the same tier order but no `"pi"` fallback — see [YAML catalog — Model defaults](yaml-catalog.md#model-defaults-and-precedence) | `src/agent/resolveAgentPort.ts`, `src/agent/agentBackend.ts`, `src/config/resolveModel.ts` |
@@ -33,7 +33,7 @@ Stageflow is a local-first runtime for configurable multi-stage agent workflows.
 5. **Record activity.** Logs and lifecycle events are appended to the run store while the stage works. Artifacts are written inside the run workspace instead of being embedded into transcripts.
 6. **Validate the handoff.** A successful stage emits a `StageEnvelope`. Stageflow validates its status, summary, artifacts, optional payload schema, and routing fields before downstream stages consume it.
 7. **Run after-phase `verify` when configured.** Stageflow runs the declared `verify` checks after handoff validation, persists per-check evidence and the attempt's verification disposition, and accepts the candidate only when every required check passes.
-8. **Route or wait.** The accepted envelope may select conditional successors or create clone instances. If the agent calls `ask_operator`, the stage parks as `waiting_for_input` until an answer is delivered through the console, MCP, or another supported operator path.
+8. **Route or wait.** Catalog `route` lists successors; optional `if` is evaluated against the success payload. Catalog YAML does not agent-select named successors via `fork_choice`. After a Clone Chain emitter succeeds, Stageflow schedules one Clone Instance per Clone Array element; the Join waits on those instances. If the agent calls `ask_operator`, the stage parks as `waiting_for_input` until an answer is delivered through the console, MCP, or another supported operator path.
 9. **Continue, recover, or finish.** The scheduler advances newly ready nodes, skips unreachable branches, applies `on_verify_fail` (automatic repair or a manual operator decision), and derives the final run outcome from persisted stage state.
 
 ## Handoff contract
@@ -47,13 +47,12 @@ type StageEnvelope = {
   artifacts: string[];
   payload?: Record<string, unknown>;
   fork_choice?: string[];
-  clone_forks?: CloneForkItem[];
   stage_id?: string;
   notes?: string;
 };
 ```
 
-The envelope is the control-plane handoff; artifacts are the data-plane handoff. A join stage can receive multiple predecessor envelopes without scraping or replaying their transcripts.
+The envelope is the control-plane handoff; artifacts are the data-plane handoff. A join stage can receive multiple predecessor envelopes without scraping or replaying their transcripts. `fork_choice` is not how catalog YAML chooses successors.
 
 ## Persistence and recovery
 
@@ -86,7 +85,7 @@ Each stage starts with an intentional context boundary. This prevents an ever-gr
 
 ### Explicit envelopes over transcript scraping
 
-Downstream behavior depends on validated fields instead of prose conventions inside another agent's chat history. This enables schema validation, fork routing, joins, CI extraction, and retry reasoning. The tradeoff is a stricter completion protocol for stage authors.
+Downstream behavior depends on validated fields instead of prose conventions inside another agent's chat history. This enables schema validation, route / join scheduling, Clone Chain instances, CI extraction, and retry reasoning. The tradeoff is a stricter completion protocol for stage authors.
 
 ### Pipeline-owned YAML
 
@@ -106,7 +105,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 ## Runtime invariants
 
-- A stage becomes ready only when its required predecessors reach compatible terminal states.
+- A stage becomes ready only when its required predecessors reach compatible terminal states. A single-parent child runs only after a succeeded parent (skip-cascade otherwise). A multi-parent Join runs if at least one parent succeeded; a failed parent leaves it pending; skipped siblings do not block.
 - A successor consumes validated envelopes, not arbitrary predecessor transcripts.
 - After-phase `verify` accepts a successful handoff only after every declared check passes (`on_verify_fail` is the fail policy; runtime IR still names this path `completion` / `recovery`).
 - Run and stage lifecycle state is persisted before it is projected to operator surfaces.
@@ -116,7 +115,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 ## Related documentation
 
-- [YAML catalog](yaml-catalog.md) — pipeline, stage, task, fork, and clone configuration
+- [YAML catalog](yaml-catalog.md) — pipeline, stage, task, route, join, loop, and Clone Chain configuration
 - [Envelopes](envelopes.md) — handoff schema, payload validation, and artifact rules
 - [Verified Stage Execution](verified-stage-execution.md) — `verify` / `on_verify_fail`, evidence, and repair policy
 - [Human-in-the-loop](hitl.md) — gate kinds, waiting behavior, and resume paths

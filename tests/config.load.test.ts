@@ -16,6 +16,23 @@ import {
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
+const FILE_IO = [
+  "io:",
+  "  input:",
+  "    schema:",
+  "      type: object",
+  "  output:",
+  "    schema:",
+  "      type: object",
+];
+
+const FILE_IR = [
+  "payload_schema:",
+  "  type: object",
+  "clone_input_schema:",
+  "  type: object",
+];
+
 describe("YAML loaders", () => {
   it.skip("legacy three-dir pipeline load — migrated in S7", async () => {
     const loaded = await loadPipeline(pipelinePath("docs-only"), { cwd: fixtures });
@@ -137,6 +154,7 @@ checkout: 42
         "id: no-hitl",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "gate_kinds: []",
         "",
       ].join("\n"),
@@ -155,6 +173,7 @@ checkout: 42
         "id: unknown",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "gate_kinds:",
         "  - not_a_kind",
         "",
@@ -169,6 +188,7 @@ checkout: 42
         "id: not-array",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "gate_kinds: artifact_backed",
         "",
       ].join("\n"),
@@ -187,6 +207,7 @@ checkout: 42
         "id: approve-plan",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IR,
         "gate_kinds: [artifact_backed]",
         "pre_emit_checks:",
         "  - id: plan-approved",
@@ -211,7 +232,7 @@ checkout: 42
     const withoutChecks = path.join(dir, "without-checks.yaml");
     await writeFile(
       withoutChecks,
-      ["id: no-checks", "system_prompt: x", "model: anthropic/claude-sonnet-4-5", ""].join(
+      ["id: no-checks", "system_prompt: x", "model: anthropic/claude-sonnet-4-5", ...FILE_IO, ""].join(
         "\n",
       ),
     );
@@ -228,6 +249,7 @@ checkout: 42
         "id: empty",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IR,
         "pre_emit_checks: []",
         "",
       ].join("\n"),
@@ -243,6 +265,7 @@ checkout: 42
         "id: bad-kind",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IR,
         "pre_emit_checks:",
         "  - id: x",
         "    type: gate",
@@ -253,8 +276,8 @@ checkout: 42
     await expect(loadStage(badKind)).rejects.toThrow(/\.kind must be one of/);
   });
 
-  it("loads optional clone_input_schema and clone_actions from stage YAML", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-fields-"));
+  it("loads optional clone_input_schema from stage YAML", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-input-"));
     const filePath = path.join(dir, "investigate-area.yaml");
     await writeFile(
       filePath,
@@ -262,36 +285,15 @@ checkout: 42
         "id: investigate-area",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
-        "clone_input_schema:",
-        "  type: object",
-        "  properties:",
-        "    area_id:",
-        "      type: string",
-        "    objective:",
-        "      type: string",
-        "    paths:",
-        "      type: array",
-        "      items:",
-        "        type: string",
-        "  required:",
-        "    - area_id",
-        "    - objective",
-        "    - paths",
-        "clone_actions:",
-        "  - once",
-        "  - fanout",
+        ...FILE_IO,
         "",
       ].join("\n"),
     );
     const loaded = await loadStage(filePath);
-    expect(loaded.clone_input_schema).toMatchObject({
-      type: "object",
-      required: ["area_id", "objective", "paths"],
-    });
-    expect(loaded.clone_actions).toEqual(["once", "fanout"]);
+    expect(loaded.clone_input_schema).toMatchObject({ type: "object" });
   });
 
-  it("rejects invalid clone_input_schema and empty or non-array clone_actions", async () => {
+  it("rejects invalid clone_input_schema", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "sf-clone-bad-"));
     const badSchema = path.join(dir, "bad-schema.yaml");
     await writeFile(
@@ -300,52 +302,17 @@ checkout: 42
         "id: bad-schema",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
-        "clone_input_schema:",
-        "  type: not-a-valid-type",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: not-a-valid-type",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
-    await expect(loadStage(badSchema)).rejects.toThrow(/clone_input_schema/);
-
-    const emptyActions = path.join(dir, "empty-actions.yaml");
-    await writeFile(
-      emptyActions,
-      [
-        "id: empty-actions",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        "clone_actions: []",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(emptyActions)).rejects.toThrow(/clone_actions/);
-
-    const stringAction = path.join(dir, "string-action.yaml");
-    await writeFile(
-      stringAction,
-      [
-        "id: string-action",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        'clone_actions: "skip"',
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(stringAction)).rejects.toThrow(/clone_actions/);
-
-    const unknownAction = path.join(dir, "unknown-action.yaml");
-    await writeFile(
-      unknownAction,
-      [
-        "id: unknown-action",
-        "system_prompt: x",
-        "model: anthropic/claude-sonnet-4-5",
-        "clone_actions:",
-        "  - explode",
-        "",
-      ].join("\n"),
-    );
-    await expect(loadStage(unknownAction)).rejects.toThrow(/clone_actions/);
+    await expect(loadStage(badSchema)).rejects.toThrow(/io\.input\.schema/);
   });
 
   it("loads optional skill name from stage YAML", async () => {
@@ -357,6 +324,7 @@ checkout: 42
         "id: named",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "skill: improve-codebase-architecture",
         "",
       ].join("\n"),
@@ -370,6 +338,7 @@ checkout: 42
         "id: omitted",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "",
       ].join("\n"),
     );
@@ -392,6 +361,7 @@ checkout: 42
           `id: ${name}`,
           "system_prompt: x",
           "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
           skillLine,
           "",
         ].join("\n"),
@@ -414,6 +384,7 @@ checkout: 42
         "id: named",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "mcp:",
         "  - github",
         "  - notion",
@@ -440,6 +411,7 @@ checkout: 42
           `id: ${name}`,
           "system_prompt: x",
           "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
           mcpLines,
           "",
         ].join("\n"),
@@ -460,6 +432,7 @@ checkout: 42
         "id: reserved",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "mcp:",
         "  - stageflow",
         "",
@@ -481,6 +454,7 @@ checkout: 42
         "id: approve",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "timeout_ms: 3600000",
         "",
       ].join("\n"),
@@ -498,6 +472,7 @@ checkout: 42
         "id: zero",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "timeout_ms: 0",
         "",
       ].join("\n"),
@@ -511,6 +486,7 @@ checkout: 42
         "id: float",
         "system_prompt: x",
         "model: anthropic/claude-sonnet-4-5",
+        ...FILE_IO,
         "timeout_ms: 1.5",
         "",
       ].join("\n"),

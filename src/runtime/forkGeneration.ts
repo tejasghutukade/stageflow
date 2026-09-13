@@ -17,7 +17,35 @@ function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
   };
 }
 
-/** Persistent route stages that fan out to clonable successors (or already have instances). */
+function nodeById(dag: ResolvedPipelineDag, id: string) {
+  return dag.nodes.find((n) => n.id === id);
+}
+
+function isCloneEmitter(
+  node: { clone_array_field?: string } | undefined,
+): boolean {
+  return node?.clone_array_field !== undefined;
+}
+
+function isMintedCloneInstance(
+  node: { id: string; definition_id?: string } | undefined,
+): boolean {
+  return (
+    node !== undefined &&
+    node.definition_id !== undefined &&
+    node.definition_id !== node.id
+  );
+}
+
+function parentIsCloneEmitter(
+  dag: ResolvedPipelineDag,
+  node: { needs: string | null } | undefined,
+): boolean {
+  if (node?.needs === null || node?.needs === undefined) return false;
+  return isCloneEmitter(nodeById(dag, node.needs));
+}
+
+/** Persistent route stages that fan out to Clone Chain children (or already have instances). */
 export function routeRelatedForkParentIds(
   dag: ResolvedPipelineDag,
   routeStageIds: readonly string[],
@@ -27,17 +55,14 @@ export function routeRelatedForkParentIds(
   const snapshot = asDagSnapshot(dag);
 
   for (const stageId of routeStageIds) {
-    for (const childId of dag.childrenOf[stageId] ?? []) {
-      const child = dag.nodes.find((n) => n.id === childId);
-      if (child?.clonable === true) {
-        parents.add(stageId);
-      }
+    if (isCloneEmitter(nodeById(dag, stageId))) {
+      parents.add(stageId);
     }
   }
 
   for (const stageId of routeStageIds) {
-    const node = dag.nodes.find((n) => n.id === stageId);
-    if (node?.clonable === true && node.needs !== null) {
+    const node = nodeById(dag, stageId);
+    if (node !== undefined && parentIsCloneEmitter(dag, node) && node.needs !== null) {
       parents.add(node.needs);
     }
   }
@@ -51,12 +76,12 @@ export function routeRelatedForkParentIds(
   }
 
   for (const stageId of routeStageIds) {
-    const node = dag.nodes.find((n) => n.id === stageId);
-    if (node?.clonable !== true) continue;
+    const node = nodeById(dag, stageId);
+    if (!parentIsCloneEmitter(dag, node) || isMintedCloneInstance(node)) continue;
     const instances = instancesOfDefinition(snapshot, stageId).filter(
       (id) => id !== stageId,
     );
-    if (instances.length > 0 && node.needs !== null) {
+    if (instances.length > 0 && node !== undefined && node.needs !== null) {
       parents.add(node.needs);
     }
   }
@@ -64,7 +89,7 @@ export function routeRelatedForkParentIds(
   return [...parents];
 }
 
-/** Clone instance ids currently under clonable successors of a fork parent. */
+/** Clone instance ids currently under Clone Chain children of a fork parent. */
 export function cloneInstanceIdsForForkParent(
   dag: ResolvedPipelineDag,
   forkParentStageId: string,
@@ -72,9 +97,10 @@ export function cloneInstanceIdsForForkParent(
   const snapshot = asDagSnapshot(dag);
   const ids: string[] = [];
   const seen = new Set<string>();
+  const parentIsEmitter = isCloneEmitter(nodeById(dag, forkParentStageId));
   for (const childId of dag.childrenOf[forkParentStageId] ?? []) {
-    const child = dag.nodes.find((n) => n.id === childId);
-    if (child?.clonable === true) {
+    const child = nodeById(dag, childId);
+    if (parentIsEmitter && !isMintedCloneInstance(child)) {
       for (const id of instancesOfDefinition(snapshot, childId)) {
         if (id === childId) continue;
         if (seen.has(id)) continue;
@@ -388,7 +414,7 @@ export function forkChoicePreservesReplaySource(
       return true;
     }
     const child = dag.nodes.find((n) => n.id === childId);
-    if (child?.clonable === true) {
+    if (parentIsCloneEmitter(dag, child) && !isMintedCloneInstance(child)) {
       const snapshot = asDagSnapshot(dag);
       for (const instanceId of instancesOfDefinition(snapshot, childId)) {
         if (instanceId === childId) continue;

@@ -6,22 +6,9 @@ import {
   composeStageUserPrompt,
 } from "../src/agent/piAdapter.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
-import type { CloneEmitContext } from "../src/types/forkChoice.js";
 import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 
-const CLONE_FORESIGHT =
-  'Each once or fanout envelope is a full StageEnvelope — it requires status ("success" or "failure"), summary (non-empty string), and artifacts (array of strings). io.input.schema fields belong in envelope.payload, not at the top level of the clone_forks item.';
-
-const AREA_ASSIGNMENT_SCHEMA = {
-  type: "object",
-  properties: {
-    area_id: { type: "string" },
-    objective: { type: "string" },
-  },
-  required: ["area_id", "objective"],
-};
-
-function baseInput(cloneEmitContext?: CloneEmitContext) {
+function baseInput() {
   return {
     roots: buildStageRoots("/tmp/run-ws", "oss-plan-investigation"),
     stage: {
@@ -31,20 +18,6 @@ function baseInput(cloneEmitContext?: CloneEmitContext) {
     },
     task: { id: "t", goal: "plan investigation" },
     priorEnvelope: null,
-    ...(cloneEmitContext !== undefined ? { cloneEmitContext } : {}),
-  };
-}
-
-function makeCloneContext(): CloneEmitContext {
-  return {
-    clonableSuccessors: [
-      {
-        successorId: "oss-investigate-area",
-        cloneCap: 4,
-        cloneInputSchema: AREA_ASSIGNMENT_SCHEMA,
-      },
-    ],
-    allowedActions: ["once", "fanout"],
   };
 }
 
@@ -79,45 +52,14 @@ function makeFeedbackLoopContext(
   };
 }
 
-describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
-  it("cloneEmitContext present → foresight names full StageEnvelope fields and envelope.payload", () => {
-    const prompt = composeStageUserPrompt(
-      baseInput(makeCloneContext()),
-      "emit_stage_envelope",
-    );
-    expect(prompt).toContain("full StageEnvelope");
-    expect(prompt).toContain("status");
-    expect(prompt).toContain("summary");
-    expect(prompt).toContain("artifacts");
-    expect(prompt).toContain("envelope.payload");
-    expect(prompt).toContain("Assignment schema (io.input.schema):");
-    expect(prompt).toContain(CLONE_FORESIGHT);
-    expect(prompt).not.toContain("clone_input_schema");
-  });
-
-  it("Cursor emitToolHint override still appends clone foresight", () => {
-    const prompt = composeStageUserPrompt(
-      baseInput(makeCloneContext()),
-      "emit_stage_envelope",
-      cursorProviderSupport.emitToolHint!("emit_stage_envelope"),
-    );
-    expect(prompt).toContain("pi__emit_stage_envelope");
-    expect(prompt).toContain("Clonable successors");
-    expect(prompt).toContain(CLONE_FORESIGHT);
-    expect(prompt).toContain("envelope.payload");
-    expect(prompt).toContain("Assignment schema (io.input.schema):");
-    expect(prompt).not.toContain("clone_input_schema");
-  });
-
-  it("cloneEmitContext absent → foresight sentence absent", () => {
+describe("composeStageUserPrompt", () => {
+  it("does not teach clonable successors or clone_forks", () => {
     const prompt = composeStageUserPrompt(
       baseInput(),
       "emit_stage_envelope",
     );
-    expect(prompt).not.toContain("full StageEnvelope");
-    expect(prompt).not.toContain("envelope.payload");
-    expect(prompt).not.toContain(CLONE_FORESIGHT);
     expect(prompt).not.toContain("Clonable successors");
+    expect(prompt).not.toContain("clone_forks");
   });
 
   it("priorEnvelopesByStage renders keyed aggregate instead of first-stage copy", () => {
@@ -145,7 +87,7 @@ describe("composeStageUserPrompt - clone envelope foresight (U3)", () => {
     );
     expect(prompt).toContain("feedback_loop is required");
     expect(prompt).toContain("Allowed send_back target: plan");
-    expect(prompt).toContain("cannot be combined with fork_choice or clone_forks");
+    expect(prompt).toContain("cannot be combined with fork_choice");
   });
 
   it("feedbackLoopContext present → labelled Feedback Loop Context section", () => {

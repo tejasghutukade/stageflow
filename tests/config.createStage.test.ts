@@ -155,6 +155,13 @@ describe("stageConfigToYaml", () => {
         "id: clarify",
         "system_prompt: Clarify the task into crisp requirements.",
         "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
@@ -174,6 +181,13 @@ describe("stageConfigToYaml", () => {
         "gate_kinds: []",
         "system_prompt: Implement only.",
         "model: anthropic/claude-sonnet-4-5",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
@@ -194,7 +208,7 @@ describe("stageConfigToYaml", () => {
         system_prompt: "Use default model.",
       }),
     ).toBe(
-      ["id: inherit", "system_prompt: Use default model.", ""].join("\n"),
+      ["id: inherit", "system_prompt: Use default model.", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
     );
     expect(
       stageConfigToYaml({
@@ -229,6 +243,8 @@ describe("createStage", () => {
         id: "new-stage",
         system_prompt: "Do the thing.",
         model: "cursor/auto",
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
       });
 
       const emptyHitl = await createStage(root, {
@@ -252,6 +268,8 @@ describe("createStage", () => {
         system_prompt: "Implement only.",
         model: "cursor/auto",
         gate_kinds: [],
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
       });
       const emptyYaml = await readFile(path.join(root, "pipelines/no-hitl.yaml"), "utf8");
       expect(emptyYaml).toMatch(/^gate_kinds: \[\]$/m);
@@ -308,6 +326,8 @@ describe("createStage", () => {
       await expect(loadStage(path.join(root, "pipelines/inherit-model.yaml"))).resolves.toEqual({
         id: "inherit-model",
         system_prompt: "Use the global default.",
+        payload_schema: { type: "object" },
+        clone_input_schema: { type: "object" },
       });
     } finally {
       await cleanup();

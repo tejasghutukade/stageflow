@@ -1,15 +1,18 @@
 id: diamond-fan-in
 stages:
   - id: clarify
+    entry: true
+    route:
+      - to: research
+      - to: validation
     uses: ../stages/clarify.yaml
   - id: research
-    needs: clarify
+    route:
+      - to: synthesize
     uses: ../stages/research.yaml
   - id: validation
-    needs: clarify
+    route:
+      - to: synthesize
     uses: ../stages/validation.yaml
   - id: synthesize
-    needs:
-      - research
-      - validation
     uses: ../stages/synthesize.yaml

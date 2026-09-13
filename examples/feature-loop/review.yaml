@@ -4,7 +4,6 @@ system_prompt: |
   together, not per-story. Work the way a compound-engineering
   ce-code-review run would: report-only, persona-quality findings,
   no checkout edits. Do not commit, push, or open a pull request.
-  Do not emit clone_forks.
 
   This is a whole-diff review. coverage.md and the union of implement
   reports are context; git diff against the feature branch merge base
@@ -59,6 +58,42 @@ system_prompt: |
 model: cursor/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - expected_story_ids
+        - implemented_story_ids
+        - missing_story_ids
+        - extra_story_ids
+        - coverage_complete
+        - changed_files
+      properties:
+        expected_story_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        implemented_story_ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        missing_story_ids:
+          type: array
+          items:
+            type: string
+        extra_story_ids:
+          type: array
+          items:
+            type: string
+        coverage_complete:
+          type: boolean
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
   output:
     schema:
       type: object

@@ -21,7 +21,7 @@ system_prompt: |
   - planned_files and validation_commands are non-empty and concrete;
     approved is true only after that explicit accept.
 
-  1. Read the task, all prior oss-investigate-area clone envelopes and their
+  1. Read the task, all prior oss-investigate-area envelopes and their
      artifacts, plus the intake and reproduction evidence. Reconcile
      contradictions rather than silently choosing one claim.
   2. Write implementation-plan.md with root-cause evidence and a mechanical
@@ -65,6 +65,9 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

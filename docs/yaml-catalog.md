@@ -66,9 +66,9 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `needs`, `fork`, `uses`, `clonable`, `clone_cap`, `on_verify_fail`, `feedback_loop`, `replay_safe`. `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp).
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io`, `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`, `clone_actions`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start (clone assignment is the strong case). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). Presence of `io.output.schema` still implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional parent `clone_actions` is a non-empty list of `skip` | `once` | `fanout`; omit the field to keep all three. See [Envelopes — clonable successors](envelopes.md#clonable-successors). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
@@ -76,9 +76,9 @@ Each stage is an object with one of:
 
 ### Upgrading older catalogs {#upgrading-older-catalogs}
 
-**Write Author YAML only:** `io` / `verify` / `on_verify_fail`. That is the catalog dialect for new and migrated files.
+**Write Author YAML only:** `io` / `verify` / `on_verify_fail` for contracts, and `route` / `entry` / `{ type: loop }` for wiring.
 
-This release still **loads** catalogs that use the previous authoring keys (second column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load — do not author both spellings.
+This release still **loads** catalogs that use the previous **contract** keys (second column). Convert them with [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) (dry-run default; `--write` to apply). Mixed old and new contract keys in one file fail load — do not author both spellings. Wiring (`needs` / `fork` / `feedback_loop`) is a separate hard cutover — see [Wiring](#upgrading-wiring).
 
 Runtime IR names in TypeScript/JSON after load (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`) are **not** what you write in catalog YAML.
 
@@ -124,6 +124,46 @@ verify:
 ```
 
 After you migrate, you can optionally set `STAGEFLOW_LEGACY_YAML=0` to reject leftover legacy authoring keys (`sf migrate-yaml` still reads them). You do not need that env var to author `io` / `verify` / `on_verify_fail`.
+
+#### Wiring: `needs` / `fork` / `feedback_loop` → `route` {#upgrading-wiring}
+
+Contract dual-read is only for `payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`. [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) converts those keys only. It does **not** rewrite wiring.
+
+`needs`, `fork`, `feedback_loop`, `route_select`, and `allow_none` are a hard cutover: load fails.
+
+- `"needs" is no longer supported — declare the wiring on the source stage's "route" instead`
+- `"fork" is no longer supported — use "route" instead; listed route targets always run`
+- `"feedback_loop" is no longer supported — use a "type: loop" entry inside "route" instead`
+- `"route_select" is no longer supported — listed route targets always run`
+- `"allow_none" is no longer supported — listed route targets always run`
+
+Those “always run” phrases describe the catalog DAG (every listed `to:` stays on the graph). Optional `if` can still skip a listed successor at runtime.
+
+`clonable`, `clone_actions`, envelope `clone_forks`, and emit-time `skip` / `once` / `fanout` are a hard cutover to [Clone Chain](#clone-chain). There is no dual-read. One run per list item is a sealed emitter → clone child → Join with `clone_cap` / `clone_mode` on the emitter pipeline entry.
+
+Cheat sheet:
+
+- `needs: [A]` on B → on A: `route: [{ to: B }]`; mark roots `entry: true`
+- structured need `{ id: A, on: [...] }` on Join → on A: `route: [{ to: Join, on: [...] }]`
+- `fork: { select: one|subset }` plus envelope `fork_choice` → list all `to:`; gate with `if` / `on:` — catalog YAML does not pick exclusive successors via `fork_choice`
+- top-level `feedback_loop:` → a `{ type: loop, to, max_replays, on_max_replays, replay_session }` entry inside `route`
+
+Join / skip (the child no longer declares parents; default edge is succeeded-only):
+
+- Single-parent: a skipped parent skip-cascades children whose `on` does **not** include `skipped`. Launch still requires a **succeeded** parent. Including `skipped` or `failed` in `on:` only opts that edge out of skip-cascade; it does not launch the child from a skipped or failed parent.
+- Multi-parent Join: never skip-cascaded from one parent. Wait until every parent is terminal. Runs if at least one parent succeeded (skipped siblings do not block). Stays pending if any parent failed (even if `on` lists `failed`). Force-skipped if every parent skipped.
+- Route `if` miss on a single-parent edge skips that successor (and cascade-skips its single-parent dependents). A required `if` field missing from the payload fails the run (`missing_field`); it is not treated as a miss.
+
+Validate:
+
+- `catalog.legacy_yaml` — contract dual-read warning; `--strict` does not promote
+- wiring keys above — hard errors
+- illegal [Clone Chain](#clone-chain) shape or policy — hard error (load / `sf validate`)
+- `pipeline.route_if_invalid` — error
+- `pipeline.route_all_gated` — warning, `ok: true`; `--strict` does not promote
+- `pipeline.model_applies` — warning
+
+See [Route wiring](#route), [Generic fan-in](#generic-fan-in), [Clone Chain](#clone-chain), [Feedback loops](#feedback-loops), [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/), [`examples/route-if-tour/`](../examples/route-if-tour/).
 
 #### For contributors
 
@@ -218,7 +258,7 @@ Use `manual` for side-effecting work such as publishing or payments. Operator co
 
 Optional pipeline-file `schemas:` is the `$ref` root for this release. Refs are JSON Pointer `#/schemas/NAME`. Cycles fail load. `schemas:` on an include fragment fails load. Isolated stage validate of a `$ref`-only schema fails with `stage.unresolved_schema_ref`; pipeline validate resolves after attach.
 
-Sequential single-parent non-clone edges: if both sides have schemas, consumer `io.input` must be a structural subset of producer `io.output`. Clone edges and multi-parent joins do not run that subset check — the child's `io.input` is the assignment or join contract.
+Sequential and fan-in edges: consumer `io.input` must be a structural subset of **each** parent's `io.output`. Pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. Compatible vs incompatible handoffs: [`11-sequential-io-handoff.pipeline.yaml`](../examples/route-wiring-smoke-test/11-sequential-io-handoff.pipeline.yaml), [`rejected/17-reject-io-incompatible.pipeline.yaml`](../examples/route-wiring-smoke-test/rejected/17-reject-io-incompatible.pipeline.yaml). Richer `$ref`/nested/array subset example: [`12-complex-io-schemas.pipeline.yaml`](../examples/route-wiring-smoke-test/12-complex-io-schemas.pipeline.yaml). All-`$ref` input and output: [`13-ref-io-handoff.pipeline.yaml`](../examples/route-wiring-smoke-test/13-ref-io-handoff.pipeline.yaml); incompatible `$ref` pair: [`rejected/21-reject-ref-io.pipeline.yaml`](../examples/route-wiring-smoke-test/rejected/21-reject-ref-io.pipeline.yaml).
 
 ```yaml
 id: story-handoff
@@ -233,17 +273,25 @@ schemas:
 stages:
   - id: draft
     system_prompt: Draft the slice and emit a success envelope.
+    entry: true
+    route:
+      - to: review
     io:
+      input:
+        schema:
+          type: object
       output:
         schema:
           $ref: "#/schemas/story-slice"
   - id: review
     system_prompt: Review the slice.
-    needs: [draft]
     io:
       input:
         schema:
           $ref: "#/schemas/story-slice"
+      output:
+        schema:
+          type: object
 ```
 
 Runnable demo with `uses:` stages: [`examples/feature-loop/`](../examples/feature-loop/) (`schemas.story-assignment` → `plan` `io.input.schema`).
@@ -257,12 +305,15 @@ id: linear-explicit
 stages:
   - id: clarify
     uses: ../stages/clarify.yaml
+    entry: true
+    route:
+      - to: design-doc
   - id: design-doc
     uses: ../stages/design-doc.yaml
-    needs: clarify
+    route:
+      - to: implementation-plan
   - id: implementation-plan
     uses: ../stages/implementation-plan.yaml
-    needs: design-doc
 ```
 
 See [`tests/fixtures/pipelines/linear-explicit.pipeline.yaml`](../tests/fixtures/pipelines/linear-explicit.pipeline.yaml).
@@ -289,74 +340,84 @@ stages:
 
 See also [`tests/fixtures/model-hierarchy/pipeline-default/`](../tests/fixtures/model-hierarchy/pipeline-default/).
 
-Parallel fan-out: multiple stages with the same `needs` (siblings):
+Parallel fan-out: multiple forward `to:` entries on the source. Listed `to:` stay on the DAG. Default `on:` is succeeded-only. After the source **succeeds**, a single-parent successor can run (then `if`, if present, is evaluated). Including `failed` or `skipped` in `on:` opts that edge out of skip-cascade; it does not launch a child from a skipped or failed parent. Optional `if` can skip a listed successor after success. The completing agent does not pick which successors run.
 
 ```yaml
 stages:
   - id: clarify
     uses: ../stages/clarify.yaml
+    entry: true
+    route:
+      - to: design-doc
+      - to: implementation-plan
   - id: design-doc
     uses: ../stages/design-doc.yaml
-    needs: clarify
   - id: implementation-plan
     uses: ../stages/implementation-plan.yaml
-    needs: clarify
 ```
 
 See [`tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml).
 
-`needs` is either a single parent stage id (string) or a non-empty array (length ≥ 1). A one-item array is the same graph as a scalar. Parallel fan-out is multiple children with the same parent. Keyed generic fan-in is one child with a `needs` array of two or more parents — see [Generic fan-in](#generic-fan-in). Clone-list joins still use a single catalog parent id — see [Clonable successors](#clonable-successors).
+`route` is a list of entries. Forward entries name `to:`, optional `on:` (`succeeded` | `failed` | `skipped`; default succeeded-only skip-cascade policy), and optional `if`. Multiple `to:` entries fan out; `if` is a runtime gate on that edge, not a missing DAG edge. Load and pipeline create invert preserve `if` on the matching outbound Route entry. HTTP create `needs` remains ungated (`id`/`on` or a parent id string). Keyed generic fan-in is one child targeted by two or more parents — see [Generic fan-in](#generic-fan-in).
 
 ### Generic fan-in {#generic-fan-in}
 
-A stage may wait for two or more catalog parents. `needs` takes one of two forms:
-
-| Form | Shape | When |
-|------|-------|------|
-| Scalar | `needs: stage-id` | One parent. The accepted terminal is `succeeded` only. |
-| Array | `needs: [ … ]` with length ≥ 1 | One or more parents. Length 1 is the same graph as a scalar. Length ≥ 2 is keyed generic fan-in. |
-
-Array items may be mixed. A string id defaults to `on: [succeeded]`. `{ id, on }` declares a non-empty unique subset of `succeeded` \| `failed` \| `skipped`. Duplicate ids, unknown keys, unknown parents, empty `on`, and cycles are rejected.
+A stage may wait for two or more catalog parents. Each parent lists a forward `to:` to the join. Optional `on:` on a **single-parent** edge is skip-cascade policy (default succeeded-only). On a Join inbound edge, `on` does **not** decide Join readiness. The Join waits until every parent is terminal; it stays pending if any parent failed (even if `on` lists `failed`); it force-skips if every parent skipped; otherwise it follows the succeeded / `if` rules below. Skipped siblings do not block a Join that has a succeeded parent. Optional `if` on that same entry is evaluated against **that parent's** output payload after success.
 
 ```yaml
 id: diamond-fan-in
 stages:
   - id: clarify
     uses: ../stages/clarify.yaml
+    entry: true
+    route:
+      - to: research
+      - to: validation
   - id: research
     uses: ../stages/research.yaml
-    needs: clarify
+    route:
+      - to: synthesize
   - id: validation
     uses: ../stages/validation.yaml
-    needs: clarify
+    route:
+      - to: synthesize
   - id: synthesize
     uses: ../stages/synthesize.yaml
-    needs:
-      - research
-      - validation
 ```
 
-Structured `on` sets (accepted failure or skip):
+Listing `failed` / `skipped` on a Join inbound `on:` (skip-cascade policy, not a launch after failure):
 
 ```yaml
-  - id: synthesize
-    uses: ../stages/synthesize.yaml
-    needs:
-      - id: research
+  - id: research
+    uses: ../stages/research.yaml
+    route:
+      - to: synthesize
         on: [succeeded, failed, skipped]
-      - id: validation
-        on: [succeeded]
 ```
 
-The join starts only after every declared parent (or every current clone instance of a clonable parent) is terminal in that parent's accepted set. Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. Do not reuse clone-list `priorEnvelopes` — that field stays for [clone-list joins](#clonable-successors). A clonable parent under generic fan-in maps to one key whose value is that parent's clone-list-ordered envelope array (or `[]` when a skip of the definition is accepted). See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
+Listing `failed` or `skipped` on a Join inbound edge does not run the Join after failure. Skipped siblings still do not block when another parent succeeded.
 
-A parent whose observed terminal is not in that edge's `on` set skips only incompatible paths. Independent siblings and joins that accept the observed state continue. Accepted failed or skipped parents stay visibly terminal and do not independently fail the run.
+The Join starts only after every declared parent is terminal. A false inbound `if` does **not** skip the child while another parent is still running.
+
+After every parent **succeeded**, the child **runs** only if every inbound edge fired (`if` true — including nested `all` / `any` / `not` composition — or no `if`). It then opens with **every** parent's success envelope (complete set, no hole). If any inbound `if` missed, the child is **skipped** — not pending forever, not failed, not opened with a partial envelope set. Sequential `io` subset checks still apply when the Join child runs; a skipped Join child is not opened.
+
+A failed parent still **blocks** the Join. `if` does not redefine failure joins.
+
+Pipelines whose Routes have **no** forward `if` keep today's Join: it **runs if at least one parent succeeded**. Skipped parents do not block, and their envelopes are omitted from join input. The Join stays pending if a parent failed. It is skipped if every parent skipped.
+
+The all-inbound-fired check applies only when every parent succeeded. If some parents skipped and at least one succeeded, the Join can still run even if a succeeded parent's inbound `if` missed; skipped parents' envelopes stay omitted from join input.
+
+A false `if` on a single-parent edge skips that successor and skip-cascades its single-parent dependents. A Join with two or more parents is never skip-cascaded from one parent.
+
+Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
+
+A [Clone Chain](#clone-chain) Join's parents are that chain's Clone Instances. Every instance must succeed; a failed or skipped instance is a failed Join parent and blocks the Join. That Join does not run on a partial set.
 
 Fixtures:
 
-- [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond, string `needs` array
-- [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — structured `on` including failed and skipped
-- [`diamond-fan-in-clone.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-clone.pipeline.yaml) — clonable parent plus named sibling join
+- [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond
+- [`diamond-fan-in-accepted.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in-accepted.pipeline.yaml) — inbound `on` lists `failed` and `skipped` (skip-cascade policy; does not run the Join after a failed parent)
+- [`route-if-join.pipeline.yaml`](../tests/fixtures/pipelines/route-if-join.pipeline.yaml) — Join gated by inbound `if`s
 
 Runtime coverage: [`tests/runtime.genericFanIn.schedule.test.ts`](../tests/runtime.genericFanIn.schedule.test.ts), [`tests/runtime.genericFanIn.retry.test.ts`](../tests/runtime.genericFanIn.retry.test.ts), [`tests/runtime.envelopeRouting.test.ts`](../tests/runtime.envelopeRouting.test.ts), [`tests/runstore.trackProjection.test.ts`](../tests/runstore.trackProjection.test.ts).
 
@@ -371,7 +432,6 @@ include:
 stages:
   - id: finish
     uses: ./finish.yaml
-    needs: gate
 ```
 
 Fragment files contain a `stages:` array (same entry shapes as the parent pipeline). Paths in `local:` are relative to the pipeline file's directory. Top-level `model` / `agent` on a fragment are ignored; only the root pipeline file supplies those defaults (see [Model defaults and precedence](#model-defaults-and-precedence)).
@@ -380,121 +440,236 @@ Nested `include:` is allowed. Cycles and duplicate stage ids across files are re
 
 Fixture: [`tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml`](../tests/fixtures/pipeline-owned/include-merge/main.pipeline.yaml).
 
-### Fork pipelines
+### Route wiring {#route}
 
-A deciding stage may declare a `fork` object to require a runtime choice among its immediate successors. The stage must emit `fork_choice` in its envelope (see [Envelopes](envelopes.md)). Use **object-form** stage entries (`id:` + optional `uses:` + `fork:`) — bare string stage refs cannot carry `fork`.
+Wiring is declared on the **source** stage as `route`. Each forward entry names a `to:` target. Optional `on:` is skip-cascade / acceptance policy (default succeeded-only), not a launch schedule for failed or skipped parents. Optional `if` is a payload predicate evaluated after the source **succeeds**, against that stage's output payload only. A pipeline that uses `route` must mark at least one `entry: true` root.
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `select` | yes | `one` — exactly one immediate successor must be named in `fork_choice`. `subset` — one or more successors (including all, some, or none when `allow_none` is set). |
-| `allow_none` | no | Boolean, default `false`. Only usable with `select: subset`. When `true`, an empty `fork_choice: []` is valid and all immediate successors are skipped. |
+Listed forward `to:` targets still appear on the DAG. A miss skips that successor at runtime; it does not remove the edge. After success, an entry with no `if` is eligible to run (single-parent) or participates in Join readiness as above. `on` does not launch from failed or skipped. Two matching `if`s on different targets both fire (not first-match-wins). Duplicate `to:` in one Route stays illegal. The completing agent does **not** pick which successors run, and catalog YAML does not produce a `fork` on the resolved DAG. HITL (`ask_operator`) inside a stage is not a parallel router: `if` still runs only after that stage succeeds and emits a payload.
 
-`fork` accepts only `select` and `allow_none`. Catalog validation does not reject `select: one` together with `allow_none: true`; emit still requires exactly one choice — empty `fork_choice` fails even if `allow_none` is set.
+`if` is a predicate, not a string: a leaf `{ field, op, value }` or a composition node `{ all: [...] }` | `{ any: [...] }` | `{ not: {...} }` (including nesting such as `not` around `all`, or `any` of `all`s). A node must be exactly one of those shapes; mixing leaf keys with `all` / `any` / `not`, or any unknown key, is `pipeline.route_if_invalid`. Empty `all` / `any` / `in` / `not_in` lists are invalid. There is no `exists` operator and no else/fallback arm.
 
-`fork_choice` names only non-clonable immediate successors. When every child is clonable, `fork_choice` is not required.
+Operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`. `eq` / `ne` are only for `string` | `number` | `integer` | `boolean` schema fields. `gt` / `gte` / `lt` / `lte` are only for `number` | `integer`. Comparison is type-strict (`1` is not `"1"`). `in` / `not_in` mean the **scalar** field is a member of a non-empty literal list whose items share the field's scalar type — not array-contains. `value` is required for every operator.
 
-Children list `needs: parent-id`. A stage with multiple children and **no** `fork` field is [parallel fan-out](#parallel-fan-out-multiple-stages-with-the-same-needs-siblings) — every successor runs. A stage with `fork` requires the completing agent to name which successors run via `fork_choice`. Requiring `fork_choice` from a plain fan-out stage would break existing pipelines; omitting it from a fork stage fails emit validation.
+`field` is a dot-separated path into the source output payload. Validate walks the source `io.output.schema` after `$ref` / pipeline `schemas:` expansion. Every segment must be a property of an object schema and listed in that object's `required`. Array schemas and index segments (`items.0`) are `pipeline.route_if_invalid`. Optional path segments (not in `required`) are also invalid, including after `$ref` inlining.
 
-Unchosen branches are marked `skipped`, including **all downstream descendants** of the unchosen stage — not only the immediate successor — unless a multi-parent join lists `skipped` in that parent's `on` set. That join waits for its other parents instead of cascade-skipping. Non-accepting paths still cascade. In [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml), when `clarify` emits `fork_choice: ["design-doc"]`, both `implementation-plan` and `join-doc` are skipped because `join-doc` depends on the unchosen branch (scalar `needs`, so `skipped` is not accepted).
+Illegal `if` is error `pipeline.route_if_invalid` (not `pipeline.dag_error`). When every forward `to:` on a stage has `if`, validate warns `pipeline.route_all_gated` with `ok: true`; `--strict` does not promote that warning. Sequential `io` subset checks still apply on a gated edge that fires; a skipped child is not opened.
 
-Skipped stages appear on every observable surface with the same `skipped` status used when a parent fails: operator console spatial map / run detail, CLI stage output, MCP `get_run`, and JSON run records. Unchosen fork branches are not failures; see [CI / headless](ci.md) for exit-code behavior.
+`if` is legal only on a **forward** Route Entry after success. It is `pipeline.route_if_invalid` on a `{ type: loop }` entry, or when combined with `on` other than succeeded-only. Entries without `if` keep `on:` as skip-cascade policy (including `on: [failed]`). Backward or circular forward `to:` without `type: loop` remains `pipeline.dag_error`.
 
-`fork` on a stage with no immediate successors (a DAG leaf) fails validation (`pipeline.dag_error`). Pipelines without `fork` are unaffected.
+`fork`, `route_select`, and `allow_none` are rejected:
+
+- `"fork" is no longer supported — use "route" instead; listed route targets always run`
+- `"route_select" is no longer supported — listed route targets always run`
+- `"allow_none" is no longer supported — listed route targets always run`
+
+Those messages mean listed `to:` stay on the DAG (no agent exclusive pick); `if` can still skip a listed successor.
+
+`on: [failed]` on `hotfix` keeps hotfix from being skip-cascaded when `run-tests` fails; it does **not** launch hotfix. Launch still requires a succeeded parent. Prefer `if` on a succeeded payload for deterministic branching.
 
 ```yaml
-id: fork-demo
+id: release-gate
+stages:
+  - id: run-tests
+    uses: ./run-tests.yaml
+    entry: true
+    route:
+      - to: ship
+        on: [succeeded]
+      - to: hotfix
+        on: [failed]
+  - id: hotfix
+    uses: ./hotfix.yaml
+  - id: ship
+    uses: ./ship.yaml
+```
+
+```yaml
+id: fan-out
 stages:
   - id: decide
     uses: ./decide.yaml
-    fork:
-      select: one
+    entry: true
+    route:
+      - to: branch-a
+      - to: branch-b
   - id: branch-a
     uses: ./branch-a.yaml
-    needs: decide
   - id: branch-b
     uses: ./branch-b.yaml
-    needs: decide
 ```
-
-Fixtures:
-
-- [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml) — exclusive `select: one`
-- [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml) — cascade skip through descendants
-- [`fork-route-subset.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-subset.pipeline.yaml) — `select: subset`, multiple successors allowed
-- [`fork-route-allow-none.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-allow-none.pipeline.yaml) — `allow_none: true`, empty choice valid
-
-Walkthrough: [`examples/conditional-fork/`](../examples/conditional-fork/).
-
-### Clonable successors {#clonable-successors}
-
-A successor object entry may set `clonable: true`. The completing predecessor must then emit `clone_forks` for that successor (see [Envelopes](envelopes.md#clonable-successors)). Optional `clone_cap` is an integer; omit the field to take the default 5. When `clone_cap` is set, it must be an integer ≥ 2 — setting `1` is a catalog validation error. Bare string refs cannot carry `clonable`. Over-cap fails the predecessor. `clonable: true` on a DAG leaf fails catalog validation — a clonable successor must have at least one child (typically a join).
 
 ```yaml
-id: clonable-demo
+id: gated-page
 stages:
-  - id: detect-changes
-    uses: ./detect-changes.yaml
-  - id: author-diagrams
-    uses: ./author-diagrams.yaml
-    needs: detect-changes
-    clonable: true
-    clone_cap: 5
-  - id: collect
-    uses: ./collect.yaml
-    needs: author-diagrams
+  - id: triage
+    uses: ./triage.yaml
+    entry: true
+    route:
+      - to: page
+        if:
+          all:
+            - field: severity
+              op: eq
+              value: high
+            - field: customer.tier
+              op: in
+              value: [gold, silver]
+      - to: notify
+  - id: page
+    uses: ./page.yaml
+  - id: notify
+    uses: ./notify.yaml
 ```
-
-A clone may skip, run once, or fan out its own successor only when that successor is also `clonable`. See [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) and [`examples/clonable-fanout/`](../examples/clonable-fanout/). v1 does not support two clones both fanning out the same successor.
-
-A clonable successor is not selected via `fork_choice`. `clone_forks` is the only include/skip/N control for that successor. `fork_choice` ids are non-clonable immediate successors; when every child is clonable, `fork_choice` is not required. Named siblings still use `fork_choice` when the parent has `fork`. See [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) (`fork.select: subset` plus clonable `design-doc` and named `implementation-plan`).
-
-#### Instance ids {#clonable-instance-ids}
-
-Run-once keeps the catalog id. Fan-out mints `{catalogId}~{n}` with 1-based `n` in the predecessor's clone-list order. YAML `needs` stays the catalog id. Instance ids must not contain `/`, `\`, or `..`. The operator console labels clones `definition · N` (see [Operator console](operator-console.md#clone-tracks)); disk paths and API keys stay the raw instance id.
-
-A clone-list join still names **one** catalog parent id. Join requires every clone to succeed in both modes. When the join runs, `priorEnvelopes` are success-only (0.7; 0.5 included failures). Sequential also skips remaining clones on first failure; parallel lets sibling clones finish. Details: [envelopes](envelopes.md#clonable-successors). That list field is not used for [generic fan-in](#generic-fan-in) — a `needs` array receives `priorEnvelopesByStage` instead.
 
 Fixtures:
 
-- [`clonable-default-cap.pipeline.yaml`](../tests/fixtures/pipelines/clonable-default-cap.pipeline.yaml) — `clonable: true` with default cap 5
-- [`clone-fanout-join.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-join.pipeline.yaml) — fan-out then join
-- [`clone-fanout-mix.pipeline.yaml`](../tests/fixtures/pipelines/clone-fanout-mix.pipeline.yaml) — mix with named sibling + fork
-- [`clonable-nested-gate.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-gate.pipeline.yaml) — clone toward a non-clonable collect
-- [`clonable-nested-fanout.pipeline.yaml`](../tests/fixtures/pipelines/clonable-nested-fanout.pipeline.yaml) — clonable successor of a clone, then a non-clonable join
+- [`fork-one-of-two.pipeline.yaml`](../tests/fixtures/pipelines/fork-one-of-two.pipeline.yaml) — two listed targets, both run
+- [`fork-route-cascade.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-cascade.pipeline.yaml) — fan-out plus a downstream child of one arm
+- [`fork-route-subset.pipeline.yaml`](../tests/fixtures/pipelines/fork-route-subset.pipeline.yaml) — three listed targets, all run
+- [`parallel-after-clarify.pipeline.yaml`](../tests/fixtures/pipelines/parallel-after-clarify.pipeline.yaml) — same fan-out shape
+- [`route-if-eq.pipeline.yaml`](../tests/fixtures/pipelines/route-if-eq.pipeline.yaml) — gated `eq` plus always-run sibling
+- [`route-if-composition.pipeline.yaml`](../tests/fixtures/pipelines/route-if-composition.pipeline.yaml) — `not` around `all`, nested required paths, `in`
+- [`route-if-two-match.pipeline.yaml`](../tests/fixtures/pipelines/route-if-two-match.pipeline.yaml) — two matching `if`s both run
 
-Walkthrough: [`examples/clonable-fanout/`](../examples/clonable-fanout/).
+Walkthrough: [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/) (`14-if-eq-gating.pipeline.yaml`, `16-if-composition.pipeline.yaml`).
 
-Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; that example remains a single `author-diagrams` session until a later change.
+### Clone Chain {#clone-chain}
+
+A Clone Chain is a sealed inbound path of three roles: **emitter → clone child → Join**. Detection is from that shape plus a named `$ref`, not from a `clonable` flag. Use it when one stage produces a list and the next stage should run once per element (research items, ops tickets, story slices, or any other list).
+
+- The emitter's `io.output.schema` is an object with exactly one array property whose `items` are `{ $ref: '#/schemas/<id>' }` (a Clone Array). Sibling fields next to that array are allowed.
+- The clone child's entire `io.input.schema` is `{ $ref: '#/schemas/<id>' }` with the same id.
+- The emitter's only forward `route` is the clone child; the clone child's only forward `route` is the Join. Neither inbound edge uses `if`. No other stage routes to the Join.
+- The emitter's pipeline entry requires `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`). Those keys are invalid on any other stage and invalid on a stage file body.
+- On emitter success, N is the Clone Array length. Stageflow mints Clone Instances `{child}~{n}` (1-based, including `~1` when N is 1). Each instance receives that array element only. The Join waits on those instances and receives their success envelopes in array order.
+
+**Empty and over-cap.** Load compiles the Clone Array as `minItems: 1` / `maxItems: <clone_cap>`. An empty array or a length above the Clone Cap fails the **emitter emit** — Stageflow does not skip the chain or truncate the list. Gate a zero-item path **before** the emitter (ordinary `if` / routing on an earlier stage), not by emitting an empty array.
+
+**Clone Mode** is catalog policy on the emitter entry:
+
+- `parallel` — Clone Instances may overlap. A failure does not stop siblings that are already running; they may finish after the failure. The Join stays blocked.
+- `sequential` — Clone Instances run in Clone Array order. A failure skips instances that have not started. A successful retry of the failed instance then starts the next skipped instance.
+
+In both modes a failed or skipped Clone Instance is a failed Join parent. The Join does not run on a hole.
+
+**Loop.** The Join may Loop only to a stage **before** the emitter. The emitter, clone child, and Join are not Loop targets. The clone child cannot declare a Loop and cannot `send_back`.
+
+**Illegal at load** (`sf validate` / pipeline load). A pipeline that looks like a Clone Chain but violates sealed shape fails immediately:
+
+- Extra routes on the emitter or clone child
+- `if` on either chain inbound edge
+- An extra parent routing to the Join
+- Two clone children from one emitter
+- Nested Clone Array (a Clone Instance emitting another Clone Array)
+- Two named-`$ref` array fields on the emitter
+- Inline (anonymous) array items
+- A root-level array payload
+- `clone_cap` / `clone_mode` on a stage that is not the emitter
+- Shared emitter, clone child, or Join across two Clone Chains
+
+A pipeline may have many Clone Chains if they share no emitter, clone child, or Join. A Join may later be the emitter of a following Clone Chain.
+
+Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml). Walkthrough: [`examples/feature-loop/`](../examples/feature-loop/).
+
+```yaml
+id: clone-chain-smallest
+model: anthropic/claude-sonnet-4-5
+schemas:
+  Issue:
+    type: object
+    required: [id, title]
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit a list of issues.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+            summary:
+              type: string
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one issue.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+  - id: gather
+    system_prompt: Gather clone results.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+```
+
+### Rejected clone fields {#rejected-clone-fields}
+
+Older `#clonable-successors` links should use this heading.
+
+`clonable`, `clone_actions`, and envelope `clone_forks` are not accepted. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter fail load. Those fields fail with a message naming the field and pointing at a Clone Chain. There is no dual-read of `skip` / `once` / `fanout`.
+
+[`examples/archify-on-pr`](../examples/archify-on-pr/) gates `author-diagrams` with Route `if` on `author_diagrams`. It remains a single `author-diagrams` session, not a Clone Chain.
 
 ### Feedback loops {#feedback-loops}
 
-A stage may declare a **source-owned** `feedback_loop` policy so that, on success, it can either advance downstream (`continue`) or send work back to an earlier ancestor (`send_back`). Feedback loops do **not** add reverse `needs` edges — the catalog DAG stays forward-only; replay is a runtime schedule over the existing route.
+A stage may declare a **source-owned** loop as a `type: loop` entry inside `route` so that, on success, it can either advance downstream (`continue`) or send work back to an earlier ancestor (`send_back`). Loop entries do **not** add reverse DAG edges — the catalog DAG stays forward-only; replay is a runtime schedule over the existing route.
 
 ```yaml
 id: feedback-loop
 stages:
   - id: plan
     uses: ./plan.yaml
+    entry: true
+    route:
+      - to: implement
   - id: implement
     uses: ./implement.yaml
-    needs: plan
+    route:
+      - to: review
   - id: review
     uses: ./review.yaml
-    needs: implement
-    feedback_loop:
-      target: implement
-      max_replays: 2
-      on_max_replays: require_continue
-      replay_session: resume
+    route:
+      - to: submit
+      - type: loop
+        to: implement
+        max_replays: 2
+        on_max_replays: require_continue
+        replay_session: resume
   - id: submit
     uses: ./submit.yaml
-    needs: review
     replay_safe: false
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `target` | yes | Stage id of an earlier ancestor of the source (via `needs`). |
+| `type` | yes | Must be `loop`. |
+| `to` | yes | Stage id of an earlier ancestor of the source (via forward `route`). |
 | `max_replays` | yes | Positive integer — how many accepted `send_back` replays the source may take before the max-replays policy applies. |
 | `on_max_replays` | yes | `require_continue` — a further `send_back` is rejected (emit fails with exceeded `max_replays`); the source must emit `continue` instead. `wait_for_human` — park for an operator decision (`extend` / `continue` / `abandon`). |
 | `replay_session` | yes | `resume` — reopen the prior agent session (`feedback_resume`). `new_session` — start a fresh session for the replayed stage. |
@@ -504,21 +679,20 @@ Optional on any stage entry: `replay_safe` (boolean). **Omitted means safe** —
 **Validation rules**
 
 - The policy lives on the **source** stage (the one that emits `feedback_loop` in its envelope). The target must already be declared and must be an ancestor — not the source itself, not a sibling, not a descendant.
-- Neither the source nor the target may be `clonable: true`.
-- Unknown `feedback_loop` keys are rejected.
-- Persistent fork parents are valid targets (send-back can re-enter a fork parent). Clonable successors are not.
+- A stage may declare at most one `type: loop` route entry.
+- `if` is not allowed on a `{ type: loop }` entry (`pipeline.route_if_invalid`).
+- The top-level `feedback_loop` field is rejected — use a `type: loop` entry inside `route`.
 
 **Runtime behavior (session, forks, artifacts)**
 
 - On `send_back`, Stageflow replays the inclusive route from the target through the source (forward order). Downstream of the source stays held until the loop continues or is abandoned.
 - Replayed stages receive a **Feedback Loop Context** block in the agent prompt (`loop_id`, `replay_id`, source envelope, remaining replays, route ids, optional prior attempt / active fork generation). See [Envelopes — Feedback loops](envelopes.md#feedback-loops).
 - `replay_session: resume` maps to session mode `feedback_resume` (resume token from the prior attempt). `new_session` maps to `new_session`.
-- When the replay route re-fans out a clonable successor, the prior clone cohort is **superseded** and a new fork generation mints fresh instance ids (`{catalogId}~{n}`). Prior clone artifacts remain under their attempt paths; the active generation is the one named in Feedback Loop Context.
 - Artifacts stay attempt-scoped. Downstream stages still consume the latest accepted envelopes on the active route; the send-back feedback itself is the source envelope carried in Feedback Loop Context.
 
 Operator / host-down decisions when `on_max_replays: wait_for_human`: [CLI `sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide), MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
 
-Fixtures: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml), [`feedback-loop-wait-human.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-wait-human.pipeline.yaml), [`feedback-loop-clone-fanout.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-clone-fanout.pipeline.yaml).
+Fixtures: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml), [`feedback-loop-wait-human.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-wait-human.pipeline.yaml).
 
 Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/).
 
@@ -530,7 +704,6 @@ Bind a Pi skill to a stage on the **pipeline stage entry** (alongside `uses:` or
 stages:
   - id: author-diagrams
     uses: ./author-diagrams.yaml
-    needs: detect-changes
     skill: archify
 ```
 
@@ -619,7 +792,7 @@ Optional when a pipeline or manifest default can fill it:
 |-------|-------------|
 | `model` | Provider/model string; resolved via [Model defaults and precedence](#model-defaults-and-precedence) |
 
-Optional body fields on the file (not on the `uses:` wrapper): `model` (when inherited from a higher default), `io`, `verify`, `gate_kinds`, `clone_actions`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`needs`, `on_verify_fail`, `fork`, `clonable`) are errors on an external stage file (body only — put wiring on the pipeline entry). `clone_actions` on a parent restricts emit clone actions; omit keeps skip, once, and fanout. `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
+Required on the file (not on the `uses:` wrapper): `io.input.schema` and `io.output.schema`. Optional body fields: `model` (when inherited from a higher default), `verify`, `gate_kinds`, `timeout_ms` — see [Envelopes — io schemas](envelopes.md#io-schemas) and [Verify](#verify). The loader accepts `skill:` and `mcp:` here; prefer binding them on the pipeline entry (see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp)). `io.input.schema` is the successor assignment contract (not the child's later `io.output.schema`). Wiring keys (`route`, `entry`, `on_verify_fail`, `needs`, `fork`, `route_select`, `allow_none`, `clonable`, `clone_cap`, `clone_mode`) are errors on an external stage file (body only — put wiring on the pipeline entry). `timeout_ms` is an optional positive integer millisecond attempt budget (default 60 minutes).
 
 Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixtures/stages/plan-review.yaml).
 
@@ -632,9 +805,9 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 | `context` | no | Background for agents |
 | `constraints` | no | Boundaries |
 | `checkout` | no | Relative or absolute path to working tree |
-| `input` | no | Structured object; when present must match each entry stage's `io.input` |
+| `input` | no | Structured object matched against each entry stage's `io.input`; omitted is `{}` |
 
-Prose-only tasks (no `input`) stay valid. If an entry stage declares `io.input` and the task has no `input`, `sf validate` of each file alone still succeeds; start-run / `preparePipeline` emit a `task.entry_input_unmet` warning and continue. Non-entry stages still receive the full task in the agent prompt.
+Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `io.input.schema` and the task omits `input`, start-run / `preparePipeline` treat it as `{}` and fail with `task.invalid_shape` when that does not match. `sf validate` of the task file alone still succeeds. Non-entry stages still receive the full task in the agent prompt.
 
 Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
@@ -673,11 +846,11 @@ Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (wi
 sf validate --strict                    # manifest-all: pipelines, stages, and tasks from git root
 sf validate --pipeline path/to/x.pipeline.yaml --strict   # that pipeline and its stages
 sf validate --task path/to/x.task.yaml --strict           # that task
-sf migrate-yaml                         # dry-run convert legacy keys to io / verify / on_verify_fail
+sf migrate-yaml                         # dry-run convert contract keys to io / verify / on_verify_fail (not wiring)
 sf migrate-yaml --write                 # apply
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`needs`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `--strict` does not promote `catalog.legacy_yaml` or `task.entry_input_unmet`. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml).
+Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `sf migrate-yaml` converts contract keys (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`) only — it does not rewrite wiring. `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none` are hard errors. Illegal [Clone Chains](#clone-chain) fail load and `sf validate`. `pipeline.route_if_invalid` is an error. `catalog.legacy_yaml` is a contract dual-read warning; `--strict` does not promote it. `pipeline.route_all_gated` and `pipeline.model_applies` are warnings (`ok: true`); `--strict` does not promote them. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) and [Upgrading older catalogs](#upgrading-older-catalogs).
 
 ## CLI run
 

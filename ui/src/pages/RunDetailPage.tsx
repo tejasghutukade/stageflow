@@ -135,7 +135,7 @@ export function RunDetailPage({
   const [dismissedWaitKey, setDismissedWaitKey] = useState<string | null>(null);
   const [workHeight, setWorkHeight] = useState(WORK_DEFAULT_H);
   const [hiddenCenterSide, setHiddenCenterSide] = useState<"transcript" | "logs" | null>(
-    "transcript",
+    null,
   );
   const [paneHeight, setPaneHeight] = useState(0);
   const [splitDragging, setSplitDragging] = useState(false);
@@ -232,7 +232,7 @@ export function RunDetailPage({
     setDrawerStageId(null);
     setDismissedWaitKey(null);
     setWorkHeight(WORK_DEFAULT_H);
-    setHiddenCenterSide("transcript");
+    setHiddenCenterSide(null);
     setRun(null);
     setError(null);
     setVerification(null);
@@ -502,6 +502,7 @@ export function RunDetailPage({
     );
     const logsHeaderAction = (
       <>
+        {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
         <button
           type="button"
           className="btn btn--sm"

@@ -13,3 +13,6 @@ io:
         topic:
           type: string
       additionalProperties: false
+  output:
+    schema:
+      type: object

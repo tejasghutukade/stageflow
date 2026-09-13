@@ -1,0 +1,11 @@
+id: route-unreachable
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: design-doc
+    uses: ../stages/clarify.yaml
+  - id: design-doc
+    uses: ../stages/design-doc.yaml
+  - id: implementation-plan
+    uses: ../stages/implementation-plan.yaml

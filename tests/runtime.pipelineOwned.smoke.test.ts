@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -41,6 +41,7 @@ async function writeEntryInputCatalog(options?: {
     ? [
         "  - id: intake-b",
         "    system_prompt: Second root",
+        "    entry: true",
         "    io:",
         "      input:",
         "        schema:",
@@ -49,6 +50,9 @@ async function writeEntryInputCatalog(options?: {
         "          properties:",
         "            area_id:",
         "              type: string",
+        "      output:",
+        "        schema:",
+        "          type: object",
       ]
     : [];
   await writeFile(
@@ -59,13 +63,25 @@ async function writeEntryInputCatalog(options?: {
       "stages:",
       "  - id: intake",
       "    system_prompt: Collect input",
+      "    entry: true",
+      "    route:",
+      "      - to: follow",
       "    io:",
       "      input:",
       "        schema:",
       ENTRY_INPUT_SCHEMA,
+      "      output:",
+      "        schema:",
+      "          type: object",
       "  - id: follow",
       "    system_prompt: Continue the work",
-      "    needs: [intake]",
+      "    io:",
+      "      input:",
+      "        schema:",
+      "          type: object",
+      "      output:",
+      "        schema:",
+      "          type: object",
       ...secondRoot,
       "",
     ].join("\n"),
@@ -80,6 +96,7 @@ function successEmit(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }
@@ -113,7 +130,7 @@ describe("U6 task input pairing", () => {
     );
   });
 
-  it("AE5: sample.task.yaml against entry io.input warns and start-run continues", async () => {
+  it("AE5: omitted task.input against required entry io.input is an error", async () => {
     const { cwd, pipelinePath } = await writeEntryInputCatalog();
     const loaded = await loadPipeline(pipelinePath, { cwd });
     const taskYaml = await readFile(SAMPLE_TASK, "utf8");
@@ -122,33 +139,53 @@ describe("U6 task input pairing", () => {
       cwd,
       taskPath: SAMPLE_TASK,
     });
-    expect(findings.some((f) => f.code === "task.entry_input_unmet")).toBe(true);
-    expect(findings.every((f) => f.severity === "warning")).toBe(true);
+    expect(
+      findings.some(
+        (f) => f.severity === "error" && f.code === "task.invalid_shape",
+      ),
+    ).toBe(true);
+    expect(findings.some((f) => f.code === "task.entry_input_unmet")).toBe(
+      false,
+    );
 
     const store = createRunStore({ rootDir: cwd });
-    const logged: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-      logged.push(args.map(String).join(" "));
-    });
-    try {
-      const started = await startPipeline({
-        agent: scriptedFakeAgent([successEmit("intake"), successEmit("follow")]),
+    await expect(
+      startPipeline({
+        agent: scriptedFakeAgent([]),
         store,
         taskPath: SAMPLE_TASK,
         pipeline: pipelinePath,
         cwd,
-      });
-      const result = await started.done;
-      expect(result.ok).toBe(true);
-      expect(result.findings?.some((f) => f.code === "task.entry_input_unmet")).toBe(
-        true,
-      );
-    } finally {
-      spy.mockRestore();
-    }
-    expect(logged.some((line) => line.includes("task.entry_input_unmet"))).toBe(
-      true,
+      }),
+    ).rejects.toBeInstanceOf(PipelineValidationError);
+  });
+
+  it("omitted task.input matches an unconstrained object entry schema", async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "sf-entry-empty-ok-"));
+    const pipelinePath = path.join(cwd, "entry-input.pipeline.yaml");
+    await writeFile(
+      pipelinePath,
+      [
+        "id: entry-input",
+        "model: anthropic/claude-sonnet-4-5",
+        "stages:",
+        "  - id: intake",
+        "    system_prompt: Collect input",
+        "    entry: true",
+        "    io:",
+        "      input:",
+        "        schema:",
+        "          type: object",
+        "      output:",
+        "        schema:",
+        "          type: object",
+        "",
+      ].join("\n"),
     );
+    const loaded = await loadPipeline(pipelinePath, { cwd });
+    const task = loadTaskFromYaml(["id: t", "goal: g", ""].join("\n"));
+    const findings = checkTaskEntryInput(task, loaded, { cwd });
+    expect(findings).toEqual([]);
   });
 
   it("task input matching each entry schema is clean", async () => {

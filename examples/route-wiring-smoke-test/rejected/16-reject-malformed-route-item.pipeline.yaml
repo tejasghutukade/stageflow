@@ -1,0 +1,15 @@
+id: route-demo-reject-malformed-route-item
+stages:
+  - id: draft
+    entry: true
+    route:
+      - on: [succeeded]
+    system_prompt: Draft.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

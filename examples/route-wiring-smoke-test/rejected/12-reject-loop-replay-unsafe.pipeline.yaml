@@ -1,0 +1,55 @@
+id: route-demo-reject-loop-replay-unsafe
+stages:
+  - id: implement
+    entry: true
+    route:
+      - to: middle
+    system_prompt: Implement.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: middle
+    replay_safe: false
+    route:
+      - to: review
+    system_prompt: A stage on the replay route that is not safe to replay.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: review
+    route:
+      - to: submit
+      - type: loop
+        to: implement
+        max_replays: 1
+        on_max_replays: require_continue
+        replay_session: resume
+    system_prompt: Review.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: submit
+    system_prompt: Submit.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

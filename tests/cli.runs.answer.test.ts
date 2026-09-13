@@ -53,6 +53,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "clarify-ok",
   artifacts: [] as string[],
+  payload: {},
 };
 
 function captureIo() {

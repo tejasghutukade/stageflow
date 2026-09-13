@@ -53,6 +53,8 @@ const workStageYaml = [
   `model: ${MODEL}`,
   "payload_schema:",
   "  type: object",
+  "clone_input_schema:",
+  "  type: object",
   "pre_emit_checks:",
   "  - id: declared",
   "    type: artifact_declared",
@@ -107,7 +109,6 @@ function comparableIr(loaded: Awaited<ReturnType<typeof loadPipeline>>) {
       clone_input_schema: stage.clone_input_schema,
       pre_emit_checks: stage.pre_emit_checks,
       gate_kinds: stage.gate_kinds,
-      clone_actions: stage.clone_actions,
       timeout_ms: stage.timeout_ms,
       skill: stage.skill,
       mcp: stage.mcp,
@@ -116,8 +117,6 @@ function comparableIr(loaded: Awaited<ReturnType<typeof loadPipeline>>) {
       id: node.id,
       needs: node.needs,
       needsEdges: node.needsEdges,
-      clonable: node.clonable,
-      clone_cap: node.clone_cap,
       completion: node.completion,
       recovery: node.recovery,
       fork: node.fork,
@@ -288,7 +287,9 @@ describe("sf migrate-yaml", () => {
     try {
       const { pipelinePath, stagePath } = await writeUsesCatalog(catalogRoot);
       await commitAll(catalogRoot, "catalog");
-      const before = comparableIr(await loadPipeline(pipelinePath, { cwd: catalogRoot }));
+      const before = comparableIr(
+        await loadPipeline(pipelinePath, { cwd: catalogRoot, requireIo: false }),
+      );
       const cap = captureIo();
       expect(
         await runMigrateYamlCommand(["--write", pipelinePath], {
@@ -307,7 +308,11 @@ describe("sf migrate-yaml", () => {
       expect(afterStage).not.toMatch(/needs:/);
       expect(afterStage).not.toMatch(/on_verify_fail:/);
       const after = comparableIr(await loadPipeline(pipelinePath, { cwd: catalogRoot }));
-      expect(after).toEqual(before);
+      expect(after.stages.map(({ clone_input_schema: _, ...stage }) => stage)).toEqual(
+        before.stages.map(({ clone_input_schema: _, ...stage }) => stage),
+      );
+      expect(after.stages[0]?.clone_input_schema).toEqual({ type: "object" });
+      expect(after.dag).toEqual(before.dag);
       expect(after.dag[0]?.completion?.checks.some((check) => check.id === "tests")).toBe(
         true,
       );
@@ -526,6 +531,8 @@ describe("sf migrate-yaml", () => {
         `model: ${MODEL}`,
         "payload_schema:",
         "  $ref: '#/schemas/story'",
+        "clone_input_schema:",
+        "  type: object",
         "pre_emit_checks:",
         "  - id: declared",
         "    type: artifact_declared",

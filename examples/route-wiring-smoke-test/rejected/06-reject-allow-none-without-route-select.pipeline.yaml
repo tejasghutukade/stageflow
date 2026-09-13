@@ -1,0 +1,37 @@
+id: route-demo-reject-allow-none
+stages:
+  - id: decide
+    entry: true
+    allow_none: true
+    route:
+      - to: path-a
+      - to: path-b
+    system_prompt: Decide.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: path-a
+    system_prompt: A.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: path-b
+    system_prompt: B.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

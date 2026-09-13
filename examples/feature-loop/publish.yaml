@@ -71,6 +71,32 @@ system_prompt: |
 model: cursor/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - addressed_all_blocking
+        - fixed_files
+        - verification_commands
+        - remaining_risks
+        - sent_back
+      properties:
+        addressed_all_blocking:
+          type: boolean
+        fixed_files:
+          type: array
+          items:
+            type: string
+        verification_commands:
+          type: array
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
+        sent_back:
+          type: boolean
   output:
     schema:
       type: object

@@ -5,3 +5,10 @@ stages:
   - id: gate
     system_prompt: Duplicate gate in main.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

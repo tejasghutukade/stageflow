@@ -1,6 +1,5 @@
 import { parseAgentField } from "../agent/agentBackend.js";
 import { STAGEFLOW_MCP_SERVER_NAME } from "../agent/claudeTools.js";
-import { CLONE_ACTIONS, type CloneAction } from "../types/forkChoice.js";
 import type { CompletionContract } from "../types/completion.js";
 import {
   STAGE_GATE_KINDS,
@@ -19,12 +18,12 @@ import {
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 import {
-  applyCompiledBody,
   classifyYamlDocument,
   compileTargetContract,
   dialectFromKeys,
   mixedDialectIssue,
   STAGE_FILE_WIRING_KEYS,
+  type CompiledTargetContract,
 } from "./yamlDialect.js";
 
 const afterCompletionByStage = new WeakMap<StageConfig, CompletionContract>();
@@ -36,49 +35,6 @@ export function afterCompletionForStage(stage: StageConfig): CompletionContract 
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
-}
-
-function isCloneAction(value: string): value is CloneAction {
-  return (CLONE_ACTIONS as readonly string[]).includes(value);
-}
-
-function parseCloneActions(
-  raw: unknown,
-  label: string,
-): LoadOutcome<CloneAction[] | undefined> {
-  if (raw === undefined) return loadSuccess(undefined);
-  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
-    return loadFailure([
-      {
-        code: "stage.invalid_clone_actions",
-        message: `Invalid stage ${label}: clone_actions must be a non-empty array of strings`,
-        category: "stage",
-      },
-    ]);
-  }
-  if (raw.length === 0) {
-    return loadFailure([
-      {
-        code: "stage.invalid_clone_actions",
-        message: `Invalid stage ${label}: clone_actions must not be empty`,
-        category: "stage",
-      },
-    ]);
-  }
-  const actions: CloneAction[] = [];
-  for (const item of raw) {
-    if (!isCloneAction(item)) {
-      return loadFailure([
-        {
-          code: "stage.invalid_clone_actions",
-          message: `Invalid stage ${label}: unsupported clone_actions value "${item}" (allowed: ${CLONE_ACTIONS.join(", ")})`,
-          category: "stage",
-        },
-      ]);
-    }
-    actions.push(item);
-  }
-  return loadSuccess(actions);
 }
 
 function parseTimeoutMs(
@@ -204,9 +160,9 @@ function parseStageFields(
   label: string,
   entryId: string,
   deferSchemaRefs: boolean,
+  requireIo: boolean,
+  compiled?: CompiledTargetContract,
 ): LoadOutcome<StageConfig> {
-  // Reads IR field names. Target YAML must already be compiled via
-  // applyCompiledBody; legacy YAML uses these keys as authoring.
   if (typeof raw.system_prompt !== "string") {
     return loadFailure([
       {
@@ -223,6 +179,17 @@ function parseStageFields(
     system_prompt: raw.system_prompt,
   };
 
+  if (raw.clone_actions !== undefined) {
+    return loadFailure([
+      {
+        code: "stage.invalid_clone_actions",
+        message: `Invalid stage ${label}: "clone_actions" is no longer supported — use a Clone Chain instead`,
+        category: "stage",
+        stageId: entryId,
+      },
+    ]);
+  }
+
   const modelField = parseModelField(raw.model);
   if (!modelField.ok) {
     return loadFailure([
@@ -238,104 +205,134 @@ function parseStageFields(
     stage.model = modelField.value;
   }
 
-  if (raw.payload_schema !== undefined) {
-    if (
-      raw.payload_schema === null ||
-      typeof raw.payload_schema !== "object" ||
-      Array.isArray(raw.payload_schema)
-    ) {
-      return loadFailure([
-        {
-          code: "stage.invalid_payload_schema",
-          message: `Invalid stage ${label}: payload_schema must be an object`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
+  if (compiled) {
+    if (compiled.payload_schema !== undefined) {
+      stage.payload_schema = compiled.payload_schema;
     }
-    try {
-      compilePayloadSchema(raw.payload_schema);
-    } catch (err) {
-      if (err instanceof UnresolvedSchemaRefError) {
-        if (!deferSchemaRefs) {
+    if (compiled.clone_input_schema !== undefined) {
+      stage.clone_input_schema = compiled.clone_input_schema;
+    }
+  } else {
+    if (raw.payload_schema !== undefined) {
+      if (
+        raw.payload_schema === null ||
+        typeof raw.payload_schema !== "object" ||
+        Array.isArray(raw.payload_schema)
+      ) {
           return loadFailure([
             {
-              code: "stage.unresolved_schema_ref",
-              message: `Invalid stage ${label}: ${err.message}`,
+              code: "stage.invalid_payload_schema",
+              message: `Invalid stage ${label}: io.output.schema must be an object`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+      }
+      try {
+        compilePayloadSchema(raw.payload_schema);
+      } catch (err) {
+        if (err instanceof UnresolvedSchemaRefError) {
+          if (!deferSchemaRefs) {
+            return loadFailure([
+              {
+                code: "stage.unresolved_schema_ref",
+                message: `Invalid stage ${label}: ${err.message}`,
+                category: "stage",
+                stageId: entryId,
+              },
+            ]);
+          }
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          return loadFailure([
+            {
+              code: "stage.invalid_payload_schema",
+              message: `Invalid stage ${label}: invalid io.output.schema: ${message}`,
               category: "stage",
               stageId: entryId,
             },
           ]);
         }
-      } else {
-        const message = err instanceof Error ? err.message : String(err);
+      }
+      stage.payload_schema = raw.payload_schema;
+    }
+
+    if (raw.clone_input_schema !== undefined) {
+      if (
+        raw.clone_input_schema === null ||
+        typeof raw.clone_input_schema !== "object" ||
+        Array.isArray(raw.clone_input_schema)
+      ) {
+          return loadFailure([
+            {
+              code: "stage.invalid_clone_input_schema",
+              message: `Invalid stage ${label}: io.input.schema must be an object`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+      }
+      try {
+        compilePayloadSchema(raw.clone_input_schema);
+      } catch (err) {
+        if (err instanceof UnresolvedSchemaRefError) {
+          if (!deferSchemaRefs) {
+            return loadFailure([
+              {
+                code: "stage.unresolved_schema_ref",
+                message: `Invalid stage ${label}: ${err.message}`,
+                category: "stage",
+                stageId: entryId,
+              },
+            ]);
+          }
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          return loadFailure([
+            {
+              code: "stage.invalid_clone_input_schema",
+              message: `Invalid stage ${label}: invalid io.input.schema: ${message}`,
+              category: "stage",
+              stageId: entryId,
+            },
+          ]);
+        }
+      }
+      stage.clone_input_schema = raw.clone_input_schema;
+    }
+
+    if (requireIo) {
+      if (raw.payload_schema === undefined && raw.clone_input_schema === undefined) {
         return loadFailure([
           {
-            code: "stage.invalid_payload_schema",
-            message: `Invalid stage ${label}: invalid payload_schema: ${message}`,
+            code: "stage.invalid_io",
+            message: `Invalid stage ${label}: io is required`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
+      if (raw.payload_schema === undefined) {
+        return loadFailure([
+          {
+            code: "stage.invalid_io",
+            message: `Invalid stage ${label}: io.output.schema is required`,
+            category: "stage",
+            stageId: entryId,
+          },
+        ]);
+      }
+      if (raw.clone_input_schema === undefined) {
+        return loadFailure([
+          {
+            code: "stage.invalid_io",
+            message: `Invalid stage ${label}: io.input.schema is required`,
             category: "stage",
             stageId: entryId,
           },
         ]);
       }
     }
-    stage.payload_schema = raw.payload_schema;
-  }
-
-  if (raw.clone_input_schema !== undefined) {
-    if (
-      raw.clone_input_schema === null ||
-      typeof raw.clone_input_schema !== "object" ||
-      Array.isArray(raw.clone_input_schema)
-    ) {
-      return loadFailure([
-        {
-          code: "stage.invalid_clone_input_schema",
-          message: `Invalid stage ${label}: clone_input_schema must be an object`,
-          category: "stage",
-          stageId: entryId,
-        },
-      ]);
-    }
-    try {
-      compilePayloadSchema(raw.clone_input_schema);
-    } catch (err) {
-      if (err instanceof UnresolvedSchemaRefError) {
-        if (!deferSchemaRefs) {
-          return loadFailure([
-            {
-              code: "stage.unresolved_schema_ref",
-              message: `Invalid stage ${label}: ${err.message}`,
-              category: "stage",
-              stageId: entryId,
-            },
-          ]);
-        }
-      } else {
-        const message = err instanceof Error ? err.message : String(err);
-        return loadFailure([
-          {
-            code: "stage.invalid_clone_input_schema",
-            message: `Invalid stage ${label}: invalid clone_input_schema: ${message}`,
-            category: "stage",
-            stageId: entryId,
-          },
-        ]);
-      }
-    }
-    stage.clone_input_schema = raw.clone_input_schema;
-  }
-
-  const cloneActionsOutcome = parseCloneActions(raw.clone_actions, label);
-  if (!cloneActionsOutcome.ok) {
-    const issues: LoadIssue[] = cloneActionsOutcome.issues.map((issue) => ({
-      ...issue,
-      stageId: entryId,
-    }));
-    return loadFailure(issues);
-  }
-  if (cloneActionsOutcome.value !== undefined) {
-    stage.clone_actions = cloneActionsOutcome.value;
   }
 
   const gateKindsOutcome = parseGateKinds(raw.gate_kinds, label);
@@ -362,16 +359,22 @@ function parseStageFields(
     stage.timeout_ms = timeoutMsOutcome.value;
   }
 
-  const preEmitChecksOutcome = parsePreEmitChecks(raw.pre_emit_checks, label);
-  if (!preEmitChecksOutcome.ok) {
-    const issues: LoadIssue[] = preEmitChecksOutcome.issues.map((issue) => ({
-      ...issue,
-      stageId: entryId,
-    }));
-    return loadFailure(issues);
-  }
-  if (preEmitChecksOutcome.value !== undefined) {
-    stage.pre_emit_checks = preEmitChecksOutcome.value;
+  if (compiled) {
+    if (compiled.pre_emit_checks !== undefined) {
+      stage.pre_emit_checks = compiled.pre_emit_checks;
+    }
+  } else {
+    const preEmitChecksOutcome = parsePreEmitChecks(raw.pre_emit_checks, label);
+    if (!preEmitChecksOutcome.ok) {
+      const issues: LoadIssue[] = preEmitChecksOutcome.issues.map((issue) => ({
+        ...issue,
+        stageId: entryId,
+      }));
+      return loadFailure(issues);
+    }
+    if (preEmitChecksOutcome.value !== undefined) {
+      stage.pre_emit_checks = preEmitChecksOutcome.value;
+    }
   }
 
   if (raw.skill !== undefined) {
@@ -414,14 +417,21 @@ function parseStageFields(
 
 export type LoadStageOptions = {
   deferSchemaRefs?: boolean;
+  requireIo?: boolean;
 };
 
 export function loadStageFromObjectOutcome(
   raw: Record<string, unknown>,
-  ctx: { entryId: string; declaringPath: string; deferSchemaRefs?: boolean },
+  ctx: {
+    entryId: string;
+    declaringPath: string;
+    deferSchemaRefs?: boolean;
+    requireIo?: boolean;
+  },
 ): LoadOutcome<StageConfig> {
   const label = `${ctx.entryId} (${ctx.declaringPath})`;
   const deferSchemaRefs = ctx.deferSchemaRefs === true;
+  const requireIo = ctx.requireIo !== false;
   const dialect = dialectFromKeys(Object.keys(raw));
   if (dialect === "invalid") {
     return loadFailure([mixedDialectIssue()]);
@@ -438,16 +448,19 @@ export function loadStageFromObjectOutcome(
       label,
       category: "stage",
       deferSchemaRefs,
+      requireIo,
     });
     if (!compiled.ok) return compiled;
     return parseStageFields(
-      applyCompiledBody(raw, compiled.value),
+      raw,
       label,
       ctx.entryId,
       deferSchemaRefs,
+      requireIo,
+      compiled.value,
     );
   }
-  return parseStageFields(raw, label, ctx.entryId, deferSchemaRefs);
+  return parseStageFields(raw, label, ctx.entryId, deferSchemaRefs, requireIo);
 }
 
 export async function loadStageOutcome(
@@ -502,22 +515,31 @@ export async function loadStageOutcome(
     }
   }
 
-  let parseRaw = raw;
+  let compiled: CompiledTargetContract | undefined;
   let afterCompletion: CompletionContract | undefined;
   const deferSchemaRefs = options.deferSchemaRefs === true;
+  const requireIo = options.requireIo !== false;
   if (dialect === "target") {
-    const compiled = compileTargetContract(raw, {
+    const compiledOutcome = compileTargetContract(raw, {
       stageId: raw.id,
       label: `file ${filePath}`,
       category: "stage",
       deferSchemaRefs,
+      requireIo,
     });
-    if (!compiled.ok) return compiled;
-    parseRaw = applyCompiledBody(raw, compiled.value);
-    afterCompletion = compiled.value.completion;
+    if (!compiledOutcome.ok) return compiledOutcome;
+    compiled = compiledOutcome.value;
+    afterCompletion = compiled.completion;
   }
 
-  const outcome = parseStageFields(parseRaw, `file ${filePath}`, raw.id, deferSchemaRefs);
+  const outcome = parseStageFields(
+    raw,
+    `file ${filePath}`,
+    raw.id,
+    deferSchemaRefs,
+    requireIo,
+    compiled,
+  );
   if (!outcome.ok) return outcome;
   if (outcome.value.id !== raw.id) {
     return loadFailure([

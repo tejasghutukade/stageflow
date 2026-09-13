@@ -37,7 +37,7 @@ Ask until you can name every step, how they sequence, any decision point, and an
 
 Read [`references/catalog-mapping.md`](references/catalog-mapping.md). Apply those rules to the confirmed structure. Read [`references/stage-prompt-template.md`](references/stage-prompt-template.md) for each stage's `system_prompt`, optional `model`, `io`, `verify`, and `gate_kinds`. Apply the Anti-patterns section below while mapping. When the human needs hard advance gates, plan body `verify` and wiring `on_verify_fail`. When a review can demand changes, include an address-feedback stage before approve/ship.
 
-**Done when** you have a pipeline id, one stage id per step, `needs` / `fork` wiring, a prompt plan per stage, and any `verify` / `on_verify_fail` / remediation stages the structure requires.
+**Done when** you have a pipeline id, one stage id per step, `route` / `entry` wiring (optional `if`, `{ type: loop }`, sealed Clone Chain when the human wants one run per list item), a prompt plan per stage, and any `verify` / `on_verify_fail` / remediation stages the structure requires.
 
 ## Anti-patterns
 
@@ -45,15 +45,15 @@ Author these contracts explicitly. They come from long runs that failed after ho
 
 | Always do | How |
 |---|---|
-| End every attempt on a tool call | Prompt: last call is `emit_stage_envelope`, or `ask_operator` while waiting on HITL. Each clonable instance emits on its own. |
+| End every attempt on a tool call | Prompt: last call is `emit_stage_envelope`, or `ask_operator` while waiting on HITL. |
 | Land required files in the attempt artifact dir | Prompt `write_stage_artifact`. Body `verify` with `type: artifact` and `when` including `after`. `ask_operator` `artifact_backed` references that same path. |
 | Make implement stages change the checkout | Body `verify` `checkout_changes` + `path_fields`; `io.output.schema` with required checkout-relative path arrays. Exploration-only is its own stage or a failure emit. |
 | Hand successors clean envelopes | `summary` / `payload` = outcomes and artifact pointers only. Name required `io.output.schema` fields in the prompt. |
 | Give review blockers a place to land | Wire `review → address-feedback → approve/ship`. Put `verdict` / `blocking_findings` (or equivalent) in the review `io.output.schema`. |
 | Bind success to the full checklist | If a plan lists N commands, success requires all of them in `commands_run` with exit 0. Cheap checks first; slow suites last or in a verify stage. Size `timeout_ms` to the work. |
-| Use configured models on every sibling | Same configured `model` family after a fork/fan-out unless the human asks otherwise. Reliable model on publish/PR stages. |
+| Use configured models on every sibling | Same configured `model` family after fan-out unless the human asks otherwise. Reliable model on publish/PR stages. |
 | Finish publish in the accept attempt | After `artifact_backed` accept: side effects (commit/push/PR) → final artifact → emit in the same attempt. Fix emit/schema errors by re-emitting. |
-| Emit full clone assignments | When `clonable: true`, parent success uses `clone_forks` with full envelopes matching `io.input.schema`. Leave clonable unset when the clone count is unknown. |
+| Author a sealed Clone Chain | One run per list item is emitter → clone child → Join. Never write `clonable`, `clone_forks`, or emit-time `skip` / `once` / `fanout`. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain). |
 
 Throwaway checkout deliverables (HTML spike, scratch file): prompt builtin `write` at a checkout-relative path, `artifacts: []` on emit, path in `payload`.
 

@@ -1,4 +1,3 @@
-import type { CloneAction } from "./forkChoice.js";
 import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 
@@ -20,14 +19,98 @@ export type PipelineForkConfig = {
 
 export type NeedTerminalState = "succeeded" | "failed" | "skipped";
 
+export type RouteIfOp =
+  | "eq"
+  | "ne"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "in"
+  | "not_in";
+
+export type RouteIfLeafPredicate = {
+  field: string;
+  op: RouteIfOp;
+  value: unknown;
+};
+
+export type RouteIfAllPredicate = {
+  all: RouteIfPredicate[];
+  field?: never;
+};
+
+export type RouteIfAnyPredicate = {
+  any: RouteIfPredicate[];
+  field?: never;
+};
+
+export type RouteIfNotPredicate = {
+  not: RouteIfPredicate;
+  field?: never;
+};
+
+export type RouteIfPredicate =
+  | RouteIfLeafPredicate
+  | RouteIfAllPredicate
+  | RouteIfAnyPredicate
+  | RouteIfNotPredicate;
+
 export type PipelineNeedEdge = {
   id: string;
   on: NeedTerminalState[];
+  if?: RouteIfPredicate;
 };
 
 export type PipelineNeedItem = string | { id: string; on?: NeedTerminalState[] };
 
 export type PipelineNeeds = string | PipelineNeedEdge[];
+
+/**
+ * Terminal states a route entry (or its inverted predecessor edge) can gate on.
+ * Same domain as `NeedTerminalState` — kept as a distinct alias since `route`
+ * is a separate vocabulary from `needs` (see docs/yaml-catalog.md).
+ */
+export type RouteTerminalState = NeedTerminalState;
+
+/**
+ * A forward route entry: hands off from the declaring stage to `to`, gated on
+ * the declaring stage's own terminal state (`on`, defaulting to succeeded-only).
+ */
+export type PipelineRouteForwardEntry = {
+  to: string;
+  on?: RouteTerminalState | RouteTerminalState[];
+  if?: RouteIfPredicate;
+};
+
+/**
+ * A loop route entry (ticket 03, route-based-pipeline-wiring spec): sends
+ * execution back to a declared ancestor of the source stage instead of
+ * continuing forward, carrying the same replay policy `FeedbackLoopConfig`
+ * carries today — `target` renamed to `to` for naming consistency with
+ * forward entries. Contributes no forward DAG edge (`toRouteEdges` skips
+ * it), so it is excluded from cycle detection; it is a runtime-only replay
+ * schedule over the already-resolved forward graph.
+ */
+export type PipelineRouteLoopEntry = {
+  type: "loop";
+  to: string;
+  max_replays: number;
+  on_max_replays: "require_continue" | "wait_for_human";
+  replay_session: "resume" | "new_session";
+};
+
+export type PipelineRouteEntry = PipelineRouteForwardEntry | PipelineRouteLoopEntry;
+
+/** A stage's outbound `route` field: where execution goes next. */
+export type PipelineRoute = PipelineRouteEntry[];
+
+/** Normalized forward route edge (post-parse): `on` is always populated. */
+export type PipelineRouteEdge = {
+  to: string;
+  on: RouteTerminalState[];
+  if?: RouteIfPredicate;
+};
 
 /** Runtime feedback-loop policy declared by the stage that can send work back. */
 export type FeedbackLoopConfig = {
@@ -37,41 +120,46 @@ export type FeedbackLoopConfig = {
   replay_session: "resume" | "new_session";
 };
 
+export type CloneMode = "parallel" | "sequential";
+
 export type PipelineStageRef = {
   id: string;
-  needs?: string | PipelineNeedItem[];
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
-  clonable?: boolean;
-  clone_cap?: number;
   /** IR: after-phase checks. YAML: `verify` items whose `when` includes `after`. */
   completion?: CompletionContract;
   /** IR: after-phase failure policy. YAML: `on_verify_fail`. */
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   /** Omitted means this stage is safe to include in a feedback replay. */
   replay_safe?: boolean;
+  /** Pipeline wiring vocabulary (see docs/yaml-catalog.md). */
+  route?: PipelineRouteEntry[];
+  /** Marks this stage as a pipeline entry point. */
+  entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
 };
 
 /**
- * Pipeline YAML stage entry (both dialects). Target authoring is `io` / `verify`
- * / `on_verify_fail`. The payload_schema / pre_emit_checks / completion /
- * recovery keys are the legacy YAML dialect (and also the IR names after compile).
- * New catalog fields: add target YAML keys here and compile them in yamlDialect.ts.
+ * Catalog YAML stage entry (`io` / `verify` / `on_verify_fail`). Not IR.
+ * Dual-read of `payload_schema` / `pre_emit_checks` / `completion` / `recovery`
+ * stays in `legacyYaml.ts` on the raw record.
  */
-export type PipelineStageYamlEntry = PipelineStageRef & {
+export type PipelineStageYamlEntry = {
+  id?: string;
   uses?: string;
   system_prompt?: string;
   model?: string;
-  payload_schema?: unknown;
   gate_kinds?: StageGateKind[];
-  clone_input_schema?: unknown;
-  clone_actions?: CloneAction[];
+  timeout_ms?: number;
   skill?: string;
   mcp?: string[];
+  replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
+  clone_cap?: number;
+  clone_mode?: CloneMode;
   io?: StageIoYaml;
   verify?: unknown;
   on_verify_fail?: RecoveryPolicy;
-  pre_emit_checks?: unknown;
 };
 
 export type PipelineIncludeEntry = {
@@ -85,17 +173,16 @@ export type PipelineFragmentConfig = {
 
 export type NormalizedPipelineStageEntry = {
   id: string;
-  needs?: PipelineNeeds;
-  fork?: { select: "one" | "subset"; allow_none?: boolean };
-  clonable?: boolean;
-  clone_cap?: number;
   /** IR after compile. YAML `verify` after-phase / `on_verify_fail`. */
   completion?: CompletionContract;
   recovery?: RecoveryPolicy;
-  feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  route?: PipelineRouteEntry[];
+  entry?: boolean;
   skill?: string;
   mcp?: string[];
+  clone_cap?: number;
+  clone_mode?: CloneMode;
   body:
     | { kind: "inline"; raw: Record<string, unknown> }
     | { kind: "uses"; path: string; absolutePath: string };
@@ -113,8 +200,9 @@ export type ResolvedPipelineStageNode = {
   ancestors: string[];
   stageIndex: number;
   fork?: PipelineForkConfig;
-  clonable?: boolean;
   clone_cap?: number;
+  clone_mode?: CloneMode;
+  clone_array_field?: string;
   definition_id?: string;
   /** Persisted on pipeline_dag. YAML `verify` after-phase. */
   completion?: CompletionContract;
@@ -122,6 +210,8 @@ export type ResolvedPipelineStageNode = {
   recovery?: RecoveryPolicy;
   feedback_loop?: FeedbackLoopConfig;
   replay_safe?: boolean;
+  /** Present (true) only when this stage was declared `entry: true`. */
+  entry?: boolean;
 };
 
 export type ResolvedPipelineDag = {

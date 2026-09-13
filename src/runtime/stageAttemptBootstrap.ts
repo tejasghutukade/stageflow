@@ -25,9 +25,15 @@ import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import {
+  assertPriorInputPayload,
+  payloadInstanceMismatch,
+} from "../envelope/payloadSchema.js";
+import {
   buildCompletedEnvelopesFromRun,
   resolvePriorEnvelope,
+  type ResolvePriorEnvelopeResult,
 } from "./envelopeRouting.js";
+import { assignment } from "./cloneSchedule.js";
 import { resumeSessionFilePath, type StageAttemptContext } from "./stageAttemptContext.js";
 import {
   buildStageRoots,
@@ -161,6 +167,53 @@ async function openStageWithOperatorCatalog(
   }
 }
 
+function assertPriorsMatchCloneInput(
+  cloneInputSchema: unknown | undefined,
+  childId: string,
+  priorResult: Extract<ResolvePriorEnvelopeResult, { ok: true }>,
+  task: TaskFile,
+  skipCloneAssignment: boolean,
+): { ok: true } | { ok: false; reason: string } {
+  if (cloneInputSchema === undefined) return { ok: true };
+  if (skipCloneAssignment) return { ok: true };
+  try {
+    if (priorResult.priorEnvelopesByStage !== undefined) {
+      for (const value of Object.values(priorResult.priorEnvelopesByStage)) {
+        const envelopes = Array.isArray(value) ? value : [value];
+        for (const envelope of envelopes) {
+          if (envelope.status !== "success") continue;
+          assertPriorInputPayload(envelope, cloneInputSchema, childId);
+        }
+      }
+      return { ok: true };
+    }
+    if (priorResult.joinPriors !== undefined) {
+      for (const envelope of priorResult.joinPriors) {
+        if (envelope.status !== "success") continue;
+        assertPriorInputPayload(envelope, cloneInputSchema, childId);
+      }
+      return { ok: true };
+    }
+    if (priorResult.prior !== null) {
+      assertPriorInputPayload(priorResult.prior, cloneInputSchema, childId);
+      return { ok: true };
+    }
+    const details = payloadInstanceMismatch(task.input ?? {}, cloneInputSchema);
+    if (details !== undefined) {
+      return {
+        ok: false,
+        reason: `task input does not match io.input.schema for ${childId}: ${details}`,
+      };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 function resolveAttemptRoots(input: StageAttemptOpenInput, stageId: string): StageRoots {
   const baseRoots =
     input.roots ??
@@ -249,14 +302,31 @@ export async function openStageAttempt(
       undefined,
       input.dag,
     ));
-  const priorResult = await resolvePriorEnvelope({
-    dag: input.dag,
+  const assigned = assignment(
+    input.dag,
     stageId,
+    definitionId,
     completedEnvelopes,
-    store: input.store,
-    runId: input.runId,
-  });
+  );
+  const priorResult =
+    assigned ??
+    (await resolvePriorEnvelope({
+      dag: input.dag,
+      stageId,
+      completedEnvelopes,
+      store: input.store,
+      runId: input.runId,
+    }));
   if (!priorResult.ok) return priorResult;
+
+  const priorInput = assertPriorsMatchCloneInput(
+    input.stage.clone_input_schema,
+    stageId,
+    priorResult,
+    input.task,
+    false,
+  );
+  if (!priorInput.ok) return priorInput;
 
   const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;
@@ -267,9 +337,6 @@ export async function openStageAttempt(
   const forkEmitContext = resolveForkEmitContext(input.dag, definitionId);
   const snapshot = input.dag as RunPipelineDagSnapshot;
   const cloneEmitContext = resolveCloneEmitContext(input.dag, definitionId, {
-    ...(input.stage.clone_actions !== undefined
-      ? { allowedActions: input.stage.clone_actions }
-      : {}),
     ...(snapshot.clone_input_schema !== undefined
       ? { successorCloneInputSchemas: snapshot.clone_input_schema }
       : {}),
@@ -281,10 +348,9 @@ export async function openStageAttempt(
   const isDynamicCloneInstance =
     runtimeNode?.definition_id !== undefined &&
     runtimeNode.definition_id !== runtimeNode.id;
-  const feedbackLoopEmitContext =
-    isDynamicCloneInstance || runtimeNode?.clonable === true
-      ? undefined
-      : runtimeNode?.feedback_loop;
+  const feedbackLoopEmitContext = isDynamicCloneInstance
+    ? undefined
+    : runtimeNode?.feedback_loop;
   const repairContext = await repairContextForAttempt(input, stageId, attempt);
   const readQaTrail = createAttemptQaTrailReader(
     input.store,

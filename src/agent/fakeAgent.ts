@@ -6,7 +6,6 @@ import {
 } from "../envelope/check.js";
 import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
-import { assertCloneForks } from "../envelope/cloneForks.js";
 import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
 import {
@@ -224,14 +223,14 @@ export class FakeAgent implements AgentPort {
           : undefined;
 
       try {
-        const envelope = assertRequiredEnvelope(envelopeValue);
+        let envelope = assertRequiredEnvelope(envelopeValue);
+        if (envelope.status === "success" && envelope.payload === undefined) {
+          envelope = { ...envelope, payload: {} };
+        }
         assertFeedbackLoopAction(envelope, input.feedbackLoopEmitContext);
         const isFeedbackSendBack = envelope.feedback_loop?.action === "send_back";
         if (!isFeedbackSendBack && input.forkEmitContext !== undefined) {
           assertForkEnvelope(envelope, input.forkEmitContext);
-        }
-        if (!isFeedbackSendBack && input.cloneEmitContext !== undefined) {
-          assertCloneForks(envelope, input.cloneEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
         if (!isAdvancingEnvelope(envelope)) {

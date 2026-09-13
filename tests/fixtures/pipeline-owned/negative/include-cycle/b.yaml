@@ -4,3 +4,10 @@ stages:
   - id: nested
     system_prompt: Nested stage.
     model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

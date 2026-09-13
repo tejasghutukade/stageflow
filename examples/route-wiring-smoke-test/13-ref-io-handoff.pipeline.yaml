@@ -1,0 +1,84 @@
+id: route-demo-ref-io
+schemas:
+  empty:
+    type: object
+  doc:
+    type: object
+    required: [title, body]
+    properties:
+      title:
+        type: string
+        minLength: 1
+      body:
+        type: string
+      extras:
+        type: array
+        items:
+          type: string
+  analyzed:
+    type: object
+    required: [title, body, verdict]
+    properties:
+      title:
+        type: string
+        minLength: 1
+      body:
+        type: string
+      extras:
+        type: array
+        items:
+          type: string
+      verdict:
+        type: string
+        enum: [approve, request-changes]
+  title-only:
+    type: object
+    required: [title]
+    properties:
+      title:
+        type: string
+        minLength: 1
+  done:
+    type: object
+stages:
+  - id: draft
+    entry: true
+    route:
+      - to: review
+    system_prompt: |
+      Draft a document in one or two sentences.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/doc: {"title":"Smoke doc","body":"A short body."}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/empty"
+      output:
+        schema:
+          $ref: "#/schemas/doc"
+  - id: review
+    route:
+      - to: ship
+    system_prompt: |
+      Keep the document fields and add a verdict of approve or request-changes.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and a payload matching #/schemas/analyzed: {"title":"Smoke doc","body":"A short body.","verdict":"approve"}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/doc"
+      output:
+        schema:
+          $ref: "#/schemas/analyzed"
+  - id: ship
+    system_prompt: |
+      Ship using title from the prior payload. One sentence is enough.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/title-only"
+      output:
+        schema:
+          $ref: "#/schemas/done"

@@ -26,9 +26,46 @@ schemas:
         type: array
         items:
           type: string
+  story-work:
+    type: object
+    required:
+      - story_id
+      - title
+      - plan_artifact
+      - order
+      - depends_on
+      - planned_files
+      - validation_commands
+    properties:
+      story_id:
+        type: string
+      title:
+        type: string
+      plan_artifact:
+        type: string
+      order:
+        type: integer
+        minimum: 1
+      depends_on:
+        type: array
+        items:
+          type: string
+      planned_files:
+        type: array
+        items:
+          type: string
+      validation_commands:
+        type: array
+        items:
+          type: string
 stages:
   - id: decompose
     uses: ./decompose.yaml
+    entry: true
+    clone_cap: 8
+    clone_mode: parallel
+    route:
+      - to: plan
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -36,9 +73,8 @@ stages:
       include_failed_checks: true
   - id: plan
     uses: ./plan.yaml
-    needs: decompose
-    clonable: true
-    clone_cap: 8
+    route:
+      - to: align
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -46,7 +82,10 @@ stages:
       include_failed_checks: true
   - id: align
     uses: ./align.yaml
-    needs: plan
+    clone_cap: 8
+    clone_mode: sequential
+    route:
+      - to: implement
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -54,9 +93,8 @@ stages:
       include_failed_checks: true
   - id: implement
     uses: ./implement.yaml
-    needs: align
-    clonable: true
-    clone_cap: 8
+    route:
+      - to: verify
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -64,7 +102,8 @@ stages:
       include_failed_checks: true
   - id: verify
     uses: ./verify.yaml
-    needs: implement
+    route:
+      - to: review
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -72,7 +111,8 @@ stages:
       include_failed_checks: true
   - id: review
     uses: ./review.yaml
-    needs: verify
+    route:
+      - to: address-feedback
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -80,20 +120,20 @@ stages:
       include_failed_checks: true
   - id: address-feedback
     uses: ./address-feedback.yaml
-    needs: review
+    route:
+      - to: publish
+      - type: loop
+        to: review
+        max_replays: 2
+        on_max_replays: wait_for_human
+        replay_session: new_session
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
-    feedback_loop:
-      target: review
-      max_replays: 2
-      on_max_replays: wait_for_human
-      replay_session: new_session
   - id: publish
     uses: ./publish.yaml
-    needs: address-feedback
     on_verify_fail:
       mode: manual
       retry_safety: side_effecting

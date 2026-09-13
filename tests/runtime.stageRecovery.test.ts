@@ -29,6 +29,7 @@ const successEnvelope = {
   status: "success" as const,
   summary: "done",
   artifacts: [] as string[],
+  payload: {},
 };
 
 const STARTUP_RECONCILE_REASON =
@@ -38,7 +39,7 @@ const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
 
 function okEnvelope(summary: string) {
-  return { status: "success" as const, summary, artifacts: [] as string[] };
+  return { status: "success" as const, summary, artifacts: [] as string[], payload: {} };
 }
 
 function failEnvelope(summary: string) {

@@ -8,6 +8,14 @@ system_prompt: |
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload describing what you produced.
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - verdict
+      properties:
+        verdict:
+          type: string
   output:
     schema:
       type: object

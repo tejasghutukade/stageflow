@@ -1287,21 +1287,17 @@ describe("MCP Tier 1 operator parity", () => {
       expect(scoped.payload.findings.length).toBeGreaterThan(0);
 
       const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("clone-fanout-mix"),
+        pipeline: pipelinePath("diamond-fan-in"),
       });
       expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("clone-fanout-mix");
+      expect(described.payload.id).toBe("diamond-fan-in");
       expect(described.payload.stages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            id: "clarify",
-            fork: expect.objectContaining({ select: "subset" }),
+            id: "research",
           }),
           expect.objectContaining({
-            id: "design-doc",
-            clonable: true,
-            clone_cap: 5,
-            needs: "clarify",
+            id: "synthesize",
           }),
         ]),
       );

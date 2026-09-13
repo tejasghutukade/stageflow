@@ -9,6 +9,9 @@ system_prompt: |
   attempt must be emit_stage_envelope (or ask_operator if waiting on HITL).
   An empty final message is a stage failure.
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

@@ -10,7 +10,6 @@ import type {
 } from "../runstore/port.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
-import type { CloneForkItem } from "../types/forkChoice.js";
 
 export type StageProjection = {
   stage_id: string;
@@ -21,7 +20,6 @@ export type StageProjection = {
     artifacts: string[];
     payload?: Record<string, unknown>;
     fork_choice?: string[];
-    clone_forks?: CloneForkItem[];
     feedback_loop?: StageEnvelope["feedback_loop"];
   } | null;
   artifacts: string[];
@@ -114,9 +112,6 @@ export function projectRun(detail: RunDetail): RunProjection {
               : {}),
             ...(stage.envelope.fork_choice !== undefined
               ? { fork_choice: stage.envelope.fork_choice }
-              : {}),
-            ...(stage.envelope.clone_forks !== undefined
-              ? { clone_forks: stage.envelope.clone_forks }
               : {}),
             ...(stage.envelope.feedback_loop !== undefined
               ? { feedback_loop: stage.envelope.feedback_loop }

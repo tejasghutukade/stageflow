@@ -16,7 +16,6 @@ import {
   isAdvancingEnvelope,
 } from "../envelope/check.js";
 import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
-import { assertCloneForks } from "../envelope/cloneForks.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import {
   assertEnvelopePayload,
@@ -28,12 +27,7 @@ import {
 } from "../envelope/preEmitChecks.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { FeedbackLoopConfig } from "../types/pipeline.js";
-import {
-  CLONE_ACTIONS,
-  type CloneAction,
-  type CloneEmitContext,
-  type ForkEmitContext,
-} from "../types/forkChoice.js";
+import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 
 export type EmitCapture = {
   envelope?: StageEnvelope;
@@ -82,76 +76,6 @@ function feedbackLoopActionSchema(context: FeedbackLoopConfig): TSchema {
   ]);
 }
 
-function cloneForksItemSchema(cloneEmitContext: CloneEmitContext): TSchema {
-  const allowedActions: CloneAction[] =
-    cloneEmitContext.allowedActions ?? [...CLONE_ACTIONS];
-  const allowSkip = allowedActions.includes("skip");
-  const allowOnce = allowedActions.includes("once");
-  const allowFanout = allowedActions.includes("fanout");
-  const variants: TSchema[] = [];
-
-  for (const successor of cloneEmitContext.clonableSuccessors) {
-    const successorId = Type.Literal(successor.successorId);
-    const nestedPayload =
-      successor.cloneInputSchema !== undefined
-        ? compilePayloadSchema(successor.cloneInputSchema)
-        : undefined;
-    const nestedEnvelope = stageEnvelopeSchema(nestedPayload);
-
-    if (allowSkip) {
-      variants.push(
-        Type.Object(
-          {
-            successor_id: successorId,
-            action: Type.Literal("skip"),
-          },
-          { additionalProperties: false },
-        ),
-      );
-    }
-    if (allowOnce) {
-      variants.push(
-        Type.Object({
-          successor_id: successorId,
-          action: Type.Literal("once"),
-          envelope: nestedEnvelope,
-        }),
-      );
-    }
-    if (allowFanout) {
-      variants.push(
-        Type.Object({
-          successor_id: successorId,
-          action: Type.Literal("fanout"),
-          mode: Type.Union([
-            Type.Literal("parallel"),
-            Type.Literal("sequential"),
-          ]),
-          clones: Type.Array(
-            Type.Object({
-              envelope: nestedEnvelope,
-            }),
-            { minItems: 2, maxItems: successor.cloneCap },
-          ),
-        }),
-      );
-    }
-  }
-
-  if (variants.length === 0) {
-    return Type.Object({
-      successor_id: Type.String(),
-      action: stringLiteralsSchema(allowedActions),
-    });
-  }
-  if (variants.length === 1) {
-    return variants[0]!;
-  }
-  return Type.Union(
-    variants as [TSchema, TSchema, ...TSchema[]],
-  );
-}
-
 function toolResult(
   text: string,
   details: { advancing: boolean; error: string },
@@ -169,7 +93,7 @@ export function createEmitStageEnvelopeTool(
   capture: EmitCapture,
   payloadSchema?: unknown,
   forkEmitContext?: ForkEmitContext,
-  cloneEmitContext?: CloneEmitContext,
+  _cloneEmitContext?: CloneEmitContext,
   preEmitCheckOptions?: PreEmitCheckOptions,
   feedbackLoopEmitContext?: FeedbackLoopConfig,
 ) {
@@ -196,14 +120,6 @@ export function createEmitStageEnvelopeTool(
         forkEmitContext !== undefined && feedbackLoopEmitContext === undefined
           ? Type.Array(Type.String())
           : Type.Optional(Type.Array(Type.String())),
-      ...(cloneEmitContext !== undefined
-        ? {
-            clone_forks:
-              feedbackLoopEmitContext === undefined
-                ? Type.Array(cloneForksItemSchema(cloneEmitContext))
-                : Type.Optional(Type.Array(cloneForksItemSchema(cloneEmitContext))),
-          }
-        : {}),
       ...(feedbackLoopEmitContext !== undefined
         ? {
             feedback_loop: Type.Optional(
@@ -244,13 +160,6 @@ export function createEmitStageEnvelopeTool(
             "emit",
             forkEmitContext,
           );
-        }
-        if (
-          envelope.status !== "failure" &&
-          !isSendBack &&
-          cloneEmitContext !== undefined
-        ) {
-          assertCloneForks(envelope, cloneEmitContext);
         }
         assertEnvelopePayload(envelope, payloadSchema);
         if (envelope.status !== "failure") {

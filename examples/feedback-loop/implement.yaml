@@ -5,3 +5,10 @@ system_prompt: |
   Emit a success envelope summarizing what you produced.
   On a feedback replay, read Feedback Loop Context and address the review feedback.
 model: omniroute/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

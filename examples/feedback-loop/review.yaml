@@ -5,5 +5,11 @@ system_prompt: |
   - {"action":"continue"} when the work is good enough to submit
   - {"action":"send_back","target":"implement"} when another pass is needed
   Prefer at most one send_back in this walkthrough, then continue.
-  Do not combine send_back with fork_choice or clone_forks.
 model: omniroute/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

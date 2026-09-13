@@ -7,7 +7,6 @@ system_prompt: |
   verified_paths from ci-context.json — only cite source paths marked true.
 
   When evidence exists in relevant paths, authored diagrams may reflect modern
-  Stageflow concepts: forks, clonable successors, fan-in, feedback loops,
   verified stage execution, dual AgentPort (Pi/Claude), MCP + sf runs host-down,
   and skills binding. Still require verified_paths and repo evidence; do not
   invent components without source.
@@ -42,6 +41,46 @@ system_prompt: |
   Do not stop after a chat reply.
 model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - pr_number
+        - base_ref
+        - head_sha
+        - changed_files
+        - diagram_types
+        - change_summary
+        - content_hash
+        - author_diagrams
+      properties:
+        pr_number:
+          type: string
+        base_ref:
+          type: string
+        head_sha:
+          type: string
+        changed_files:
+          type: array
+          items:
+            type: string
+        diagram_types:
+          type: array
+          items:
+            type: string
+            enum:
+              - architecture
+              - workflow
+              - sequence
+              - dataflow
+              - lifecycle
+        change_summary:
+          type: string
+        content_hash:
+          type: string
+        author_diagrams:
+          type: boolean
+      additionalProperties: false
   output:
     schema:
       type: object

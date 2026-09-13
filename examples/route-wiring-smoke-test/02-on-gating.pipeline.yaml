@@ -1,0 +1,44 @@
+id: route-demo-on-gate
+stages:
+  - id: run-tests
+    entry: true
+    route:
+      - to: ship
+        on: [succeeded]
+      - to: hotfix
+        on: [failed]
+    system_prompt: |
+      Run a tiny smoke-test check and succeed so ship runs next. (A failure envelope would route to hotfix instead.)
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: ship
+    system_prompt: |
+      Ship the release in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: hotfix
+    system_prompt: |
+      Apply a hotfix in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

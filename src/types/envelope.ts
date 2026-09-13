@@ -1,5 +1,3 @@
-import type { CloneForkItem } from "./forkChoice.js";
-
 export type EnvelopeStatus = "success" | "failure";
 
 export type FeedbackLoopAction =
@@ -12,7 +10,6 @@ export type StageEnvelope = {
   artifacts: string[];
   payload?: Record<string, unknown>;
   fork_choice?: string[];
-  clone_forks?: CloneForkItem[];
   feedback_loop?: FeedbackLoopAction;
   /** Agent's explicit acknowledgement of pipeline-owned checklist items. */
   checklist_attestations?: Array<{ check_id: string; items: string[] }>;

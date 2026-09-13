@@ -19,9 +19,13 @@ use case not covered by the six core types.
 
 ```yaml
 stages:
+  - id: plan
+    uses: ./stages/plan.yaml
+    entry: true
+    route:
+      - to: implement
   - id: implement
     uses: ./stages/implement.yaml
-    needs: [plan]
     on_verify_fail:
       mode: repair
       max_attempts: 3

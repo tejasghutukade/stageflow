@@ -45,9 +45,9 @@ describe("emit_stage_envelope schema parity — typebox (Pi) vs Zod (Claude)", (
     expect(new Set(zodFieldNames())).toEqual(new Set(typeboxFieldNames()));
   });
 
-  it("clone_forks appears in both, and only both, when a cloneEmitContext is given", () => {
-    expect(typeboxFieldNames(undefined, CLONE_CONTEXT)).toContain("clone_forks");
-    expect(zodFieldNames(undefined, CLONE_CONTEXT)).toContain("clone_forks");
+  it("clone_forks is never on the emit schema, even when a cloneEmitContext is passed", () => {
+    expect(typeboxFieldNames(undefined, CLONE_CONTEXT)).not.toContain("clone_forks");
+    expect(zodFieldNames(undefined, CLONE_CONTEXT)).not.toContain("clone_forks");
     expect(typeboxFieldNames()).not.toContain("clone_forks");
     expect(zodFieldNames()).not.toContain("clone_forks");
   });

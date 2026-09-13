@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-12
+
+### Added
+
+- Clone Chains: a sealed emitter → clone child → Join path. N is the length of one named-`$ref` Clone Array; `clone_cap` and `clone_mode` sit on the emitter's pipeline entry; each Clone Instance receives that array element only
+- Deterministic `if` on forward Route entries, and `type: loop` Route entries as current loop authoring
+
+### Changed
+
+- Pipeline wiring is `route` / `entry` only. Listed Route targets always run (no agent `fork_choice` pick list)
+
+### Removed
+
+- `clonable`, envelope `clone_forks`, and skip / once / fanout as current cloning
+- `needs`, `fork`, and `feedback_loop` as current pipeline-stage fields
+
 ## [0.17.0] - 2026-09-10
 
 ### Added
@@ -240,7 +256,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/tejasghutukade/stageflow/compare/v0.17.0...v0.18.0
 [0.15.0]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/tejasghutukade/stageflow/compare/v0.12.1...v0.13.0

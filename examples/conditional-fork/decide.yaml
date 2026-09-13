@@ -2,8 +2,8 @@ id: decide
 gate_kinds:
   - free_text
 system_prompt: |
-  You are the deciding stage for an exclusive fork. The operator chooses which
-  branch runs. Follow these steps exactly:
+  You are the deciding stage for exclusive Route if branching. The operator
+  chooses which branch runs. Follow these steps exactly:
 
   1. Call ask_operator with kind free_text. Ask which branch to take. Tell the
      operator to reply with exactly one of: branch-a or branch-b.
@@ -13,12 +13,23 @@ system_prompt: |
      - status: success
      - a non-empty summary
      - artifacts: []
-     - fork_choice: an array naming exactly one stage id — the id the operator
-       chose ("branch-a" or "branch-b")
+     - payload: { "branch": "branch-a" } or { "branch": "branch-b" }, matching
+       the operator reply exactly
 
   Rules:
   - Never emit before the operator answers.
-  - Never put both branch-a and branch-b in fork_choice.
-  - Never invent other stage ids.
-  - Name only the single id the operator chose.
+  - Do not emit fork_choice. Routing is deterministic from payload.branch.
+  - Never invent other branch values.
+  - Put only the id the operator chose in payload.branch.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object
+      required: [branch]
+      properties:
+        branch:
+          type: string

@@ -1,0 +1,110 @@
+id: route-demo-fork-choice
+stages:
+  # Listed route targets always run after triage succeeds.
+  - id: triage
+    entry: true
+    route:
+      - to: quick-fix
+      - to: big-project
+    system_prompt: |
+      Categorize this work in one sentence. Both the quick-fix and big-project follow-ups run next.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: big-project
+    system_prompt: |
+      Kick off planning for the big project in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  # Listed route targets always run after quick-fix succeeds.
+  - id: quick-fix
+    route:
+      - to: notify-team
+      - to: update-docs
+      - to: schedule-followup
+    system_prompt: |
+      Apply the quick fix in one sentence. Notify-team, update-docs, and schedule-followup all run next.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: notify-team
+    route:
+      - to: close
+    system_prompt: |
+      Notify the team the quick fix shipped, in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: update-docs
+    route:
+      - to: close
+    system_prompt: |
+      Update the docs for the quick fix in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  - id: schedule-followup
+    route:
+      - to: close
+    system_prompt: |
+      Schedule a follow-up review in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+
+  # Fan-in of notify-team, update-docs, and schedule-followup — all three
+  # run on the happy path.
+  - id: close
+    system_prompt: |
+      Close out the run in one sentence.
+      Then emit a success envelope via emit_stage_envelope with status: success, a short summary, artifacts: [], and payload: {}.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

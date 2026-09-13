@@ -16,7 +16,6 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import type { StageEnvelope, TerminalEnvelope } from "../src/types/envelope.js";
-import type { CloneForkItem } from "../src/types/forkChoice.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
@@ -32,26 +31,9 @@ const okEnvelope = (
   status: "success",
   summary,
   artifacts: [],
+  payload: {},
   ...extra,
 });
-
-function cloneItem(summary: string): { envelope: StageEnvelope } {
-  return { envelope: okEnvelope(summary) };
-}
-
-function fanoutForks(
-  mode: "parallel" | "sequential",
-  summaries: string[],
-): CloneForkItem[] {
-  return [
-    {
-      successor_id: "research",
-      action: "fanout",
-      mode,
-      clones: summaries.map(cloneItem),
-    },
-  ];
-}
 
 async function waitFor(
   predicate: () => Promise<boolean> | boolean,
@@ -367,80 +349,7 @@ describe("generic fan-in retry invalidation", () => {
     expect(after.stages.find((s) => s.stage_id === "validation")?.attempt_count).toBe(1);
   }, 15000);
 
-  it("retry one research clone instance resets synthesize, not the sibling clone", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-retry-clone-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = gatedFanInAgent({
-      behaviorsByStage: {
-        clarify: [
-          {
-            type: "emit",
-            envelope: okEnvelope("clarify-ok", {
-              clone_forks: fanoutForks("parallel", ["c1", "c2"]),
-            }),
-          },
-        ],
-        "research~1": [
-          { type: "emit", envelope: okEnvelope("r1-first") },
-          { type: "emit", envelope: okEnvelope("r1-retry") },
-        ],
-        "research~2": [{ type: "emit", envelope: okEnvelope("r2-kept") }],
-        validation: [{ type: "emit", envelope: okEnvelope("validation-kept") }],
-        synthesize: [
-          { type: "emit", envelope: okEnvelope("syn-first") },
-          { type: "emit", envelope: okEnvelope("syn-retry") },
-        ],
-      },
-    });
-    const manager = new RunManager({
-      agent,
-      store,
-      cwd: fixtures,
-      maxActiveStagesPerRun: 4,
-    });
-    const started = await manager.startRun({
-      task: SAMPLE_TASK,
-      pipeline: pipelinePath("diamond-fan-in-clone"),
-    });
-    expect(started.ok).toBe(true);
-    if (!started.ok) return;
-
-    await waitFor(async () => (await store.readRunMeta(started.runId)).status === "succeeded");
-
-    const beforeDag = (await store.readRunMeta(started.runId)).pipeline_dag;
-    expect(beforeDag?.stage_ids).toEqual(
-      expect.arrayContaining(["research~1", "research~2"]),
-    );
-    expect(beforeDag?.stage_ids).not.toContain("research~3");
-
-    await retryAncestorDirect(store, agent, started.runId, "research~1");
-
-    expect((await store.readRunMeta(started.runId)).status).toBe("succeeded");
-    expect(agent.openCounts.get("research~1")).toBe(2);
-    expect(agent.openCounts.get("research~2")).toBe(1);
-    expect(agent.openCounts.get("validation")).toBe(1);
-    expect(agent.openCounts.get("clarify")).toBe(1);
-    expect(agent.openCounts.get("synthesize")).toBe(2);
-
-    const retryPrior = (agent.priorByStage.get("synthesize") ?? [])[1];
-    expect(Object.keys(retryPrior ?? {})).toEqual(["research", "validation"]);
-    expect(
-      Array.isArray(retryPrior?.research)
-        ? retryPrior.research.map((e) => e.summary)
-        : undefined,
-    ).toEqual(["r1-retry", "r2-kept"]);
-    expect(retryPrior?.validation).toEqual(okEnvelope("validation-kept"));
-    expect(retryPrior?.["research~1"]).toBeUndefined();
-    expect(retryPrior?.["research~2"]).toBeUndefined();
-
-    const afterDag = (await store.readRunMeta(started.runId)).pipeline_dag;
-    expect(afterDag?.stage_ids).not.toContain("research~3");
-    expect(afterDag?.stage_ids?.filter((id) => id.startsWith("research~"))).toEqual(
-      ["research~1", "research~2"],
-    );
-  }, 15000);
-
-  it("retry of an accepted-failed parent that fails again still runs the join", async () => {
+  it("retry of an accepted-failed parent that fails again does not run the join", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-retry-refail-"));
     const store = createRunStore({ rootDir: root });
     const failEnvelope = (summary: string): StageEnvelope => ({
@@ -463,10 +372,7 @@ describe("generic fan-in retry invalidation", () => {
           { type: "fail", reason: "research boom again", envelope: failEnvelope("research-retry-fail") },
         ],
         validation: [{ type: "emit", envelope: okEnvelope("validation-kept") }],
-        synthesize: [
-          { type: "emit", envelope: okEnvelope("syn-first") },
-          { type: "emit", envelope: okEnvelope("syn-retry") },
-        ],
+        synthesize: [{ type: "throw", message: "synthesize must not run" }],
       },
     });
     const manager = new RunManager({
@@ -482,46 +388,31 @@ describe("generic fan-in retry invalidation", () => {
     expect(started.ok).toBe(true);
     if (!started.ok) return;
 
-    await waitFor(async () => (await store.readRunMeta(started.runId)).status === "succeeded");
-    expect(agent.openCounts.get("synthesize")).toBe(1);
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "research")?.status === "failed" &&
+        detail.stages.find((s) => s.stage_id === "validation")?.status === "succeeded" &&
+        detail.stages.find((s) => s.stage_id === "synthesize")?.status === "pending"
+      );
+    });
+    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
 
     const retry = await manager.retryStage(started.runId, "research");
     expect(retry.ok).toBe(true);
 
-    await waitFor(async () => (await store.readRunMeta(started.runId)).status === "succeeded");
+    await waitFor(() => (agent.openCounts.get("research") ?? 0) === 2);
 
-    expect(agent.openCounts.get("research")).toBe(2);
     expect(agent.openCounts.get("validation")).toBe(1);
-    expect(agent.openCounts.get("synthesize")).toBe(2);
-
-    const retryPrior = (agent.priorByStage.get("synthesize") ?? [])[1];
-    expect(Object.keys(retryPrior ?? {})).toEqual(["research", "validation"]);
-    expect(retryPrior?.research).toEqual(failEnvelope("research-retry-fail"));
-    expect(retryPrior?.validation).toEqual(okEnvelope("validation-kept"));
-
+    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
     const detail = await store.readRun(started.runId);
-    expect(detail.status).toBe("succeeded");
     expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe("failed");
-    expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe("pending");
   }, 15000);
 
-  it("retries an accepted-failed parent while the accepting join is still pending", async () => {
+  it("retries an accepted-failed parent while the join is still pending, then runs after success", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-retry-pending-join-"));
     const store = createRunStore({ rootDir: root });
-    let releaseSynthesize!: () => void;
-    const holdSynthesize = new Promise<void>((resolve) => {
-      releaseSynthesize = resolve;
-    });
-    let holdingSynthesize = false;
-    const originalCreate = store.createStageExecution.bind(store);
-    store.createStageExecution = async (runId, stageId) => {
-      if (stageId === "synthesize" && !holdingSynthesize) {
-        holdingSynthesize = true;
-        await holdSynthesize;
-      }
-      return originalCreate(runId, stageId);
-    };
-
     const failEnvelope = (summary: string): StageEnvelope => ({
       status: "failure",
       summary,
@@ -561,31 +452,24 @@ describe("generic fan-in retry invalidation", () => {
 
     await waitFor(async () => {
       const detail = await store.readRun(started.runId);
-      const research = detail.stages.find((s) => s.stage_id === "research");
-      const validation = detail.stages.find((s) => s.stage_id === "validation");
-      const synthesize = detail.stages.find((s) => s.stage_id === "synthesize");
       return (
-        research?.status === "failed" &&
-        validation?.status === "succeeded" &&
-        synthesize?.status === "pending" &&
-        holdingSynthesize
+        detail.stages.find((s) => s.stage_id === "research")?.status === "failed" &&
+        detail.stages.find((s) => s.stage_id === "validation")?.status === "succeeded" &&
+        detail.stages.find((s) => s.stage_id === "synthesize")?.status === "pending"
       );
     });
+    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
 
-    expect(manager.getActiveRunIds()).toContain(started.runId);
+    const retry = await manager.retryStage(started.runId, "research");
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
 
-    try {
-      const retry = await manager.retryStage(started.runId, "research");
-      expect(retry.ok).toBe(true);
-      if (!retry.ok) return;
-      expect(agent.openCounts.get("research")).toBe(2);
-      const mid = await store.readRun(started.runId);
-      expect(mid.stages.find((s) => s.stage_id === "synthesize")?.status).not.toBe(
-        "succeeded",
-      );
-    } finally {
-      releaseSynthesize();
-    }
+    await waitFor(async () => (await store.readRunMeta(started.runId)).status === "succeeded");
+    expect(agent.openCounts.get("research")).toBe(2);
+    expect(agent.openCounts.get("synthesize")).toBe(1);
+    const retryPrior = (agent.priorByStage.get("synthesize") ?? [])[0];
+    expect(retryPrior?.research).toEqual(okEnvelope("research-retry"));
+    expect(retryPrior?.validation).toEqual(okEnvelope("validation-ok"));
   }, 15000);
 
   it("retries when projected status is running but persisted meta is failed", async () => {
@@ -625,14 +509,14 @@ describe("generic fan-in retry invalidation", () => {
     expect(result.ok).toBe(true);
   }, 15000);
 
-  it("host restart resumes a pending join behind an accepted failure", async () => {
+  it("host restart does not run a pending join behind an accepted failure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-diamond-restart-join-"));
     const store = createRunStore({ rootDir: root });
     const { runId } = await seedAcceptedFailurePendingJoin(store);
 
     const agent = gatedFanInAgent({
       behaviorsByStage: {
-        synthesize: [{ type: "emit", envelope: okEnvelope("syn-restart") }],
+        synthesize: [{ type: "throw", message: "synthesize must not run" }],
       },
     });
     const boot = await bootstrapStageflowHost({
@@ -642,17 +526,14 @@ describe("generic fan-in retry invalidation", () => {
       store,
     });
 
-    await waitFor(async () => (await store.readRunMeta(runId)).status === "succeeded");
-
-    expect(agent.openCounts.get("synthesize")).toBe(1);
+    expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
     expect(agent.openCounts.get("research")).toBeUndefined();
     const detail = await store.readRun(runId);
-    expect(detail.status).toBe("succeeded");
     expect(detail.stages.find((s) => s.stage_id === "research")?.status).toBe(
       "failed",
     );
     expect(detail.stages.find((s) => s.stage_id === "synthesize")?.status).toBe(
-      "succeeded",
+      "pending",
     );
     expect(boot.manager.getActiveRunIds()).not.toContain(runId);
   }, 15000);

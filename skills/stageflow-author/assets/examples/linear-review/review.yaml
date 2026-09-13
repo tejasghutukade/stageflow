@@ -13,6 +13,14 @@ system_prompt: |
   4. Call emit_stage_envelope with an advancing success status only after the
      operator accepts. Never emit before accept.
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
   output:
     schema:
       type: object

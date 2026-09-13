@@ -27,7 +27,7 @@ sf validate --strict --json
 | `0` | No errors |
 | `1` | Validation errors (warnings alone pass unless `--strict` promotes manifest warnings) |
 
-With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors. `--strict` does not promote `catalog.legacy_yaml` (only relevant if you still have pre-`io` catalogs). That warning names replacement fields (for example `payload_schema` → `io.output.schema`). Convert older catalogs with `sf migrate-yaml` (dry-run default; `--write` to apply). Finding codes are additive.
+With no flags, `sf validate` validates **all pipelines and tasks** declared in `stageflow.yaml` (manifest-all), including each pipeline’s stages. `--pipeline` validates that pipeline and its stages (`uses:` / `include:`), not all tasks. `--task` validates that task file. The CLI rejects both `--pipeline` and `--task`. `--strict` promotes `catalog.manifest_missing` and `catalog.empty_catalog` warnings to errors. `--strict` does not promote `catalog.legacy_yaml` (only relevant if you still have pre-`io` catalogs), `pipeline.model_applies`, or `pipeline.route_all_gated`. `catalog.legacy_yaml` names replacement fields (for example `payload_schema` → `io.output.schema`). Convert older **contract** keys with `sf migrate-yaml` (dry-run default; `--write` to apply). That command does not rewrite `needs` / `fork` / `feedback_loop` — see [Upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs). Finding codes are additive.
 
 Does not prove provider auth or checkout paths.
 
@@ -50,7 +50,7 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
 | `2` | `waiting` | Stage blocked on HITL |
 
-Unchosen branches in fork pipelines are `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A parent that failed in a state a [generic fan-in](yaml-catalog.md#generic-fan-in) join explicitly accepts does not independently fail the run.
+A listed successor skipped by Route `if` (or skip-cascade from a skipped parent) is `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A failed parent still fails the run: a [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending even if that parent's `on` lists `failed`. Skipped siblings do not block a Join that has a succeeded parent.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md). The CI guest uses `sf run --json` / `--skip-gates` only — it does not wait or answer with `sf runs`. Outside CI, humans and agents can continue a parked run with [`sf runs`](cli-reference.md#sf-runs).
 
@@ -69,25 +69,7 @@ One document per invocation with `--json`:
 }
 ```
 
-When start-run pairing produces warnings, the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). `task.entry_input_unmet` is a warning and does not fail the run (`ok` / `outcome` / exit stay as today):
-
-```json
-{
-  "ok": true,
-  "outcome": "succeeded",
-  "runId": "…",
-  "runDir": ".stageflow/runs/…",
-  "findings": [
-    {
-      "severity": "warning",
-      "code": "task.entry_input_unmet",
-      "file": "tasks/sample.task.yaml",
-      "message": "Task has no input; entry stage \"intake\" requires io.input",
-      "category": "task"
-    }
-  ]
-}
-```
+When start-run pairing produces warnings (for example `pipeline.model_applies`), the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). Warnings do not fail the run (`ok` / `outcome` / exit stay as today). Omitted `task.input` is treated as `{}` against each entry `io.input.schema`; a mismatch fails start-run as validate-shaped JSON (`task.invalid_shape`).
 
 **Waiting:**
 
@@ -146,7 +128,7 @@ Optional `code` when the start failure reports one.
 
 ### Including stage projections {#including-stage-projections}
 
-Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`. `--include stages` without `--json` exits `1`. After clonable fan-out, `--stage` and `stages[]` ids are instance ids (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids).
+Pass **`--include stages`** with **`--json`** to append a `stages[]` array to the completion document. Each item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`. `--include stages` without `--json` exits `1`.
 
 ```bash
 sf run --task examples/hello-world/my-task.task.yaml \
@@ -305,19 +287,21 @@ Provider auth uses **OpenRouter** (`OPENROUTER_API_KEY`), not OpenAI.
 `relevant_files`, and deterministic `diagram_types` / `change_summary` /
 `expected_fork_choice` from path rules; when the relevant set is empty, GHA
 skips the pipeline early. **detect-changes** copies that context into
-`changes.json` and the envelope (no type-selection heuristics); pipeline
+`changes.json` and the envelope (no type-selection heuristics) and sets
+`author_diagrams` true iff `diagram_types` is non-empty. Pipeline
 completion checks the handoff against ci-context via
-`scripts/validate-detect-envelope.mjs`. **author-diagrams** then writes
-`{type}.spec.json` per type. The workflow uses
+`scripts/validate-detect-envelope.mjs`. Route `if` on `author_diagrams`
+skips **author-diagrams** when no types were selected; otherwise that
+stage writes `{type}.spec.json` per type in one session. The workflow uses
 [`.github/actions/sf-run`](../.github/actions/sf-run) with `export-run: true`,
 then runs Archify `deliver` for each spec via `scripts/deliver-diagrams.sh`,
 uploads per-type HTML (unzipped for in-browser viewing) plus a `diagrams/`
 bundle, and updates a sticky PR comment when applicable. Skill provisioning uses
 `sf skills install --from-zip`; agents do not install Archify or post comments.
 
-When detect emits `fork_choice: []`, GHA skips deliver, upload, and comment.
-Fork PRs cannot receive bot comments with the default token; see the example
-README.
+When `relevant_files` is empty, GHA skips deliver, upload, and comment before
+`sf run`. Fork PRs cannot receive bot comments with the default token; see the
+example README.
 
 ## See also
 

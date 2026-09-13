@@ -1,10 +1,13 @@
-import { isNeedTerminalState, predecessorEdges } from "../config/pipelineNeeds.js";
+import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { RunPipelineDagSnapshot } from "../runstore/port.js";
 import {
   appendCloneInstances,
   instancesOfDefinition,
 } from "../runstore/pipelineDagSnapshot.js";
-import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
+import {
+  cloneInstanceOrdinal,
+  definitionIdForInstance,
+} from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   NeedTerminalState,
@@ -13,11 +16,7 @@ import type {
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
 import { collectDownstreamStageIds } from "./dagTraversal.js";
-import {
-  activeCohortFromCloneIds,
-  filterJoinInputs,
-  type ActiveCohort,
-} from "./forkGeneration.js";
+import type { ResolvePriorEnvelopeResult } from "./envelopeRouting.js";
 import type { StageScheduleState } from "./pipelineScheduler.js";
 
 function asDagSnapshot(dag: ResolvedPipelineDag): RunPipelineDagSnapshot {
@@ -47,44 +46,24 @@ export function isCloneInstance(
   return definitionIdForInstance(asDagSnapshot(dag), stageId) !== stageId;
 }
 
+function emitterCloneMode(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+): ResolvedPipelineStageNode["clone_mode"] {
+  if (!isCloneInstance(dag, stageId)) return undefined;
+  const node = dag.nodes.find((n) => n.id === stageId);
+  const emitterId =
+    typeof node?.needs === "string" && node.needs ? node.needs : undefined;
+  if (emitterId === undefined) return undefined;
+  return dag.nodes.find((n) => n.id === emitterId)?.clone_mode;
+}
+
 function isParallelCloneInstance(
   dag: ResolvedPipelineDag,
   stageId: string,
-  completedEnvelopes: Map<string, StageEnvelope>,
+  _completedEnvelopes: Map<string, StageEnvelope>,
 ): boolean {
-  if (!isCloneInstance(dag, stageId)) return false;
-  const defId = definitionIdForInstance(asDagSnapshot(dag), stageId);
-  for (const envelope of completedEnvelopes.values()) {
-    for (const item of envelope.clone_forks ?? []) {
-      if (
-        item.action === "fanout" &&
-        item.mode === "parallel" &&
-        item.successor_id === defId &&
-        definitionInstances(dag, defId).includes(stageId)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function isSequentialFanoutSuccessor(
-  completedEnvelopes: Map<string, StageEnvelope>,
-  successorId: string,
-): boolean {
-  for (const envelope of completedEnvelopes.values()) {
-    for (const item of envelope.clone_forks ?? []) {
-      if (
-        item.action === "fanout" &&
-        item.mode === "sequential" &&
-        item.successor_id === successorId
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return emitterCloneMode(dag, stageId) === "parallel";
 }
 
 function isSequentialCloneInstance(
@@ -92,25 +71,24 @@ function isSequentialCloneInstance(
   stageId: string,
   completedEnvelopes: Map<string, StageEnvelope>,
 ): boolean {
-  if (!isCloneInstance(dag, stageId)) return false;
-  const defId = definitionIdForInstance(asDagSnapshot(dag), stageId);
-  if (!isSequentialFanoutSuccessor(completedEnvelopes, defId)) return false;
-  return definitionInstances(dag, defId).includes(stageId);
+  return sequentialInstanceList(dag, stageId, completedEnvelopes) !== undefined;
 }
 
 function sequentialInstanceList(
   dag: ResolvedPipelineDag,
   stageId: string,
-  completedEnvelopes: Map<string, StageEnvelope>,
+  _completedEnvelopes: Map<string, StageEnvelope>,
 ): string[] | undefined {
-  for (const envelope of completedEnvelopes.values()) {
-    for (const item of envelope.clone_forks ?? []) {
-      if (item.action !== "fanout" || item.mode !== "sequential") continue;
-      const instances = definitionInstances(dag, item.successor_id);
-      if (instances.includes(stageId)) return instances;
-    }
-  }
-  return undefined;
+  if (!isCloneInstance(dag, stageId)) return undefined;
+  const snapshot = asDagSnapshot(dag);
+  const defId = definitionIdForInstance(snapshot, stageId);
+  const node = dag.nodes.find((n) => n.id === stageId);
+  const emitterId =
+    typeof node?.needs === "string" && node.needs ? node.needs : undefined;
+  if (emitterId === undefined) return undefined;
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  if (emitter?.clone_mode !== "sequential") return undefined;
+  return definitionInstances(dag, defId);
 }
 
 function sequentialPreviousUnsatisfied(
@@ -148,24 +126,6 @@ function parentNeedEdge(
   );
 }
 
-function edgeInstancesReady(
-  dag: ResolvedPipelineDag,
-  edge: PipelineNeedEdge,
-  states: Map<string, StageScheduleState>,
-): boolean {
-  const instances = definitionInstances(dag, edge.id);
-  if (instances.length === 0) return false;
-  const hasSucceededSibling = instances.some(
-    (id) => states.get(id) === "succeeded",
-  );
-  return instances.every((id) => {
-    const state = states.get(id);
-    if (!isNeedTerminalState(state)) return false;
-    if (edge.on.includes(state)) return true;
-    return state === "skipped" && hasSucceededSibling;
-  });
-}
-
 function shouldSkipForObservedNeed(
   dag: ResolvedPipelineDag,
   node: ResolvedPipelineStageNode,
@@ -173,11 +133,18 @@ function shouldSkipForObservedNeed(
   parentDefId: string,
   observed: NeedTerminalState,
 ): boolean {
+  // A multi-parent join is never skip-cascaded from one parent. Once every
+  // parent is terminal: run if any succeeded (skipped siblings do not
+  // block) unless every parent succeeded and an inbound `if` missed;
+  // stay pending if any failed; force-skip when every parent is skipped
+  // or every parent succeeded with an inbound miss (`pickStalledJoinSkips`).
+  // A single-parent node keeps eager skip-cascade below.
+  if (predecessorEdges(node).length > 1) return false;
   const edge = parentNeedEdge(node, parentId, parentDefId);
   if (!edge) return false;
   if (edge.on.includes(observed)) return false;
   if (
-    observed === "skipped" &&
+    (observed === "skipped" || observed === "failed") &&
     predecessorEdges(node).length === 1 &&
     typeof node.needs === "string" &&
     isCloneInstance(dag, parentId)
@@ -251,50 +218,7 @@ function joinAndDownstreamIds(
   return ids;
 }
 
-/**
- * A fresh clone_forks fanout targeting a catalog id that already has
- * instances is only safe when every existing instance was put back to
- * `pending` by the current retry cascade (`retryDownstreamIds`) — that means
- * an ancestor was legitimately retried and this parent re-emitted the same
- * fanout for reactivation. Instances that are still active/terminal, or
- * merely `pending` without having gone through a retry reset (e.g. an
- * envelope processed twice in one live run), are rejected as before.
- *
- * Feedback-loop replay is different: the prior cohort was superseded
- * (`skipped`) and a new generation must mint fresh `~N` ids, so
- * `forceFreshCloneIds` bypasses the conflict.
- */
-export function cloneFanoutConflict(
-  dag: ResolvedPipelineDag,
-  envelope: StageEnvelope,
-  states: Map<string, StageScheduleState>,
-  retryDownstreamIds: ReadonlySet<string>,
-  options?: { forceFreshCloneIds?: boolean },
-): string | undefined {
-  if (options?.forceFreshCloneIds === true) return undefined;
-  const snapshot = asDagSnapshot(dag);
-  for (const item of envelope.clone_forks ?? []) {
-    if (item.action !== "fanout") continue;
-    const existing = definitionInstances(dag, item.successor_id).filter(
-      (id) => id !== item.successor_id,
-    );
-    if (existing.length > 0) {
-      const reactivatable = existing.every(
-        (id) => states.get(id) === "pending" && retryDownstreamIds.has(id),
-      );
-      if (!reactivatable) {
-        return `clone fan-out for "${item.successor_id}" is already instanced`;
-      }
-      continue;
-    }
-    if (!snapshot.stage_ids.includes(item.successor_id)) {
-      return `clone fan-out for "${item.successor_id}" is already instanced`;
-    }
-  }
-  return undefined;
-}
-
-export function nextFreeCloneSuffix(
+function nextFreeCloneSuffix(
   snapshot: RunPipelineDagSnapshot,
   catalogId: string,
 ): number {
@@ -308,18 +232,154 @@ export function nextFreeCloneSuffix(
   return max + 1;
 }
 
+function catalogCloneChildId(
+  dag: ResolvedPipelineDag,
+  emitterId: string,
+): string | undefined {
+  const catalogChildId = (dag.childrenOf[emitterId] ?? []).find((id) => {
+    const child = dag.nodes.find((n) => n.id === id);
+    return child !== undefined && (child.definition_id ?? child.id) === child.id;
+  });
+  if (catalogChildId !== undefined) return catalogChildId;
+  const instanceChild = (dag.childrenOf[emitterId] ?? []).find((id) => {
+    const child = dag.nodes.find((n) => n.id === id);
+    return child?.definition_id !== undefined && child.definition_id !== child.id;
+  });
+  return instanceChild
+    ? dag.nodes.find((n) => n.id === instanceChild)?.definition_id
+    : undefined;
+}
+
+export type MintResult =
+  | { kind: "none" }
+  | { kind: "error"; reason: string }
+  | {
+      kind: "minted";
+      dag: RunPipelineDagSnapshot;
+      catalogChildId: string;
+      instanceIds: string[];
+    };
+
+export function mint(
+  dag: ResolvedPipelineDag,
+  emitterId: string,
+  envelope: StageEnvelope,
+): MintResult {
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  const field = emitter?.clone_array_field;
+  if (field === undefined) return { kind: "none" };
+  const catalogChildId = catalogCloneChildId(dag, emitterId);
+  if (catalogChildId === undefined) return { kind: "none" };
+  const arr = envelope.payload?.[field];
+  if (!Array.isArray(arr) || arr.length < 1) {
+    return {
+      kind: "error",
+      reason: `Clone Array "${field}" must contain at least one item`,
+    };
+  }
+  const snapshot = asDagSnapshot(dag);
+  const { snapshot: next, instanceIds } = appendCloneInstances(snapshot, {
+    catalogId: catalogChildId,
+    predecessorId: emitterId,
+    count: arr.length,
+    startAt: nextFreeCloneSuffix(snapshot, catalogChildId),
+  });
+  return {
+    kind: "minted",
+    dag: next,
+    catalogChildId,
+    instanceIds,
+  };
+}
+
+function cloneAssignmentIndex(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  definitionId: string,
+  arrayLength: number,
+): number | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
+  const snapshot = dag as RunPipelineDagSnapshot;
+  if (!Array.isArray(snapshot.stage_ids) || arrayLength < 1) {
+    return ordinal - 1;
+  }
+  const siblings = instancesOfDefinition(snapshot, definitionId)
+    .map((id) => ({ id, ordinal: cloneInstanceOrdinal(id, definitionId) }))
+    .filter((row): row is { id: string; ordinal: number } => row.ordinal !== undefined)
+    .sort((a, b) => a.ordinal - b.ordinal);
+  const cohort = siblings.slice(-arrayLength);
+  const index = cohort.findIndex((row) => row.id === stageId);
+  return index === -1 ? undefined : index;
+}
+
+export function assignment(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  definitionId: string,
+  completedEnvelopes: Map<string, StageEnvelope>,
+): ResolvePriorEnvelopeResult | undefined {
+  const ordinal = cloneInstanceOrdinal(stageId, definitionId);
+  if (ordinal === undefined) return undefined;
+  const node = dag.nodes.find((n) => n.id === stageId);
+  if (!node) return undefined;
+  const emitterId =
+    typeof node.needs === "string" && node.needs
+      ? node.needs
+      : predecessorEdges(node)[0]?.id;
+  if (emitterId === undefined) return undefined;
+  const emitter = dag.nodes.find((n) => n.id === emitterId);
+  const field = emitter?.clone_array_field;
+  if (field === undefined) return undefined;
+  const parent = completedEnvelopes.get(emitterId);
+  if (parent === undefined || parent.status !== "success") {
+    return {
+      ok: false,
+      reason: `missing envelope for Clone Chain emitter "${emitterId}"`,
+    };
+  }
+  const arr = parent.payload?.[field];
+  if (!Array.isArray(arr)) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const index = cloneAssignmentIndex(dag, stageId, definitionId, arr.length);
+  if (index === undefined || index >= arr.length) {
+    return {
+      ok: false,
+      reason: `missing Clone Array element ${ordinal} on "${emitterId}"`,
+    };
+  }
+  const element = arr[index];
+  if (element === null || typeof element !== "object" || Array.isArray(element)) {
+    return {
+      ok: false,
+      reason: `Clone Array element ${index + 1} is not an object`,
+    };
+  }
+  return {
+    ok: true,
+    prior: {
+      status: "success",
+      summary: parent.summary,
+      artifacts: [],
+      payload: structuredClone(element) as Record<string, unknown>,
+    },
+  };
+}
+
 export function protectedClonableChildIds(
   dag: ResolvedPipelineDag,
   predecessorId: string,
-  envelope: StageEnvelope,
+  _envelope: StageEnvelope,
 ): Set<string> {
   const ids = new Set<string>();
+  const predecessor = dag.nodes.find((n) => n.id === predecessorId);
+  if (predecessor?.clone_array_field === undefined) return ids;
   for (const childId of dag.childrenOf[predecessorId] ?? []) {
-    const child = dag.nodes.find((n) => n.id === childId);
-    if (child?.clonable === true) ids.add(childId);
-  }
-  for (const item of envelope.clone_forks ?? []) {
-    ids.add(item.successor_id);
+    ids.add(childId);
   }
   return ids;
 }
@@ -396,54 +456,9 @@ export function cloneScheduleAllowsRun(
   stageId: string,
   states: Map<string, StageScheduleState>,
   completedEnvelopes: Map<string, StageEnvelope>,
-  options?: {
-    activeCohortForNeeds?: (needsId: string) => ActiveCohort;
-    activeCloneIdsForNeeds?: (needsId: string) => Set<string> | null;
-  },
 ): boolean {
-  const node = dag.nodes.find((n) => n.id === stageId);
-  if (!node) return false;
   if (definitionInstances(dag, stageId).some((id) => id !== stageId)) {
     return false;
-  }
-  const edges = predecessorEdges(node);
-  if (edges.length === 0) {
-    return !sequentialPreviousUnsatisfied(
-      dag,
-      stageId,
-      states,
-      completedEnvelopes,
-    );
-  }
-  if (edges.length >= 2) {
-    for (const edge of edges) {
-      if (!edgeInstancesReady(dag, edge, states)) return false;
-    }
-  } else {
-    const parentNeedId =
-      typeof node.needs === "string" && node.needs ? node.needs : edges[0]!.id;
-    const allInstances = definitionInstances(dag, parentNeedId);
-    const cohort =
-      options?.activeCohortForNeeds?.(parentNeedId) ??
-      activeCohortFromCloneIds(options?.activeCloneIdsForNeeds?.(parentNeedId));
-    if (cohort.kind === "awaiting_mint") {
-      return false;
-    }
-    const instances = filterJoinInputs(allInstances, cohort);
-    if (instances.length <= 1) {
-      const parentId = instances[0] ?? parentNeedId;
-      if (states.get(parentId) !== "succeeded") return false;
-    } else if (cohort.kind === "active") {
-      if (!instances.every((id) => states.get(id) === "succeeded")) {
-        return false;
-      }
-    } else if (
-      !instances.every(
-        (id) => states.get(id) === "succeeded" || states.get(id) === "skipped",
-      )
-    ) {
-      return false;
-    }
   }
   return !sequentialPreviousUnsatisfied(
     dag,
@@ -451,132 +466,4 @@ export function cloneScheduleAllowsRun(
     states,
     completedEnvelopes,
   );
-}
-
-export type ApplyCloneForksResult = {
-  dag: RunPipelineDagSnapshot;
-  skippedIds: string[];
-  /** Freshly minted instance ids keyed by clonable catalog successor id. */
-  mintedBySuccessor?: Map<string, string[]>;
-};
-
-export function applyCloneForksToSchedule(
-  dag: ResolvedPipelineDag,
-  predecessorId: string,
-  envelope: StageEnvelope,
-  states: Map<string, StageScheduleState>,
-  options?: { forceFreshCloneIds?: boolean },
-): ApplyCloneForksResult {
-  let current = asDagSnapshot(dag);
-  const skippedIds: string[] = [];
-  const mintedBySuccessor = new Map<string, string[]>();
-  const forceFresh = options?.forceFreshCloneIds === true;
-  const skipPending = (stageId: string) => {
-    if (states.get(stageId) === "pending") {
-      states.set(stageId, "skipped");
-      skippedIds.push(stageId);
-    }
-  };
-
-  for (const item of envelope.clone_forks ?? []) {
-    if (item.action === "skip") {
-      skipPending(item.successor_id);
-      skipRejectedNeedDependents(
-        current,
-        item.successor_id,
-        states,
-        "skipped",
-        skipPending,
-      );
-      continue;
-    }
-    if (item.action !== "fanout") continue;
-    const existing = definitionInstances(current, item.successor_id).filter(
-      (id) => id !== item.successor_id,
-    );
-    if (forceFresh) {
-      const { snapshot, instanceIds } = appendCloneInstances(current, {
-        catalogId: item.successor_id,
-        predecessorId,
-        count: item.clones.length,
-        startAt: nextFreeCloneSuffix(current, item.successor_id),
-      });
-      current = snapshot;
-      states.delete(item.successor_id);
-      for (const id of instanceIds) {
-        states.set(id, "pending");
-      }
-      mintedBySuccessor.set(item.successor_id, instanceIds);
-      continue;
-    }
-    if (existing.length > 0) {
-      // Reactivating instances a retry cascade reset to `pending` (see
-      // cloneFanoutConflict), which only allows this fanout through when
-      // *every* existing instance is pending. Anything short of that —
-      // a normal resume re-apply of an already-processed fanout, or only
-      // one sibling out of a cohort being retried directly — must stay a
-      // no-op here: growing/shrinking the cohort in those cases would mint
-      // or skip instances no retry actually asked for.
-      const allPending = existing.every((id) => states.get(id) === "pending");
-      if (!allPending) continue;
-      const desired = item.clones.length;
-      for (const id of existing.slice(desired)) {
-        skipPending(id);
-        skipRejectedNeedDependents(current, id, states, "skipped", skipPending);
-      }
-      if (desired > existing.length) {
-        const { snapshot, instanceIds } = appendCloneInstances(current, {
-          catalogId: item.successor_id,
-          predecessorId,
-          count: desired - existing.length,
-          startAt: nextFreeCloneSuffix(current, item.successor_id),
-        });
-        current = snapshot;
-        for (const id of instanceIds) {
-          states.set(id, "pending");
-        }
-      }
-      continue;
-    }
-    const { snapshot, instanceIds } = appendCloneInstances(current, {
-      catalogId: item.successor_id,
-      predecessorId,
-      count: item.clones.length,
-    });
-    current = snapshot;
-    states.delete(item.successor_id);
-    for (const id of instanceIds) {
-      states.set(id, "pending");
-    }
-    mintedBySuccessor.set(item.successor_id, instanceIds);
-  }
-
-  return {
-    dag: current,
-    skippedIds,
-    ...(mintedBySuccessor.size > 0 ? { mintedBySuccessor } : {}),
-  };
-}
-
-export function applyCloneForksFromEnvelopes(
-  dag: ResolvedPipelineDag,
-  states: Map<string, StageScheduleState>,
-  completedEnvelopes: Map<string, StageEnvelope>,
-): ApplyCloneForksResult {
-  let current = asDagSnapshot(dag);
-  const skippedIds: string[] = [];
-  const predecessors = [...current.nodes];
-  for (const node of predecessors) {
-    const envelope = completedEnvelopes.get(node.id);
-    if (!envelope?.clone_forks?.length) continue;
-    const applied = applyCloneForksToSchedule(
-      current,
-      node.id,
-      envelope,
-      states,
-    );
-    current = applied.dag;
-    skippedIds.push(...applied.skippedIds);
-  }
-  return { dag: current, skippedIds };
 }

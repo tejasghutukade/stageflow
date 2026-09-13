@@ -1,3 +1,10 @@
 id: explicit
 system_prompt: Stage model wins over pipeline and global defaults.
 model: test/stage-model
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

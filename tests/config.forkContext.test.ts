@@ -17,29 +17,57 @@ const ctx = (pipelineId: string) => ({
 describe("resolveForkEmitContext", () => {
   it("C1: stage without fork field returns undefined", () => {
     const { dag } = resolvePipelineDag(
-      [{ id: "clarify" }, { id: "design-doc", needs: "clarify" }],
+      [
+        { id: "clarify", entry: true, route: [{ to: "design-doc" }] },
+        { id: "design-doc" },
+      ],
       ctx("linear"),
     );
     expect(resolveForkEmitContext(dag, "clarify")).toBeUndefined();
     expect(resolveForkEmitContext(dag, "design-doc")).toBeUndefined();
   });
 
-  it("C2: fork stage with select one and two children returns full context", async () => {
+  it("C2: YAML fan-out stage returns undefined fork context", async () => {
     const { dag } = await loadPipeline(
       path.join(FIXTURES_ROOT, "pipelines/fork-one-of-two.pipeline.yaml"),
       { cwd: FIXTURES_ROOT },
     );
-    expect(resolveForkEmitContext(dag, "clarify")).toEqual({
-      immediateSuccessorIds: ["design-doc", "implementation-plan"],
-      forkShape: { cardinality: "one", allowNone: false },
-    });
+    expect(resolveForkEmitContext(dag, "clarify")).toBeUndefined();
   });
 
-  it("C3: fork stage with allow_none true sets allowNone on shape", async () => {
-    const { dag } = await loadPipeline(
-      path.join(FIXTURES_ROOT, "pipelines/fork-route-allow-none.pipeline.yaml"),
-      { cwd: FIXTURES_ROOT },
-    );
+  it("C3: programmatic fork stage with allow_none true sets allowNone on shape", () => {
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "clarify",
+          needs: null,
+          needsEdges: [],
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "subset", allow_none: true },
+        },
+        {
+          id: "design-doc",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 1,
+        },
+        {
+          id: "implementation-plan",
+          needs: "clarify",
+          needsEdges: [{ id: "clarify", on: ["succeeded"] }],
+          ancestors: ["clarify"],
+          stageIndex: 2,
+        },
+      ],
+      roots: ["clarify"],
+      childrenOf: {
+        clarify: ["design-doc", "implementation-plan"],
+        "design-doc": [],
+        "implementation-plan": [],
+      },
+    };
     expect(resolveForkEmitContext(dag, "clarify")).toEqual({
       immediateSuccessorIds: ["design-doc", "implementation-plan"],
       forkShape: { cardinality: "subset", allowNone: true },
@@ -47,13 +75,24 @@ describe("resolveForkEmitContext", () => {
   });
 
   it("C4: single-child fork stage returns one successor ID", () => {
-    const { dag } = resolvePipelineDag(
-      [
-        { id: "decide", fork: { select: "one" } },
-        { id: "only-branch", needs: "decide" },
+    // Catalog YAML cannot produce node.fork. This exercises
+    // resolveForkEmitContext's own handling of that resolved-DAG shape
+    // directly, the same way the hand-built-DAG tests below this describe
+    // block do.
+    const dag: ResolvedPipelineDag = {
+      nodes: [
+        {
+          id: "decide",
+          needs: null,
+          ancestors: [],
+          stageIndex: 0,
+          fork: { select: "one", allow_none: false },
+        },
+        { id: "only-branch", needs: "decide", ancestors: ["decide"], stageIndex: 1 },
       ],
-      ctx("single-child-fork"),
-    );
+      roots: ["decide"],
+      childrenOf: { decide: ["only-branch"], "only-branch": [] },
+    };
     expect(resolveForkEmitContext(dag, "decide")).toEqual({
       immediateSuccessorIds: ["only-branch"],
       forkShape: { cardinality: "one", allowNone: false },
@@ -62,7 +101,7 @@ describe("resolveForkEmitContext", () => {
 });
 
 describe("resolveCloneEmitContext", () => {
-  it("AE7: no clonable children returns undefined", () => {
+  it("returns undefined when no child is a clone emitter", () => {
     const dag: ResolvedPipelineDag = {
       nodes: [
         { id: "detect-changes", needs: null, ancestors: [], stageIndex: 0 },
@@ -73,134 +112,5 @@ describe("resolveCloneEmitContext", () => {
     };
     expect(resolveCloneEmitContext(dag, "detect-changes")).toBeUndefined();
     expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
-  });
-
-  it("linear parent with one clonable child returns clone context and no fork context", () => {
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        { id: "detect-changes", needs: null, ancestors: [], stageIndex: 0 },
-        {
-          id: "author-diagrams",
-          needs: "detect-changes",
-          ancestors: ["detect-changes"],
-          stageIndex: 1,
-          clonable: true,
-          clone_cap: 5,
-        },
-      ],
-      roots: ["detect-changes"],
-      childrenOf: { "detect-changes": ["author-diagrams"], "author-diagrams": [] },
-    };
-    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
-      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
-    });
-    expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
-  });
-
-  it("AE-mix: fork parent drops clonable ids from fork context", () => {
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        {
-          id: "detect-changes",
-          needs: null,
-          ancestors: [],
-          stageIndex: 0,
-          fork: { select: "one", allow_none: false },
-        },
-        {
-          id: "author-diagrams",
-          needs: "detect-changes",
-          ancestors: ["detect-changes"],
-          stageIndex: 1,
-          clonable: true,
-          clone_cap: 5,
-        },
-        {
-          id: "notify-slack",
-          needs: "detect-changes",
-          ancestors: ["detect-changes"],
-          stageIndex: 2,
-        },
-      ],
-      roots: ["detect-changes"],
-      childrenOf: {
-        "detect-changes": ["author-diagrams", "notify-slack"],
-        "author-diagrams": [],
-        "notify-slack": [],
-      },
-    };
-    expect(resolveForkEmitContext(dag, "detect-changes")).toEqual({
-      immediateSuccessorIds: ["notify-slack"],
-      forkShape: { cardinality: "one", allowNone: false },
-    });
-    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
-      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
-    });
-  });
-
-  it("fork parent whose every child is clonable returns undefined fork context", () => {
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        {
-          id: "detect-changes",
-          needs: null,
-          ancestors: [],
-          stageIndex: 0,
-          fork: { select: "one", allow_none: false },
-        },
-        {
-          id: "author-diagrams",
-          needs: "detect-changes",
-          ancestors: ["detect-changes"],
-          stageIndex: 1,
-          clonable: true,
-          clone_cap: 5,
-        },
-      ],
-      roots: ["detect-changes"],
-      childrenOf: { "detect-changes": ["author-diagrams"], "author-diagrams": [] },
-    };
-    expect(resolveForkEmitContext(dag, "detect-changes")).toBeUndefined();
-    expect(resolveCloneEmitContext(dag, "detect-changes")).toEqual({
-      clonableSuccessors: [{ successorId: "author-diagrams", cloneCap: 5 }],
-    });
-  });
-
-  it("attaches successor assignment schema and parent allowed actions", () => {
-    const dag: ResolvedPipelineDag = {
-      nodes: [
-        { id: "plan", needs: null, ancestors: [], stageIndex: 0 },
-        {
-          id: "oss-investigate-area",
-          needs: "plan",
-          ancestors: ["plan"],
-          stageIndex: 1,
-          clonable: true,
-          clone_cap: 4,
-        },
-      ],
-      roots: ["plan"],
-      childrenOf: { plan: ["oss-investigate-area"], "oss-investigate-area": [] },
-    };
-    const schema = {
-      type: "object",
-      properties: { area_id: { type: "string" } },
-      required: ["area_id"],
-    };
-    expect(
-      resolveCloneEmitContext(dag, "plan", {
-        allowedActions: ["once", "fanout"],
-        successorCloneInputSchemas: { "oss-investigate-area": schema },
-      }),
-    ).toEqual({
-      clonableSuccessors: [
-        {
-          successorId: "oss-investigate-area",
-          cloneCap: 4,
-          cloneInputSchema: schema,
-        },
-      ],
-      allowedActions: ["once", "fanout"],
-    });
   });
 });

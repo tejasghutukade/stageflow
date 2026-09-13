@@ -1,0 +1,32 @@
+id: two-sequential-forks-join
+# Sequential fan-out into a join: clarify fans out to branch-a and
+# branch-b; branch-b fans out to path-a and path-b. join-doc waits for
+# every parent (branch-a, path-a, path-b) to become terminal, then runs if
+# at least one succeeded. Skipped parents do not block. All-skipped
+# parents skip the join.
+stages:
+  - id: clarify
+    entry: true
+    route:
+      - to: branch-a
+      - to: branch-b
+    uses: ../stages/clarify.yaml
+  - id: branch-a
+    route:
+      - to: join-doc
+    uses: ../stages/branch-a.yaml
+  - id: branch-b
+    route:
+      - to: path-a
+      - to: path-b
+    uses: ../stages/branch-b.yaml
+  - id: path-a
+    route:
+      - to: join-doc
+    uses: ../stages/path-a.yaml
+  - id: path-b
+    route:
+      - to: join-doc
+    uses: ../stages/path-b.yaml
+  - id: join-doc
+    uses: ../stages/join-doc.yaml

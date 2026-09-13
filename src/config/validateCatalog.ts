@@ -39,6 +39,8 @@ export type ValidationFindingCode =
   | "pipeline.invalid_verify"
   | "pipeline.io_incompatible"
   | "pipeline.model_applies"
+  | "pipeline.route_if_invalid"
+  | "pipeline.route_all_gated"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -189,6 +191,7 @@ function findingPipelineError(
   message: string,
   code: ValidationFindingCode,
   pipelineId?: string,
+  stageId?: string,
 ): ValidationFinding {
   return baseFinding(
     {
@@ -198,6 +201,7 @@ function findingPipelineError(
       code,
       category: "pipeline",
       pipelineId,
+      stageId,
     },
     "error",
   );
@@ -267,7 +271,7 @@ export function findingsFromLoadIssues(
 ): ValidationFinding[] {
   return issues.flatMap((issue) => {
     if (issue.category === "pipeline") {
-      if (issue.code === "pipeline.model_applies") {
+      if (issue.code === "pipeline.model_applies" || issue.code === "pipeline.route_all_gated") {
         return [
           baseFinding(
             {
@@ -277,6 +281,7 @@ export function findingsFromLoadIssues(
               code: issue.code,
               category: "pipeline",
               pipelineId: issue.pipelineId,
+              stageId: issue.stageId,
             },
             "warning",
           ),
@@ -289,6 +294,7 @@ export function findingsFromLoadIssues(
           issue.message,
           issue.code as ValidationFindingCode,
           issue.pipelineId,
+          issue.stageId,
         ),
       ];
     }

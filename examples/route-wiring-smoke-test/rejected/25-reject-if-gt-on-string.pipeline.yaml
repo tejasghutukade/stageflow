@@ -1,0 +1,33 @@
+id: route-demo-reject-if-gt-on-string
+stages:
+  - id: triage
+    entry: true
+    route:
+      - to: page
+        if:
+          field: severity
+          op: gt
+          value: 1
+    system_prompt: Triage.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [severity]
+          properties:
+            severity:
+              type: string
+  - id: page
+    system_prompt: Page.
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object

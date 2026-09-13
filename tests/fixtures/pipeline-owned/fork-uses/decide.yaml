@@ -4,3 +4,10 @@ gate_kinds:
 system_prompt: |
   You are the deciding stage for an exclusive fork. Ask the operator which branch to take.
 model: cursor/auto
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

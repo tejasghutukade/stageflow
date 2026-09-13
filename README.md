@@ -36,8 +36,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
-- **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
-- **Clonable fan-out** — clone one successor N times at completion, then join (see [YAML catalog](docs/yaml-catalog.md#clonable-successors))
+- **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
 
 ## Architecture at a glance
@@ -219,7 +218,6 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 | [hello-world](examples/hello-world/) | Single stage, domain-neutral |
 | [plan-review](examples/plan-review/) | Multi-stage with operator gate — SDLC-style **example** |
 | [conditional-fork](examples/conditional-fork/) | Exclusive fork routing with operator branch choice |
-| [clonable-fanout](examples/clonable-fanout/) | Clone one successor N times, then join |
 | [stage-mcp](examples/stage-mcp/) | Stage MCP via project `.mcp.json` and a local echo fixture |
 | [playwright-mcp](examples/playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) |
 | [context7-mcp](examples/context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) |

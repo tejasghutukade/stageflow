@@ -1,8 +1,11 @@
 id: cycle
 stages:
   - id: clarify
-    needs: design-doc
+    entry: true
+    route:
+      - to: design-doc
     uses: ../stages/clarify.yaml
   - id: design-doc
-    needs: clarify
+    route:
+      - to: clarify
     uses: ../stages/design-doc.yaml

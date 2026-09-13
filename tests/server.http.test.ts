@@ -256,7 +256,7 @@ async function postRetry(
 }
 
 function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [] };
+  return { status: "success", summary, artifacts: [], payload: {} };
 }
 
 function failEnvelope(summary: string): StageEnvelope {
@@ -570,7 +570,7 @@ describe("localhost HTTP API", () => {
     await mkdir(path.join(repoRoot, "pipelines"), { recursive: true });
     await writeFile(
       path.join(repoRoot, "pipelines", "alpha.yaml"),
-      ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", ""].join("\n"),
+      ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
     );
     await writeFile(
       path.join(repoRoot, "pipelines", "beta.yaml"),
@@ -580,6 +580,13 @@ describe("localhost HTTP API", () => {
         "  - confirm",
         "system_prompt: Beta.",
         "model: cursor/auto",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
         "",
       ].join("\n"),
     );
@@ -1050,6 +1057,7 @@ describe("localhost HTTP API", () => {
                 status: "success" as const,
                 summary: `${input.stage.id} done`,
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -2578,6 +2586,7 @@ describe("localhost HTTP API", () => {
                   status: "success" as const,
                   summary: input.stage.id,
                   artifacts: [],
+                  payload: {},
                 },
               };
             },

@@ -144,8 +144,8 @@ if (changes.change_summary !== ci.change_summary) {
 }
 
 const diagramTypes = changes.diagram_types;
-const expectedFork =
-  Array.isArray(diagramTypes) && diagramTypes.length === 0 ? [] : ["author-diagrams"];
+const expectedAuthorDiagrams = Array.isArray(diagramTypes) && diagramTypes.length > 0;
+const expectedFork = expectedAuthorDiagrams ? ["author-diagrams"] : [];
 
 if (ci.expected_fork_choice !== undefined) {
   if (!deepEqual(ci.expected_fork_choice, expectedFork)) {
@@ -155,19 +155,38 @@ if (ci.expected_fork_choice !== undefined) {
   }
 }
 
-if (!deepEqual(changes.fork_choice, expectedFork)) {
+if (ci.expected_author_diagrams !== undefined) {
+  if (ci.expected_author_diagrams !== expectedAuthorDiagrams) {
+    fail(
+      `validate-detect-envelope: ci.expected_author_diagrams inconsistent with diagram_types\n  expected_author_diagrams: ${JSON.stringify(ci.expected_author_diagrams)}\n  derived: ${JSON.stringify(expectedAuthorDiagrams)}`,
+    );
+  }
+}
+
+if (changes.fork_choice !== undefined) {
   fail(
-    `validate-detect-envelope: changes.json fork_choice must be ${JSON.stringify(expectedFork)}; got ${JSON.stringify(changes.fork_choice)}`,
+    `validate-detect-envelope: changes.json must not include fork_choice; got ${JSON.stringify(changes.fork_choice)}`,
   );
 }
 
-if (!deepEqual(envelope.fork_choice, expectedFork)) {
+if (envelope.fork_choice !== undefined) {
   fail(
-    `validate-detect-envelope: envelope.fork_choice must be ${JSON.stringify(expectedFork)}; got ${JSON.stringify(envelope.fork_choice)}`,
+    `validate-detect-envelope: envelope.fork_choice must be absent; got ${JSON.stringify(envelope.fork_choice)}`,
   );
 }
 
 const payload = envelope.payload ?? {};
+if (payload.author_diagrams !== expectedAuthorDiagrams) {
+  fail(
+    `validate-detect-envelope: payload.author_diagrams must be ${JSON.stringify(expectedAuthorDiagrams)} (diagram_types.length > 0); got ${JSON.stringify(payload.author_diagrams)}`,
+  );
+}
+if (changes.author_diagrams !== expectedAuthorDiagrams) {
+  fail(
+    `validate-detect-envelope: changes.json author_diagrams must be ${JSON.stringify(expectedAuthorDiagrams)}; got ${JSON.stringify(changes.author_diagrams)}`,
+  );
+}
+
 for (const key of [
   "pr_number",
   "base_ref",
@@ -187,8 +206,11 @@ if (!deepEqual(payload.changed_files, changes.changed_files)) {
 if (!deepEqual(payload.diagram_types, changes.diagram_types)) {
   fail("validate-detect-envelope: envelope.payload.diagram_types !== changes.diagram_types");
 }
+if (payload.author_diagrams !== changes.author_diagrams) {
+  fail("validate-detect-envelope: envelope.payload.author_diagrams !== changes.author_diagrams");
+}
 
 console.log(
-  `validate-detect-envelope: OK pr=${changes.pr_number} diagrams=${JSON.stringify(changes.diagram_types)} fork=${JSON.stringify(envelope.fork_choice)} file=${changesPath}`,
+  `validate-detect-envelope: OK pr=${changes.pr_number} diagrams=${JSON.stringify(changes.diagram_types)} author_diagrams=${JSON.stringify(payload.author_diagrams)} file=${changesPath}`,
 );
 process.exit(0);

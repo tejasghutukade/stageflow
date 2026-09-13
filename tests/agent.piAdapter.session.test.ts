@@ -85,7 +85,7 @@ describe("StageRoots session seam", () => {
     });
     expect(result).toEqual({
       ok: true,
-      envelope: { status: "success", summary: "unnamed", artifacts: [] },
+      envelope: { status: "success", summary: "unnamed", artifacts: [], payload: {} },
     });
   });
 

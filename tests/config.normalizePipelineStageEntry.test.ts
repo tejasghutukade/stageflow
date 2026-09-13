@@ -7,6 +7,13 @@ import {
 
 const ctx = { pipelineId: "test", path: "/tmp/test.pipeline.yaml" };
 
+const REQUIRED_IO = {
+  io: {
+    input: { schema: { type: "object" } },
+    output: { schema: { type: "object" } },
+  },
+};
+
 describe("normalizePipelineStageEntries", () => {
   it("infers id decide from uses path only", () => {
     const outcome = normalizePipelineStageEntries(
@@ -72,14 +79,21 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.code).toBe("pipeline.stage_uses_inline_conflict");
   });
 
-  it("rejects wiring-only entry", () => {
+  it("rejects authored needs on a uses stage", () => {
     const outcome = normalizePipelineStageEntries(
-      [{ raw: { id: "orphan", needs: "decide" }, declaringPath: "/tmp/pipeline.yaml" }],
+      [
+        {
+          raw: { id: "child", uses: "./child.yaml", needs: "decide" },
+          declaringPath: "/tmp/pipeline.yaml",
+        },
+      ],
       ctx,
     );
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.issues[0]?.code).toBe("pipeline.stage_missing_body");
+    expect(outcome.issues[0]?.message).toMatch(
+      /stage "child": "needs" is no longer supported — declare the wiring on the source stage's "route" instead/,
+    );
   });
 
   it("rejects unknown keys", () => {
@@ -103,57 +117,47 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.message).toMatch(/unknown key "label"/);
   });
 
-  it("accepts clonable and clone_cap on an object entry", () => {
+  it("normalizes route entries with mixed on gates", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
           raw: {
-            id: "author",
-            clonable: true,
-            clone_cap: 3,
+            id: "research",
+            entry: true,
+            route: [{ to: "synthesize" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(outcome.value[0]?.clonable).toBe(true);
-    expect(outcome.value[0]?.clone_cap).toBe(3);
-  });
-
-  it("normalizes mixed needs arrays and keeps scalar needs as a string", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
         {
-          raw: { id: "research", system_prompt: "p", model: "m" },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-        {
-          raw: { id: "validation", system_prompt: "p", model: "m" },
+          raw: {
+            id: "validation",
+            entry: true,
+            route: [{ to: "synthesize", on: ["succeeded", "failed"] }],
+            system_prompt: "p",
+            model: "m",
+            ...REQUIRED_IO,
+          },
           declaringPath: "/tmp/pipeline.yaml",
         },
         {
           raw: {
             id: "synthesize",
-            needs: [
-              "research",
-              { id: "validation", on: ["succeeded", "failed"] },
-            ],
+            route: [{ to: "followup" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
         {
           raw: {
             id: "followup",
-            needs: "synthesize",
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -162,31 +166,30 @@ describe("normalizePipelineStageEntries", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value[2]?.needs).toEqual([
-      { id: "research", on: ["succeeded"] },
-      { id: "validation", on: ["succeeded", "failed"] },
+    expect(outcome.value[0]?.route).toEqual([{ to: "synthesize", on: ["succeeded"] }]);
+    expect(outcome.value[1]?.route).toEqual([
+      { to: "synthesize", on: ["succeeded", "failed"] },
     ]);
-    expect(outcome.value[3]?.needs).toBe("synthesize");
-    expect(toWiringRefs(outcome.value).map((ref) => ref.needs)).toEqual([
+    expect(outcome.value[2]?.route).toEqual([{ to: "followup", on: ["succeeded"] }]);
+    expect(toWiringRefs(outcome.value).map((ref) => ref.route)).toEqual([
+      [{ to: "synthesize", on: ["succeeded"] }],
+      [{ to: "synthesize", on: ["succeeded", "failed"] }],
+      [{ to: "followup", on: ["succeeded"] }],
       undefined,
-      undefined,
-      [
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded", "failed"] },
-      ],
-      "synthesize",
     ]);
   });
 
-  it("accepts a one-element needs array", () => {
+  it("accepts a one-element route array", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
           raw: {
-            id: "design-doc",
-            needs: ["clarify"],
+            id: "clarify",
+            entry: true,
+            route: [{ to: "design-doc" }],
             system_prompt: "p",
             model: "m",
+            ...REQUIRED_IO,
           },
           declaringPath: "/tmp/pipeline.yaml",
         },
@@ -195,7 +198,7 @@ describe("normalizePipelineStageEntries", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value[0]?.needs).toEqual([{ id: "clarify", on: ["succeeded"] }]);
+    expect(outcome.value[0]?.route).toEqual([{ to: "design-doc", on: ["succeeded"] }]);
   });
 
   it("accepts uses plus on_verify_fail as wiring", () => {
@@ -268,7 +271,7 @@ describe("normalizePipelineStageEntries", () => {
     expect(outcome.issues[0]?.code).toBe("catalog.mixed_yaml_dialect");
   });
 
-  it("maps inline io and after-verify onto payload_schema and completion", () => {
+  it("maps inline io and after-verify onto completion without stamping IR onto body.raw", () => {
     const outcome = normalizePipelineStageEntries(
       [
         {
@@ -278,6 +281,7 @@ describe("normalizePipelineStageEntries", () => {
             model: "m",
             gate_kinds: ["confirm"],
             io: {
+              input: { schema: { type: "object" } },
               output: {
                 schema: {
                   type: "object",
@@ -300,59 +304,24 @@ describe("normalizePipelineStageEntries", () => {
     if (!outcome.ok) return;
     expect(outcome.value[0]?.body.kind).toBe("inline");
     if (outcome.value[0]?.body.kind !== "inline") return;
-    expect(outcome.value[0].body.raw.payload_schema).toEqual({
-      type: "object",
-      properties: { verdict: { type: "string" } },
-      required: ["verdict"],
+    expect(outcome.value[0].body.raw.io).toEqual({
+      input: { schema: { type: "object" } },
+      output: {
+        schema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+        },
+      },
     });
-    expect(outcome.value[0].body.raw.pre_emit_checks).toEqual([
-      { id: "approved", type: "gate", kind: "confirm" },
-    ]);
+    expect(outcome.value[0].body.raw.payload_schema).toBeUndefined();
+    expect(outcome.value[0].body.raw.pre_emit_checks).toBeUndefined();
     expect(outcome.value[0]?.completion).toEqual({
       mode: "all",
       checks: [{ id: "report", type: "artifact", path: "report.md" }],
     });
   });
 
-  it("toWiringRefs copies clonable and clone_cap when present", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
-        {
-          raw: {
-            id: "author",
-            clonable: true,
-            clone_cap: 3,
-            system_prompt: "p",
-            model: "m",
-          },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(toWiringRefs(outcome.value)).toEqual([
-      { id: "author", clonable: true, clone_cap: 3 },
-    ]);
-  });
-
-  it("omits clonable fields from wiring refs when absent", () => {
-    const outcome = normalizePipelineStageEntries(
-      [
-        {
-          raw: { id: "clarify", system_prompt: "p", model: "m" },
-          declaringPath: "/tmp/pipeline.yaml",
-        },
-      ],
-      ctx,
-    );
-    expect(outcome.ok).toBe(true);
-    if (!outcome.ok) return;
-    expect(toWiringRefs(outcome.value)).toEqual([{ id: "clarify" }]);
-    expect(outcome.value[0]?.clonable).toBeUndefined();
-    expect(outcome.value[0]?.clone_cap).toBeUndefined();
-  });
 });
 
 describe("inferIdFromUsesPath", () => {

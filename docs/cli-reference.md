@@ -85,7 +85,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 
 Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout leased).
 
-Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `task.entry_input_unmet`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. See [CI / headless](ci.md#json-stdout).
+Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `pipeline.model_applies`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. Omitted `task.input` is `{}` against entry `io.input.schema`; mismatch is `task.invalid_shape` and fails start-run. See [CI / headless](ci.md#json-stdout).
 
 Example:
 
@@ -310,7 +310,7 @@ sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] 
 | Flag | Description |
 |------|-------------|
 | `--run` | Run id (optional when `--from` provides `runId`) |
-| `--stage` | Stage id to read (required). After clonable fan-out this is the instance id (`work~1`), not the catalog id; run-once stays the catalog id. See [YAML catalog — instance ids](yaml-catalog.md#clonable-instance-ids). |
+| `--stage` | Stage id to read (required). |
 | `--from` | Read `runId` / `runDir` from a prior `sf run --json` output file |
 | `--detect-stage` | For `--format handoff`: when this stage emitted `fork_choice: []`, output `{ skipped: true }` and exit `0` |
 | `--format` | `envelope` (default) — raw stage envelope; `handoff` — downstream deliverables shape |
@@ -423,7 +423,7 @@ With no flags, validates **all pipelines and tasks** declared in `stageflow.yaml
 |------|-------------|
 | `--pipeline` | Validate that pipeline file and its stages (`uses:` / `include:` transitively). Does not validate all tasks. |
 | `--task` | Validate that task file only |
-| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors. Does not promote `catalog.legacy_yaml`. |
+| `--strict` | Promote manifest warnings (`catalog.manifest_missing`, `catalog.empty_catalog`) to errors. Does not promote `catalog.legacy_yaml`, `pipeline.model_applies`, or `pipeline.route_all_gated`. Validate can pass (`ok: true`, exit 0) with warnings > 0. |
 | `--json` | Machine-readable findings |
 
 Use at most one of `--pipeline` or `--task`. The CLI rejects both.
@@ -441,6 +441,8 @@ sf validate --strict --json
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
 For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
+
+Converts **contract keys only** (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema` → `io` / `verify` / `on_verify_fail`). It does **not** rewrite `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none`. Those fail load until rewritten to `route` / `entry` / `{ type: loop }`. See [Upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs) (wiring subsection).
 
 ```bash
 sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]

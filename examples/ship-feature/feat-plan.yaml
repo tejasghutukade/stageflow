@@ -74,6 +74,9 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 3600000
 io:
+  input:
+    schema:
+      type: object
   output:
     schema:
       type: object

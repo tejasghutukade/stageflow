@@ -123,22 +123,32 @@ export function buildVerifyItems(
   return { ok: true, items: order.map((id) => byId.get(id)!) };
 }
 
+const OBJECT_SCHEMA = { type: "object" };
+
 export function ioFromSchemas(stage: {
   payload_schema?: unknown;
   clone_input_schema?: unknown;
 }): StageIoYaml | undefined {
-  const io: StageIoYaml = {};
-  if (stage.clone_input_schema !== undefined) {
-    io.input = { schema: stage.clone_input_schema };
+  if (stage.clone_input_schema === undefined && stage.payload_schema === undefined) {
+    return undefined;
   }
-  if (stage.payload_schema !== undefined) {
-    io.output = { schema: stage.payload_schema };
-  }
-  return io.input !== undefined || io.output !== undefined ? io : undefined;
+  return {
+    input: { schema: stage.clone_input_schema ?? OBJECT_SCHEMA },
+    output: { schema: stage.payload_schema ?? OBJECT_SCHEMA },
+  };
 }
 
 export function ioFromRawDocument(raw: Record<string, unknown>): StageIoYaml | undefined {
-  if (isPlainObject(raw.io)) return raw.io as StageIoYaml;
+  if (isPlainObject(raw.io)) {
+    const io = raw.io;
+    const input = isPlainObject(io.input) ? io.input : undefined;
+    const output = isPlainObject(io.output) ? io.output : undefined;
+    if (input?.schema === undefined && output?.schema === undefined) return undefined;
+    return {
+      input: { schema: input?.schema ?? OBJECT_SCHEMA },
+      output: { schema: output?.schema ?? OBJECT_SCHEMA },
+    };
+  }
   return ioFromSchemas({
     payload_schema: raw.payload_schema,
     clone_input_schema: raw.clone_input_schema,
@@ -163,7 +173,6 @@ const STAGE_BODY_ORDER = [
   "io",
   "verify",
   "gate_kinds",
-  "clone_actions",
   "skill",
   "mcp",
 ] as const;
@@ -175,8 +184,6 @@ const PIPELINE_WIRING_ORDER = [
   "mcp",
   "needs",
   "fork",
-  "clonable",
-  "clone_cap",
   "on_verify_fail",
   "feedback_loop",
   "replay_safe",

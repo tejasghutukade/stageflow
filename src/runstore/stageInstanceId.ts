@@ -25,6 +25,17 @@ export function mintCloneInstanceIds(
   return Array.from({ length: count }, (_, i) => mintCloneInstanceId(catalogId, startAt + i));
 }
 
+export function cloneInstanceOrdinal(
+  instanceId: string,
+  catalogId: string,
+): number | undefined {
+  const prefix = `${catalogId}~`;
+  if (!instanceId.startsWith(prefix)) return undefined;
+  const n = Number(instanceId.slice(prefix.length));
+  if (!Number.isInteger(n) || n < 1) return undefined;
+  return n;
+}
+
 export function definitionIdForInstance(
   snapshot: RunPipelineDagSnapshot | null | undefined,
   instanceId: string,

@@ -59,27 +59,6 @@ describe("assertRequiredEnvelope", () => {
     expect(isAdvancingEnvelope(envelope)).toBe(false);
   });
 
-  it("accepts a legal skip clone_forks item and copies it onto the envelope", () => {
-    const envelope = assertRequiredEnvelope({
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-      clone_forks: [{ successor_id: "author-diagrams", action: "skip" }],
-    });
-    expect(envelope.clone_forks).toEqual([
-      { successor_id: "author-diagrams", action: "skip" },
-    ]);
-  });
-
-  it("accepts an envelope without clone_forks and leaves the field absent", () => {
-    const envelope = assertRequiredEnvelope({
-      status: "success",
-      summary: "ok",
-      artifacts: [],
-    });
-    expect(envelope.clone_forks).toBeUndefined();
-  });
-
   it("accepts explicit checklist attestations and rejects malformed ones", () => {
     const envelope = assertRequiredEnvelope({
       status: "success",
@@ -103,47 +82,49 @@ describe("assertRequiredEnvelope", () => {
     ).toThrow(/checklist_attestations/);
   });
 
-  it("rejects clone_forks that is not an array", () => {
-    expect(() =>
-      assertRequiredEnvelope({
-        status: "success",
-        summary: "ok",
-        artifacts: [],
-        clone_forks: "nope",
-      }),
-    ).toThrow(EnvelopeError);
-  });
-
   it("U1: pathPrefix qualifies missing status", () => {
     expect(() =>
       assertRequiredEnvelope(
         { summary: "ok", artifacts: [] },
-        "clone_forks[0].envelope",
+        "nested.envelope",
       ),
-    ).toThrow(/clone_forks\[0\]\.envelope\.status must be/);
+    ).toThrow(/nested\.envelope\.status must be/);
   });
 
-  it("U1: pathPrefix qualifies missing summary on fanout clone", () => {
+  it("U1: pathPrefix qualifies missing summary", () => {
     expect(() =>
       assertRequiredEnvelope(
         { status: "success", artifacts: [] },
-        "clone_forks[0].clones[1].envelope",
+        "nested.envelope",
       ),
-    ).toThrow(/clone_forks\[0\]\.clones\[1\]\.envelope\.summary/);
+    ).toThrow(/nested\.envelope\.summary/);
   });
 
   it("U1: pathPrefix qualifies bad artifacts", () => {
     expect(() =>
       assertRequiredEnvelope(
         { status: "success", summary: "ok", artifacts: "nope" },
-        "clone_forks[0].envelope",
+        "nested.envelope",
       ),
-    ).toThrow(/clone_forks\[0\]\.envelope\.artifacts/);
+    ).toThrow(/nested\.envelope\.artifacts/);
   });
 
   it("U1: no pathPrefix retains bare status message", () => {
     expect(() =>
       assertRequiredEnvelope({ summary: "ok", artifacts: [] }),
     ).toThrow(/^status must be "success" or "failure"$/);
+  });
+
+  it('rejects clone_forks with a message naming the field and pointing at Clone Chain', () => {
+    expect(() =>
+      assertRequiredEnvelope({
+        status: "success",
+        summary: "ok",
+        artifacts: [],
+        clone_forks: [{ successor_id: "implement", action: "skip" }],
+      }),
+    ).toThrow(
+      /"clone_forks" is no longer supported — use a Clone Chain instead/,
+    );
   });
 });

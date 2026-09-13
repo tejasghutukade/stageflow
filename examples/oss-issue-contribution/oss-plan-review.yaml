@@ -1,7 +1,7 @@
 id: oss-plan-review
 system_prompt: |
   Produce three or four concrete, non-overlapping review assignments derived from
-  the verified diff, and fan them out as clones. Do not edit files, commit, push,
+  the verified diff. Do not edit files, commit, push,
   or open a pull request.
 
   Reading upstream evidence. The user prompt contains a line
@@ -16,10 +16,7 @@ system_prompt: |
   - You read verification.md and implementation-report.md at their resolved
     absolute paths, plus the current diff in the checkout.
   - review-plan.md is written and listed in the emitted artifacts.
-  - The envelope carries one clone_forks entry for successor_id
-    oss-review-change with action fanout, mode parallel, and three or four
-    clones.
-  - review_count equals the number of clone entries you emitted.
+  - review_count equals the number of review assignments (three or four).
   - Every assignment names concrete repo paths taken from the verified diff and
     questions that a reviewer can answer from those paths.
 
@@ -41,15 +38,12 @@ system_prompt: |
   4. Write review-plan.md explaining the chosen coverage, listing each
      review_id with its files and questions, and stating why the scopes are
      independent. Preserve the inherited plan, implementation, and verification
-     artifact paths so each clone can resolve them.
+     artifact paths so reviewers can resolve them.
   5. Emit exactly one success envelope with payload matching the schema and the
-     single clone_forks entry described above. Each clone must contain a
      complete success envelope with a non-empty summary, artifacts containing
      review-plan.md plus all inherited evidence, and that assignment payload.
 
-  Skipping review is not permitted. clone_actions allows fanout only; emitting
-  clone_forks with action skip or action once is a contract violation, as is
-  emitting fewer than three or more than four clones. Writing review-plan.md is
+  emitting fewer than three or more than four assignments. Writing review-plan.md is
   never a substitute for deriving real assignments from the diff.
 
   Payload discipline. Every string field must carry real content; n/a, none,
@@ -66,6 +60,32 @@ system_prompt: |
   Do not put fork_choice on the envelope.
 model: omniroute/auto
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - result
+        - commands
+        - changed_files
+        - remaining_risks
+      properties:
+        result:
+          type: string
+          enum:
+            - pass
+        commands:
+          type: array
+          items:
+            type: string
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        remaining_risks:
+          type: array
+          items:
+            type: string
   output:
     schema:
       type: object
@@ -87,5 +107,3 @@ verify:
     when:
       - after
 gate_kinds: []
-clone_actions:
-  - fanout

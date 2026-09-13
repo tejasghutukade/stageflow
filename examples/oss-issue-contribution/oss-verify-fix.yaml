@@ -63,6 +63,37 @@ system_prompt: |
 model: omniroute/auto
 timeout_ms: 1800000
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - changed_files
+        - regression_test
+        - implementation_summary
+        - assumptions
+        - commands_run
+        - all_passed
+      properties:
+        changed_files:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        regression_test:
+          type: string
+        implementation_summary:
+          type: string
+        assumptions:
+          type: array
+          items:
+            type: string
+        commands_run:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        all_passed:
+          type: boolean
   output:
     schema:
       type: object

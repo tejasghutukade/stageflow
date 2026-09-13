@@ -27,6 +27,26 @@ system_prompt: |
   a one-sentence summary, and a payload matching the stage schema.
 model: cursor/composer-2-5
 io:
+  input:
+    schema:
+      type: object
+      required:
+        - version
+        - tag
+        - previous_version
+        - included_versions
+      properties:
+        version:
+          type: string
+        tag:
+          type: string
+        previous_version:
+          type: string
+        included_versions:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
   output:
     schema:
       type: object

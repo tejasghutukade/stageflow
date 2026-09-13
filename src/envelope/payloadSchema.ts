@@ -31,6 +31,7 @@ type JsonSchemaNode = {
   items?: unknown;
   additionalProperties?: unknown;
   minItems?: unknown;
+  maxItems?: unknown;
   enum?: unknown;
   minimum?: unknown;
   maximum?: unknown;
@@ -262,10 +263,23 @@ function compileNode(node: unknown, path: string, ctx: CompileCtx): TSchema {
           `${path}: minItems must be a non-negative integer when present`,
         );
       }
+      if (
+        schema.maxItems !== undefined &&
+        (typeof schema.maxItems !== "number" ||
+          !Number.isInteger(schema.maxItems) ||
+          schema.maxItems < 0)
+      ) {
+        throw new Error(
+          `${path}: maxItems must be a non-negative integer when present`,
+        );
+      }
       const items = compileNode(schema.items, `${path}.items`, childCtx);
+      const arrayOpts: { minItems?: number; maxItems?: number } = {};
+      if (schema.minItems !== undefined) arrayOpts.minItems = schema.minItems;
+      if (schema.maxItems !== undefined) arrayOpts.maxItems = schema.maxItems;
       base =
-        schema.minItems !== undefined
-          ? Type.Array(items, { minItems: schema.minItems })
+        Object.keys(arrayOpts).length > 0
+          ? Type.Array(items, arrayOpts)
           : Type.Array(items);
       break;
     }
@@ -556,6 +570,86 @@ export function expandPayloadSchemaRefs(
   });
 }
 
+const INDEX_SEGMENT = /^\d+$/;
+
+export type PayloadSchemaFieldPathIssue =
+  | "empty_segment"
+  | "array_index"
+  | "missing"
+  | "optional"
+  | "untyped";
+
+export type PayloadSchemaFieldPathResult =
+  | { ok: true; type: string }
+  | { ok: false; issue: PayloadSchemaFieldPathIssue };
+
+function schemaNodeType(schema: JsonSchemaNode | undefined): string | undefined {
+  return typeof schema?.type === "string" ? schema.type : undefined;
+}
+
+function tryExpandSchema(
+  node: unknown,
+  options?: CompilePayloadSchemaOptions,
+): unknown {
+  try {
+    return expandPayloadSchemaRefs(node, options);
+  } catch {
+    return node;
+  }
+}
+
+export function resolvePayloadSchemaFieldPath(
+  schema: unknown,
+  field: string,
+  options?: CompilePayloadSchemaOptions,
+): PayloadSchemaFieldPathResult {
+  const segments = field.split(".");
+  if (segments.length === 0 || segments.some((segment) => segment === "")) {
+    return { ok: false, issue: "empty_segment" };
+  }
+  if (segments.some((segment) => INDEX_SEGMENT.test(segment))) {
+    return { ok: false, issue: "array_index" };
+  }
+
+  let current: unknown = tryExpandSchema(schema, options);
+  for (const segment of segments) {
+    if (!isPlainSchemaObject(current)) {
+      return { ok: false, issue: "missing" };
+    }
+    const node = current as JsonSchemaNode;
+    if (node.$ref !== undefined && node.properties === undefined) {
+      return { ok: false, issue: "missing" };
+    }
+    const typeName = schemaNodeType(node);
+    if (
+      typeName === "array" ||
+      (node.items !== undefined && typeName !== "object")
+    ) {
+      return { ok: false, issue: "array_index" };
+    }
+    const properties = readProperties(node);
+    if (!Object.prototype.hasOwnProperty.call(properties, segment)) {
+      return { ok: false, issue: "missing" };
+    }
+    if (!readRequiredKeys(node).includes(segment)) {
+      return { ok: false, issue: "optional" };
+    }
+    current = properties[segment];
+  }
+
+  const leaf = isPlainSchemaObject(current)
+    ? (tryExpandSchema(current, options) as JsonSchemaNode)
+    : undefined;
+  if (leaf?.$ref !== undefined && leaf.properties === undefined) {
+    return { ok: false, issue: "untyped" };
+  }
+  const fieldType = schemaNodeType(leaf);
+  if (fieldType === undefined) {
+    return { ok: false, issue: "untyped" };
+  }
+  return { ok: true, type: fieldType };
+}
+
 function expandSchemaNode(node: unknown, path: string, ctx: CompileCtx): unknown {
   const { schema, stack } = derefSchemaNode(node, path, ctx);
   const childCtx: CompileCtx = { schemas: ctx.schemas, stack };
@@ -656,6 +750,35 @@ export function assertCloneAssignmentPayload(
       details
         ? `${pathLead}clone assignment payload does not match io.input.schema for ${successorId}: ${details}`
         : `${pathLead}clone assignment payload does not match io.input.schema for ${successorId}`,
+    );
+  }
+}
+
+/**
+ * Validate a predecessor success payload against the child's IR
+ * `clone_input_schema` (YAML: `io.input.schema`) on a normal pipeline edge.
+ */
+export function assertPriorInputPayload(
+  envelope: StageEnvelope,
+  cloneInputSchema: unknown,
+  childId: string,
+  options?: CompilePayloadSchemaOptions,
+): void {
+  if (envelope.status !== "success") {
+    return;
+  }
+  const schema = compilePayloadSchema(cloneInputSchema, options);
+  if (envelope.payload === undefined) {
+    throw new EnvelopeError(
+      `prior payload is required by io.input.schema for ${childId}`,
+    );
+  }
+  if (!Value.Check(schema, envelope.payload)) {
+    const details = payloadSchemaMismatchDetails(schema, envelope.payload);
+    throw new EnvelopeError(
+      details
+        ? `prior payload does not match io.input.schema for ${childId}: ${details}`
+        : `prior payload does not match io.input.schema for ${childId}`,
     );
   }
 }

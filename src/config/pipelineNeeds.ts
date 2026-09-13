@@ -1,10 +1,13 @@
 import type {
   NeedTerminalState,
   PipelineNeedEdge,
+  PipelineNeedItem,
   PipelineNeeds,
-  PipelineStageRef,
+  PipelineRoute,
+  PipelineRouteForwardEntry,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
+import { parseRouteIf } from "./routeIf.js";
 
 export const NEED_TERMINAL_STATES: readonly NeedTerminalState[] = [
   "succeeded",
@@ -135,16 +138,105 @@ export function parsePipelineNeeds(
   return { ok: true, value: edges };
 }
 
-export function toNeedEdges(needs: PipelineStageRef["needs"]): PipelineNeedEdge[] {
+export function toNeedEdges(
+  needs: PipelineNeeds | PipelineNeedItem[] | undefined,
+): PipelineNeedEdge[] {
   if (needs === undefined) return [];
   if (typeof needs === "string") {
     return needs ? [{ id: needs, on: ["succeeded"] }] : [];
   }
-  return needs.map((item) =>
-    typeof item === "string"
-      ? { id: item, on: ["succeeded"] }
-      : { id: item.id, on: item.on && item.on.length > 0 ? item.on : ["succeeded"] },
-  );
+  return needs.map((item) => {
+    if (typeof item === "string") {
+      return { id: item, on: ["succeeded"] };
+    }
+    const edge: PipelineNeedEdge = {
+      id: item.id,
+      on: item.on && item.on.length > 0 ? item.on : ["succeeded"],
+    };
+    if ("if" in item && item.if !== undefined) {
+      edge.if = item.if;
+    }
+    return edge;
+  });
+}
+
+export function toPipelineNeeds(edges: PipelineNeedEdge[]): PipelineNeeds {
+  const only = edges[0];
+  if (
+    edges.length === 1 &&
+    only !== undefined &&
+    only.on.length === 1 &&
+    only.on[0] === "succeeded" &&
+    only.if === undefined
+  ) {
+    return only.id;
+  }
+  return edges;
+}
+
+function isForwardRouteEntry(
+  entry: PipelineRoute[number],
+): entry is PipelineRouteForwardEntry {
+  return !("type" in entry) || entry.type === undefined;
+}
+
+export function invertRouteToPredecessorEdges(
+  sources: ReadonlyArray<{ id: string; route?: PipelineRoute }>,
+): Map<string, PipelineNeedEdge[]> {
+  const inbound = new Map<string, PipelineNeedEdge[]>();
+  for (const source of sources) {
+    if (source.route === undefined) continue;
+    for (const item of source.route) {
+      if (!isForwardRouteEntry(item)) continue;
+      const on =
+        item.on === undefined
+          ? (["succeeded"] as NeedTerminalState[])
+          : Array.isArray(item.on)
+            ? item.on
+            : [item.on];
+      const list = inbound.get(item.to) ?? [];
+      const edge: PipelineNeedEdge = { id: source.id, on };
+      if (item.if !== undefined) edge.if = item.if;
+      list.push(edge);
+      inbound.set(item.to, list);
+    }
+  }
+  return inbound;
+}
+
+export type OutboundRouteInversion = {
+  route?: PipelineRouteForwardEntry[];
+  entry?: boolean;
+};
+
+export function invertPredecessorEdgesToRoute(
+  stages: ReadonlyArray<{ id: string; needs?: PipelineNeeds }>,
+): Map<string, OutboundRouteInversion> {
+  const result = new Map<string, OutboundRouteInversion>();
+  if (!stages.some((stage) => stage.needs !== undefined)) {
+    return result;
+  }
+
+  const outbound = new Map<string, PipelineRouteForwardEntry[]>();
+  for (const stage of stages) {
+    if (stage.needs === undefined) {
+      result.set(stage.id, { entry: true });
+      continue;
+    }
+    for (const parent of toNeedEdges(stage.needs)) {
+      const list = outbound.get(parent.id) ?? [];
+      const entry: PipelineRouteForwardEntry = { to: stage.id, on: parent.on };
+      if (parent.if !== undefined) entry.if = parent.if;
+      list.push(entry);
+      outbound.set(parent.id, list);
+    }
+  }
+
+  for (const [id, route] of outbound) {
+    result.set(id, { ...(result.get(id) ?? {}), route });
+  }
+
+  return result;
 }
 
 export function predecessorEdges(
@@ -170,7 +262,15 @@ export function hydrateResolvedNeeds(node: {
             typeof state === "string" && NEED_TERMINAL_STATE_SET.has(state),
           )
         : (["succeeded"] as NeedTerminalState[]);
-      edges.push({ id: item.id, on: on.length > 0 ? on : ["succeeded"] });
+      const edge: PipelineNeedEdge = {
+        id: item.id,
+        on: on.length > 0 ? on : ["succeeded"],
+      };
+      if (item.if !== undefined) {
+        const parsedIf = parseRouteIf(item.if, item.id, item.id);
+        if (parsedIf.ok) edge.if = parsedIf.value;
+      }
+      edges.push(edge);
     }
     if (typeof node.needs === "string") {
       return { needs: node.needs, needsEdges: edges };

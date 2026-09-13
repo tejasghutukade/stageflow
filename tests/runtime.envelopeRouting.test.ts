@@ -267,114 +267,10 @@ describe.each(storeKinds)("buildCompletedEnvelopesFromRun (%s)", (kind) => {
   });
 });
 
-describe("resolvePriorEnvelope clone join list (U2 / U5)", () => {
-  it("once successor prior is the item envelope, not the predecessor", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
-      cwd: fixtures,
-    });
-    const parent: StageEnvelope = {
-      status: "success",
-      summary: "clarify-summary",
-      artifacts: [],
-      clone_forks: [
-        {
-          successor_id: "design-doc",
-          action: "once",
-          envelope: {
-            status: "success",
-            summary: "once-prior",
-            artifacts: [],
-          },
-        },
-      ],
-    };
-    const result = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "design-doc",
-      completedEnvelopes: new Map([["clarify", parent]]),
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.prior?.summary).toBe("once-prior");
-    expect(result.joinPriors).toBeUndefined();
-  });
 
-  it("join of three clones fills joinPriors in clone-list order", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const { snapshot } = appendCloneInstances(base, {
-      catalogId: "design-doc",
-      predecessorId: "clarify",
-      count: 3,
-    });
-    const completed = new Map<string, StageEnvelope>([
-      ["design-doc~1", { status: "success", summary: "a", artifacts: [] }],
-      ["design-doc~2", { status: "failure", summary: "b-fail", artifacts: [] }],
-      ["design-doc~3", { status: "success", summary: "c", artifacts: [] }],
-    ]);
-    const result = await resolvePriorEnvelope({
-      dag: snapshot,
-      stageId: "join-doc",
-      completedEnvelopes: completed,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.prior).toBeNull();
-    expect(result.joinPriors?.map((e) => e.summary)).toEqual([
-      "a",
-      "b-fail",
-      "c",
-    ]);
-    expect(result.priorEnvelopesByStage).toBeUndefined();
-  });
-
-  it("missing succeeded-clone envelope fails closed", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const { snapshot } = appendCloneInstances(base, {
-      catalogId: "design-doc",
-      predecessorId: "clarify",
-      count: 2,
-    });
-    const result = await resolvePriorEnvelope({
-      dag: snapshot,
-      stageId: "join-doc",
-      completedEnvelopes: new Map([
-        ["design-doc~1", { status: "success", summary: "a", artifacts: [] }],
-      ]),
-    });
-    expect(result.ok).toBe(false);
-  });
-
-  it("root stage still has prior null and no joinPriors", async () => {
-    const loaded = await loadPipeline(pipelinePath("clone-fanout-join"), {
-      cwd: fixtures,
-    });
-    const result = await resolvePriorEnvelope({
-      dag: loaded.dag,
-      stageId: "clarify",
-      completedEnvelopes: new Map(),
-    });
-    expect(result).toEqual({ ok: true, prior: null });
-  });
-
-  it("formatPriorEnvelope renders clone-list JSON when joinPriors present", () => {
-    const text = formatPriorEnvelope(null, [
-      { status: "success", summary: "a", artifacts: [] },
-      { status: "failure", summary: "b", artifacts: [] },
-    ]);
-    expect(text).toContain("Prior envelopes (2 clones, clone-list order):");
-    expect(text).toContain('"summary": "a"');
-    expect(text).toContain('"summary": "b"');
-  });
-});
 
 function okEnvelope(summary: string): StageEnvelope {
-  return { status: "success", summary, artifacts: [] };
+  return { status: "success", summary, artifacts: [], payload: {} };
 }
 
 async function seedStageTerminal(
@@ -498,7 +394,7 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
     expect(result.priorEnvelopesByStage?.research).toEqual(research);
   });
 
-  it("failed parent uses emitted failure envelope", async () => {
+  it("failed parent is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -531,10 +427,13 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual(emitted);
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(result.priorEnvelopesByStage?.validation).toEqual(
+      okEnvelope("from-validation"),
+    );
   });
 
-  it("failed parent without envelope uses synthetic failure from persisted reason", async () => {
+  it("failed parent without envelope is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -561,14 +460,13 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "failure",
-      summary: "validation crashed",
-      artifacts: [],
-    });
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(result.priorEnvelopesByStage?.validation).toEqual(
+      okEnvelope("from-validation"),
+    );
   });
 
-  it("skipped parent uses synthetic skipped and ignores an emitted success envelope", async () => {
+  it("skipped parent is omitted from priorEnvelopesByStage", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -597,17 +495,16 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "skipped",
-      summary: "stage was skipped",
-      artifacts: [],
-    });
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
+    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual([
+      "validation",
+    ]);
     expect(result.priorEnvelopesByStage?.validation).toEqual(
       okEnvelope("from-validation"),
     );
   });
 
-  it("does not treat an emitted success envelope as a failed parent's terminal", async () => {
+  it("does not merge a failed parent's emitted success envelope", async () => {
     const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
       cwd: fixtures,
     });
@@ -637,108 +534,7 @@ describe("resolvePriorEnvelope generic fan-in (U2)", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual({
-      status: "failure",
-      summary: "agent crashed",
-      artifacts: [],
-    });
-  });
-
-  it("clonable parent under a generic join is a nested list in clone-list order", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const withClonable = {
-      ...base,
-      nodes: base.nodes.map((node) =>
-        node.id === "research"
-          ? { ...node, clonable: true, clone_cap: 4 }
-          : node,
-      ),
-    };
-    const { snapshot } = appendCloneInstances(withClonable, {
-      catalogId: "research",
-      predecessorId: "clarify",
-      count: 2,
-    });
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-clone-parent-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await seedStageTerminal(store, run.runId, "research~2", "succeeded", {
-      envelope: okEnvelope("r2"),
-    });
-    await seedStageTerminal(store, run.runId, "research~1", "succeeded", {
-      envelope: okEnvelope("r1"),
-    });
-    await seedStageTerminal(store, run.runId, "validation", "succeeded", {
-      envelope: okEnvelope("from-validation"),
-    });
-
-    const result = await resolvePriorEnvelope({
-      dag: snapshot,
-      stageId: "synthesize",
-      completedEnvelopes: new Map(),
-      store,
-      runId: run.runId,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.prior).toBeNull();
-    expect(result.joinPriors).toBeUndefined();
-    expect(Object.keys(result.priorEnvelopesByStage ?? {})).toEqual([
-      "research",
-      "validation",
-    ]);
-    expect(
-      Array.isArray(result.priorEnvelopesByStage?.research)
-        ? result.priorEnvelopesByStage.research.map((e) => e.summary)
-        : undefined,
-    ).toEqual(["r1", "r2"]);
-    expect(result.priorEnvelopesByStage?.validation).toEqual(
-      okEnvelope("from-validation"),
-    );
-  });
-
-  it("skipped clone group under a generic join supplies an empty list", async () => {
-    const loaded = await loadPipeline(pipelinePath("diamond-fan-in"), {
-      cwd: fixtures,
-    });
-    const base = buildPipelineDagSnapshotFromLoaded(loaded);
-    const snapshot = {
-      ...base,
-      nodes: base.nodes.map((node) =>
-        node.id === "research"
-          ? { ...node, clonable: true, clone_cap: 4 }
-          : node,
-      ),
-    };
-    const root = await mkdtemp(path.join(tmpdir(), "sf-env-clone-skip-"));
-    const store = createRunStore({ rootDir: root });
-    const run = await store.createRun({
-      ...catalogLocators("diamond-fan-in"),
-      taskYaml: "id: t\ngoal: g\n",
-    });
-    await seedStageTerminal(store, run.runId, "research", "skipped");
-    await seedStageTerminal(store, run.runId, "validation", "succeeded", {
-      envelope: okEnvelope("from-validation"),
-    });
-
-    const result = await resolvePriorEnvelope({
-      dag: snapshot,
-      stageId: "synthesize",
-      completedEnvelopes: new Map(),
-      store,
-      runId: run.runId,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.priorEnvelopesByStage?.research).toEqual([]);
+    expect(result.priorEnvelopesByStage?.research).toBeUndefined();
     expect(result.priorEnvelopesByStage?.validation).toEqual(
       okEnvelope("from-validation"),
     );

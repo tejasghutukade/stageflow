@@ -10,10 +10,12 @@ schemas:
     additionalProperties: false
 stages:
   - id: intake
+    entry: true
+    route:
+      - to: draft
     uses: ./intake.yaml
   - id: draft
     uses: ./draft.yaml
-    needs: [intake]
     on_verify_fail:
       mode: repair
       max_attempts: 2

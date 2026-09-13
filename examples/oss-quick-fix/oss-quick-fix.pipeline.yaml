@@ -1,6 +1,9 @@
 id: oss-quick-fix
 stages:
   - id: understand-issue
+    entry: true
+    route:
+      - to: implement-fix
     uses: ./understand-issue.yaml
     on_verify_fail:
       mode: repair
@@ -8,16 +11,18 @@ stages:
       retry_safety: idempotent
       include_failed_checks: true
   - id: implement-fix
+    route:
+      - to: verify-fix
     uses: ./implement-fix.yaml
-    needs: understand-issue
     on_verify_fail:
       mode: repair
       max_attempts: 3
       retry_safety: idempotent
       include_failed_checks: true
   - id: verify-fix
+    route:
+      - to: ship-fix
     uses: ./verify-fix.yaml
-    needs: implement-fix
     on_verify_fail:
       mode: repair
       max_attempts: 3
@@ -25,7 +30,6 @@ stages:
       include_failed_checks: true
   - id: ship-fix
     uses: ./ship-fix.yaml
-    needs: verify-fix
     on_verify_fail:
       mode: manual
       retry_safety: side_effecting

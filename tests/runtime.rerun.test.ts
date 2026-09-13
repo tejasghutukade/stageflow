@@ -19,6 +19,7 @@ function successEnvelope(summary: string) {
       status: "success" as const,
       summary,
       artifacts: [],
+      payload: {},
     },
   };
 }
@@ -80,6 +81,7 @@ describe("run manager re-run", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -93,6 +95,7 @@ describe("run manager re-run", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },
@@ -151,6 +154,7 @@ describe("run manager re-run", () => {
                 status: "success" as const,
                 summary: "ok",
                 artifacts: [],
+                payload: {},
               },
             };
           },
@@ -164,6 +168,7 @@ describe("run manager re-run", () => {
             status: "success" as const,
             summary: "ok",
             artifacts: [],
+            payload: {},
           },
         };
       },
@@ -187,7 +192,7 @@ describe("run manager re-run", () => {
     const store = createRunStore({ rootDir: root });
 
     function envelope(summary: string, status: "success" | "failure") {
-      return { status, summary, artifacts: [] as string[] };
+      return { status, summary, artifacts: [] as string[], payload: {} };
     }
 
     const agent = scriptedFakeAgent([
