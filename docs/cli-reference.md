@@ -438,6 +438,30 @@ Example:
 sf validate --strict --json
 ```
 
+## `sf graph`
+
+Print a definition-time view of a pipeline graph (stages, route edges, entry, Clone Chain fan-out, loop send-back) before any run. Default output is a plain terminal box-drawing diagram on stdout (Unicode box-drawing characters). Does not require `sf ui` or a running server.
+
+```bash
+sf graph --pipeline <path> [--json]
+```
+
+`--pipeline` is required (no manifest-all mode).
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline` | Pipeline YAML to render (required). Loads and resolves the same way as `sf validate --pipeline`. |
+| `--json` | On success: dump the resolved DAG (`nodes`, `roots`, `childrenOf`) as JSON instead of the terminal diagram. On load/validation failure: print validate-shaped JSON (`ok`, `scope`, `checks`, `summary`, `findings`) to stdout (same shape as `sf validate --json` / `sf run --json` validation failure; findings use `file` remapped from internal `path`), exit `1`. |
+| `--help` / `-h` | Print usage |
+
+**Exit codes:** `0` success, `1` failure (missing/invalid args, load/validation failure). Graph never exits `2` — no waiting state.
+
+Example:
+
+```bash
+sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml
+```
+
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
 For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.

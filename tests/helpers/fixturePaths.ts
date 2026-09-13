@@ -24,6 +24,7 @@ export const SINGLE_PIPELINE = pipelinePath("single");
 export const DOCS_ONLY_PIPELINE = pipelinePath("docs-only");
 export const LINEAR_EXPLICIT_PIPELINE = pipelinePath("linear-explicit");
 export const BROKEN_PIPELINE = pipelinePath("broken");
+export const CYCLE_PIPELINE = pipelinePath("cycle");
 export function catalogLocators(stem: string): {
   pipelineId: string;
   pipelinePath: string;

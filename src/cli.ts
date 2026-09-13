@@ -14,6 +14,7 @@ import {
   EXPORT_RUN_USAGE,
   runExportRunCommand,
 } from "./cli/exportRunCommand.js";
+import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -36,6 +37,7 @@ const USAGE = `Usage:
   sf init
   sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+  sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
@@ -74,6 +76,8 @@ ${INIT_USAGE}
 ${RUN_USAGE}
 
 ${VALIDATE_USAGE}
+
+${GRAPH_USAGE}
 
 ${MIGRATE_YAML_USAGE}
 
@@ -120,6 +124,7 @@ function parseArgs(argv: string[]): {
   if (
     command === "providers" ||
     command === "validate" ||
+    command === "graph" ||
     command === "migrate-yaml" ||
     command === "run" ||
     command === "init" ||
@@ -313,6 +318,13 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "validate") {
       return runValidateCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "graph") {
+      return runGraphCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });
