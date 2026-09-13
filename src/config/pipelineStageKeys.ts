@@ -18,7 +18,7 @@ export const WIRING_KEYS = new Set([
   "on_verify_fail",
   "feedback_loop",
   "replay_safe",
-  /** Additive, alongside `needs`/`fork`/`feedback_loop` (route-based-pipeline-wiring spec). */
+  /** Additive, alongside `needs`/`fork`/`feedback_loop` (see docs/yaml-catalog.md). */
   "route",
   "entry",
   "route_select",

@@ -569,7 +569,7 @@ In both modes a failed or skipped Clone Instance is a failed Join parent. The Jo
 
 A pipeline may have many Clone Chains if they share no emitter, clone child, or Join. A Join may later be the emitter of a following Clone Chain.
 
-Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml). Spec: [Clone Chain](specs/clone-chain.md).
+Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml).
 
 ```yaml
 id: clone-chain-smallest

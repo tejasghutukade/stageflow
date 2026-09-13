@@ -1,6 +1,6 @@
 /**
  * Parsing/normalization for the additive `route` stage field
- * (docs/specs/route-based-pipeline-wiring.md). Mirrors the shape of
+ * (docs/yaml-catalog.md). Mirrors the shape of
  * pipelineNeeds.ts: `parsePipelineRoute` validates raw YAML/JSON input at
  * parse time, `toRouteEdges`/`toRouteLoopEntries` normalize an already-typed
  * `PipelineRoute` (used by the `resolvePipelineDagFromRefs` seam, which may

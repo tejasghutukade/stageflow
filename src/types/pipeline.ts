@@ -69,7 +69,7 @@ export type PipelineNeeds = string | PipelineNeedEdge[];
 /**
  * Terminal states a route entry (or its inverted predecessor edge) can gate on.
  * Same domain as `NeedTerminalState` — kept as a distinct alias since `route`
- * is a separate vocabulary from `needs` (see docs/specs/route-based-pipeline-wiring.md).
+ * is a separate vocabulary from `needs` (see docs/yaml-catalog.md).
  */
 export type RouteTerminalState = NeedTerminalState;
 
@@ -130,7 +130,7 @@ export type PipelineStageRef = {
   recovery?: RecoveryPolicy;
   /** Omitted means this stage is safe to include in a feedback replay. */
   replay_safe?: boolean;
-  /** Pipeline wiring vocabulary (see route-based-pipeline-wiring spec). */
+  /** Pipeline wiring vocabulary (see docs/yaml-catalog.md). */
   route?: PipelineRouteEntry[];
   /** Marks this stage as a pipeline entry point. */
   entry?: boolean;
