@@ -41,7 +41,7 @@ type FeedbackLoopAction =
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
-\* Required for fork stages on success (`fork_choice`). On failure, `fork_choice` is not required or validated. `clone_forks` is rejected on every envelope — see [Rejected clone fields](yaml-catalog.md#clonable-successors).
+\* Required for fork stages on success (`fork_choice`). On failure, `fork_choice` is not required or validated. `clone_forks` is rejected on every envelope — see [Rejected clone fields](yaml-catalog.md#rejected-clone-fields).
 
 † Required on success for stages that declare a `{ type: loop }` route entry. Forbidden on failure and on stages that do not declare a `{ type: loop }` route entry. See [Feedback loops](#feedback-loops).
 
@@ -89,9 +89,11 @@ Rules:
 
 Unchosen successors are `skipped` — the same status used when a parent fails. Catalog pipelines use [route](yaml-catalog.md#route) instead of `fork_choice`.
 
-### Rejected clone fields {#clonable-successors}
+### Rejected clone fields {#rejected-clone-fields}
 
-`clone_forks` is not a valid envelope field. Presence fails emit with a message naming the field and pointing at a Clone Chain. See [YAML catalog — Rejected clone fields](yaml-catalog.md#clonable-successors) and [Clone Chain spec](specs/clone-chain.md). That authoring is not current runtime behavior.
+A [Clone Chain](yaml-catalog.md#clone-chain) emitter succeeds with a valid payload only (Clone Array length 1..cap). Stageflow mints Clone Instances; agents do not emit clone lists.
+
+`clone_forks` is not a valid envelope field. Presence fails emit with a message naming the field and pointing at a Clone Chain. See [YAML catalog — Rejected clone fields](yaml-catalog.md#rejected-clone-fields).
 
 ### Feedback loops {#feedback-loops}
 

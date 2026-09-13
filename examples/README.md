@@ -6,6 +6,8 @@ Stages are **author-defined** in YAML; these walkthroughs show domain-neutral fl
 
 Upgrading older YAML: [`sf migrate-yaml`](../docs/cli-reference.md#sf-migrate-yaml) converts contract keys to `io` / `verify` / `on_verify_fail`. Wiring (`needs` / `fork` / `feedback_loop`) is a hard cutover to `route` / `entry` / `{ type: loop }` — see [Upgrading older catalogs](../docs/yaml-catalog.md#upgrading-older-catalogs) (wiring subsection). `sf migrate-yaml` does not rewrite wiring.
 
+[Clone Chain](../docs/yaml-catalog.md#clone-chain) (one Clone Instance per Clone Array element) is documented in the YAML catalog. Canonical shapes are [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../tests/fixtures/pipelines/). There is no `examples/` Clone Chain walkthrough.
+
 ## Featured example: Archify on PR
 
 **[`archify-on-pr/`](archify-on-pr/)** is the flagship CI dogfood walkthrough. It shows what configurable stages look like in production:

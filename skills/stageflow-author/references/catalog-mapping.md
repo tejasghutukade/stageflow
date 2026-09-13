@@ -35,6 +35,7 @@ Wiring is declared on the **source** stage. Children do not list parents. A pipe
 | Exactly one of several successors should run | Source lists every `to:` with mutually exclusive `if`s on a required payload field. Agent emits that field; it does not name successor ids. |
 | Optional extra successor | `if` on that `to:`. Keep an ungated sibling if something should always run. |
 | Review can send work back | Source `route` includes `{ type: loop, to: ancestor, max_replays, on_max_replays, replay_session }`. Success emit includes envelope `feedback_loop`. |
+| One run per list item | Sealed [Clone Chain](../../../docs/yaml-catalog.md#clone-chain): emitter → clone child → Join. Emitter output has exactly one array of a named `$ref`; the clone child's entire input is that `$ref`. Emitter pipeline entry has `clone_cap` and `clone_mode`. |
 
 A review, approval, or sign-off step is a gated stage: put `gate_kinds` on that stage file and follow [`stage-prompt-template.md`](stage-prompt-template.md).
 
@@ -103,7 +104,11 @@ Put `verify` on the **stage body** (the `uses:` file or inline entry). Put `on_v
 
 ## Clone Chain
 
-A Clone Chain is emitter → clone child → Join. The emitter output has exactly one array of a named `$ref`; the clone child's entire input is that same `$ref`. Put `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) on the **emitter pipeline entry**, not on the stage body. N=1 still mints `{child}~1`. See [Clone Chain spec](../../../docs/specs/clone-chain.md) and [`clone-chain-smallest.pipeline.yaml`](../../../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml).
+A Clone Chain is emitter → clone child → Join. The emitter output has exactly one array of a named `$ref`; the clone child's entire input is that same `$ref`. Put `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) on the **emitter pipeline entry**, not on the stage body. N=1 still mints `{child}~1`.
+
+An empty Clone Array or a length above the Clone Cap fails the **emitter emit** — it does not skip the chain or truncate. Gate a zero-item path before the emitter. Both inbound chain edges are sealed: no extra routes, no `if`. The Join may Loop only to a stage before the emitter; the emitter, clone child, and Join are not Loop targets; the clone child cannot Loop or `send_back`.
+
+See [YAML catalog — Clone Chain](../../../docs/yaml-catalog.md#clone-chain) and [`clone-chain-smallest.pipeline.yaml`](../../../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml).
 
 ## Rejected clone fields
 

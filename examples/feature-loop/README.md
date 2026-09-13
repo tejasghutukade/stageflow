@@ -10,12 +10,19 @@ as overlapping parallel edits. It is repository-neutral — point the
 task `checkout` at a feature branch of whatever tree you are shipping.
 Nothing in the stage files names a product, repo, or keyword.
 
+**Not a Clone Chain yet.** The intended shape is two Clone Chains
+(decompose → plan → align, then align → implement → verify). The YAML
+in this directory still uses inbound `needs` and is **not** a sealed
+Clone Chain — `sf validate` will fail until it is rewritten. Author Clone
+Chains as in [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain)
+and [`tests/fixtures/pipelines/clone-chain-*.pipeline.yaml`](../../tests/fixtures/pipelines/).
+
 ## Flow
 
 ```
-decompose ──fanout parallel──► plan~N ──join──► align
+decompose ──Clone Array (parallel)──► plan~N ──Join──► align
                                            │
-                          sequential fanout │
+                    sequential Clone Array │
                                            ▼
                               implement~1 → implement~2 → …
                                            │
@@ -24,17 +31,21 @@ decompose ──fanout parallel──► plan~N ──join──► align
 ```
 
 1. **decompose** — Read the epic (task + requirements doc). Cut 1–8
-   `fanout` / `parallel`). Writes `epic-split.md`.
-   write `story-plan.md` (edit sites, validation commands, neighbor
+   stories into a Clone Array. Writes `epic-split.md`.
+2. **plan** — One Clone Instance per story (`clone_mode: parallel`). Each
+   writes `story-plan.md` (edit sites, validation commands, neighbor
    boundaries). No source edits.
-3. **align** — Join every plan clone. Fix overlapping files and
+3. **align** — Join of every plan Clone Instance. Fix overlapping files and
    contradictions, choose **implementation order**, ask the operator to
-   with `mode: sequential`.
+   accept. Then this stage is the emitter of the next Clone Chain
+   (`clone_mode: sequential`).
+4. **implement** — Sequential Clone Instances in array order; `~N`
    starts only after `~N-1` succeeded, so earlier edits are already in
-   the tree. Each clone executes only its story (ce-work style) and
-   must change the checkout.
-5. **verify** — Join implement clones. Fail if any aligned `story_id`
-   is missing from the clone list or the union diff. Writes `coverage.md`.
+   the tree. Each instance executes only its story and must change the
+   checkout.
+5. **verify** — Join of implement Clone Instances. Fail if any aligned
+   `story_id` is missing from the instance set or the union diff. Writes
+   `coverage.md`.
 6. **review** — One whole-diff review of every story together
    (ce-code-review style). Report-only. `verdict: pass | changes_required`.
 7. **address-feedback** — Fix blockers. `feedback_loop` `send_back` to
@@ -49,14 +60,14 @@ creates or switches branches.
 
 ## Runtime contracts
 
-| Stage | Clonable | Gate | Required artifacts | Other checks |
-|-------|----------|------|--------------------|--------------|
-| `plan` | yes, cap 8 | — | `story-plan.md` | `io.input` assignment |
-| `implement` | yes, cap 8 | — | `implementation-report.md` | `checkout_changes` |
-| `verify` | join | — | `coverage.md` | `io.output` |
-| `review` | — | — | `review-report.md` | whole-diff, report-only |
-| `address-feedback` | — | — | `review-feedback-report.md` | `feedback_loop` → `review` |
-| `publish` | — | `artifact_backed` | `ship-package.md`, `pull-request.md` | `on_verify_fail: manual` |
+| Stage | Gate | Required artifacts | Other checks |
+|-------|------|--------------------|--------------|
+| `plan` | — | `story-plan.md` | `io.input` assignment |
+| `implement` | — | `implementation-report.md` | `checkout_changes` |
+| `verify` | — | `coverage.md` | `io.output` |
+| `review` | — | `review-report.md` | whole-diff, report-only |
+| `address-feedback` | — | `review-feedback-report.md` | `feedback_loop` → `review` |
+| `publish` | `artifact_backed` | `ship-package.md`, `pull-request.md` | `on_verify_fail: manual` |
 
 `on_verify_fail` repair (idempotent, 3 attempts) sits on every stage except
 `publish` (`manual` / `side_effecting`). Stage files use `io` / `verify` /
@@ -84,5 +95,5 @@ Needs a configured provider (`sf providers status`), `gh` on PATH, and
 `mcp: [context7]` on the `plan` pipeline entry when `CONTEXT7_API_KEY`
 is set so story plans can query current library docs.
 
-Inspect clone tracks and envelopes in the operator console (`sf ui`)
-on the `plan` and `implement` stages, then the `align` / `verify` joins.
+Inspect Clone Instance tracks and envelopes in the operator console (`sf ui`)
+on the `plan` and `implement` stages, then the `align` / `verify` Joins.

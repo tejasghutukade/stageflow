@@ -68,7 +68,7 @@ Each stage is an object with one of:
 
 **Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#clonable-successors).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
 `uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
 
@@ -139,6 +139,8 @@ Contract dual-read is only for `payload_schema` / `pre_emit_checks` / `completio
 
 Those “always run” phrases describe the catalog DAG (every listed `to:` stays on the graph). Optional `if` can still skip a listed successor at runtime.
 
+`clonable`, `clone_actions`, envelope `clone_forks`, and emit-time `skip` / `once` / `fanout` are a hard cutover to [Clone Chain](#clone-chain). There is no dual-read. One run per list item is a sealed emitter → clone child → Join with `clone_cap` / `clone_mode` on the emitter pipeline entry.
+
 Cheat sheet:
 
 - `needs: [A]` on B → on A: `route: [{ to: B }]`; mark roots `entry: true`
@@ -156,11 +158,12 @@ Validate:
 
 - `catalog.legacy_yaml` — contract dual-read warning; `--strict` does not promote
 - wiring keys above — hard errors
+- illegal [Clone Chain](#clone-chain) shape or policy — hard error (load / `sf validate`)
 - `pipeline.route_if_invalid` — error
 - `pipeline.route_all_gated` — warning, `ok: true`; `--strict` does not promote
 - `pipeline.model_applies` — warning
 
-See [Route wiring](#route), [Generic fan-in](#generic-fan-in), [Feedback loops](#feedback-loops), [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/), [`examples/route-if-tour/`](../examples/route-if-tour/).
+See [Route wiring](#route), [Generic fan-in](#generic-fan-in), [Clone Chain](#clone-chain), [Feedback loops](#feedback-loops), [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smoke-test/), [`examples/route-if-tour/`](../examples/route-if-tour/).
 
 #### For contributors
 
@@ -408,6 +411,8 @@ A false `if` on a single-parent edge skips that successor and skip-cascades its 
 
 Join input is `priorEnvelopesByStage`, keyed in YAML declaration order. `priorEnvelope` is `null`. See [Envelopes](envelopes.md#downstream-consumption). Walkthrough: [`examples/generic-fan-in/`](../examples/generic-fan-in/).
 
+A [Clone Chain](#clone-chain) Join's parents are that chain's Clone Instances. Every instance must succeed; a failed or skipped instance is a failed Join parent and blocks the Join. That Join does not run on a partial set.
+
 Fixtures:
 
 - [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml) — static diamond
@@ -530,7 +535,7 @@ Walkthrough: [`examples/route-wiring-smoke-test/`](../examples/route-wiring-smok
 
 ### Clone Chain {#clone-chain}
 
-A Clone Chain is a sealed inbound path of three roles: **emitter → clone child → Join**. Detection is from that shape plus a named `$ref`, not from a `clonable` flag.
+A Clone Chain is a sealed inbound path of three roles: **emitter → clone child → Join**. Detection is from that shape plus a named `$ref`, not from a `clonable` flag. Use it when one stage produces a list and the next stage should run once per element (research items, ops tickets, story slices, or any other list).
 
 - The emitter's `io.output.schema` is an object with exactly one array property whose `items` are `{ $ref: '#/schemas/<id>' }` (a Clone Array). Sibling fields next to that array are allowed.
 - The clone child's entire `io.input.schema` is `{ $ref: '#/schemas/<id>' }` with the same id.
@@ -538,11 +543,96 @@ A Clone Chain is a sealed inbound path of three roles: **emitter → clone child
 - The emitter's pipeline entry requires `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`). Those keys are invalid on any other stage and invalid on a stage file body.
 - On emitter success, N is the Clone Array length. Stageflow mints Clone Instances `{child}~{n}` (1-based, including `~1` when N is 1). Each instance receives that array element only. The Join waits on those instances and receives their success envelopes in array order.
 
-Fixture: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml). Spec: [Clone Chain](specs/clone-chain.md).
+**Empty and over-cap.** Load compiles the Clone Array as `minItems: 1` / `maxItems: <clone_cap>`. An empty array or a length above the Clone Cap fails the **emitter emit** — Stageflow does not skip the chain or truncate the list. Gate a zero-item path **before** the emitter (ordinary `if` / routing on an earlier stage), not by emitting an empty array.
 
-### Rejected clone fields {#clonable-successors}
+**Clone Mode** is catalog policy on the emitter entry:
 
-`clonable`, `clone_actions`, and envelope `clone_forks` are not accepted. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter fail load. Those fields fail with a message naming the field and pointing at a Clone Chain.
+- `parallel` — Clone Instances may overlap. A failure does not stop siblings that are already running; they may finish after the failure. The Join stays blocked.
+- `sequential` — Clone Instances run in Clone Array order. A failure skips instances that have not started. A successful retry of the failed instance then starts the next skipped instance.
+
+In both modes a failed or skipped Clone Instance is a failed Join parent. The Join does not run on a hole.
+
+**Loop.** The Join may Loop only to a stage **before** the emitter. The emitter, clone child, and Join are not Loop targets. The clone child cannot declare a Loop and cannot `send_back`.
+
+**Illegal at load** (`sf validate` / pipeline load). A pipeline that looks like a Clone Chain but violates sealed shape fails immediately:
+
+- Extra routes on the emitter or clone child
+- `if` on either chain inbound edge
+- An extra parent routing to the Join
+- Two clone children from one emitter
+- Nested Clone Array (a Clone Instance emitting another Clone Array)
+- Two named-`$ref` array fields on the emitter
+- Inline (anonymous) array items
+- A root-level array payload
+- `clone_cap` / `clone_mode` on a stage that is not the emitter
+- Shared emitter, clone child, or Join across two Clone Chains
+
+A pipeline may have many Clone Chains if they share no emitter, clone child, or Join. A Join may later be the emitter of a following Clone Chain.
+
+Canonical sample: [`tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml`](../tests/fixtures/pipelines/clone-chain-smallest.pipeline.yaml). Spec: [Clone Chain](specs/clone-chain.md).
+
+```yaml
+id: clone-chain-smallest
+model: anthropic/claude-sonnet-4-5
+schemas:
+  Issue:
+    type: object
+    required: [id, title]
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+stages:
+  - id: emit-items
+    entry: true
+    clone_cap: 4
+    clone_mode: parallel
+    route:
+      - to: handle-item
+    system_prompt: Emit a list of issues.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Issue"
+            summary:
+              type: string
+  - id: handle-item
+    route:
+      - to: gather
+    system_prompt: Handle one issue.
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Issue"
+      output:
+        schema:
+          type: object
+  - id: gather
+    system_prompt: Gather clone results.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+```
+
+### Rejected clone fields {#rejected-clone-fields}
+
+Older `#clonable-successors` links should use this heading.
+
+`clonable`, `clone_actions`, and envelope `clone_forks` are not accepted. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter fail load. Those fields fail with a message naming the field and pointing at a Clone Chain. There is no dual-read of `skip` / `once` / `fanout`.
 
 Rewire of [`examples/archify-on-pr`](../examples/archify-on-pr/) is deferred; that example remains a single `author-diagrams` session until a later change.
 
@@ -760,7 +850,7 @@ sf migrate-yaml                         # dry-run convert contract keys to io / 
 sf migrate-yaml --write                 # apply
 ```
 
-Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `sf migrate-yaml` converts contract keys (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`) only — it does not rewrite wiring. `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none` are hard errors. `pipeline.route_if_invalid` is an error. `catalog.legacy_yaml` is a contract dual-read warning; `--strict` does not promote it. `pipeline.route_all_gated` and `pipeline.model_applies` are warnings (`ok: true`); `--strict` does not promote them. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) and [Upgrading older catalogs](#upgrading-older-catalogs).
+Validation checks pipeline shape, `uses:` resolution, DAG (`route`, cycles), stage file shape, `io` / `verify` / `on_verify_fail`, and task shape. It also resolves the effective `model` per stage (`stage → pipeline → global`); omitting `model` at all three tiers is an error — see [`tests/fixtures/model-hierarchy/missing-all/`](../tests/fixtures/model-hierarchy/missing-all/). When `.mcp.json` is present, it also checks catalog shape and reserved-name collision. When a stage lists `mcp`, it checks those names exist in the catalog. It does not verify provider credentials, checkout paths, env vars, or a live MCP connect. `sf migrate-yaml` converts contract keys (`payload_schema` / `pre_emit_checks` / `completion` / `recovery` / `clone_input_schema`) only — it does not rewrite wiring. `needs` / `fork` / `feedback_loop` / `route_select` / `allow_none` are hard errors. Illegal [Clone Chains](#clone-chain) fail load and `sf validate`. `pipeline.route_if_invalid` is an error. `catalog.legacy_yaml` is a contract dual-read warning; `--strict` does not promote it. `pipeline.route_all_gated` and `pipeline.model_applies` are warnings (`ok: true`); `--strict` does not promote them. See [`sf migrate-yaml`](cli-reference.md#sf-migrate-yaml) and [Upgrading older catalogs](#upgrading-older-catalogs).
 
 ## CLI run
 

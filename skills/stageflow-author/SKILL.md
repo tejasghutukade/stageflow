@@ -37,7 +37,7 @@ Ask until you can name every step, how they sequence, any decision point, and an
 
 Read [`references/catalog-mapping.md`](references/catalog-mapping.md). Apply those rules to the confirmed structure. Read [`references/stage-prompt-template.md`](references/stage-prompt-template.md) for each stage's `system_prompt`, optional `model`, `io`, `verify`, and `gate_kinds`. Apply the Anti-patterns section below while mapping. When the human needs hard advance gates, plan body `verify` and wiring `on_verify_fail`. When a review can demand changes, include an address-feedback stage before approve/ship.
 
-**Done when** you have a pipeline id, one stage id per step, `route` / `entry` wiring (optional `if`, `{ type: loop }`), a prompt plan per stage, and any `verify` / `on_verify_fail` / remediation stages the structure requires.
+**Done when** you have a pipeline id, one stage id per step, `route` / `entry` wiring (optional `if`, `{ type: loop }`, sealed Clone Chain when the human wants one run per list item), a prompt plan per stage, and any `verify` / `on_verify_fail` / remediation stages the structure requires.
 
 ## Anti-patterns
 
@@ -53,6 +53,7 @@ Author these contracts explicitly. They come from long runs that failed after ho
 | Bind success to the full checklist | If a plan lists N commands, success requires all of them in `commands_run` with exit 0. Cheap checks first; slow suites last or in a verify stage. Size `timeout_ms` to the work. |
 | Use configured models on every sibling | Same configured `model` family after fan-out unless the human asks otherwise. Reliable model on publish/PR stages. |
 | Finish publish in the accept attempt | After `artifact_backed` accept: side effects (commit/push/PR) → final artifact → emit in the same attempt. Fix emit/schema errors by re-emitting. |
+| Author a sealed Clone Chain | One run per list item is emitter → clone child → Join. Never write `clonable`, `clone_forks`, or emit-time `skip` / `once` / `fanout`. See [YAML catalog — Clone Chain](../../docs/yaml-catalog.md#clone-chain). |
 
 Throwaway checkout deliverables (HTML spike, scratch file): prompt builtin `write` at a checkout-relative path, `artifacts: []` on emit, path in `payload`.
 

@@ -36,7 +36,7 @@ The same pipeline runs three ways without rewriting anything:
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
-- **Parallel stages** — pipeline DAG with fan-out and join (see [YAML catalog](docs/yaml-catalog.md))
+- **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
 - **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
 
 ## Architecture at a glance

@@ -123,3 +123,32 @@ Add this block to the base (or gated) prompt:
 On success, include feedback_loop: { action: continue } to advance, or
 { action: send_back, target: <ancestor id> } to replay that ancestor.
 ```
+
+## Clone Chain
+
+A Clone Chain emitter succeeds by emitting a valid payload only. Do not emit `clone_forks`. The Clone Array field in `io.output.schema` is the list; Stageflow mints one Clone Instance per element.
+
+The clone child's opening input is that array element (the named `$ref`) and nothing else. Prompt it as work on one item.
+
+The Join receives the Clone Instance success envelopes (array order). It does not unpack a clone list from the emitter.
+
+Add this block to an **emitter** prompt:
+
+```
+On success, emit the list in the Clone Array field named in io.output.schema
+(length 1..clone_cap). Do not emit clone_forks. Stageflow starts one run of
+the next stage per element.
+```
+
+Add this block to a **clone child** prompt:
+
+```
+Your input is one list element. Do the work for that element only. Emit a
+payload that matches io.output.schema. Do not emit a Clone Array.
+```
+
+Add this block to a **Join** prompt:
+
+```
+You receive every Clone Instance success envelope. Gather them in list order.
+```

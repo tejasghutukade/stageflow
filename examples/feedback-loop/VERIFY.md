@@ -197,7 +197,9 @@ npm run dev -- runs wait --run "$RUN" --until terminal --timeout-ms 240000 --jso
 | C require_continue exhaust | `feedback-loop.pipeline.yaml` | `exhaust-require-continue.task.yaml` | ~7+ stage runs, expects failure |
 | D wait_for_human | `feedback-loop-wait-human.pipeline.yaml` | `exhaust-wait-human.task.yaml` | parks; then decide |
 
-Clone-fanout supersede is covered by Vitest + fixture (`tests/fixtures/pipelines/feedback-loop-clone-fanout.pipeline.yaml`), not this walkthrough (high LLM cost / agent skill).
+Clone-chain Loop from Join is covered by fixture
+[`tests/fixtures/pipelines/clone-chain-loop-from-join.pipeline.yaml`](../../tests/fixtures/pipelines/clone-chain-loop-from-join.pipeline.yaml),
+not this walkthrough.
 
 ## References
 

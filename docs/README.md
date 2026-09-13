@@ -15,7 +15,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
-| [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` and wiring `route` / `entry` / `type: loop` ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
+| [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` and wiring `route` / `entry` / `type: loop` / [Clone Chain](yaml-catalog.md#clone-chain) ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
 | [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
@@ -49,11 +49,11 @@ For source-owned feedback loops (`continue` / `send_back`), see [`examples/feedb
 
 Test fixtures under [`tests/fixtures/`](../tests/fixtures/) are the source of truth for valid catalog shapes:
 
-- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — source of truth for current `route` / `entry` shapes (fan-out, diamond fan-in, loops), plus HITL and validation edge cases (`*.pipeline.yaml`)
+- [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/) — source of truth for current `route` / `entry` shapes (fan-out, diamond fan-in, loops), Clone Chain shapes (`clone-chain-*.pipeline.yaml`), plus HITL and validation edge cases (`*.pipeline.yaml`)
 - [`tests/fixtures/stages/`](../tests/fixtures/stages/) — gate kinds, `io` / `verify` shapes (referenced via `uses:`)
 - [`tests/fixtures/tasks/`](../tests/fixtures/tasks/) — task file shapes (`*.task.yaml`)
 
-Runnable walkthroughs live in [`examples/`](../examples/) (see [`examples/README.md`](../examples/README.md)).
+Runnable walkthroughs live in [`examples/`](../examples/) (see [`examples/README.md`](../examples/README.md)). Clone Chain shapes live under the fixtures above; there is no `examples/` Clone Chain walkthrough.
 
 ## See also
 
