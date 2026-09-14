@@ -39,8 +39,10 @@ import {
 import {
   canAbandon,
   canRetry,
+  canResumeTimedOut,
   isStageActionBusy,
   useStageAbandon,
+  useStageResume,
   useStageRetry,
 } from "../stageAction";
 import {
@@ -215,6 +217,22 @@ export function RunDetailPage({
   );
 
   const {
+    resumingStageIds,
+    error: resumeError,
+    resume,
+    clearError: clearResumeError,
+  } = useStageResume(runId, onStageActionSuccess);
+
+  const resumeAndSelect = useCallback(
+    (stageId: string) => {
+      setUserPickedStageId(stageId);
+      onOpenStream(stageId);
+      resume(stageId);
+    },
+    [onOpenStream, resume],
+  );
+
+  const {
     abandoningStageId,
     error: abandonError,
     abandon,
@@ -224,6 +242,7 @@ export function RunDetailPage({
   const actionBusy = {
     retryingStageIds,
     abandoningStageId,
+    resumingStageIds,
   };
 
   useEffect(() => {
@@ -397,6 +416,7 @@ export function RunDetailPage({
     setError(null);
     clearRetryError();
     clearAbandonError();
+    clearResumeError();
     try {
       const result = await rerun(runId);
       onReran(result.runId);
@@ -537,6 +557,18 @@ export function RunDetailPage({
             {stage ? <AttemptCountBadge count={stage.attempt_count} /> : null}
             {stage ? <CostBadge costUsd={stage.cost_usd} /> : null}
             {sessionChipEl(workspace.sessionChip)}
+            {stage && canResumeTimedOut(stage) && manualRecovery === undefined ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={isStageActionBusy(actionBusy, stage.stage_id)}
+                onClick={() => resumeAndSelect(stage.stage_id)}
+              >
+                {resumingStageIds.has(stage.stage_id)
+                  ? "Resuming…"
+                  : "Resume session"}
+              </button>
+            ) : null}
             {stage && canRetry(stage.status) && manualRecovery === undefined ? (
               <button
                 type="button"
@@ -634,6 +666,12 @@ export function RunDetailPage({
             </div>
           ) : null}
 
+          {resumeError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {resumeError}
+            </div>
+          ) : null}
+
           {abandonError ? (
             <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
               {abandonError}
@@ -675,6 +713,8 @@ export function RunDetailPage({
               onDeselect={hideWorkspace}
               retryingStageIds={retryingStageIds}
               onRetryStage={retryAndSelect}
+              resumingStageIds={resumingStageIds}
+              onResumeStage={resumeAndSelect}
               abandoningStageId={abandoningStageId}
               onAbandonStage={abandon}
               runId={runId}

@@ -426,6 +426,16 @@ export function retryStage(
   );
 }
 
+export function resumeTimedOutStage(
+  runId: string,
+  stageId: string,
+): Promise<{ runId: string; stageId: string; attemptIndex: number }> {
+  return api(
+    `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/resume`,
+    { method: "POST" },
+  );
+}
+
 export function recoverManualStage(
   runId: string,
   stageId: string,

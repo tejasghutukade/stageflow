@@ -87,6 +87,11 @@ import type {
 import { DEFAULT_STAGE_TIMEOUT_MS, runtimeStageId, runStageViaOpen } from "./port.js";
 import type { StageGateKind } from "../types/stage.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
+import {
+  TIMEOUT_ABORT_TOOL_RESULT,
+  composeTimeoutResumePrompt,
+  stageTimeoutReason,
+} from "./stageTimeout.js";
 
 /**
  * Stage tool allowlist for sealed Pi sessions.
@@ -1361,6 +1366,7 @@ export class PiAgentAdapter implements AgentPort {
     let sessionManager: SessionManager | undefined;
     let resumeWaiting = false;
     let feedbackResume = false;
+    let timeoutResume = false;
     let forceNewSession = sessionMode === "new_session";
 
     if (sessionMode === "feedback_resume") {
@@ -1394,6 +1400,31 @@ export class PiAgentAdapter implements AgentPort {
       }
       ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
       feedbackResume = true;
+    } else if (sessionMode === "timeout_resume") {
+      if (!existsSync(sessionFile)) {
+        throw new StageSessionReconstructError(
+          `stage session file missing for timeout_resume: ${sessionFile}`,
+          { stageId: runtimeStageId(input), sessionFile },
+        );
+      }
+      try {
+        sessionManager = SessionManager.open(
+          sessionFile,
+          path.dirname(sessionFile),
+          input.roots.cwd,
+        );
+      } catch (err) {
+        throw new StageSessionReconstructError(
+          `stage session file corrupt or unreadable for timeout_resume: ${sessionFile}`,
+          {
+            stageId: runtimeStageId(input),
+            sessionFile,
+            cause: err,
+          },
+        );
+      }
+      ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+      timeoutResume = true;
     } else if (sessionMode !== "new_session") {
       if (sessionMode === "waiting_resume" || existsSync(sessionFile)) {
         if (existsSync(sessionFile)) {
@@ -1484,12 +1515,16 @@ export class PiAgentAdapter implements AgentPort {
         const workPromise = work();
         const abortPromise = new Promise<never>((_, reject) => {
           controller.signal.addEventListener("abort", () => {
-            reject(new Error(`stage timed out after ${timeoutMs}ms`));
+            void session?.abort();
+            reject(new Error(stageTimeoutReason(timeoutMs)));
           });
         });
         await Promise.race([workPromise, abortPromise]);
         return { ...resultFromCapture(wiring.capture), usage: wiring.usage };
       } catch (err) {
+        if (sessionManager) {
+          ensureStageSessionFlushed(sessionManager, runtimeStageId(input));
+        }
         if (wiring.capture.envelope && isAdvancingEnvelope(wiring.capture.envelope)) {
           return { ok: true, envelope: wiring.capture.envelope, usage: wiring.usage };
         }
@@ -1517,6 +1552,18 @@ export class PiAgentAdapter implements AgentPort {
           if (feedbackResume) {
             syncAgentMessagesFromSession(session!, sessionManager!);
             await session!.prompt(composeFeedbackResumePrompt(input));
+            return;
+          }
+          if (timeoutResume) {
+            syncAgentMessagesFromSession(session!, sessionManager!);
+            if (findOpenToolCall(sessionManager!)) {
+              injectOpaqueAnswerIntoSession(
+                sessionManager!,
+                TIMEOUT_ABORT_TOOL_RESULT,
+              );
+              syncAgentMessagesFromSession(session!, sessionManager!);
+            }
+            await session!.prompt(composeTimeoutResumePrompt());
             return;
           }
           const userPrompt = composeStageUserPrompt(

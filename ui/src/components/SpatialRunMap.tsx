@@ -18,7 +18,7 @@ import {
   isAbandonedDisplay,
   statusCopy,
 } from "../status/runStatus";
-import { canAbandon, canRetry, isStageActionBusy } from "../stageAction";
+import { canAbandon, canResumeTimedOut, canRetry, isStageActionBusy } from "../stageAction";
 import type {
   FeedbackOverlay,
   SpatialNodeChrome,
@@ -276,6 +276,8 @@ export type SpatialRunMapProps = {
   onDeselect: () => void;
   retryingStageIds?: ReadonlySet<string>;
   onRetryStage?: (stageId: string) => void;
+  resumingStageIds?: ReadonlySet<string>;
+  onResumeStage?: (stageId: string) => void;
   abandoningStageId?: string | null;
   onAbandonStage?: (stageId: string) => void;
   runId?: string;
@@ -292,6 +294,8 @@ export function SpatialRunMap({
   onDeselect,
   retryingStageIds,
   onRetryStage,
+  resumingStageIds,
+  onResumeStage,
   abandoningStageId = null,
   onAbandonStage,
   runId,
@@ -317,6 +321,7 @@ export function SpatialRunMap({
   const snapshots = new Map(stages.map((s) => [s.stage_id, s]));
   const chromeById = new Map(nodeChrome.map((c) => [c.stageId, c]));
   const retrying = retryingStageIds ?? new Set<string>();
+  const resuming = resumingStageIds ?? new Set<string>();
 
   useLayoutEffect(() => {
     const el = stageRef.current;
@@ -535,13 +540,20 @@ export function SpatialRunMap({
                   chrome={chrome}
                   selected={selectedStageId === node.stageId}
                   busy={isStageActionBusy(
-                    { retryingStageIds: retrying, abandoningStageId },
+                    {
+                      retryingStageIds: retrying,
+                      abandoningStageId,
+                      resumingStageIds: resuming,
+                    },
                     node.stageId,
                   )}
                   retrying={retrying.has(node.stageId)}
+                  resuming={resuming.has(node.stageId)}
                   abandoning={abandoningStageId === node.stageId}
+                  snapshot={snap}
                   onSelectStage={onSelectStage}
                   onRetryStage={onRetryStage}
+                  onResumeStage={onResumeStage}
                   onAbandonStage={onAbandonStage}
                 />
               );
@@ -589,9 +601,12 @@ function SpatialNode({
   selected,
   busy,
   retrying,
+  resuming,
   abandoning,
+  snapshot,
   onSelectStage,
   onRetryStage,
+  onResumeStage,
   onAbandonStage,
 }: {
   node: SpatialNodeBox;
@@ -601,14 +616,21 @@ function SpatialNode({
   selected: boolean;
   busy: boolean;
   retrying: boolean;
+  resuming: boolean;
   abandoning: boolean;
+  snapshot?: StageSnapshot;
   onSelectStage: (stageId: string) => void;
   onRetryStage?: (stageId: string) => void;
+  onResumeStage?: (stageId: string) => void;
   onAbandonStage?: (stageId: string) => void;
 }) {
   const pending = status === "pending";
   const selectable = !pending;
   const action = spatialNodeAction(status, abandoned);
+  const showResume =
+    snapshot !== undefined &&
+    canResumeTimedOut(snapshot) &&
+    onResumeStage !== undefined;
   const showRetry = action === "retry" && canRetry(status) && onRetryStage;
   const showAbandon = action === "abandon" && canAbandon(status) && onAbandonStage;
   const chromeStatus = nodeChromeStatus(status, abandoned);
@@ -691,11 +713,20 @@ function SpatialNode({
         abandoned={abandoned}
         cx={node.width - 26}
         cy={26}
+        showResume={Boolean(showResume)}
         showRetry={Boolean(showRetry)}
         showAbandon={Boolean(showAbandon)}
         busy={busy}
+        resumeLabel={resuming ? "Resuming…" : "Resume session"}
         retryLabel={retrying ? "Retrying…" : "Retry stage"}
         abandonLabel={abandoning ? "Abandoning…" : "Abandon stage"}
+        onResume={
+          showResume
+            ? () => {
+                onResumeStage?.(node.stageId);
+              }
+            : undefined
+        }
         onRetry={
           showRetry
             ? () => {
@@ -723,7 +754,7 @@ function NodeStatusAction({
   label,
   onActivate,
 }: {
-  kind: "retry" | "abandon";
+  kind: "retry" | "abandon" | "resume";
   cx: number;
   cy: number;
   busy: boolean;
@@ -765,6 +796,11 @@ function NodeStatusAction({
             `L${cx - 3.4} ${cy - 3.6}`,
           ].join(" ")}
         />
+      ) : kind === "resume" ? (
+        <path
+          className="action-icon"
+          d={`M${cx - 2.2} ${cy - 3.6} L${cx - 2.2} ${cy + 3.6} L${cx + 4.2} ${cy} Z`}
+        />
       ) : (
         <rect
           className="action-icon"
@@ -784,11 +820,14 @@ function NodeStatusColumn({
   abandoned,
   cx,
   cy,
+  showResume,
   showRetry,
   showAbandon,
   busy,
+  resumeLabel,
   retryLabel,
   abandonLabel,
+  onResume,
   onRetry,
   onAbandon,
 }: {
@@ -796,15 +835,19 @@ function NodeStatusColumn({
   abandoned: boolean;
   cx: number;
   cy: number;
+  showResume: boolean;
   showRetry: boolean;
   showAbandon: boolean;
   busy: boolean;
+  resumeLabel: string;
   retryLabel: string;
   abandonLabel: string;
+  onResume?: () => void;
   onRetry?: () => void;
   onAbandon?: () => void;
 }) {
   const actionY = cy + 28;
+  const retryY = showResume ? actionY + 26 : actionY;
   return (
     <g className="node-status">
       {status === "succeeded" ? (
@@ -905,11 +948,21 @@ function NodeStatusColumn({
           strokeWidth={1.5}
         />
       ) : null}
+      {showResume ? (
+        <NodeStatusAction
+          kind="resume"
+          cx={cx}
+          cy={actionY}
+          busy={busy}
+          label={resumeLabel}
+          onActivate={onResume}
+        />
+      ) : null}
       {showRetry ? (
         <NodeStatusAction
           kind="retry"
           cx={cx}
-          cy={actionY}
+          cy={retryY}
           busy={busy}
           label={retryLabel}
           onActivate={onRetry}

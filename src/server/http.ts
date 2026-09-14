@@ -146,6 +146,7 @@ function isMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/feedback-decision$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
+    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/resume$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
@@ -477,6 +478,26 @@ export async function startUiServer(
           const runId = decodeURIComponent(retryMatch[1] ?? "");
           const stageId = decodeURIComponent(retryMatch[2] ?? "");
           const result = await manager.retryStage(runId, stageId);
+          if (!result.ok) {
+            json(res, result.status ?? 500, mapRetryStageFailure(result));
+            return true;
+          }
+          json(res, 202, {
+            runId: result.runId,
+            stageId: result.stageId,
+            attemptIndex: result.attemptIndex,
+          });
+          return true;
+        }
+
+        const resumeMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/resume$/,
+        );
+        if (method === "POST" && resumeMatch) {
+          await readJsonBody(req);
+          const runId = decodeURIComponent(resumeMatch[1] ?? "");
+          const stageId = decodeURIComponent(resumeMatch[2] ?? "");
+          const result = await manager.resumeTimedOutStage(runId, stageId);
           if (!result.ok) {
             json(res, result.status ?? 500, mapRetryStageFailure(result));
             return true;

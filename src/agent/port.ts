@@ -17,6 +17,7 @@ export type StageSessionMode =
   | "fresh"
   | "waiting_resume"
   | "feedback_resume"
+  | "timeout_resume"
   | "new_session";
 
 export type StageRepairContext = {

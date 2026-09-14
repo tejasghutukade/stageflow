@@ -2459,6 +2459,16 @@ a.topbar__back { text-decoration: none; }
   stroke: var(--color-text-red);
 }
 
+.node-resume .action-bg {
+  fill: var(--color-background-red);
+  stroke: var(--color-border-red);
+}
+
+.node-resume .action-icon {
+  fill: var(--color-text-red);
+  stroke: none;
+}
+
 .node-abandon .action-bg {
   fill: var(--color-background-muted);
   stroke: var(--color-border-emphasized);
@@ -2483,6 +2493,12 @@ a.topbar__back { text-decoration: none; }
 
 .node-abandon:hover .action-icon,
 .node-abandon:focus-visible .action-icon {
+  fill: var(--color-accent);
+  stroke: none;
+}
+
+.node-resume:hover .action-icon,
+.node-resume:focus-visible .action-icon {
   fill: var(--color-accent);
   stroke: none;
 }

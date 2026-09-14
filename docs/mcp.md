@@ -510,6 +510,16 @@ Retry a **failed** stage (same as HTTP `POST .../retry`).
 
 Waiting stages are not retryable (`409`, often `code: "hitl_not_retriable"`) — use `answer_gate` instead.
 
+### `resume_stage`
+
+Resume a stage that **timed out**, continuing the same attempt/session (same as HTTP `POST .../resume`). Does not start a new attempt — use `retry_stage` to start over.
+
+**Input:** `{ "runId", "stageId" }`
+
+**Success:** `{ "runId", "stageId", "attemptIndex" }` (same attempt as the timed-out pass)
+
+Fails with `409` if the stage is not a timeout failure or the session file is missing.
+
 ### `abandon_stage`
 
 Abandon a **running** stage (marks it failed/interrupted). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`.
@@ -561,7 +571,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json`, Settings inspect, and stage `mcp` names (not this host)
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
 - [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`
