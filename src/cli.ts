@@ -50,6 +50,7 @@ const USAGE = `Usage:
   sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal] [--timeout-ms <n>] [--json]
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
   sf runs retry --run <runId> --stage <stageId> [--json]
+  sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--json]
   sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]

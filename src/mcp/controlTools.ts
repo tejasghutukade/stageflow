@@ -272,6 +272,32 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
+    "resume_stage",
+    {
+      description:
+        "Resume a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+      }),
+    },
+    async ({ runId, stageId }) => {
+      const result = await manager.resumeTimedOutStage(runId, stageId);
+      if (!result.ok) {
+        return textResult(
+          { ...mapRetryStageFailure(result), status: result.status },
+          true,
+        );
+      }
+      return textResult({
+        runId: result.runId,
+        stageId: result.stageId,
+        attemptIndex: result.attemptIndex,
+      });
+    },
+  );
+
+  server.registerTool(
     "abandon_stage",
     {
       description:

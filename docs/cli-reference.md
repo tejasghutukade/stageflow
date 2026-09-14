@@ -119,6 +119,7 @@ sf runs wait --run <runId> [--from <sf-run.json>] [--until any|waiting|terminal]
 sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
 sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
 sf runs retry --run <runId> --stage <stageId> [--json]
+sf runs resume --run <runId> --stage <stageId> [--json]
 sf runs abandon --run <runId> --stage <stageId> [--json]
 sf runs rerun --run <runId> [--json]
 ```
@@ -134,6 +135,7 @@ sf runs rerun --run <runId> [--json]
 | `answer` | Submit an `AskOperatorAnswer` for a parked stage |
 | `feedback-decide` | Resolve a feedback-loop `wait_for_human` decision (`extend` / `continue` / `abandon`) |
 | `retry` | Retry a failed stage; process waits until waiting or terminal |
+| `resume` | Continue a timed-out failed attempt on the same session |
 | `abandon` | Mark a running stage abandoned |
 | `rerun` | Start a new run from a stored run; process waits until waiting or terminal |
 
@@ -144,7 +146,7 @@ sf runs rerun --run <runId> [--json]
 | Kind | Verbs | Host up |
 |------|-------|---------|
 | Read | `list`, `show`, `verify`, `waiting`, `wait` | Allowed |
-| Mutate | `answer`, `feedback-decide`, `retry`, `recover`, `abandon`, `rerun` | Refused |
+| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `rerun` | Refused |
 
 Mutating verbs probe `GET http://127.0.0.1:3847/api/health` (1500 ms). HTTP 200 with parseable JSON → exit `1` without opening a mutating writer. This is not a single-writer lock: a host on another port (`sf ui --port 4000`) and a live blocking `sf run` are undetected second writers. Reads still work while a host is up.
 
@@ -171,11 +173,12 @@ A HITL park keeps store status `running`. `--status waiting` is not a valid `lis
 
 Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `waiting` for the next state. Do not reuse `sf run` exit `2` for a completed `wait` that woke on waiting.
 
-**Retry / rerun / abandon:**
+**Retry / resume / rerun / abandon:**
 
 | Verb | `--json` shape | Exit |
 |------|----------------|------|
 | `retry`, `rerun` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy, `2` waiting |
+| `resume` | `{ "ok", "runId", "stageId", "attemptIndex" }` | `0` success, `1` error |
 | `abandon` | `{ "ok", "runId", "stageId" }` | `0` success, `1` error |
 
 ### `sf runs list`
@@ -295,9 +298,9 @@ Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and 
 
 Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback_loops`) and `sf runs waiting` (`waiting_kind: "feedback_loop_decision"`).
 
-### `sf runs retry` / `abandon` / `rerun`
+### `sf runs retry` / `resume` / `abandon` / `rerun`
 
-Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
+Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
 
 ## `sf envelope get`
 

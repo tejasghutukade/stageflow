@@ -29,6 +29,7 @@ export const RUNS_USAGE = `Usage:
   sf runs answer --run <runId> --stage <stageId> [--answer '<json>'] [--json]
   sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] --decision extend|continue|abandon [--reason <text>] [--json]
   sf runs retry --run <runId> --stage <stageId> [--json]
+  sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--json]`;
 
@@ -158,6 +159,8 @@ function flagsFor(subcommand: string): Set<string> | undefined {
     case "feedback-decide":
       return FEEDBACK_DECIDE_FLAGS;
     case "retry":
+      return RETRY_FLAGS;
+    case "resume":
       return RETRY_FLAGS;
     case "abandon":
       return ABANDON_FLAGS;
@@ -743,6 +746,41 @@ export async function runRunsCommand(
         { kind: "completion", result: result.pipeline },
         { json: parsed.json, io: mutatingIo },
       );
+    }
+
+    case "resume": {
+      const blocked = await guardHost();
+      if (blocked !== undefined) return blocked;
+      if (!parsed.runId || !parsed.stageId) {
+        return usageError(out, "Missing --run and/or --stage");
+      }
+      const manager = buildManager();
+      const result = await manager.resumeTimedOutStage(
+        parsed.runId,
+        parsed.stageId,
+      );
+      if (!result.ok) {
+        if (parsed.json) {
+          printJson(out, {
+            ...mapRetryStageFailure(result),
+            status: result.status,
+          });
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+          stageId: result.stageId,
+          attemptIndex: result.attemptIndex,
+        });
+      } else {
+        out.log(`ok\t${result.runId}\t${result.stageId}\t${result.attemptIndex}`);
+      }
+      return 0;
     }
 
     case "recover": {

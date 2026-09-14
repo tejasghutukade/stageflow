@@ -121,6 +121,8 @@ export type StageLifecycleEvent =
   | { event: "succeeded"; usage?: StageUsage }
   | { event: "failed"; reason: string; usage?: StageUsage }
   | { event: "skipped" }
+  /** A previously skipped stage is runnable again (parent succeeded). */
+  | { event: "reopened" }
   /** Operator explicitly authorized a new attempt after verified failure. */
   | { event: "manual_recovery_requested"; guidance?: string }
   /** Operator chose to leave the verified failure terminal. */

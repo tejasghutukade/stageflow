@@ -4,6 +4,10 @@ import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { loadRunContext } from "./resumeReconstruct.js";
+import {
+  assertTimedOutStageEligible,
+  reconstructTimedOutAndContinue,
+} from "./resumeTimedOut.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import {
   deriveStatusFromStages,
@@ -647,6 +651,94 @@ export class RunManager {
 
   async retryStage(runId: string, stageId: string): Promise<RetryStageResult> {
     return this.retryStageInternal(runId, stageId, true);
+  }
+
+  async resumeTimedOutStage(
+    runId: string,
+    stageId: string,
+  ): Promise<RetryStageResult> {
+    const resumeKey = waitKey(runId, stageId);
+    if (this.resumeInFlight.has(resumeKey) || this.retryInFlight.has(resumeKey)) {
+      return {
+        ok: false,
+        reason: `Resume already in progress for run ${runId} stage ${stageId}`,
+        status: 409,
+      };
+    }
+    this.resumeInFlight.add(resumeKey);
+
+    let detail;
+    try {
+      detail = await this.options.store.readRun(runId);
+    } catch {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
+    if (!stageSnap) {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: `Stage not found: ${stageId}`, status: 404 };
+    }
+    const eligibility = assertTimedOutStageEligible(
+      stageSnap.status,
+      stageSnap.events,
+    );
+    if (!eligibility.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return eligibility;
+    }
+
+    const latest = await this.options.store.getLatestStageExecution(
+      runId,
+      stageId,
+    );
+    const attemptIndex = latest?.attempt ?? 1;
+    const wasActive = this.active.has(runId);
+    const tracked = await this.ensureResumeTracked(runId);
+    if (!tracked.ok) {
+      this.resumeInFlight.delete(resumeKey);
+      return { ok: false, reason: tracked.reason, status: 409 };
+    }
+    const insertedForResume = !wasActive;
+
+    try {
+      const done = reconstructTimedOutAndContinue({
+        runId,
+        stageId,
+        agent: this.options.agent,
+        store: this.options.store,
+        hitl: this.hitl,
+        executionMode: this.executionMode,
+        cwd: this.cwd,
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        factoryCwd: this.projectRoot,
+        ...(this.stageProcessLauncher !== undefined
+          ? { stageProcessLauncher: this.stageProcessLauncher }
+          : {}),
+        ...(this.options.operatorCatalog !== undefined
+          ? { operatorCatalog: this.options.operatorCatalog }
+          : {}),
+      });
+      this.registerResumeUntrack(runId, done);
+      const outcome = await done;
+      if (!outcome.ok) {
+        if (insertedForResume) {
+          this.removeActiveEntry(runId, false);
+        }
+        const missingSession =
+          outcome.reason !== undefined &&
+          outcome.reason.startsWith("missing session to resume");
+        return {
+          ok: false,
+          reason: outcome.reason ?? "timeout resume failed",
+          status: missingSession ? 409 : 500,
+        };
+      }
+      return { ok: true, runId, stageId, attemptIndex };
+    } finally {
+      this.resumeInFlight.delete(resumeKey);
+    }
   }
 
   async recoverManualStage(

@@ -79,6 +79,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/sf runs wait/);
     expect(result.stdout).toMatch(/sf runs answer/);
     expect(result.stdout).toMatch(/sf runs retry/);
+    expect(result.stdout).toMatch(/sf runs resume/);
     expect(result.stdout).toMatch(/sf runs abandon/);
     expect(result.stdout).toMatch(/sf runs rerun/);
     expect(result.stdout).not.toMatch(/\.software-factory/);
@@ -111,6 +112,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(out).toMatch(/sf runs wait/);
     expect(out).toMatch(/sf runs answer/);
     expect(out).toMatch(/sf runs retry/);
+    expect(out).toMatch(/sf runs resume/);
     expect(out).toMatch(/sf runs abandon/);
     expect(out).toMatch(/sf runs rerun/);
   });

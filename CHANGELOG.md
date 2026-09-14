@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-14
+
+### Added
+
+- Resume a timed-out failed stage on the same attempt from the CLI, MCP, and operator console
+- Collapsible feedback-loop banner on the run map; collapsed by default except when waiting for a human decision
+
+### Fixed
+
+- Feedback-loop remints keep Join and scheduling on the active clone cohort and skip superseded instances
+- Stringified JSON objects in `emit_stage_envelope` and `ask_operator` arguments are coerced before schema validation
+- Operator console hides superseded Clone Chain instances from the spatial map
+
 ## [0.18.0] - 2026-09-12
 
 ### Added
@@ -256,7 +269,8 @@ See `docs/yaml-catalog.md` and `docs/quickstart.md` for the pipeline-owned autho
 - SQLite run store under `.stageflow/`
 - `sf validate`, `sf providers`, parallel pipeline DAG support
 
-[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/tejasghutukade/stageflow/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/tejasghutukade/stageflow/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/tejasghutukade/stageflow/compare/v0.17.0...v0.18.0
 [0.15.0]: https://github.com/tejasghutukade/stageflow/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/tejasghutukade/stageflow/compare/v0.13.0...v0.14.0
