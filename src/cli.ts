@@ -21,6 +21,7 @@ import { RUNS_USAGE, runRunsCommand } from "./cli/runsCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
+import { GRAPH_USAGE, runGraphCommand } from "./cli/graph.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
 import { createRunStore } from "./runstore/createStore.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
@@ -61,6 +62,7 @@ const USAGE = `Usage:
   sf skills list
   sf skills install --from-path <dir> [--skill-name <name>]
   sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
+  sf graph --pipeline <path> [--json]
   sf --version
   sf -V
   sf --help
@@ -127,7 +129,8 @@ function parseArgs(argv: string[]): {
     command === "envelope" ||
     command === "export-run" ||
     command === "runs" ||
-    command === "skills"
+    command === "skills" ||
+    command === "graph"
   ) {
     return { help: false, command };
   }
@@ -368,6 +371,13 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "skills") {
       return runSkillsCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "graph") {
+      return runGraphCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });

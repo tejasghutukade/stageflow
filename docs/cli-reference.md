@@ -468,6 +468,33 @@ sf migrate-yaml examples/hello-world --write
 
 See [CI / headless](ci.md) for `catalog.legacy_yaml` (not promoted by `--strict` this release).
 
+## `sf graph`
+
+Display a terminal-based visualization of a pipeline's structure.
+
+```bash
+sf graph --pipeline <path> [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline` | Filesystem path to a pipeline YAML file (required) |
+| `--json` | Output the resolved DAG data in JSON format instead of ASCII diagram |
+
+The command reads pipeline definitions using existing `resolvePipelineDag` functionality and renders an ASCII diagram showing stages as nodes, route connections as edges, entry points, clone chains, and loop returns.
+
+Example:
+
+```bash
+sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml
+```
+
+With JSON output:
+
+```bash
+sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml --json
+```
+
 ## `sf ui`
 
 Start the operator console and MCP endpoint (sessions are the MCP product default).

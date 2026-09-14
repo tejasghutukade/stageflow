@@ -1,0 +1,40 @@
+id: graph-example
+model: gpt-4o
+stages:
+  - id: start
+    entry: true
+    route:
+      - to: process
+    system_prompt: Process data
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: process
+    route:
+      - to: finalize
+      - type: loop
+        to: start
+        max_replays: 2
+        on_max_replays: wait_for_human
+        replay_session: new_session
+    system_prompt: Process the collected data
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: finalize
+    system_prompt: Finalize and output results
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
