@@ -32,12 +32,14 @@ import {
   joinAllowsRun,
   pickStalledJoinSkips,
 } from "./joinReadiness.js";
+import { reopenRunnableSkippedStages, persistReopenedStages } from "./reopenSkipped.js";
 import type {
   FeedbackLoopDecisionInput,
   ResolveFeedbackLoopDecisionResult,
 } from "./feedbackLoopDecision.js";
 import {
   forkChoicePreservesReplaySource,
+  forkCohortMapsFromStore,
   mintCohortForFanout,
 } from "./forkGeneration.js";
 import {
@@ -203,6 +205,14 @@ export async function hydrateScheduleFromStore(
     schedulingHalted = true;
   }
 
+  await reopenRunnableSkippedStages(
+    store,
+    runId,
+    resolvedDag,
+    states,
+    completedEnvelopes,
+  );
+
   return {
     states,
     completedEnvelopes,
@@ -238,6 +248,7 @@ export async function hydrateScheduleForRetryRoots(
     }
   }
   const retryRootSet = new Set(retryStageIds);
+  const { supersededCloneIds } = await forkCohortMapsFromStore(store, runId);
 
   const states = new Map<string, StageScheduleState>();
   for (const node of resolvedDag.nodes) {
@@ -246,9 +257,11 @@ export async function hydrateScheduleForRetryRoots(
 
   const overrides = new Map<string, StageScheduleState>();
   for (const rootId of retryStageIds) {
+    if (supersededCloneIds.has(rootId)) continue;
     overrides.set(rootId, "pending");
   }
   for (const id of downstream) {
+    if (supersededCloneIds.has(id)) continue;
     overrides.set(id, "pending");
   }
 
@@ -260,6 +273,18 @@ export async function hydrateScheduleForRetryRoots(
       completedEnvelopes.delete(id);
     }
   }
+
+  const skippedToReopen: string[] = [];
+  const skipStates = new Map<string, StageScheduleState>();
+  for (const snap of runDetail.stages) {
+    const id = snap.stage_id;
+    if (supersededCloneIds.has(id)) continue;
+    if (snap.status !== "skipped") continue;
+    if (!retryRootSet.has(id) && !downstream.has(id)) continue;
+    skippedToReopen.push(id);
+    skipStates.set(id, "skipped");
+  }
+  await persistReopenedStages(store, runId, skippedToReopen, skipStates);
 
   return {
     states,
@@ -1130,6 +1155,14 @@ export async function runPipelineDag(
         await persistSkipPending(childId);
       }
     }
+
+    await reopenRunnableSkippedStages(
+      store,
+      run.runId,
+      dag,
+      states,
+      completedEnvelopes,
+    );
   };
 
   const handlePostSuccessError = async (stageId: string, reason: string) => {
