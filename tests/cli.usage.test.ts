@@ -58,7 +58,7 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(result.stdout).toMatch(/sf run[^\n]*--json/);
     expect(result.stdout).toMatch(/sf validate/);
     expect(result.stdout).toMatch(/sf init/);
-    expect(result.stdout).not.toMatch(/name-or-path/);
+    expect(result.stdout).toMatch(/sf graph/);
     expect(result.stdout).toMatch(/--pipeline <path>/);
     expect(result.stdout).toMatch(/--strict/);
     expect(result.stdout).toMatch(/--json/);
@@ -150,6 +150,14 @@ describe("CLI stub", { timeout: 15_000 }, () => {
     expect(out).toMatch(/manifest-all|stageflow\.yaml/i);
     expect(out).not.toMatch(/name-or-path/);
     expect(out).toMatch(/--strict/);
+    expect(out).toMatch(/--json/);
+  });
+
+  it("graph --help prints graph usage and exits zero", () => {
+    const result = runCli(["graph", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/sf graph --pipeline/);
     expect(out).toMatch(/--json/);
   });
 
