@@ -6,6 +6,7 @@ import { attemptContext, noAttemptContext } from "./stageAttemptContext.js";
 import type { StageAttemptContext } from "./stageAttemptContext.js";
 import type { TaskFile } from "../types/task.js";
 import { resolveCredentialBinding } from "./credentialBinding.js";
+import { ensureWorktreeCheckout } from "./gitWorktreeCheckout.js";
 
 export type StageRoots = {
   mode: "bound" | "unbound";
@@ -90,6 +91,14 @@ export async function resolveAndValidateCheckout(
 ): Promise<string | undefined> {
   const raw = override ?? task.checkout;
   if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    return ensureWorktreeCheckout({
+      projectRoot: factoryCwd,
+      branch: raw.branch,
+      base: raw.base,
+      taskId: task.id,
+    });
+  }
   if (raw.trim() === "") {
     throw new Error("Invalid checkout: path is empty or whitespace-only");
   }

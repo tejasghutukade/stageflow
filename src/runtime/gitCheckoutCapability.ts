@@ -10,7 +10,7 @@ import type {
 
 type TrackedPath = { path: string; tracked: boolean };
 
-function runGit(root: string, args: string[]): Promise<Buffer> {
+export function runGit(root: string, args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
