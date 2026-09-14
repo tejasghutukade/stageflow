@@ -1505,10 +1505,33 @@ a.topbar__sub:hover { text-decoration: underline; }
 .feedback-loop-panel {
   margin: var(--spacing-3) var(--spacing-4) 0;
   flex-shrink: 0;
+  grid-template-columns: 1fr;
+}
+
+.feedback-loop-panel .astryx-collapsible-trigger {
+  padding: var(--spacing-3) var(--spacing-5);
+  font-size: var(--font-size-sm);
+}
+
+.feedback-loop-panel__body {
+  padding: 0 var(--spacing-5) var(--spacing-4);
+}
+
+.feedback-loop-panel__trigger {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.feedback-loop-panel__summary {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 .feedback-loop-panel .kv {
-  margin-top: var(--spacing-3);
+  margin-top: 0;
 }
 
 .feedback-loop-panel__timeline {
