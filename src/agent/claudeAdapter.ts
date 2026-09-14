@@ -77,6 +77,10 @@ import {
   type StageRunInput,
   type StageRunResult,
 } from "./port.js";
+import {
+  composeTimeoutResumePrompt,
+  stageTimeoutReason,
+} from "./stageTimeout.js";
 import { StageMcpError } from "../config/resolveStageMcpServers.js";
 import { addModelUsage, emptyStageUsage, type StageUsage } from "../types/usage.js";
 
@@ -379,6 +383,29 @@ async function runTurn(
       await clearClaudeSessionMarker(markerPath);
       return { kind: "completed", result: { ok: true, envelope: emitCapture.envelope, usage } };
     }
+    if (controller.signal.aborted && sessionId !== undefined) {
+      await writeClaudeSessionMarker(markerPath, { sessionId, usage });
+      return {
+        kind: "completed",
+        result: {
+          ok: false,
+          reason: stageTimeoutReason(timeoutMs),
+          envelope: emitCapture.envelope,
+          usage,
+        },
+      };
+    }
+    if (controller.signal.aborted) {
+      return {
+        kind: "completed",
+        result: {
+          ok: false,
+          reason: stageTimeoutReason(timeoutMs),
+          envelope: emitCapture.envelope,
+          usage,
+        },
+      };
+    }
     return {
       kind: "completed",
       result: {
@@ -483,6 +510,27 @@ export class ClaudeAgentAdapter implements AgentPort {
         const pre = preflight(input);
         if (!pre.ok) {
           return { status: "completed", result: { ok: false, reason: pre.reason } };
+        }
+        if (input.sessionMode === "timeout_resume") {
+          const marker = await readClaudeSessionMarker(markerPath);
+          if (marker?.sessionId === undefined) {
+            return {
+              status: "completed",
+              result: {
+                ok: false,
+                reason: "missing Claude session to resume; use retry to start a new attempt",
+              },
+            };
+          }
+          const outcome = await runTurn(
+            input,
+            pre.model,
+            markerPath,
+            composeTimeoutResumePrompt(),
+            marker.sessionId,
+            usage,
+          );
+          return applyOutcome(outcome);
         }
         const outcome = await runTurn(
           input,

@@ -1642,6 +1642,7 @@ describe("MCP Tier 2 wait_run", () => {
     try {
       const tools = await mcpListTools(base);
       expect(tools.map((t) => t.name)).toContain("wait_run");
+      expect(tools.map((t) => t.name)).toContain("resume_stage");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

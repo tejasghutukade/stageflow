@@ -132,7 +132,9 @@ export class FakeAgent implements AgentPort {
     let resumeCorrupt = false;
     const sessionMode = input.sessionMode ?? "fresh";
     const skipHitlPark =
-      sessionMode === "feedback_resume" || sessionMode === "new_session";
+      sessionMode === "feedback_resume" ||
+      sessionMode === "timeout_resume" ||
+      sessionMode === "new_session";
 
     if (sessionMode === "feedback_resume" && input.feedbackLoopContext === undefined) {
       return createCompletedOnlyStageHandle({

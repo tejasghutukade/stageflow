@@ -13,6 +13,7 @@ import { formatEnvelopeSubtitle } from "../components/EnvelopeFields";
 import { spatialNodeKicker } from "../components/SpatialRunMap";
 import {
   buildFeedbackOverlays,
+  collectSupersededCloneStageIds,
   collectSupersededStageIds,
   envelopeAsidePath,
   formatCloneLabel,
@@ -1639,6 +1640,7 @@ describe("feedback loop workspace", () => {
       "implement~old",
       "work~1",
     ]);
+    expect([...collectSupersededCloneStageIds(history)]).toEqual(["work~1"]);
   });
 
   it("shows completed replay overlays when no live replays remain", () => {
@@ -2067,5 +2069,206 @@ describe("feedback loop workspace", () => {
     expect(
       workspace.nodeChrome.find((n) => n.stageId === "implement")?.isFeedbackTarget,
     ).toBe(true);
+  });
+
+  it("omits superseded clone instances from the spatial map", () => {
+    const cloneTrack = {
+      nodes: [
+        cloneTrackNode({
+          stage_id: "fork",
+          definition_id: "fork",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 0,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~1",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~2",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 1,
+        }),
+        cloneTrackNode({
+          stage_id: "work~3",
+          definition_id: "work",
+          status: "running",
+          readiness: "running",
+          layer: 1,
+          layer_order: 2,
+        }),
+        cloneTrackNode({
+          stage_id: "join",
+          definition_id: "join",
+          status: "pending",
+          readiness: "blocked",
+          layer: 2,
+          layer_order: 0,
+        }),
+      ],
+      edges: [
+        { from: "fork", to: "work~1" },
+        { from: "fork", to: "work~2" },
+        { from: "fork", to: "work~3" },
+        { from: "work~1", to: "join" },
+        { from: "work~2", to: "join" },
+        { from: "work~3", to: "join" },
+      ],
+    };
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [],
+        fork_generations: [
+          {
+            run_id: "run-1",
+            generation_id: "gen-1",
+            fork_parent_stage_id: "fork",
+            generation_number: 1,
+            clone_stage_ids: ["work~1", "work~2"],
+            status: "superseded",
+            created_at: "2026-08-18T00:00:00.000Z",
+            updated_at: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    ];
+    const run = detail(
+      [
+        stage({ stage_id: "fork", status: "succeeded" }),
+        stage({ stage_id: "work~1", status: "succeeded" }),
+        stage({ stage_id: "work~2", status: "succeeded" }),
+        stage({ stage_id: "work~3", status: "running" }),
+        stage({ stage_id: "join", status: "pending" }),
+      ],
+      {
+        pipeline_track: cloneTrack,
+        feedback_loops: history,
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
+      "fork",
+      "work~3",
+      "join",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual([
+      { from: "fork", to: "work~3" },
+      { from: "work~3", to: "join" },
+    ]);
+  });
+
+  it("keeps every clone on the map when no fork generation is superseded", () => {
+    const cloneTrack = {
+      nodes: [
+        cloneTrackNode({
+          stage_id: "fork",
+          definition_id: "fork",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 0,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~1",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 0,
+        }),
+        cloneTrackNode({
+          stage_id: "work~2",
+          definition_id: "work",
+          status: "succeeded",
+          readiness: "succeeded",
+          layer: 1,
+          layer_order: 1,
+        }),
+        cloneTrackNode({
+          stage_id: "join",
+          definition_id: "join",
+          status: "pending",
+          readiness: "blocked",
+          layer: 2,
+          layer_order: 0,
+        }),
+      ],
+      edges: [
+        { from: "fork", to: "work~1" },
+        { from: "fork", to: "work~2" },
+        { from: "work~1", to: "join" },
+        { from: "work~2", to: "join" },
+      ],
+    };
+    const history: FeedbackLoopHistory[] = [
+      {
+        loop: feedbackLoop(),
+        replays: [],
+        fork_generations: [
+          {
+            run_id: "run-1",
+            generation_id: "gen-1",
+            fork_parent_stage_id: "fork",
+            generation_number: 1,
+            clone_stage_ids: ["work~1", "work~2"],
+            status: "active",
+            created_at: "2026-08-18T00:00:00.000Z",
+            updated_at: "2026-08-18T00:00:00.000Z",
+          },
+        ],
+      },
+    ];
+    const run = detail(
+      [
+        stage({ stage_id: "fork", status: "succeeded" }),
+        stage({ stage_id: "work~1", status: "succeeded" }),
+        stage({ stage_id: "work~2", status: "succeeded" }),
+        stage({ stage_id: "join", status: "pending" }),
+      ],
+      {
+        pipeline_track: cloneTrack,
+        feedback_loops: history,
+      },
+    );
+    const workspace = resolveRunWorkspace(stream, run, selection());
+    expect(workspace.spatialLayout.nodes.map((n) => n.stageId)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.trackStages.map((s) => s.id)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.nodeChrome.map((c) => c.stageId)).toEqual([
+      "fork",
+      "work~1",
+      "work~2",
+      "join",
+    ]);
+    expect(workspace.spatialLayout.edges).toEqual(cloneTrack.edges);
   });
 });

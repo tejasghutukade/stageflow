@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { canRetry } from "./eligibility";
+import { canResumeTimedOut, canRetry } from "./eligibility";
 import { createStageRetrySession } from "./useStageRetry";
 
 describe("canRetry eligibility", () => {
@@ -13,6 +13,29 @@ describe("canRetry eligibility", () => {
     expect(canRetry("succeeded")).toBe(false);
     expect(canRetry("pending")).toBe(false);
     expect(canRetry("skipped")).toBe(false);
+  });
+});
+
+describe("canResumeTimedOut eligibility", () => {
+  it("is true only for timeout failures", () => {
+    expect(
+      canResumeTimedOut({
+        status: "failed",
+        events: [{ event: "failed", reason: "stage timed out after 3600000ms" }],
+      }),
+    ).toBe(true);
+    expect(
+      canResumeTimedOut({
+        status: "failed",
+        events: [{ event: "failed", reason: "missing emit_stage_envelope" }],
+      }),
+    ).toBe(false);
+    expect(
+      canResumeTimedOut({
+        status: "running",
+        events: [{ event: "failed", reason: "stage timed out after 3600000ms" }],
+      }),
+    ).toBe(false);
   });
 });
 

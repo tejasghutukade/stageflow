@@ -534,6 +534,7 @@ export function stageStatusFromEvents(
     if (ev.event === "succeeded") status = "succeeded";
     if (ev.event === "failed") status = "failed";
     if (ev.event === "skipped") status = "skipped";
+    if (ev.event === "reopened") status = "pending";
   }
   return status;
 }

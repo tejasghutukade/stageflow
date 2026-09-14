@@ -29,6 +29,7 @@ import {
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import { isStageTimeoutReason } from "../agent/stageTimeout.js";
 
 export type RunStageOutcome = StageRunResult | { waiting: true };
 
@@ -355,7 +356,9 @@ export async function runStage(
       attemptCtx,
     });
     console.error(`Stage ${stageId} failed: ${reason}`);
-    await handle.close().catch(() => undefined);
+    await handle
+      .close(isStageTimeoutReason(reason) ? { park: true } : undefined)
+      .catch(() => undefined);
     return { ok: false, reason };
   }
 
@@ -386,6 +389,9 @@ export async function runStage(
       attemptCtx,
     });
   } finally {
-    await handle.close().catch(() => undefined);
+    const timedOut = isStageTimeoutReason(
+      outcome.ok ? undefined : outcome.reason,
+    );
+    await handle.close(timedOut ? { park: true } : undefined).catch(() => undefined);
   }
 }
