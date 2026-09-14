@@ -438,6 +438,61 @@ Example:
 sf validate --strict --json
 ```
 
+## `sf graph`
+
+Print a definition-time view of how a pipeline graph is wired, before any run. It does not require `sf ui`, does not start the operator console, and renders no HTML or mermaid — the default output is a plain, 80-column, box-drawing ASCII diagram built from the same resolved DAG that `sf validate` / `sf run` use.
+
+```bash
+sf graph --pipeline <path> [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline` | Filesystem path to the pipeline YAML (mirrors `sf validate --pipeline`). Required. |
+| `--json` | Dump the resolved `ResolvedPipelineDag` as JSON instead of the terminal diagram. |
+
+The diagram renders: stages as nodes (in dependency order), the `entry: true` stage marked with `▶`, a Clone Chain emitter's outgoing edge labeled `child~N (mode)` (one child node, not N instances), and a `{ type: loop }` as a separate `↩ loop ×N → <target>` return cue rather than a reverse DAG edge.
+
+**Exit codes:** `0` success, `1` failure (missing/invalid `--pipeline`, unknown flag, unresolved pipeline).
+
+Example:
+
+```bash
+sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml
+```
+
+```text
+▶ decompose   entry · clone 8 (parallel)
+   │
+   ▼ child~8 (parallel)
+  plan
+   │
+   ▼
+  align   clone 8 (sequential)
+   │
+   ▼ child~8 (sequential)
+  implement
+   │
+   ▼
+  verify
+   │
+   ▼
+  review
+   │
+   ▼
+  address-feedback
+   ↩ loop ×2 → review   (wait_for_human)
+   │
+   ▼
+  publish   replay_safe: false
+```
+
+`--json` prints the resolved DAG verbatim (the same object `loaded.dag` exposes internally):
+
+```bash
+sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml --json
+```
+
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
 For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
