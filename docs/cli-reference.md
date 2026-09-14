@@ -409,6 +409,31 @@ sf skills install --from-zip "https://github.com/tt-a1i/archify/releases/downloa
 
 See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding).
 
+## `sf graph`
+
+Visualize pipeline structure as ASCII/box-drawing diagram.
+
+```bash
+sf graph --pipeline <path> [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--pipeline` | Path to pipeline YAML file (required) |
+| `--json` | Output resolved DAG as JSON instead of ASCII diagram |
+
+Displays a terminal-friendly visualization of pipeline structure including:
+- Stages as nodes with entry points marked
+- Route connections as directional edges
+- Clone chain fan-out as labeled bands
+- Loop types as send_back return cues
+
+Example:
+
+```bash
+sf graph --pipeline examples/my-pipeline.pipeline.yaml
+```
+
 ## `sf validate`
 
 Validate catalog YAML (pipelines, their stages, and tasks).

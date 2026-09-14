@@ -1,0 +1,87 @@
+id: graph-example
+description: Example pipeline demonstrating entry points, clone chains, and loops for graph visualization
+schemas:
+  Item:
+    type: object
+    required: [id, name]
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+stages:
+  - id: start
+    entry: true
+    route:
+      - to: process-item
+    system_prompt: Start the pipeline process
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/schemas/Item"
+
+  - id: process-item
+    clone_cap: 3
+    clone_mode: parallel
+    route:
+      - to: validate-result
+    system_prompt: Process individual items in parallel
+    model: test/model
+    io:
+      input:
+        schema:
+          $ref: "#/schemas/Item"
+      output:
+        schema:
+          type: object
+          required: [processed]
+          properties:
+            processed:
+              type: boolean
+
+  - id: validate-result
+    route:
+      - to: report-findings
+      - type: loop
+        to: process-item
+        max_replays: 2
+        on_max_replays: wait_for_human
+        replay_session: resume
+    system_prompt: Validate processing results
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [valid]
+          properties:
+            valid:
+              type: boolean
+
+  - id: report-findings
+    system_prompt: Report final findings
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [report]
+          properties:
+            report:
+              type: string
