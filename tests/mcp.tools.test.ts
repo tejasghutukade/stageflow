@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { cp, mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { cp, mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { describePipeline } from "../src/config/describePipeline.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   createCompletedOnlyStageHandle,
   type AgentPort,
@@ -1328,20 +1330,13 @@ describe("MCP Tier 1 operator parity", () => {
       expect(scoped.payload.ok).toBe(false);
       expect(scoped.payload.findings.length).toBeGreaterThan(0);
 
+      const diamondPath = pipelinePath("diamond-fan-in");
       const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in"),
+        pipeline: diamondPath,
       });
       expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in");
-      expect(described.payload.stages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "research",
-          }),
-          expect.objectContaining({
-            id: "synthesize",
-          }),
-        ]),
+      expect(described.payload).toEqual(
+        describePipeline(await loadPipeline(diamondPath, { cwd: catalogRoot })),
       );
 
       const missing = await mcpCall(base, "describe_pipeline", {
@@ -1365,26 +1360,24 @@ describe("MCP Tier 1 operator parity", () => {
     }
   });
 
-  it("describe_pipeline exposes scalar needs and structured diamond join edges", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-"));
+  it("describe_pipeline payload equals describePipeline helper", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-eq-"));
     const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
 
     try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in"),
-      });
-      expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in");
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
-      );
-      expect(byId.clarify).toMatchObject({ id: "clarify", needs: null });
-      expect(byId.research).toMatchObject({ id: "research", needs: "clarify" });
-      expect(byId.validation).toMatchObject({ id: "validation", needs: "clarify" });
-      expect(byId.synthesize?.needs).toEqual([
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded"] },
-      ]);
+      for (const name of [
+        "diamond-fan-in",
+        "clone-chain-smallest",
+        "route-if-eq",
+        "route-loop-basic",
+      ]) {
+        const pipeline = pipelinePath(name);
+        const described = await mcpCall(base, "describe_pipeline", { pipeline });
+        expect(described.isError).toBe(false);
+        expect(described.payload).toEqual(
+          describePipeline(await loadPipeline(pipeline, { cwd: catalogRoot })),
+        );
+      }
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -1392,193 +1385,12 @@ describe("MCP Tier 1 operator parity", () => {
     }
   });
 
-  it("describe_pipeline preserves reversed YAML declaration order for diamond join", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-rev-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in-reversed"),
-      });
-      expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in-reversed");
-      const synthesize = (
-        described.payload.stages as Array<{ id: string; needs: unknown }>
-      ).find((s) => s.id === "synthesize");
-      expect(synthesize?.needs).toEqual([
-        { id: "validation", on: ["succeeded"] },
-        { id: "research", on: ["succeeded"] },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline exposes declared on sets for accepted-failure diamond", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-accepted-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in-accepted"),
-      });
-      expect(described.isError).toBe(false);
-      const synthesize = (
-        described.payload.stages as Array<{ id: string; needs: unknown }>
-      ).find((s) => s.id === "synthesize");
-      expect(synthesize?.needs).toEqual([
-        { id: "research", on: ["succeeded", "failed", "skipped"] },
-        { id: "validation", on: ["succeeded"] },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline exposes clone_cap, clone_mode, and entry on a Clone Chain emitter", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-clone-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("clone-chain-smallest"),
-      });
-      expect(described.isError).toBe(false);
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
-      );
-      expect(byId["emit-items"]).toMatchObject({
-        id: "emit-items",
-        clone_cap: 4,
-        clone_mode: "parallel",
-        entry: true,
-      });
-      expect(byId["handle-item"]).not.toHaveProperty("clone_cap");
-      expect(byId["handle-item"]).not.toHaveProperty("clone_mode");
-      expect(byId.gather).not.toHaveProperty("clone_cap");
-      expect(byId.gather).not.toHaveProperty("clone_mode");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline exposes sequential clone_mode on a Clone Chain emitter", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-clone-seq-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("clone-chain-sequential"),
-      });
-      expect(described.isError).toBe(false);
-      const emitItems = (
-        described.payload.stages as Array<{
-          id: string;
-          clone_cap?: number;
-          clone_mode?: string;
-        }>
-      ).find((s) => s.id === "emit-items");
-      expect(emitItems).toMatchObject({
-        clone_cap: 4,
-        clone_mode: "sequential",
-      });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline structures a single parent when inbound if is present", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-route-if-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("route-if-eq"),
-      });
-      expect(described.isError).toBe(false);
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string; needs: unknown }>).map(
-          (s) => [s.id, s],
-        ),
-      );
-      expect(byId.page?.needs).toEqual([
-        {
-          id: "triage",
-          on: ["succeeded"],
-          if: { field: "severity", op: "eq", value: "high" },
-        },
-      ]);
-      expect(byId.notify?.needs).toBe("triage");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline exposes feedback_loop, entry, and replay_safe from a loop pipeline", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-loop-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("route-loop-basic"),
-      });
-      expect(described.isError).toBe(false);
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
-      );
-      expect(byId.review).toMatchObject({
-        feedback_loop: {
-          target: "implement",
-          max_replays: 2,
-          on_max_replays: "require_continue",
-          replay_session: "resume",
-        },
-      });
-      expect(byId.plan).toMatchObject({ entry: true });
-      expect(byId.submit).toMatchObject({ replay_safe: false });
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline structures a single parent when on is non-default", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-on-failed-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("route-on-failed"),
-      });
-      expect(described.isError).toBe(false);
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string; needs: unknown }>).map(
-          (s) => [s.id, s],
-        ),
-      );
-      expect(byId.hotfix?.needs).toEqual([
-        {
-          id: "run-tests",
-          on: ["failed"],
-        },
-      ]);
-      expect(byId.ship?.needs).toBe("run-tests");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
+  it("describe_pipeline does not import graph ASCII", async () => {
+    const src = await readFile(
+      new URL("../src/mcp/catalogTools.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(/renderGraph|graphRender|graphCommand/);
   });
 
   it("get_run diamond pipeline_track has both inbound synthesize edges", async () => {

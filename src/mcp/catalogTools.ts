@@ -1,10 +1,9 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { browseCatalog } from "../config/browseCatalog.js";
+import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
-import { toPipelineNeeds } from "../config/pipelineNeeds.js";
 import { validateCatalog } from "../config/validateCatalog.js";
-import type { ResolvedPipelineStageNode } from "../types/pipeline.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -31,17 +30,6 @@ const startRunSchema = z
   });
 
 const runStatusSchema = z.enum(["created", "running", "succeeded", "failed"]);
-
-function describePipelineNeeds(node: ResolvedPipelineStageNode) {
-  if (node.needsEdges.length === 0) return node.needs;
-  const collapsed = toPipelineNeeds(node.needsEdges);
-  if (typeof collapsed === "string") return collapsed;
-  return collapsed.map((edge) => ({
-    id: edge.id,
-    on: [...edge.on],
-    ...(edge.if !== undefined ? { if: edge.if } : {}),
-  }));
-}
 
 export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;
@@ -267,29 +255,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       }
       try {
         const loaded = await loadPipeline(pipeline.trim(), { cwd });
-        const gateById = new Map(
-          loaded.stages.map((s) => [s.id, s.gate_kinds] as const),
-        );
-        const stages = loaded.dag.nodes.map((node) => ({
-          id: node.id,
-          needs: describePipelineNeeds(node),
-          ...(node.fork !== undefined ? { fork: node.fork } : {}),
-          ...(node.clone_cap !== undefined ? { clone_cap: node.clone_cap } : {}),
-          ...(node.clone_mode !== undefined ? { clone_mode: node.clone_mode } : {}),
-          ...(node.feedback_loop !== undefined
-            ? { feedback_loop: node.feedback_loop }
-            : {}),
-          ...(node.entry !== undefined ? { entry: node.entry } : {}),
-          ...(node.replay_safe !== undefined ? { replay_safe: node.replay_safe } : {}),
-          ...(gateById.get(node.id) !== undefined
-            ? { gate_kinds: gateById.get(node.id) }
-            : {}),
-        }));
-        return textResult({
-          id: loaded.pipeline.id,
-          path: loaded.pipelinePath,
-          stages,
-        });
+        return textResult(describePipeline(loaded));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return textResult({ error: message, status: 404 }, true);
