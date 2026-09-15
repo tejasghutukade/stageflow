@@ -14,6 +14,8 @@ import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
 import { projectRunForMcp } from "../src/mcp/projectRun.js";
 import { readRunArtifact } from "../src/mcp/readArtifact.js";
+import { runResourceUri } from "../src/mcp/resources.js";
+import type { RunPipelineDagSnapshot, RunStore } from "../src/runstore/port.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -111,6 +113,37 @@ async function mcpCall(
     isError: Boolean(message.result?.isError),
     payload: contentText ? JSON.parse(contentText) : null,
     raw: message,
+  };
+}
+
+async function mcpRpc(
+  base: string,
+  method: string,
+  params: Record<string, unknown> = {},
+) {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+  });
+  const text = await res.text();
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`no SSE data in MCP ${method}: ${text.slice(0, 200)}`);
+  }
+  return JSON.parse(dataLine.slice("data: ".length)) as {
+    result?: {
+      contents?: Array<{ text?: string }>;
+    };
+    error?: unknown;
   };
 }
 
@@ -602,6 +635,61 @@ describe("MCP tools and HTTP inline task", () => {
     );
     const projected = projectRunForMcp(detail);
     expect(projected.stages[0]?.pending_prompt).toEqual(pending_prompt);
+  });
+
+  it("projectRunForMcp copies cost and definition_id when the store snapshot has them", () => {
+    const detail = projectRunDetail(
+      {
+        run_id: "r1",
+        pipeline_id: "clone-chain",
+        created_at: "t",
+        status: "succeeded",
+      },
+      [
+        {
+          stage_id: "author-diagrams~2",
+          definition_id: "author-diagrams",
+          status: "succeeded",
+          events: [{ event: "started" }, { event: "succeeded" }],
+          envelope: { status: "success", summary: "ok", artifacts: [] },
+          artifacts: [],
+          cost_usd: 0.0123,
+        },
+      ],
+      "id: x\ngoal: y\n",
+    );
+    const projected = projectRunForMcp(detail);
+    expect(projected.total_cost_usd).toBe(0.0123);
+    expect(projected.stages[0]?.cost_usd).toBe(0.0123);
+    expect(projected.stages[0]?.definition_id).toBe("author-diagrams");
+    expect(projected).not.toHaveProperty("task_yaml");
+    expect(projected.stages[0]).not.toHaveProperty("events");
+  });
+
+  it("projectRunForMcp omits unused cost rather than inventing 0", () => {
+    const detail = projectRunDetail(
+      {
+        run_id: "r1",
+        pipeline_id: "docs-only",
+        created_at: "t",
+        status: "succeeded",
+      },
+      [
+        {
+          stage_id: "clarify",
+          status: "succeeded",
+          events: [{ event: "started" }],
+          envelope: { status: "success", summary: "ok", artifacts: [] },
+          artifacts: [],
+        },
+      ],
+      "id: x\ngoal: y\n",
+    );
+    const projected = projectRunForMcp(detail);
+    expect(projected).not.toHaveProperty("total_cost_usd");
+    expect(projected.stages[0]).not.toHaveProperty("cost_usd");
+    expect(projected).not.toHaveProperty("task_yaml");
+    expect(projected.stages[0]).not.toHaveProperty("events");
   });
 });
 
@@ -2020,3 +2108,130 @@ describe("MCP Tier 2 wait_run", () => {
     }
   });
 });
+
+function cloneInstanceDag(): RunPipelineDagSnapshot {
+  return {
+    stage_ids: ["author-diagrams~2"],
+    roots: ["author-diagrams~2"],
+    childrenOf: {},
+    nodes: [
+      {
+        id: "author-diagrams~2",
+        needs: null,
+        needsEdges: [],
+        ancestors: [],
+        stageIndex: 0,
+        definition_id: "author-diagrams",
+      },
+    ],
+  };
+}
+
+async function seedSucceededStage(
+  store: RunStore,
+  runId: string,
+  stageId: string,
+  opts: { cost_usd?: number } = {},
+) {
+  await store.createStageExecution(runId, stageId);
+  await store.appendStageEvent(runId, stageId, { event: "started" }, { attempt: 1 });
+  await store.appendStageEvent(runId, stageId, { event: "succeeded" }, { attempt: 1 });
+  await store.updateStageExecution(runId, stageId, 1, {
+    status: "succeeded",
+    envelope: { status: "success", summary: "ok", artifacts: [] },
+    ...(opts.cost_usd !== undefined ? { cost_usd: opts.cost_usd } : {}),
+  });
+}
+
+async function readRunResourcePayload(base: string, runId: string) {
+  const read = await mcpRpc(base, "resources/read", {
+    uri: runResourceUri(runId),
+  });
+  const text = read.result?.contents?.[0]?.text ?? "{}";
+  return JSON.parse(text) as Record<string, unknown> & {
+    stages: Array<Record<string, unknown>>;
+  };
+}
+
+describe("MCP lean run projection fields", () => {
+  it("get_run, wait_run nested run, and run resource share cost and definition_id omit-or-present rules", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-lean-cost-"));
+    const store = createRunStore({ rootDir: root });
+    const withCost = await store.createRun({
+      pipelineId: "clone-chain",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineDag: cloneInstanceDag(),
+    });
+    await seedSucceededStage(store, withCost.runId, "author-diagrams~2", {
+      cost_usd: 0.0123,
+    });
+    const unused = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await seedSucceededStage(store, unused.runId, "clarify");
+
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]), store);
+    try {
+      const getWithCost = await mcpCall(base, "get_run", { runId: withCost.runId });
+      const waitWithCost = await mcpCall(base, "wait_run", {
+        runId: withCost.runId,
+        until: "terminal",
+        timeout_ms: 2_000,
+      });
+      const resourceWithCost = await readRunResourcePayload(base, withCost.runId);
+
+      expect(getWithCost.isError).toBe(false);
+      expect(waitWithCost.isError).toBe(false);
+      expect(getWithCost.payload.total_cost_usd).toBe(0.0123);
+      expect(waitWithCost.payload.run.total_cost_usd).toBe(0.0123);
+      expect(resourceWithCost.total_cost_usd).toBe(0.0123);
+
+      const costStage = getWithCost.payload.stages.find(
+        (s: { stage_id: string }) => s.stage_id === "author-diagrams~2",
+      );
+      const waitStage = waitWithCost.payload.run.stages.find(
+        (s: { stage_id: string }) => s.stage_id === "author-diagrams~2",
+      );
+      const resourceStage = resourceWithCost.stages.find(
+        (s) => s.stage_id === "author-diagrams~2",
+      );
+      expect(costStage?.cost_usd).toBe(0.0123);
+      expect(costStage?.definition_id).toBe("author-diagrams");
+      expect(costStage?.events).toBeUndefined();
+      expect(waitStage?.cost_usd).toBe(0.0123);
+      expect(waitStage?.definition_id).toBe("author-diagrams");
+      expect(waitStage?.events).toBeUndefined();
+      expect(resourceStage?.cost_usd).toBe(0.0123);
+      expect(resourceStage?.definition_id).toBe("author-diagrams");
+      expect(resourceStage?.events).toBeUndefined();
+      expect(getWithCost.payload.task_yaml).toBeUndefined();
+      expect(waitWithCost.payload.run.task_yaml).toBeUndefined();
+      expect(resourceWithCost.task_yaml).toBeUndefined();
+
+      const getUnused = await mcpCall(base, "get_run", { runId: unused.runId });
+      const waitUnused = await mcpCall(base, "wait_run", {
+        runId: unused.runId,
+        until: "terminal",
+        timeout_ms: 2_000,
+      });
+      const resourceUnused = await readRunResourcePayload(base, unused.runId);
+
+      expect(getUnused.payload.total_cost_usd).toBeUndefined();
+      expect(waitUnused.payload.run.total_cost_usd).toBeUndefined();
+      expect(resourceUnused.total_cost_usd).toBeUndefined();
+      expect(getUnused.payload.stages[0]?.cost_usd).toBeUndefined();
+      expect(waitUnused.payload.run.stages[0]?.cost_usd).toBeUndefined();
+      expect(resourceUnused.stages[0]?.cost_usd).toBeUndefined();
+      expect(getUnused.payload.stages[0]?.events).toBeUndefined();
+      expect(waitUnused.payload.run.stages[0]?.events).toBeUndefined();
+      expect(resourceUnused.stages[0]?.events).toBeUndefined();
+      expect(getUnused.payload.task_yaml).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

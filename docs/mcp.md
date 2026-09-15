@@ -317,7 +317,7 @@ Poll run status without loading the full event stream.
 
 **Input:** `{ "runId": "…" }`
 
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes).
+**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes). The projection includes `total_cost_usd` and per-stage `cost_usd` / `definition_id` when the store has them.
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
@@ -562,7 +562,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
 - No provider/settings/catalog-write MCP tools
-- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence); use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
+- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 
