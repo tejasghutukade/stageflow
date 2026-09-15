@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-15
+
+### Added
+
+- Stageflow now runs as a single global, auto-starting service instead of one process per project — `sf run`/`sf runs *` talk to it over HTTP, and it starts itself on first use, so opening a second project or git worktree no longer collides on port binding
+
+### Changed
+
+- Run data lives in one shared `~/.stageflow` store instead of per-project `.stageflow/` directories — a run started from any project shows up in `sf runs list` from any other project too
+- `maxConcurrent` is a global setting for the whole service, not per-project
+- `--operator-cwd`/`--operator-agent-dir` on `sf run` no longer have any effect, since the shared service's operator catalog is fixed once at its own startup; set `STAGEFLOW_OPERATOR_CWD`/`STAGEFLOW_OPERATOR_AGENT_DIR` before the service first starts instead
+
 ## [0.19.0] - 2026-09-14
 
 ### Added
