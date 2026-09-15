@@ -8,6 +8,7 @@ import {
 } from "../config/browseCatalog.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import type { McpToolDeps } from "./deps.js";
@@ -135,10 +136,10 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_health",
     {
       description:
-        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
+        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, version. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
       inputSchema: z.object({}),
     },
-    async () => textResult(manager.getHealth()),
+    async () => textResult({ ...manager.getHealth(), version: PACKAGE_VERSION }),
   );
 
   server.registerTool(

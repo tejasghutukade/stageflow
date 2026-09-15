@@ -9,6 +9,7 @@ import {
   type AgentPort,
   type StageRunInput,
 } from "../src/agent/port.js";
+import { PACKAGE_VERSION } from "../src/package-meta.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
@@ -231,6 +232,7 @@ describe("MCP tools and HTTP inline task", () => {
         slotsAvailable: expect.any(Number),
         activeStageProcesses: 0,
         maxActiveStageProcesses: null,
+        version: PACKAGE_VERSION,
       });
       expect(health.payload).not.toHaveProperty("inFlight");
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
@@ -512,6 +514,20 @@ describe("MCP tools and HTTP inline task", () => {
       expect(overCap.payload.activeCount).toBe(1);
       expect(overCap.payload.maxConcurrent).toBe(1);
       expect(overCap.payload.activeRunIds).toEqual([holderId]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("get_health includes version matching PACKAGE_VERSION", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-ver-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+    try {
+      const health = await mcpCall(base, "get_health");
+      expect(health.isError).toBe(false);
+      expect(health.payload.version).toBe(PACKAGE_VERSION);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
