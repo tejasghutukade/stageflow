@@ -1157,6 +1157,57 @@ describe("MCP Tier 1 operator parity", () => {
       expect(envelope.isError).toBe(false);
       expect(envelope.payload.envelope.summary).toBe("clarify-ok");
       expect(envelope.payload.envelope.payload).toEqual({ n: 1 });
+      expect(envelope.payload).not.toHaveProperty("attempt");
+
+      await store.writeEnvelope(
+        runId,
+        "clarify",
+        {
+          status: "success",
+          summary: "attempt-1-prior",
+          artifacts: [],
+          payload: { n: 1 },
+        },
+        { attempt: 1 },
+      );
+      const second = await store.createStageExecution(runId, "clarify");
+      expect(second.attempt).toBe(2);
+      await store.writeEnvelope(
+        runId,
+        "clarify",
+        {
+          status: "success",
+          summary: "attempt-2-latest",
+          artifacts: [],
+          payload: { n: 2 },
+        },
+        { attempt: 2 },
+      );
+
+      const latest = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+      });
+      expect(latest.isError).toBe(false);
+      expect(latest.payload.envelope.summary).toBe("attempt-2-latest");
+      expect(latest.payload).not.toHaveProperty("attempt");
+
+      const prior = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+        attempt: 1,
+      });
+      expect(prior.isError).toBe(false);
+      expect(prior.payload.attempt).toBe(1);
+      expect(prior.payload.envelope.summary).toBe("attempt-1-prior");
+
+      const missingAttempt = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+        attempt: 99,
+      });
+      expect(missingAttempt.isError).toBe(true);
+      expect(missingAttempt.payload.status).toBe(404);
 
       const missingRun = await mcpCall(base, "list_stage_events", {
         runId: "missing",
@@ -1171,8 +1222,6 @@ describe("MCP Tier 1 operator parity", () => {
       });
       expect(missingStage.isError).toBe(true);
       expect(missingStage.payload.status).toBe(404);
-
-      void store;
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

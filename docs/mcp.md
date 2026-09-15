@@ -521,11 +521,11 @@ recovered again in that run.
 
 ### `get_envelope`
 
-Read the full `StageEnvelope` for a stage (latest attempt).
+Read the full `StageEnvelope` for a stage. Optional `attempt` (omit = latest). A provided attempt reads that execution's stored envelope.
 
-**Input:** `{ "runId", "stageId" }`
+**Input:** `{ "runId", "stageId", "attempt?" }`
 
-**Output:** `{ "runId", "stageId", "envelope": { … } }`
+**Output:** `{ "runId", "stageId", "attempt?", "envelope": { … } }`
 
 Returns `404` when the run, stage, or envelope is missing. MCP does **not** synthesize an envelope for fork-skipped stages. CLI `envelope get` synthesizes `{ status: "skipped", summary: "stage was fork-skipped", artifacts: [], fork_choice: null }` when the stage is skipped and no envelope is stored.
 

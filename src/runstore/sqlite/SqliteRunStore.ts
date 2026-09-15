@@ -897,8 +897,19 @@ export class SqliteRunStore implements RunStore {
     await this.updateStageExecution(runId, stageId, attempt, { envelope });
   }
 
-  async readEnvelope(runId: string, stageId: string): Promise<StageEnvelope> {
+  async readEnvelope(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<StageEnvelope> {
     await this.ready();
+    if (attempt !== undefined) {
+      const execution = await this.getStageExecution(runId, stageId, attempt);
+      if (execution.envelope != null) {
+        return execution.envelope;
+      }
+      throw new Error(`Envelope not found: ${runId}/${stageId}`);
+    }
     const execution = await this.getLatestStageExecution(runId, stageId);
     if (execution?.envelope != null) {
       return execution.envelope;

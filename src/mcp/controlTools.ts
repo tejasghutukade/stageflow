@@ -210,13 +210,14 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "get_envelope",
     {
       description:
-        "Read the full StageEnvelope for a run stage (latest attempt). Returns 404 when absent.",
+        "Read the full StageEnvelope for a run stage. Optional attempt (omit = latest). Returns 404 when absent.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
+        attempt: z.number().int().positive().optional(),
       }),
     },
-    async ({ runId, stageId }) => {
+    async ({ runId, stageId, attempt }) => {
       try {
         await store.readRunMeta(runId);
       } catch (err) {
@@ -231,8 +232,8 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
             true,
           );
         }
-        const envelope = await store.readEnvelope(runId, stageId);
-        return textResult({ runId, stageId, envelope });
+        const envelope = await store.readEnvelope(runId, stageId, attempt);
+        return textResult({ runId, stageId, attempt, envelope });
       } catch (err) {
         const mapped = mapStoreLookupError(err, { policy: "envelope" });
         return textResult(

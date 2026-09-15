@@ -113,6 +113,12 @@ describe.each(adapters)("$label RunStore contract", ({ kind }) => {
     await expect(store.readEnvelope(run.runId, stageId)).resolves.toEqual(
       envelopeAttempt2,
     );
+    await expect(store.readEnvelope(run.runId, stageId, 1)).resolves.toEqual(
+      envelopeAttempt1,
+    );
+    await expect(store.readEnvelope(run.runId, stageId, 2)).resolves.toEqual(
+      envelopeAttempt2,
+    );
   });
 
   it("buildStageSnapshotFromStore with execution row", async () => {
