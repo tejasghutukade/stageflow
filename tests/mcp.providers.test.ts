@@ -1,0 +1,303 @@
+import { afterEach, describe, expect, it } from "vitest";
+import path from "node:path";
+import type { AuthInteraction, Provider } from "@earendil-works/pi-ai";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import {
+  makeMutationLock,
+  type ProviderAuthContext,
+  type ProviderAuthRuntime,
+} from "../src/agent/providerAuth.js";
+import { startUiServer } from "../src/server/http.js";
+import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
+import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { initTempGitRepo } from "./helpers/projectContext.js";
+
+const SECRET_RE =
+  /accessToken|refreshToken|"apiKey"|"key"\s*:|authPath|sk-/;
+
+function fakeProvider(partial: {
+  id: string;
+  name: string;
+  supportsApiKeyLogin?: boolean;
+  supportsOauth?: boolean;
+}): Provider {
+  return {
+    id: partial.id,
+    name: partial.name,
+    auth: {
+      ...(partial.supportsApiKeyLogin
+        ? {
+            apiKey: {
+              name: `${partial.name} API key`,
+              async login() {
+                return { type: "api_key" as const, key: "stored" };
+              },
+              async resolve() {
+                return undefined;
+              },
+            },
+          }
+        : {}),
+      ...(partial.supportsOauth
+        ? {
+            oauth: {
+              name: `${partial.name} OAuth`,
+              async login() {
+                return {
+                  type: "oauth" as const,
+                  refresh: "r",
+                  access: "a",
+                  expires: Date.now() + 60_000,
+                };
+              },
+              async refresh(c) {
+                return c;
+              },
+              async toAuth() {
+                return { apiKey: "x" };
+              },
+            },
+          }
+        : {}),
+    },
+    getModels: () => [],
+    stream: () => {
+      throw new Error("not implemented");
+    },
+    streamSimple: () => {
+      throw new Error("not implemented");
+    },
+  } as unknown as Provider;
+}
+
+function createFakeRuntime(options?: {
+  credentials?: Record<string, "api_key" | "oauth">;
+}): ProviderAuthRuntime {
+  const providers = [
+    fakeProvider({
+      id: "key-provider",
+      name: "Key Provider",
+      supportsApiKeyLogin: true,
+    }),
+    fakeProvider({
+      id: "oauth-provider",
+      name: "OAuth Provider",
+      supportsOauth: true,
+    }),
+    fakeProvider({
+      id: "env-only",
+      name: "Env Only",
+    }),
+  ];
+  const store = new Map<string, "api_key" | "oauth">(
+    Object.entries(options?.credentials ?? {}),
+  );
+
+  return {
+    getProviders: () => providers,
+    getProvider: (id) => providers.find((p) => p.id === id),
+    getProviderAuthStatus: (id) => ({
+      configured: store.has(id),
+      source: store.has(id) ? "stored" : undefined,
+    }),
+    listCredentials: async () =>
+      [...store.entries()].map(([providerId, type]) => ({ providerId, type })),
+    checkAuth: async (id) => {
+      const type = store.get(id);
+      return type ? { type, source: "stored" } : undefined;
+    },
+    login: async (providerId, type, interaction: AuthInteraction) => {
+      const secret = await interaction.prompt({
+        type: "secret",
+        message: "API key",
+      });
+      if (!secret) throw new Error("missing secret");
+      store.set(providerId, type);
+      return { type, key: "redacted" };
+    },
+    logout: async (providerId) => {
+      store.delete(providerId);
+    },
+  };
+}
+
+function makeTestContext(runtime: ProviderAuthRuntime): ProviderAuthContext {
+  return {
+    createRuntime: async () => runtime,
+    lock: makeMutationLock(),
+  };
+}
+
+async function mcpCall(
+  base: string,
+  name: string,
+  args: Record<string, unknown> = {},
+) {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  });
+  const text = await res.text();
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`no SSE data in MCP response: ${text.slice(0, 200)}`);
+  }
+  const message = JSON.parse(dataLine.slice("data: ".length)) as {
+    result?: {
+      content?: Array<{ type: string; text?: string }>;
+      isError?: boolean;
+    };
+    error?: unknown;
+  };
+  const contentText = message.result?.content?.[0]?.text ?? "";
+  return {
+    status: res.status,
+    isError: Boolean(message.result?.isError),
+    payload: contentText ? JSON.parse(contentText) : null,
+    raw: message,
+  };
+}
+
+async function mcpListTools(base: string) {
+  const res = await fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/list",
+      params: {},
+    }),
+  });
+  const text = await res.text();
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
+  if (!dataLine) {
+    throw new Error(`no SSE data in MCP tools/list: ${text.slice(0, 200)}`);
+  }
+  const message = JSON.parse(dataLine.slice("data: ".length)) as {
+    result?: { tools?: Array<{ name: string }> };
+  };
+  return message.result?.tools ?? [];
+}
+
+async function withProvidersMcp(
+  runtime: ProviderAuthRuntime,
+  fn: (base: string) => Promise<void>,
+): Promise<void> {
+  const { root, cleanup } = await initTempGitRepo();
+  writeCredentialSourceToFile(root, "sf_owned");
+  clearFindProjectRootCacheForTests();
+  const { server } = await startUiServer({
+    agent: scriptedFakeAgent([]),
+    cwd: root,
+    port: 0,
+    uiDistDir: path.join(root, "missing-ui"),
+    mcpStateless: true,
+    providerAuthContext: makeTestContext(runtime),
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP address");
+    }
+    await fn(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+    clearFindProjectRootCacheForTests();
+    await cleanup();
+  }
+}
+
+afterEach(() => {
+  clearFindProjectRootCacheForTests();
+});
+
+describe("MCP list_providers", () => {
+  it("T1 configured provider returns configured true and capability fields", async () => {
+    const runtime = createFakeRuntime({
+      credentials: { "key-provider": "api_key" },
+    });
+    await withProvidersMcp(runtime, async (base) => {
+      const result = await mcpCall(base, "list_providers");
+      expect(result.isError).toBe(false);
+      expect(result.payload.authShell).toBe("pi");
+      expect(result.payload.via).toBe("pi");
+      const row = result.payload.providers.find(
+        (p: { id: string }) => p.id === "key-provider",
+      );
+      expect(row).toMatchObject({
+        id: "key-provider",
+        name: "Key Provider",
+        supportsApiKey: true,
+        supportsOauth: false,
+        configured: true,
+        authKind: "api_key",
+        source: "stored",
+      });
+      const ids = result.payload.providers.map((p: { id: string }) => p.id);
+      expect(ids).toEqual(["key-provider", "oauth-provider"]);
+    });
+  });
+
+  it("T2 unconfigured provider returns success with configured false", async () => {
+    const runtime = createFakeRuntime();
+    await withProvidersMcp(runtime, async (base) => {
+      const result = await mcpCall(base, "list_providers");
+      expect(result.isError).toBe(false);
+      const row = result.payload.providers.find(
+        (p: { id: string }) => p.id === "key-provider",
+      );
+      expect(row).toMatchObject({
+        id: "key-provider",
+        configured: false,
+      });
+    });
+  });
+
+  it("T3 payload includes detect summary and omits authPath", async () => {
+    const runtime = createFakeRuntime();
+    await withProvidersMcp(runtime, async (base) => {
+      const result = await mcpCall(base, "list_providers");
+      expect(result.isError).toBe(false);
+      expect(typeof result.payload.detect.piHomeUsable).toBe("boolean");
+      expect(result.payload.detect.source).toMatch(/^(pi_home|sf_owned)$/);
+      expect(result.payload.detect.authPath).toBeUndefined();
+      expect(result.payload).not.toHaveProperty("authPath");
+    });
+  });
+
+  it("T4 stringified payload matches no secret patterns", async () => {
+    const runtime = createFakeRuntime({
+      credentials: { "key-provider": "api_key" },
+    });
+    await withProvidersMcp(runtime, async (base) => {
+      const result = await mcpCall(base, "list_providers");
+      expect(result.isError).toBe(false);
+      expect(result.payload).toEqual(expect.objectContaining({ providers: expect.any(Array) }));
+      expect(JSON.stringify(result.payload)).not.toMatch(SECRET_RE);
+    });
+  });
+
+  it("T5 tools/list includes list_providers and excludes login tools", async () => {
+    const runtime = createFakeRuntime();
+    await withProvidersMcp(runtime, async (base) => {
+      const names = (await mcpListTools(base)).map((t) => t.name);
+      expect(names).toContain("list_providers");
+      expect(names.some((n) => /login|logout|oauth/i.test(n))).toBe(false);
+    });
+  });
+});

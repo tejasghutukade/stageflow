@@ -182,6 +182,41 @@ List stages currently in `waiting_for_input`.
 
 For `waiting_kind: "feedback_loop_decision"`, `feedback_loop_id` and `deferred_target` identify the exhausted loop.
 
+### `list_providers`
+
+List login-capable model providers with per-row auth readiness and a Pi-home detect summary (same helpers as HTTP `GET /api/providers`, `GET /api/providers/:id/auth`, and `GET /api/providers/detect`). Read-only: it does not log in, log out, or start OAuth.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "authShell": "pi",
+  "via": "pi",
+  "detect": {
+    "piHomeUsable": true,
+    "credentialSource": "sf_owned",
+    "provisional": false,
+    "source": "sf_owned"
+  },
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "supportsApiKey": true,
+      "supportsOauth": true,
+      "oauthLabel": "Claude Pro/Max",
+      "configured": true,
+      "authKind": "oauth",
+      "source": "stored"
+    }
+  ]
+}
+```
+
+Env-only providers are omitted (same membership as `GET /api/providers`). An unconfigured provider is still a successful result with `configured: false`. Responses never include API keys, tokens, `authPath`, or credential file contents.
+
 ### `answer_gate`
 
 Deliver an operator answer for a waiting stage (same semantics as `POST /api/runs/:id/stages/:stageId/answer`).
@@ -571,7 +606,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
-- No provider/settings/catalog-write MCP tools
+- No provider login/logout/OAuth, settings-write, or catalog-write MCP tools (`list_providers` is read-only inspect)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)

@@ -60,7 +60,14 @@ function sessionIdFromRequest(req: IncomingMessage): string | undefined {
 }
 
 function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
-  return { manager: deps.manager, store: deps.store, cwd: deps.cwd };
+  return {
+    manager: deps.manager,
+    store: deps.store,
+    cwd: deps.cwd,
+    ...(deps.providerAuthContext !== undefined
+      ? { providerAuthContext: deps.providerAuthContext }
+      : {}),
+  };
 }
 
 function attachBusNotifications(
