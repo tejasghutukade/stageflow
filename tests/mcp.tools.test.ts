@@ -1485,6 +1485,148 @@ describe("MCP Tier 1 operator parity", () => {
     }
   });
 
+  it("describe_pipeline exposes clone_cap, clone_mode, and entry on a Clone Chain emitter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-clone-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("clone-chain-smallest"),
+      });
+      expect(described.isError).toBe(false);
+      const byId = Object.fromEntries(
+        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
+      );
+      expect(byId["emit-items"]).toMatchObject({
+        id: "emit-items",
+        clone_cap: 4,
+        clone_mode: "parallel",
+        entry: true,
+      });
+      expect(byId["handle-item"]).not.toHaveProperty("clone_cap");
+      expect(byId["handle-item"]).not.toHaveProperty("clone_mode");
+      expect(byId.gather).not.toHaveProperty("clone_cap");
+      expect(byId.gather).not.toHaveProperty("clone_mode");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline exposes sequential clone_mode on a Clone Chain emitter", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-clone-seq-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("clone-chain-sequential"),
+      });
+      expect(described.isError).toBe(false);
+      const emitItems = (
+        described.payload.stages as Array<{
+          id: string;
+          clone_cap?: number;
+          clone_mode?: string;
+        }>
+      ).find((s) => s.id === "emit-items");
+      expect(emitItems).toMatchObject({
+        clone_cap: 4,
+        clone_mode: "sequential",
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline structures a single parent when inbound if is present", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-route-if-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("route-if-eq"),
+      });
+      expect(described.isError).toBe(false);
+      const byId = Object.fromEntries(
+        (described.payload.stages as Array<{ id: string; needs: unknown }>).map(
+          (s) => [s.id, s],
+        ),
+      );
+      expect(byId.page?.needs).toEqual([
+        {
+          id: "triage",
+          on: ["succeeded"],
+          if: { field: "severity", op: "eq", value: "high" },
+        },
+      ]);
+      expect(byId.notify?.needs).toBe("triage");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline exposes feedback_loop, entry, and replay_safe from a loop pipeline", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-loop-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("route-loop-basic"),
+      });
+      expect(described.isError).toBe(false);
+      const byId = Object.fromEntries(
+        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
+      );
+      expect(byId.review).toMatchObject({
+        feedback_loop: {
+          target: "implement",
+          max_replays: 2,
+          on_max_replays: "require_continue",
+          replay_session: "resume",
+        },
+      });
+      expect(byId.plan).toMatchObject({ entry: true });
+      expect(byId.submit).toMatchObject({ replay_safe: false });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("describe_pipeline structures a single parent when on is non-default", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-on-failed-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+
+    try {
+      const described = await mcpCall(base, "describe_pipeline", {
+        pipeline: pipelinePath("route-on-failed"),
+      });
+      expect(described.isError).toBe(false);
+      const byId = Object.fromEntries(
+        (described.payload.stages as Array<{ id: string; needs: unknown }>).map(
+          (s) => [s.id, s],
+        ),
+      );
+      expect(byId.hotfix?.needs).toEqual([
+        {
+          id: "run-tests",
+          on: ["failed"],
+        },
+      ]);
+      expect(byId.ship?.needs).toBe("run-tests");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
   it("get_run diamond pipeline_track has both inbound synthesize edges", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-get-diamond-"));
     const store = createRunStore({ rootDir: root });

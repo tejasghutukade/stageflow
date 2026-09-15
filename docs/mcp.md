@@ -498,7 +498,13 @@ Describe a pipeline DAG from a filesystem pipeline path (same locator style as `
 }
 ```
 
-Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` (inverted from `route`). Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). `sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
+Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` from `loadPipeline` (inverted from `route`). It is JSON, not `sf graph` ASCII.
+
+Scalar `needs` stays a string or `null` when the stage has one parent, default `on: ["succeeded"]`, and no `if`. A single parent becomes a one-element structured array `{ id, on, if? }` when that edge has `if` or a non-default `on`. A multi-parent join exposes the structured array (each item `{ id, on }`, plus `if` when present), including default `on: ["succeeded"]` for string YAML items. Omit `if` when the predicate is absent. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
+
+Stage objects also include optional `clone_cap` and `clone_mode` on a Clone Chain emitter, plus `feedback_loop`, `entry`, and `replay_safe` when those fields are set on the resolved node.
+
+`sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
 
 ### `retry_stage`
 
