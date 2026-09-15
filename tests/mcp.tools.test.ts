@@ -102,7 +102,12 @@ async function mcpCall(
   }
   const message = JSON.parse(dataLine.slice("data: ".length)) as {
     result?: {
-      content?: Array<{ type: string; text: string }>;
+      content?: Array<{
+        type: string;
+        text?: string;
+        mimeType?: string;
+        data?: string;
+      }>;
       isError?: boolean;
     };
     error?: unknown;
@@ -1773,6 +1778,201 @@ describe("MCP Tier 1 operator parity", () => {
       expect(escaped.isError).toBe(true);
       expect(escaped.payload.status).toBe(400);
       expect(String(escaped.payload.error)).toMatch(/\.\.|must not contain/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns UTF-8 text as JSON", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-txt-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "artifacts",
+      "note.txt",
+    );
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), "hello artifact", "utf8");
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(false);
+      expect(result.payload).toEqual({
+        runId: created.runId,
+        path: rel,
+        content: "hello artifact",
+      });
+      expect(result.raw.result?.content?.[0]?.type).toBe("text");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns MCP image content for a png", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-png-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "screenshot",
+      "attempts",
+      "1",
+      "artifacts",
+      "page.png",
+    );
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(false);
+      const content = result.raw.result?.content ?? [];
+      expect(content[0]).toEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: png.toString("base64"),
+      });
+      const identity = JSON.parse(content[1]?.text ?? "{}") as {
+        runId?: string;
+        path?: string;
+        mimeType?: string;
+        content?: string;
+      };
+      expect(identity).toEqual({
+        runId: created.runId,
+        path: rel,
+        mimeType: "image/png",
+      });
+      expect(identity.content).toBeUndefined();
+      expect(content[1]?.text).not.toContain(png.toString("base64"));
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns 400 for non-UTF-8 non-image bytes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-bin-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "artifacts",
+      "blob.zip",
+    );
+    const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), zip);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.payload.status).toBe(400);
+      expect(String(result.payload.error)).toMatch(/UTF-8|binary/i);
+      expect(String(result.payload.error)).not.toContain("\uFFFD");
+      expect(JSON.stringify(result.payload)).not.toContain(zip.toString("base64"));
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact denies a png under .pi-agent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-png-deny-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "screenshot",
+      "attempts",
+      "1",
+      ".pi-agent",
+      "page.png",
+    );
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.payload.status).toBe(400);
+      expect(String(result.payload.error)).toMatch(/Artifact path denied/);
+      expect(result.raw.result?.content?.[0]?.type).not.toBe("image");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

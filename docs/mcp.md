@@ -444,7 +444,7 @@ Returns `404` when the run, stage, or envelope is missing. MCP does **not** synt
 
 ### `read_artifact`
 
-Read a text artifact from a run workspace.
+Read a run-workspace artifact by relative path.
 
 **Input:**
 
@@ -455,9 +455,13 @@ Read a text artifact from a run workspace.
 }
 ```
 
-**Output:** `{ "runId", "path", "content" }`
+**Output** depends on the file:
 
-UTF-8 text only. Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
+- Known image extensions (`png`, `jpeg`/`jpg`, `gif`, `webp`) — mime is by extension, not magic bytes. Primary content is an MCP image block `{ "type": "image", "mimeType", "data" }` (`data` is standard base64). A second JSON text block may include `{ "runId", "path", "mimeType" }` identity and does not repeat file bytes.
+- Valid UTF-8 non-image files — JSON text `{ "runId", "path", "content" }`.
+- Non-image files that are not valid UTF-8 — `isError` with `{ "error", "status": 400 }`.
+
+Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
 
 Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories.
 
@@ -569,7 +573,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
 - No provider/settings/catalog-write MCP tools
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
-- Tools return JSON text content blocks
+- Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 
 ## See also

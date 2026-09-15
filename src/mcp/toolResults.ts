@@ -4,3 +4,23 @@ export function textResult(data: unknown, isError = false) {
     ...(isError ? { isError: true } : {}),
   };
 }
+
+export function imageResult(
+  mimeType: string,
+  bytes: Buffer,
+  identity: { runId: string; path: string; mimeType: string },
+) {
+  return {
+    content: [
+      {
+        type: "image" as const,
+        mimeType,
+        data: bytes.toString("base64"),
+      },
+      {
+        type: "text" as const,
+        text: JSON.stringify(identity, null, 2),
+      },
+    ],
+  };
+}

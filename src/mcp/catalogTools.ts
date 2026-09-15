@@ -8,8 +8,8 @@ import type { ResolvedPipelineStageNode } from "../types/pipeline.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
-import { readRunArtifact } from "./readArtifact.js";
-import { textResult } from "./toolResults.js";
+import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
+import { imageResult, textResult } from "./toolResults.js";
 
 const taskFileSchema = z.object({
   id: z.string(),
@@ -163,7 +163,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "read_artifact",
     {
       description:
-        "Read a text artifact from a run workspace by relative path (contained under the run workspace).",
+        "Read a run-workspace artifact by relative path (contained under the run workspace). Known image extensions (png, jpeg, gif, webp) return an MCP image content block. UTF-8 text returns JSON { runId, path, content }. Non-UTF-8 non-image files return isError 400.",
       inputSchema: z.object({
         runId: z.string(),
         path: z.string(),
@@ -171,8 +171,26 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     },
     async ({ runId, path: artifactPath }) => {
       try {
-        const content = await readRunArtifact(store, runId, artifactPath);
-        return textResult({ runId, path: artifactPath, content });
+        const bytes = await readRunArtifactBytes(store, runId, artifactPath);
+        const classified = classifyArtifactContent(artifactPath, bytes);
+        if (classified.kind === "image") {
+          return imageResult(classified.mimeType, bytes, {
+            runId,
+            path: artifactPath,
+            mimeType: classified.mimeType,
+          });
+        }
+        if (classified.kind === "utf8") {
+          return textResult({
+            runId,
+            path: artifactPath,
+            content: bytes.toString("utf8"),
+          });
+        }
+        return textResult(
+          { error: "Artifact is not valid UTF-8 text", status: 400 },
+          true,
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const notFound =
