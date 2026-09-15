@@ -8,10 +8,8 @@ import {
   setCredentialSource,
   type ProviderAuthContext,
 } from "../agent/providerAuth.js";
-import {
-  handleProviderRoutes,
-  providerAuthErrorBody,
-} from "./providerRoutes.js";
+import { mapProviderAuthError } from "../agent/providerInspect.js";
+import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
@@ -754,7 +752,7 @@ export async function startUiServer(
             try {
               credential = setCredentialSource(cwd, record.credentialSource);
             } catch (err) {
-              const mapped = providerAuthErrorBody(err);
+              const mapped = mapProviderAuthError(err);
               json(res, mapped.status, mapped.body);
               return true;
             }

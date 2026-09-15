@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { AuthInteraction, Provider } from "@earendil-works/pi-ai";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
@@ -7,6 +8,7 @@ import {
   type ProviderAuthContext,
   type ProviderAuthRuntime,
 } from "../src/agent/providerAuth.js";
+import { inspectProviderReadiness } from "../src/agent/providerInspect.js";
 import { startUiServer } from "../src/server/http.js";
 import { writeCredentialSourceToFile } from "../src/runtime/settingsFile.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
@@ -156,7 +158,7 @@ async function mcpListTools(base: string) {
 
 async function withProvidersMcp(
   runtime: ProviderAuthRuntime,
-  fn: (base: string) => Promise<void>,
+  fn: (base: string, cwd: string) => Promise<void>,
 ): Promise<void> {
   const { root, cleanup } = await initTempGitRepo();
   writeCredentialSourceToFile(root, "sf_owned");
@@ -174,7 +176,7 @@ async function withProvidersMcp(
     if (!address || typeof address === "string") {
       throw new Error("expected TCP address");
     }
-    await fn(`http://127.0.0.1:${address.port}`);
+    await fn(`http://127.0.0.1:${address.port}`, root);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((err) => (err ? reject(err) : resolve()));
@@ -189,41 +191,44 @@ afterEach(() => {
 });
 
 describe("MCP list_providers", () => {
-  it("T1 configured provider returns configured true and capability fields", async () => {
+  it("T1 payload equals inspectProviderReadiness for a configured row", async () => {
     const runtime = createFakeRuntime({
       credentials: { "key-provider": "api_key" },
     });
-    await withProvidersMcp(runtime, async (base) => {
+    await withProvidersMcp(runtime, async (base, cwd) => {
+      const expected = await inspectProviderReadiness(
+        cwd,
+        makeTestContext(runtime),
+      );
       const result = await mcpCall(base, "list_providers");
       expect(result.isError).toBe(false);
-      expect(result.payload.authShell).toBe("pi");
-      expect(result.payload.via).toBe("pi");
-      const row = result.payload.providers.find(
-        (p: { id: string }) => p.id === "key-provider",
-      );
-      expect(row).toMatchObject({
+      expect(result.payload).toEqual(expected);
+      expect(expected.providers.map((p) => p.id)).toEqual([
+        "key-provider",
+        "oauth-provider",
+      ]);
+      expect(expected.providers[0]).toMatchObject({
         id: "key-provider",
-        name: "Key Provider",
-        supportsApiKey: true,
-        supportsOauth: false,
         configured: true,
         authKind: "api_key",
         source: "stored",
       });
-      const ids = result.payload.providers.map((p: { id: string }) => p.id);
-      expect(ids).toEqual(["key-provider", "oauth-provider"]);
     });
   });
 
-  it("T2 unconfigured provider returns success with configured false", async () => {
+  it("T2 unconfigured provider is success and equals helper", async () => {
     const runtime = createFakeRuntime();
-    await withProvidersMcp(runtime, async (base) => {
+    await withProvidersMcp(runtime, async (base, cwd) => {
+      const expected = await inspectProviderReadiness(
+        cwd,
+        makeTestContext(runtime),
+      );
       const result = await mcpCall(base, "list_providers");
       expect(result.isError).toBe(false);
-      const row = result.payload.providers.find(
-        (p: { id: string }) => p.id === "key-provider",
-      );
-      expect(row).toMatchObject({
+      expect(result.payload).toEqual(expected);
+      expect(
+        expected.providers.find((p) => p.id === "key-provider"),
+      ).toMatchObject({
         id: "key-provider",
         configured: false,
       });
@@ -232,9 +237,14 @@ describe("MCP list_providers", () => {
 
   it("T3 payload includes detect summary and omits authPath", async () => {
     const runtime = createFakeRuntime();
-    await withProvidersMcp(runtime, async (base) => {
+    await withProvidersMcp(runtime, async (base, cwd) => {
+      const expected = await inspectProviderReadiness(
+        cwd,
+        makeTestContext(runtime),
+      );
       const result = await mcpCall(base, "list_providers");
       expect(result.isError).toBe(false);
+      expect(result.payload).toEqual(expected);
       expect(typeof result.payload.detect.piHomeUsable).toBe("boolean");
       expect(result.payload.detect.source).toMatch(/^(pi_home|sf_owned)$/);
       expect(result.payload.detect.authPath).toBeUndefined();
@@ -246,10 +256,14 @@ describe("MCP list_providers", () => {
     const runtime = createFakeRuntime({
       credentials: { "key-provider": "api_key" },
     });
-    await withProvidersMcp(runtime, async (base) => {
+    await withProvidersMcp(runtime, async (base, cwd) => {
+      const expected = await inspectProviderReadiness(
+        cwd,
+        makeTestContext(runtime),
+      );
       const result = await mcpCall(base, "list_providers");
       expect(result.isError).toBe(false);
-      expect(result.payload).toEqual(expect.objectContaining({ providers: expect.any(Array) }));
+      expect(result.payload).toEqual(expected);
       expect(JSON.stringify(result.payload)).not.toMatch(SECRET_RE);
     });
   });
@@ -261,5 +275,13 @@ describe("MCP list_providers", () => {
       expect(names).toContain("list_providers");
       expect(names.some((n) => /login|logout|oauth/i.test(n))).toBe(false);
     });
+  });
+
+  it("does not import HTTP provider routes", async () => {
+    const src = await readFile(
+      new URL("../src/mcp/providerTools.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(/providerRoutes/);
   });
 });
