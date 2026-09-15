@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-15
+
 ### Added
 
+- `get_health`'s MCP response now includes a `version` field, so a host integration can detect a behavior change that doesn't add or remove a whole tool
+- New lightweight `get_waiting_summary` MCP tool — a cheap count/identity list of waiting stages (no prompt bodies, artifacts, or questions) for status-bar badges, scoped by optional `runId` or `path`, spanning every project by default
 - MCP inspect parity with the operator console: read-only `list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` (no login, settings-write, or Stage MCP attach)
 - `describe_pipeline` includes Clone Chain, feedback-loop, and inbound route `if`/`on` wiring so agents can inspect before `start_run`
 - `read_artifact` returns PNG/JPEG/GIF/WebP as MCP image content blocks (text stays JSON; unknown binary still errors)
@@ -20,6 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Feedback-loop `wait_for_human` source passes persist as `waiting`, then `succeeded`/`failed` on continue/abandon, so `get_run` no longer leaves the pass `running`
+
+## [0.20.0] - 2026-09-15
+
+### Added
+
+- Stageflow now runs as a single global, auto-starting service instead of one process per project — `sf run`/`sf runs *` talk to it over HTTP, and it starts itself on first use, so opening a second project or git worktree no longer collides on port binding
+
+### Changed
+
+- Run data lives in one shared `~/.stageflow` store instead of per-project `.stageflow/` directories — a run started from any project shows up in `sf runs list` from any other project too
+- `maxConcurrent` is a global setting for the whole service, not per-project
+- `--operator-cwd`/`--operator-agent-dir` on `sf run` no longer have any effect, since the shared service's operator catalog is fixed once at its own startup; set `STAGEFLOW_OPERATOR_CWD`/`STAGEFLOW_OPERATOR_AGENT_DIR` before the service first starts instead
 
 ## [0.19.0] - 2026-09-14
 

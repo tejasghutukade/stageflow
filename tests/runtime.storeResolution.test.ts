@@ -4,6 +4,8 @@ import path from "node:path";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { storeRootFor } from "../src/runstore/paths.js";
 import { resolveProjectContext } from "../src/project/resolveProjectContext.js";
+import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
+import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import {
   ensureSfOwnedAuthStore,
   sfOwnedAuthPath,
@@ -87,6 +89,37 @@ describe("runtime store resolution", () => {
         await access(projectSettings);
       } finally {
         await cleanup();
+      }
+    });
+  });
+
+  it("bootstrapStageflowHost stores runs at the global home regardless of which project it was launched from", async () => {
+    await withIsolatedHome(async (home) => {
+      const repoA = await initTempGitRepo();
+      const repoB = await initTempGitRepo();
+      try {
+        const bootA = await bootstrapStageflowHost({
+          agent: scriptedFakeAgent([]),
+          cwd: repoA.root,
+        });
+        await bootA.mcpHandler.close();
+        const bootB = await bootstrapStageflowHost({
+          agent: scriptedFakeAgent([]),
+          cwd: repoB.root,
+        });
+        await bootB.mcpHandler.close();
+
+        const globalHome = path.join(home, ".stageflow");
+        await access(path.join(storeRootFor(globalHome), "state.db"));
+        await expect(
+          access(path.join(storeRootFor(repoA.root), "state.db")),
+        ).rejects.toThrow();
+        await expect(
+          access(path.join(storeRootFor(repoB.root), "state.db")),
+        ).rejects.toThrow();
+      } finally {
+        await repoA.cleanup();
+        await repoB.cleanup();
       }
     });
   });

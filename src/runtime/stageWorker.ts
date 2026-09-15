@@ -3,6 +3,7 @@ import { asAgentBackendId } from "../agent/agentBackend.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { createRunStore } from "../runstore/createStore.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
@@ -29,7 +30,7 @@ export type { StageWorkerInput, StageWorkerResult } from "./stageWorkerProtocol.
 export async function runStageWorker(
   input: StageWorkerInput,
 ): Promise<RunStageOutcome> {
-  const store = createRunStore({ rootDir: input.rootDir });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const { meta, task, loaded } = await loadRunContext(
     store,
     input.runId,

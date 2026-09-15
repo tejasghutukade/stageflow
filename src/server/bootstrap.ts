@@ -59,7 +59,7 @@ export async function bootstrapStageflowHost(
       : ctx.isGitProject;
   const rawStore =
     options.store ??
-    createRunStore({ rootDir, kind: options.storeKind });
+    createRunStore({ rootDir: ctx.globalHome, kind: options.storeKind });
   const boundBus = isRunStoreWrapped(rawStore)
     ? getRunChangeBusFromWrappedStore(rawStore)
     : undefined;

@@ -7,6 +7,7 @@ import { PiAgentAdapter } from "../src/agent/piAdapter.js";
 import { FakeAgent, fakeHitlResumePath, scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageHandle, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   appendCloneInstances,
@@ -140,8 +141,19 @@ describe("stage worker protocol", () => {
 });
 
 describe("stage worker feedback session modes", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-fb-home-"));
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
   });
 
   async function writeSingleStagePipeline(root: string): Promise<string> {
@@ -182,7 +194,7 @@ describe("stage worker feedback session modes", () => {
   it("feedback_resume opens with sessionMode and does not call deliverAnswer", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-fb-resume-"));
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -279,7 +291,7 @@ describe("stage worker feedback session modes", () => {
   it("new_session opens with sessionMode and does not call deliverAnswer", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-new-session-"));
     const pipelineFile = await writeSingleStagePipeline(root);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "solo",
       pipelinePath: pipelineFile,
@@ -842,7 +854,7 @@ describe("operator catalog roots", () => {
   it("worker resume fails before open when the named skill is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-op-worker-miss-"));
     const pipelineFile = await writeNamedSkillPipeline(root, "missing-skill");
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "named-skill",
       pipelinePath: pipelineFile,
@@ -868,6 +880,20 @@ describe("operator catalog roots", () => {
 });
 
 describe("stage worker prior StageEnvelope", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-prior-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("fails closed with envelopeRouting reason when upstream envelope is missing", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-prior-"));
     await mkdir(path.join(root, "pipelines"), { recursive: true });
@@ -923,7 +949,7 @@ describe("stage worker prior StageEnvelope", () => {
       ].join("\n"),
       "utf8",
     );
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: "needs-parent",
       pipelinePath: pipelineFile,
@@ -945,6 +971,20 @@ describe("stage worker prior StageEnvelope", () => {
 });
 
 describe("clone instance definition lookup", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-clone-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   async function writeAuthorDiagramsPipeline(root: string): Promise<string> {
     await mkdir(path.join(root, "pipelines"), { recursive: true });
     await mkdir(path.join(root, "stages"), { recursive: true });
@@ -1016,7 +1056,7 @@ describe("clone instance definition lookup", () => {
       predecessorId: "detect",
       count: 2,
     });
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       pipelinePath: pipelineFile,
@@ -1044,7 +1084,7 @@ describe("clone instance definition lookup", () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-tilde-"));
     const pipelineFile = await writeAuthorDiagramsPipeline(root);
     const loaded = await loadPipeline(pipelineFile);
-    const store = createRunStore({ rootDir: root });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const run = await store.createRun({
       pipelineId: loaded.pipeline.id,
       pipelinePath: pipelineFile,

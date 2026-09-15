@@ -469,6 +469,8 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
+  /** Every distinct non-empty project_root recorded across all runs. */
+  listProjectRoots(): Promise<string[]>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
   createFeedbackLoop(

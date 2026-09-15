@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { cp, mkdtemp, readFile, writeFile, mkdir } from "node:fs/promises";
+import { cp, mkdtemp, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import {
   type AgentPort,
   type StageRunInput,
 } from "../src/agent/port.js";
+import { PACKAGE_VERSION } from "../src/package-meta.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
@@ -220,6 +221,7 @@ describe("MCP tools and HTTP inline task", () => {
         slotsAvailable: expect.any(Number),
         activeStageProcesses: 0,
         maxActiveStageProcesses: null,
+        version: PACKAGE_VERSION,
       });
       expect(health.payload).not.toHaveProperty("inFlight");
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
@@ -281,6 +283,129 @@ describe("MCP tools and HTTP inline task", () => {
       await cleanup();
     }
   });
+
+  it("list_pipelines/list_tasks span every project this host has recorded a run for", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-multiproj-"));
+    const store = createRunStore({ rootDir: root });
+
+    const { root: repoA, cleanup: cleanupA } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(repoA, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(repoA, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(repoA, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoA, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(repoB, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(repoB, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(repoB, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoB, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+
+    const agent = scriptedFakeAgent([
+      { type: "emit", envelope: { status: "success", summary: "a", artifacts: [] } },
+      { type: "emit", envelope: { status: "success", summary: "b", artifacts: [] } },
+    ]);
+
+    // Host is launched pointed at repoA; repoB is only ever reached via an
+    // absolute pipeline path in start_run — proves list_pipelines/list_tasks
+    // pick it up from the run store alone, not from the host's own cwd.
+    const { server } = await startUiServer({
+      agent,
+      cwd: repoA,
+      store,
+      port: 0,
+      uiDistDir: path.join(root, "missing-ui"),
+      mcpStateless: true,
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP address");
+      }
+      const base = `http://127.0.0.1:${address.port}`;
+
+      const startedA = await mcpCall(base, "start_run", {
+        pipeline: path.join(repoA, "pipelines", "single.pipeline.yaml"),
+        task: { id: "a-task", goal: "project a" },
+      });
+      expect(startedA.isError).toBe(false);
+      await waitUntilIdleHealth(base);
+
+      const startedB = await mcpCall(base, "start_run", {
+        pipeline: path.join(repoB, "pipelines", "single.pipeline.yaml"),
+        task: { id: "b-task", goal: "project b" },
+      });
+      expect(startedB.isError).toBe(false);
+      await waitUntilIdleHealth(base);
+
+      const realRepoA = await realpath(repoA);
+      const realRepoB = await realpath(repoB);
+
+      const pipelines = await mcpCall(base, "list_pipelines");
+      expect(pipelines.isError).toBe(false);
+      const roots = new Set(
+        pipelines.payload.pipelines.map((p: { project_root: string }) => p.project_root),
+      );
+      expect(roots.has(realRepoA)).toBe(true);
+      expect(roots.has(realRepoB)).toBe(true);
+
+      const tasks = await mcpCall(base, "list_tasks");
+      expect(tasks.isError).toBe(false);
+      const taskRoots = new Set(
+        tasks.payload.tasks.map((t: { project_root: string }) => t.project_root),
+      );
+      expect(taskRoots.has(realRepoA)).toBe(true);
+      expect(taskRoots.has(realRepoB)).toBe(true);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupA();
+      await cleanupB();
+    }
+  }, 15000);
 
   it("get_health / start_run expose soft-max capacity (AE5; not exclusive inFlight)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cap-"));
@@ -378,6 +503,20 @@ describe("MCP tools and HTTP inline task", () => {
       expect(overCap.payload.activeCount).toBe(1);
       expect(overCap.payload.maxConcurrent).toBe(1);
       expect(overCap.payload.activeRunIds).toEqual([holderId]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("get_health includes version matching PACKAGE_VERSION", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-ver-"));
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
+    try {
+      const health = await mcpCall(base, "get_health");
+      expect(health.isError).toBe(false);
+      expect(health.payload.version).toBe(PACKAGE_VERSION);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

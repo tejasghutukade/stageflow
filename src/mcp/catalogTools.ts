@@ -1,15 +1,38 @@
+import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
-import { browseCatalog } from "../config/browseCatalog.js";
+import {
+  browseCatalog,
+  type PipelineListing,
+  type TaskListing,
+} from "../config/browseCatalog.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
-import { validateCatalog } from "../config/validateCatalog.js";
+import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
 import { imageResult, textResult } from "./toolResults.js";
+
+/**
+ * Every project a host serving a global store has ever recorded a run for,
+ * plus this host's own launch directory (always included so a project with
+ * zero runs yet still sees its own catalog).
+ */
+async function catalogRootsFor(deps: McpToolDeps): Promise<string[]> {
+  const known = await deps.store.listProjectRoots();
+  return [...new Set([...known, deps.cwd])];
+}
+
+/** Resolve which project a given catalog path (pipeline/task) belongs to. */
+function projectRootForPath(deps: McpToolDeps, catalogPath: string): string {
+  const absDir = path.dirname(path.resolve(deps.cwd, catalogPath));
+  return findProjectRoot(absDir) ?? deps.cwd;
+}
 
 const taskFileSchema = z.object({
   id: z.string(),
@@ -38,24 +61,48 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
   server.registerTool(
     "list_pipelines",
     {
-      description: "List manifest-declared pipeline paths from the project catalog",
+      description:
+        "List manifest-declared pipeline paths across every project this host knows about (this host's own project plus any project a run has ever been recorded for). Each entry is tagged with project_root. A project with no runs yet won't appear until its first run exists.",
       inputSchema: z.object({}),
     },
     async () => {
-      const catalog = await browseCatalog(cwd);
-      return textResult({ pipelines: catalog.pipelines });
+      const roots = await catalogRootsFor(deps);
+      const pipelines: Array<PipelineListing & { project_root: string }> = [];
+      for (const root of roots) {
+        try {
+          const catalog = await browseCatalog(root);
+          for (const p of catalog.pipelines) {
+            pipelines.push({ ...p, project_root: root });
+          }
+        } catch {
+          // stale/unreadable project root recorded on an old run; skip it
+        }
+      }
+      return textResult({ pipelines });
     },
   );
 
   server.registerTool(
     "list_tasks",
     {
-      description: "List manifest-declared task paths from the project catalog",
+      description:
+        "List manifest-declared task paths across every project this host knows about (this host's own project plus any project a run has ever been recorded for). Each entry is tagged with project_root. A project with no runs yet won't appear until its first run exists.",
       inputSchema: z.object({}),
     },
     async () => {
-      const catalog = await browseCatalog(cwd);
-      return textResult({ tasks: catalog.tasks });
+      const roots = await catalogRootsFor(deps);
+      const tasks: Array<TaskListing & { project_root: string }> = [];
+      for (const root of roots) {
+        try {
+          const catalog = await browseCatalog(root);
+          for (const t of catalog.tasks) {
+            tasks.push({ ...t, project_root: root });
+          }
+        } catch {
+          // stale/unreadable project root recorded on an old run; skip it
+        }
+      }
+      return textResult({ tasks });
     },
   );
 
@@ -104,10 +151,10 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_health",
     {
       description:
-        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
+        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, version. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
       inputSchema: z.object({}),
     },
-    async () => textResult(manager.getHealth()),
+    async () => textResult({ ...manager.getHealth(), version: PACKAGE_VERSION }),
   );
 
   server.registerTool(
@@ -215,11 +262,39 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         let scope: "full" | "pipeline" | "task" = "full";
         if (pipeline !== undefined && pipeline.trim()) scope = "pipeline";
         else if (task !== undefined && task.trim()) scope = "task";
+
+        if (scope === "full") {
+          const roots = await catalogRootsFor(deps);
+          const results: ValidationResult[] = [];
+          for (const root of roots) {
+            try {
+              results.push(
+                await validateCatalog({ cwd: root, scope: "full", strict: strict ?? false }),
+              );
+            } catch {
+              // stale/unreadable project root recorded on an old run; skip it
+            }
+          }
+          const merged: ValidationResult = {
+            scope: "full",
+            ok: results.every((r) => r.ok),
+            summary: {
+              errors: results.reduce((n, r) => n + r.summary.errors, 0),
+              warnings: results.reduce((n, r) => n + r.summary.warnings, 0),
+            },
+            findings: results.flatMap((r) => r.findings),
+          };
+          return textResult(merged);
+        }
+
+        const target = scope === "pipeline" ? pipeline!.trim() : task!.trim();
+        const projectRoot = projectRootForPath(deps, target);
         const result = await validateCatalog({
-          cwd,
+          cwd: projectRoot,
           scope,
-          ...(scope === "pipeline" ? { pipeline: pipeline!.trim() } : {}),
-          ...(scope === "task" ? { task: task!.trim() } : {}),
+          projectRoot,
+          ...(scope === "pipeline" ? { pipeline: target } : {}),
+          ...(scope === "task" ? { task: target } : {}),
           strict: strict ?? false,
         });
         return textResult(result);
@@ -244,7 +319,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({ error: "pipeline is required", status: 400 }, true);
       }
       try {
-        const loaded = await loadPipeline(pipeline.trim(), { cwd });
+        const loaded = await loadPipeline(pipeline.trim(), {
+          cwd: projectRootForPath(deps, pipeline.trim()),
+        });
         return textResult(describePipeline(loaded));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

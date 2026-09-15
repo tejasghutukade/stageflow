@@ -1,19 +1,30 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resolveGlobalOnlyAgentPort } from "../agent/resolveAgentPort.js";
 import { projectRun } from "../projection/projectRun.js";
 import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
 import { projectWaitingGates } from "../mcp/waitingGates.js";
-import { resolveOperatorCatalog } from "./operatorCatalog.js";
 import { completeCliRun } from "./runCommand.js";
 import { reportCliRun, type CliRunReportIo } from "./runOutput.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
-import { RunManager } from "../runtime/runManager.js";
-import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
-import { DEFAULT_PORT } from "../server/createHttpHost.js";
+import {
+  ensureGlobalService,
+  hostBaseUrl,
+  type EnsureGlobalServiceResult,
+} from "../server/ensureGlobalService.js";
 import { mapRetryStageFailure } from "../server/operatorResults.js";
+import {
+  httpAbandonStage,
+  httpDecideFeedbackLoop,
+  httpDeliverAnswer,
+  httpRecoverManualStageUntilStop,
+  httpRerun,
+  httpResumeTimedOutStage,
+  httpRetryStageUntilStop,
+  httpStopManualRecovery,
+} from "./hostClient.js";
 import {
   AskOperatorError,
   parseAskOperatorAnswer,
@@ -37,8 +48,6 @@ export type RunsCommandIo = {
   log: (line: string) => void;
   error: (line: string) => void;
 };
-
-export type HostProbeResult = "up" | "down";
 
 const defaultIo: RunsCommandIo = {
   log: (line) => console.log(line),
@@ -279,27 +288,6 @@ function resolveRunIdFromFile(fromPath: string, cwd: string): string {
   return runId;
 }
 
-function hostBaseUrl(): string {
-  return `http://127.0.0.1:${DEFAULT_PORT}`;
-}
-
-export async function defaultProbeHost(): Promise<HostProbeResult> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 1500);
-  try {
-    const res = await fetch(`${hostBaseUrl()}/api/health`, {
-      signal: ac.signal,
-    });
-    if (res.status !== 200) return "down";
-    JSON.parse(await res.text());
-    return "up";
-  } catch {
-    return "down";
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function printJson(io: RunsCommandIo, payload: unknown): void {
   io.log(JSON.stringify(payload, null, 2));
 }
@@ -334,31 +322,37 @@ async function resolveShowWaitRunId(
   return parsed.runId;
 }
 
+const MUTATING_SUBCOMMANDS = new Set([
+  "answer",
+  "feedback-decide",
+  "retry",
+  "resume",
+  "recover",
+  "abandon",
+  "rerun",
+]);
+
 export async function runRunsCommand(
   args: string[],
   options: {
     cwd?: string;
-    projectRoot?: string;
-    isGitProject?: boolean;
     io?: Partial<RunsCommandIo>;
     store?: RunStore;
-    probeHost?: () => Promise<HostProbeResult>;
     stdinIsTTY?: boolean;
     readStdin?: () => string;
     waitSignal?: AbortSignal;
     env?: NodeJS.ProcessEnv;
-    createManager?: (store: RunStore) => RunManager;
+    hostBaseUrl?: string;
+    ensureService?: () => Promise<EnsureGlobalServiceResult>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
-  const isGitProject = options.isGitProject ?? false;
   const out: RunsCommandIo = { ...defaultIo, ...options.io };
-  const env = options.env ?? process.env;
   const stdinIsTTY = options.stdinIsTTY ?? process.stdin.isTTY === true;
   const readStdin =
     options.readStdin ?? (() => readFileSync(0, "utf8"));
-  const probeHost = options.probeHost ?? defaultProbeHost;
+  const base = options.hostBaseUrl ?? hostBaseUrl();
+  const ensureService = options.ensureService ?? (() => ensureGlobalService());
 
   let parsed: ParsedRunsArgs;
   try {
@@ -380,44 +374,24 @@ export async function runRunsCommand(
   let resolvedStore: RunStore | undefined = options.store;
   const getStore = (): RunStore => {
     if (resolvedStore === undefined) {
-      resolvedStore = createRunStore({ rootDir: projectRoot });
+      resolvedStore = createRunStore({ rootDir: globalStageflowHome() });
     }
     return resolvedStore;
   };
 
   const mutatingIo: CliRunReportIo = out;
 
-  const agent = await resolveGlobalOnlyAgentPort(projectRoot);
-
-  const buildManager = (): RunManager => {
-    const store = getStore();
-    if (options.createManager) return options.createManager(store);
-    const operatorCatalog = resolveOperatorCatalog({
-      flags: {},
-      env,
-      defaultCwd: cwd,
-    });
-    return new RunManager({
-      agent,
-      store,
-      cwd,
-      projectRoot,
-      isGitProject,
-      operatorCatalog,
-      executionMode: readStageExecutionMode(env, "process"),
-    });
-  };
-
-  const guardHost = async (): Promise<number | undefined> => {
-    const status = await probeHost();
-    if (status === "up") {
-      out.error(
-        `A Stageflow host is already running at ${hostBaseUrl()}. Use the operator console or MCP instead of mutating the store from the CLI.`,
-      );
+  if (MUTATING_SUBCOMMANDS.has(parsed.subcommand)) {
+    const ensured = await ensureService();
+    if (!ensured.ok) {
+      if (parsed.json) {
+        printJson(out, { error: ensured.message, reason: ensured.reason });
+      } else {
+        out.error(ensured.message);
+      }
       return 1;
     }
-    return undefined;
-  };
+  }
 
   switch (parsed.subcommand) {
     case "list": {
@@ -586,8 +560,6 @@ export async function runRunsCommand(
     }
 
     case "answer": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
@@ -638,11 +610,11 @@ export async function runRunsCommand(
         out.error(message);
         return 1;
       }
-      const manager = buildManager();
-      const result = await manager.deliverAnswer(
+      const result = await httpDeliverAnswer(
+        base,
         parsed.runId,
         parsed.stageId,
-        answer,
+        parsedJson,
       );
       if (!result.ok) {
         const payload: Record<string, unknown> = { error: result.reason };
@@ -663,8 +635,6 @@ export async function runRunsCommand(
     }
 
     case "feedback-decide": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
@@ -688,8 +658,8 @@ export async function runRunsCommand(
         }
         return 1;
       }
-      const manager = buildManager();
-      const result = await manager.decideFeedbackLoop(
+      const result = await httpDecideFeedbackLoop(
+        base,
         parsed.runId,
         parsed.stageId,
         {
@@ -721,13 +691,11 @@ export async function runRunsCommand(
     }
 
     case "retry": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
-      const result = await manager.retryStageUntilStop(
+      const result = await httpRetryStageUntilStop(
+        base,
         parsed.runId,
         parsed.stageId,
       );
@@ -749,13 +717,11 @@ export async function runRunsCommand(
     }
 
     case "resume": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
-      const result = await manager.resumeTimedOutStage(
+      const result = await httpResumeTimedOutStage(
+        base,
         parsed.runId,
         parsed.stageId,
       );
@@ -784,17 +750,15 @@ export async function runRunsCommand(
     }
 
     case "recover": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
       if (parsed.stop) {
         if (parsed.guidance !== undefined) {
           return usageError(out, "--guidance cannot be used with --stop");
         }
-        const result = await manager.stopManualRecovery(
+        const result = await httpStopManualRecovery(
+          base,
           parsed.runId,
           parsed.stageId,
         );
@@ -813,7 +777,8 @@ export async function runRunsCommand(
         }
         return 0;
       }
-      const result = await manager.recoverManualStageUntilStop(
+      const result = await httpRecoverManualStageUntilStop(
+        base,
         parsed.runId,
         parsed.stageId,
         parsed.guidance,
@@ -833,13 +798,10 @@ export async function runRunsCommand(
     }
 
     case "abandon": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId || !parsed.stageId) {
         return usageError(out, "Missing --run and/or --stage");
       }
-      const manager = buildManager();
-      const result = await manager.abandonStage(parsed.runId, parsed.stageId);
+      const result = await httpAbandonStage(base, parsed.runId, parsed.stageId);
       if (!result.ok) {
         const payload: Record<string, unknown> = { error: result.reason };
         if (result.status !== undefined) payload.status = result.status;
@@ -863,13 +825,10 @@ export async function runRunsCommand(
     }
 
     case "rerun": {
-      const blocked = await guardHost();
-      if (blocked !== undefined) return blocked;
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
-      const manager = buildManager();
-      const started = await manager.rerun(parsed.runId);
+      const started = await httpRerun(base, parsed.runId);
       if (!started.ok) {
         return reportCliRun(
           { kind: "start-failure", started },

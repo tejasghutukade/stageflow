@@ -76,7 +76,6 @@ export async function reconstructAndContinue(
   ctx: PreparedResumeContext,
 ): Promise<{ ok: boolean; reason?: string }> {
   const { runId, stageId, opaqueAnswer, agent, store, cwd } = ctx;
-  const factoryCwd = ctx.factoryCwd ?? cwd;
 
   try {
     const latestExecution = await store.getLatestStageExecution(runId, stageId);
@@ -84,6 +83,7 @@ export async function reconstructAndContinue(
     const attemptOpt = attemptCtx.eventOptions();
 
     const { meta, task, loaded } = await loadRunContext(store, runId, cwd);
+    const factoryCwd = meta.project_root ?? ctx.factoryCwd ?? cwd;
     const definitionId = definitionIdForInstance(meta.pipeline_dag, stageId);
     const stageIndex = loaded.stages.findIndex((s) => s.id === definitionId);
     if (stageIndex < 0) {
@@ -203,7 +203,7 @@ export async function reconstructAndContinue(
         run: { runId, workspaceDir },
         agent,
         store,
-        cwd,
+        cwd: factoryCwd,
         projectRoot: factoryCwd,
         checkoutRoot,
         hitl: ctx.hitl,

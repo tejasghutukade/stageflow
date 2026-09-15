@@ -341,8 +341,6 @@ async function main(argv: string[]): Promise<number> {
     if (parsed.command === "run") {
       return runRunCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
-        projectRoot: ctx.projectRoot,
-        isGitProject: ctx.isGitProject,
       });
     }
 
@@ -370,8 +368,6 @@ async function main(argv: string[]): Promise<number> {
     if (parsed.command === "runs") {
       return runRunsCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
-        projectRoot: ctx.projectRoot,
-        isGitProject: ctx.isGitProject,
       });
     }
 
@@ -386,7 +382,7 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
-    const store = createRunStore({ rootDir: ctx.projectRoot });
+    const store = createRunStore({ rootDir: ctx.globalHome });
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {

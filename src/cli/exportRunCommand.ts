@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { projectRun } from "../projection/projectRun.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { RunStatus } from "../runstore/port.js";
 import { isInsideDir } from "../runstore/workspaceLayout.js";
@@ -120,7 +121,6 @@ export async function runExportRunCommand(
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
   const out: ExportRunCommandIo = { ...defaultIo, ...options.io };
 
   let parsed: ParsedExportRunArgs;
@@ -155,7 +155,7 @@ export async function runExportRunCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
 
   try {
     const detail = await store.readRun(runId);

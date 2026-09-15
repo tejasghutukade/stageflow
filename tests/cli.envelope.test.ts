@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import {
 import { buildHandoffDeliverable } from "../src/cli/handoffFormat.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,7 +41,7 @@ async function seedRun(
     skippedStages?: string[];
   } = {},
 ): Promise<{ runId: string; runDir: string }> {
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const stageIds = options.stageIds ?? ["detect-changes", "author-diagrams"];
   const created = await store.createRun({
     pipelineId: "archify-on-pr",
@@ -131,6 +132,20 @@ describe("buildHandoffDeliverable", () => {
 });
 
 describe("runEnvelopeCommand", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-env-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("outputs valid JSON envelope for a succeeded stage", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-env-get-"));
     const envelope = okEnvelope("detect ok", {

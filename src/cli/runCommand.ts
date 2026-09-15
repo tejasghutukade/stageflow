@@ -1,16 +1,17 @@
-import { resolveGlobalOnlyAgentPort } from "../agent/resolveAgentPort.js";
-import { createRunStore } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
-import { RunManager, type StartRunResult } from "../runtime/runManager.js";
-import { readStageExecutionMode } from "../runtime/stageConcurrency.js";
+import type { StartRunResult } from "../runtime/runManager.js";
+import {
+  ensureGlobalService,
+  hostBaseUrl,
+  type EnsureGlobalServiceResult,
+} from "../server/ensureGlobalService.js";
+import { httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
 import {
   reportCliRun,
   type CliRunReportIo,
 } from "./runOutput.js";
 import { resolveCiIdentity } from "./ciIdentity.js";
-import { resolveOperatorCatalog } from "./operatorCatalog.js";
-import type { OperatorCatalog } from "../runtime/stageAttemptBootstrap.js";
 import {
   exitCodeForValidation,
   formatValidationHuman,
@@ -164,22 +165,25 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
 
 function defaultStartRun(
   cwd: string,
-  projectRoot: string,
-  isGitProject: boolean,
-  operatorCatalog: OperatorCatalog,
+  base: string,
+  ensureService: () => Promise<EnsureGlobalServiceResult>,
 ): StartRunFn {
   return async (input) => {
-    const store = createRunStore({ rootDir: projectRoot });
-    const manager = new RunManager({
-      agent: await resolveGlobalOnlyAgentPort(projectRoot),
-      store,
-      cwd,
-      projectRoot,
-      isGitProject,
-      operatorCatalog,
-      executionMode: readStageExecutionMode(process.env, "process"),
+    const ensured = await ensureService();
+    if (!ensured.ok) {
+      return { ok: false, reason: ensured.message, status: 503 };
+    }
+    return httpStartRun(base, {
+      pipeline: resolveAbsolute(cwd, input.pipeline),
+      task: resolveAbsolute(cwd, input.task),
+      ...(input.checkoutOverride !== undefined
+        ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
+        : {}),
+      ...(input.skipGates !== undefined ? { skipGates: input.skipGates } : {}),
+      ...(input.gitSha !== undefined ? { gitSha: input.gitSha } : {}),
+      ...(input.ciPrUrl !== undefined ? { ciPrUrl: input.ciPrUrl } : {}),
+      ...(input.ciJobUrl !== undefined ? { ciJobUrl: input.ciJobUrl } : {}),
     });
-    return manager.startRun(input);
   };
 }
 
@@ -188,7 +192,7 @@ export async function completeCliRun(
   io: RunCommandIo = defaultIo,
   options: {
     json?: boolean;
-    store?: RunStore;
+    store?: Pick<RunStore, "readRun">;
     includeStages?: boolean;
   } = {},
 ): Promise<number> {
@@ -208,18 +212,17 @@ export async function runRunCommand(
   args: string[],
   options: {
     cwd?: string;
-    projectRoot?: string;
-    isGitProject?: boolean;
     io?: Partial<RunCommandIo>;
     startRun?: StartRunFn;
-    store?: RunStore;
+    store?: Pick<RunStore, "readRun">;
     env?: Record<string, string | undefined>;
+    hostBaseUrl?: string;
+    ensureService?: () => Promise<EnsureGlobalServiceResult>;
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
-  const isGitProject = options.isGitProject ?? false;
   const out: RunCommandIo = { ...defaultIo, ...options.io };
+  const base = options.hostBaseUrl ?? hostBaseUrl();
 
   let parsed: ParsedRunArgs;
   try {
@@ -247,17 +250,15 @@ export async function runRunCommand(
     return 1;
   }
 
-  const operatorCatalog = resolveOperatorCatalog({
-    flags: {
-      operatorCwd: parsed.operatorCwd,
-      operatorAgentDir: parsed.operatorAgentDir,
-    },
-    env: options.env ?? process.env,
-    defaultCwd: cwd,
-  });
+  if (parsed.operatorCwd !== undefined || parsed.operatorAgentDir !== undefined) {
+    out.error(
+      "warning: --operator-cwd/--operator-agent-dir have no effect on `sf run` now that pipelines execute in the shared global Stageflow service; set STAGEFLOW_OPERATOR_CWD/STAGEFLOW_OPERATOR_AGENT_DIR before that service first starts instead.",
+    );
+  }
+
   const startRun =
     options.startRun ??
-    defaultStartRun(cwd, projectRoot, isGitProject, operatorCatalog);
+    defaultStartRun(cwd, base, options.ensureService ?? (() => ensureGlobalService()));
   const identity = resolveCiIdentity({
     flags: {
       gitSha: parsed.gitSha,
@@ -268,10 +269,7 @@ export async function runRunCommand(
   });
 
   const store =
-    options.store ??
-    (parsed.includeStages
-      ? createRunStore({ rootDir: projectRoot })
-      : undefined);
+    options.store ?? (parsed.includeStages ? httpStoreReader(base) : undefined);
 
   try {
     const started = await startRun({

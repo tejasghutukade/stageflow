@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -9,6 +9,7 @@ import {
   runArtifactCommand,
 } from "../src/cli/artifactCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -26,7 +27,7 @@ async function seedArtifact(
   relPath: string,
   contents: string,
 ): Promise<{ runId: string; workspaceDir: string }> {
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const created = await store.createRun({
     pipelineId: "docs-only",
     taskYaml: "id: a\ngoal: g\n",
@@ -39,6 +40,20 @@ async function seedArtifact(
 }
 
 describe("runArtifactCommand", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-art-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("prints artifact contents to stdout", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-art-read-"));
     const rel = path.join("stages", "s1", "out.txt");

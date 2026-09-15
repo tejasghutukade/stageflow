@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { spawnSync } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateCatalog } from "../src/config/validateCatalog.js";
@@ -8,6 +10,7 @@ import {
   formatValidationHuman,
   formatValidationJson,
 } from "../src/cli/validateOutput.js";
+import { spawnTestGlobalService, type TestGlobalService } from "./helpers/testGlobalService.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -16,14 +19,35 @@ const fixtures = path.join(root, "tests", "fixtures");
 const brokenPipeline = path.join(fixtures, "manifest-catalog", "pipelines", "broken.pipeline.yaml");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
 
-function runCli(args: string[], cwd = fixtures) {
-  return spawnSync(process.execPath, [tsxCli, cli, ...args], {
-    cwd,
-    encoding: "utf8",
-  });
-}
-
 describe("sf run validation gate", { timeout: 30_000 }, () => {
+  // `sf run` now talks to the global Stageflow service over HTTP, so these
+  // spawned-CLI tests need a real (but isolated, ephemeral-port) service
+  // already running as its own OS process — otherwise the CLI would try to
+  // auto-start a real daemon against the developer's actual ~/.stageflow
+  // and port 3847, and an in-process test server would deadlock against
+  // spawnSync below (spawnSync freezes this process's event loop, so it
+  // could never service the HTTP request the spawned CLI is waiting on).
+  let service: TestGlobalService;
+  let isolatedHome: string;
+
+  beforeAll(async () => {
+    isolatedHome = await mkdtemp(path.join(tmpdir(), "sf-validation-gate-home-"));
+    service = await spawnTestGlobalService({ cwd: fixtures, home: isolatedHome });
+  });
+
+  afterAll(async () => {
+    await service.stop();
+    await rm(isolatedHome, { recursive: true, force: true });
+  });
+
+  function runCli(args: string[], cwd = fixtures) {
+    return spawnSync(process.execPath, [tsxCli, cli, ...args], {
+      cwd,
+      encoding: "utf8",
+      env: service.env,
+    });
+  }
+
   it("AE-S3-1: broken pipeline exits 1 with formatted findings and no success line", () => {
     const result = runCli([
       "run",

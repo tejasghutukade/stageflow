@@ -1,5 +1,7 @@
+import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { AbandonStageResult } from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
@@ -13,7 +15,7 @@ import { projectWaitingGates } from "./waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 
 export function registerControlTools(server: McpServer, deps: McpToolDeps): void {
-  const { manager, store } = deps;
+  const { manager, store, cwd } = deps;
 
   server.registerTool(
     "list_waiting",
@@ -27,6 +29,31 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId }) => {
       const waiting = await projectWaitingGates(store, { runId });
       return textResult({ waiting });
+    },
+  );
+
+  server.registerTool(
+    "get_waiting_summary",
+    {
+      description:
+        "Lightweight count and identity of stages waiting for operator input — no pending_prompt, waiting_artifacts, or waiting_questions (use list_waiting for full detail). Optional runId scopes to one run; optional path scopes to one project (derived via findProjectRoot, same rule as elsewhere); omitting both spans every project the store knows about.",
+      inputSchema: z.object({
+        runId: z.string().optional(),
+        path: z.string().optional(),
+      }),
+    },
+    async ({ runId, path: scopePath }) => {
+      const projectRoot =
+        runId === undefined && scopePath !== undefined
+          ? (findProjectRoot(path.resolve(cwd, scopePath)) ?? path.resolve(cwd, scopePath))
+          : undefined;
+      const waiting = await projectWaitingGates(store, { runId, projectRoot });
+      const runs = waiting.map((item) => ({
+        runId: item.runId as string,
+        stageId: item.stageId as string,
+        ...(item.waiting_kind !== undefined ? { kind: item.waiting_kind as string } : {}),
+      }));
+      return textResult({ count: runs.length, runs });
     },
   );
 
