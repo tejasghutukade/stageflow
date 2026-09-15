@@ -97,6 +97,7 @@ export async function bootstrapStageflowHost(
       cwd,
       runChangeBus,
       providerAuthContext: options.providerAuthContext,
+      projectRoot: rootDir,
     },
     { mcpStateless },
   );

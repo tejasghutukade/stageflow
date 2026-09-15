@@ -71,6 +71,19 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
+    "list_models",
+    {
+      description:
+        "List catalog model ids from the project catalog (same source as GET /api/models)",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const catalog = await browseCatalog(cwd);
+      return textResult({ models: catalog.models });
+    },
+  );
+
+  server.registerTool(
     "list_runs",
     {
       description:

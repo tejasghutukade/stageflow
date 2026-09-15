@@ -8,6 +8,7 @@ export type McpToolDeps = {
   store: RunStore;
   cwd: string;
   providerAuthContext?: ProviderAuthContext;
+  projectRoot?: string;
 };
 
 export type McpHttpDeps = McpToolDeps & {

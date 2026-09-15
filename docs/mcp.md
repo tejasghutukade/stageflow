@@ -18,7 +18,7 @@ http://127.0.0.1:3847/mcp
 
 The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-Stage agents consuming author-declared MCP is a different surface. Settings can inspect git-root `.mcp.json` names and Check connect without a run; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) plus Settings.
+Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe git-root `.mcp.json` servers the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
 
 ## Sessions (how MCP works)
 
@@ -147,6 +147,58 @@ List manifest-declared task paths from the project catalog.
   ]
 }
 ```
+
+### `list_models`
+
+List catalog model ids from the same browse source as `GET /api/models`.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "models": [
+    "anthropic/claude-sonnet-4-5",
+    "cursor/auto",
+    "cursor/composer-2-5"
+  ]
+}
+```
+
+There is no model-write, filter, or provider-login tool.
+
+### `list_project_mcp`
+
+List git-root `.mcp.json` servers as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "status": "ok",
+  "servers": [
+    { "name": "local", "transport": "stdio" },
+    { "name": "github", "transport": "http" }
+  ]
+}
+```
+
+`status` is `ok`, `missing_catalog`, or `invalid_config`. A reserved `stageflow` entry fails the whole catalog (`invalid_config`, empty `servers`), matching HTTP.
+
+Inspect is not attach. Stage MCP YAML `mcp:` still allowlists what a stage receives — see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+
+### `probe_project_mcp`
+
+Probe one named git-root `.mcp.json` server with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
+
+**Input:** `{ "name": "github" }`
+
+**Output:** `{ "name": "github", "status": "connected" }`
+
+`status` is one of `connected`, `needs_auth`, `connect_failed`, `unresolved_var`, `invalid_config`, `missing_catalog`, `cancelled`. Helper statuses stay in the success payload (`isError` only if the tool itself fails).
 
 ### `list_runs`
 
@@ -605,8 +657,8 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
-- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
-- No provider login/logout/OAuth, settings-write, or catalog-write MCP tools (`list_providers` is read-only inspect)
+- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
+- No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)

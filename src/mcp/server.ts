@@ -67,6 +67,7 @@ function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
     ...(deps.providerAuthContext !== undefined
       ? { providerAuthContext: deps.providerAuthContext }
       : {}),
+    ...(deps.projectRoot !== undefined ? { projectRoot: deps.projectRoot } : {}),
   };
 }
 
