@@ -1,6 +1,11 @@
 import path from "node:path";
-import type { LoadedPipeline } from "../types/pipeline.js";
-import { loadPipelineOutcome, resolvePipelinePath } from "./loadPipeline.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import {
+  INLINE_PIPELINE_PATH,
+  loadPipelineFromObjectOutcome,
+  loadPipelineOutcome,
+  resolvePipelinePath,
+} from "./loadPipeline.js";
 import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
@@ -460,30 +465,35 @@ type PipelineValidationCoreResult =
   | { ok: false; findings: ValidationFinding[] };
 
 async function runPipelineValidation(
-  nameOrPath: string,
+  nameOrPath: string | InlinePipelineDefinition,
   options: { cwd: string; projectRoot?: string; validateStages: boolean },
 ): Promise<PipelineValidationCoreResult> {
   const { cwd, validateStages } = options;
   const projectRoot = options.projectRoot ?? cwd;
 
   let pipelinePath: string;
-  try {
-    pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
-        {
-          code: "pipeline.load_error",
-          message,
-          category: "pipeline",
-        },
-      ]),
-    };
+  let outcome: Awaited<ReturnType<typeof loadPipelineOutcome>>;
+  if (typeof nameOrPath === "string") {
+    try {
+      pipelinePath = await resolvePipelinePath(nameOrPath, cwd);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        findings: findingsFromLoadIssues(cwd, path.resolve(cwd, nameOrPath), [
+          {
+            code: "pipeline.load_error",
+            message,
+            category: "pipeline",
+          },
+        ]),
+      };
+    }
+    outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
+  } else {
+    pipelinePath = path.resolve(cwd, INLINE_PIPELINE_PATH);
+    outcome = await loadPipelineFromObjectOutcome(nameOrPath, { cwd, projectRoot });
   }
-
-  const outcome = await loadPipelineOutcome(pipelinePath, { cwd, projectRoot });
   const findings: ValidationFinding[] = [];
 
   if (!outcome.ok) {
@@ -543,7 +553,7 @@ export type LoadPipelineValidatedResult =
   | { ok: false; findings: ValidationFinding[] };
 
 export async function loadPipelineValidated(
-  nameOrPath: string,
+  nameOrPath: string | InlinePipelineDefinition,
   options: { cwd?: string; projectRoot?: string; validateStages?: boolean } = {},
 ): Promise<LoadPipelineValidatedResult> {
   const cwd = options.cwd ?? process.cwd();

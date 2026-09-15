@@ -11,7 +11,7 @@ import type { RunStore } from "../runstore/port.js";
 import { resolveAndValidateCheckout } from "./stageRoots.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageHitlController } from "./stageHitl.js";
-import type { LoadedPipeline } from "../types/pipeline.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
@@ -85,7 +85,7 @@ async function preparePipeline(options: {
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;
-  pipeline: string;
+  pipeline: string | InlinePipelineDefinition;
   cwd: string;
   projectRoot?: string;
   checkoutOverride?: string;
@@ -142,7 +142,10 @@ async function preparePipeline(options: {
     options.cwd,
   );
 
-  const pipelinePath = normalizeCatalogPath(loaded.pipelinePath);
+  const pipelinePath =
+    typeof options.pipeline === "string"
+      ? normalizeCatalogPath(loaded.pipelinePath)
+      : undefined;
   const taskPath = options.taskPath
     ? normalizeCatalogPath(path.resolve(options.cwd, options.taskPath))
     : undefined;
@@ -235,7 +238,7 @@ export async function runPipeline(options: {
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;
-  pipeline: string;
+  pipeline: string | InlinePipelineDefinition;
   cwd?: string;
   projectRoot?: string;
   checkoutOverride?: string;
@@ -276,7 +279,7 @@ export async function startPipeline(options: {
   store: RunStore;
   taskPath?: string;
   taskYaml?: string;
-  pipeline: string;
+  pipeline: string | InlinePipelineDefinition;
   cwd?: string;
   projectRoot?: string;
   checkoutOverride?: string;

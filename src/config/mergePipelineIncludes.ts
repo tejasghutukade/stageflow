@@ -1,6 +1,7 @@
 import path from "node:path";
 import { parseAgentField } from "../agent/agentBackend.js";
 import type { PayloadSchemaMap } from "../envelope/payloadSchema.js";
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import {
   allowLegacyYamlAuthoring,
@@ -261,6 +262,100 @@ export async function mergePipelineStages(
     ...(model !== undefined ? { model } : {}),
     ...(schemas !== undefined ? { schemas } : {}),
     warnings,
+  });
+}
+
+/** Synthetic `declaringPath` for stage entries with no backing file. */
+export const INLINE_DECLARING_PATH = "<inline pipeline>";
+
+export async function mergeInlinePipelineStages(
+  raw: InlinePipelineDefinition,
+): Promise<
+  LoadOutcome<{
+    entries: RawMergedEntry[];
+    pipelineId: string;
+    agent?: string;
+    model?: string;
+    schemas?: PayloadSchemaMap;
+    warnings: LoadIssue[];
+  }>
+> {
+  if (typeof raw.id !== "string" || !raw.id) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_shape",
+        message: `Invalid inline pipeline: id is required`,
+        category: "pipeline",
+      },
+    ]);
+  }
+
+  if (!Array.isArray(raw.stages) || raw.stages.length === 0) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_shape",
+        message: `Invalid inline pipeline ${raw.id}: stages must be non-empty`,
+        category: "pipeline",
+        pipelineId: raw.id,
+      },
+    ]);
+  }
+
+  const pipelineId = raw.id;
+
+  const agentField = parseAgentField(raw.agent);
+  if (!agentField.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_agent",
+        message: `Invalid inline pipeline ${pipelineId}: ${agentField.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const agent = agentField.value;
+
+  const modelField = parseModelField(raw.model);
+  if (!modelField.ok) {
+    return loadFailure([
+      {
+        code: "pipeline.invalid_model",
+        message: `Invalid inline pipeline ${pipelineId}: ${modelField.message}`,
+        category: "pipeline",
+        pipelineId,
+      },
+    ]);
+  }
+  const model = modelField.value;
+
+  const schemasOutcome = parsePipelineSchemas(raw.schemas, "<inline pipeline>", pipelineId);
+  if (!schemasOutcome.ok) return schemasOutcome;
+  const schemas = schemasOutcome.value;
+
+  const entries: RawMergedEntry[] = [];
+  for (let index = 0; index < raw.stages.length; index++) {
+    const entry = raw.stages[index];
+    if (isPlainObject(entry) && typeof entry.uses === "string") {
+      return loadFailure([
+        {
+          code: "pipeline.invalid_shape",
+          message: `Invalid inline pipeline ${pipelineId}: stage entry at index ${index} has "uses" — inline pipelines cannot reference external stage files, all stage bodies must be inline`,
+          category: "pipeline",
+          pipelineId,
+        },
+      ]);
+    }
+    entries.push({ raw: entry, declaringPath: INLINE_DECLARING_PATH });
+  }
+
+  return loadSuccess({
+    entries,
+    pipelineId,
+    ...(agent !== undefined ? { agent } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(schemas !== undefined ? { schemas } : {}),
+    warnings: [],
   });
 }
 
