@@ -236,6 +236,35 @@ export function writeMaxConcurrentToFile(
   writeFactorySettings(cwd, { maxConcurrent });
 }
 
+export function readMaxConcurrentFromGlobal(): number | undefined {
+  return parseFactorySettingsFromRaw(
+    readRawSettingsFromFile(globalSettingsFilePath()),
+  ).maxConcurrent;
+}
+
+export function writeMaxConcurrentToGlobal(maxConcurrent: number): void {
+  if (parseSlotCount(maxConcurrent) === undefined) {
+    throw new Error(INVALID_SLOT_COUNT_MESSAGE);
+  }
+  const current = parseFactorySettingsFromRaw(
+    readRawSettingsFromFile(globalSettingsFilePath()),
+  );
+  const next: FactorySettings = { ...current, maxConcurrent };
+  const out: Record<string, unknown> = {};
+  if (next.maxConcurrent !== undefined) {
+    out.maxConcurrent = next.maxConcurrent;
+  }
+  if (next.credentialSource !== undefined) {
+    out.credentialSource = next.credentialSource;
+  }
+  mkdirSync(path.dirname(globalSettingsFilePath()), { recursive: true });
+  writeFileSync(
+    globalSettingsFilePath(),
+    `${JSON.stringify(out, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 export function readCredentialSourceFromFile(
   cwd: string,
 ): CredentialSource | undefined {

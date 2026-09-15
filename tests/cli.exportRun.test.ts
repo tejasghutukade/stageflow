@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +10,7 @@ import {
 } from "../src/cli/exportRunCommand.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { createRunStore } from "../src/runstore/createStore.js";
+import { globalStageflowHome } from "../src/project/globalHome.js";
 import type { RunStatus } from "../src/runstore/port.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 
@@ -33,7 +34,7 @@ async function seedRun(
     completeStages?: boolean;
   } = {},
 ): Promise<{ runId: string }> {
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
   const stageIds = options.stageIds ?? ["stage-a", "stage-b"];
   const completeStages = options.completeStages ?? true;
   const created = await store.createRun({
@@ -68,6 +69,20 @@ async function seedRun(
 }
 
 describe("runExportRunCommand", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-export-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("exports succeeded run JSON with run_id, status, and stages", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-run-"));
     const { runId } = await seedRun(projectRoot);
@@ -178,7 +193,7 @@ describe("runExportRunCommand", () => {
 
   it("rejects created runs", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-created-"));
-    const store = createRunStore({ rootDir: projectRoot });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
     const created = await store.createRun({
       pipelineId: "test-pipeline",
       taskYaml: "id: a\ngoal: g\n",

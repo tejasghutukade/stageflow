@@ -32,6 +32,7 @@ import { loadRunContext } from "../src/runtime/resumeReconstruct.js";
 import { startPipeline } from "../src/runtime/pipelineRunner.js";
 import { reconstructAndContinue } from "../src/runtime/resumeReconstruct.js";
 import * as stageRecovery from "../src/runtime/stageRecovery.js";
+import * as credentialBinding from "../src/runtime/credentialBinding.js";
 import {
   readMaxActiveStagesPerRun,
   readStageExecutionMode,
@@ -553,6 +554,57 @@ describe("RunRetryCoordinator.retryStage", () => {
 });
 
 describe("runtime stage retry", () => {
+  it("retryStage resolves credentials against the run's own project_root, not the constructing manager's cwd", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-retry-cred-root-"));
+    const store = createRunStore({ rootDir: root });
+    const elsewhere = await mkdtemp(
+      path.join(tmpdir(), "sf-retry-cred-elsewhere-"),
+    );
+
+    const agent = scriptedFakeAgent([
+      { type: "emit", envelope: okEnvelope("clarify-ok") },
+      { type: "emit", envelope: failEnvelope("design-fail") },
+      { type: "emit", envelope: okEnvelope("design-ok-retry") },
+      { type: "emit", envelope: okEnvelope("plan-ok") },
+    ]);
+
+    const startManager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await startManager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("linear-explicit"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(started.runId);
+      return (
+        detail.stages.find((s) => s.stage_id === "design-doc")?.status ===
+        "failed"
+      );
+    });
+
+    const meta = await store.readRunMeta(started.runId);
+    expect(meta.project_root).toBeDefined();
+
+    const credentialBindingSpy = vi.spyOn(
+      credentialBinding,
+      "resolveCredentialBinding",
+    );
+
+    // Constructed pointed at an unrelated directory, sharing only the store —
+    // proves retryStage uses the run's own stored project_root, not this
+    // manager's own cwd/projectRoot.
+    const elsewhereManager = new RunManager({ agent, store, cwd: elsewhere });
+    const retry = await elsewhereManager.retryStage(started.runId, "design-doc");
+    expect(retry.ok).toBe(true);
+
+    const capturedRoots = credentialBindingSpy.mock.calls.map((call) => call[0]);
+    expect(capturedRoots.length).toBeGreaterThan(0);
+    expect(capturedRoots).toContain(meta.project_root);
+    expect(capturedRoots).not.toContain(elsewhere);
+  });
+
   it("waits for original startRun done before retry when still tracked", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-wait-winddown-"));
     const store = createRunStore({ rootDir: root });

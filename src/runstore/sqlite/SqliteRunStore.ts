@@ -1050,6 +1050,16 @@ export class SqliteRunStore implements RunStore {
     return summaries;
   }
 
+  async listProjectRoots(): Promise<string[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT project_root FROM runs WHERE project_root IS NOT NULL AND project_root != ''`,
+      )
+      .all() as { project_root: string }[];
+    return rows.map((row) => row.project_root);
+  }
+
   async readRun(runId: string): Promise<RunDetail> {
     await this.ready();
     const row = this.getRunRow(runId);

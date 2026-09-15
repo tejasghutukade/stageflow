@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
-import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { linearCompatDagSnapshot } from "../src/runstore/pipelineDagSnapshot.js";
 import { storeRootFor } from "../src/runstore/paths.js";
+import { globalSettingsFilePath } from "../src/runtime/settingsFile.js";
 import { startUiServer } from "../src/server/http.js";
 import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -1953,6 +1954,9 @@ describe("localhost HTTP API", () => {
   });
 
   it("POST /api/settings updates maxConcurrent, persists, and 400s invalid bodies", async () => {
+    const previousHome = process.env.HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-"));
     const { server, base } = await withServer(
       root,
@@ -1979,7 +1983,7 @@ describe("localhost HTTP API", () => {
       expect(health.body.maxConcurrent).toBe(4);
 
       const persisted = JSON.parse(
-        await readFile(path.join(storeRootFor(root), "settings.json"), "utf8"),
+        await readFile(globalSettingsFilePath(), "utf8"),
       ) as { maxConcurrent: number };
       expect(persisted.maxConcurrent).toBe(4);
 
@@ -2001,10 +2005,18 @@ describe("localhost HTTP API", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
     }
   });
 
   it("POST /api/settings lowering the cap does not evict active runs", async () => {
+    const previousHome = process.env.HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-"));
     const agent = scriptedFakeAgent([
       {
@@ -2081,18 +2093,25 @@ describe("localhost HTTP API", () => {
       expect(over.status).toBe(409);
       expect(over.body.code).toBe("busy_capacity");
     } finally {
-      await rm(path.join(storeRootFor(fixtures), "settings.json"), { force: true });
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
     }
   });
 
   it("GET /api/health reads maxConcurrent from settings.json when not injected", async () => {
+    const previousHome = process.env.HOME;
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-home-"));
+    process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-boot-"));
-    await mkdir(storeRootFor(root), { recursive: true });
+    await mkdir(path.dirname(globalSettingsFilePath()), { recursive: true });
     await writeFile(
-      path.join(storeRootFor(root), "settings.json"),
+      globalSettingsFilePath(),
       `${JSON.stringify({ maxConcurrent: 6 }, null, 2)}\n`,
     );
     const { server, base } = await withServer(
@@ -2111,6 +2130,11 @@ describe("localhost HTTP API", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
     }
   });
 

@@ -5,6 +5,7 @@ import {
   isHandoffSkipped,
   type HandoffResult,
 } from "./handoffFormat.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore } from "../runstore/createStore.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -276,7 +277,6 @@ export async function runEnvelopeCommand(
   } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
-  const projectRoot = options.projectRoot ?? cwd;
   const out: EnvelopeCommandIo = { ...defaultIo, ...options.io };
 
   let parsed: ParsedEnvelopeArgs;
@@ -306,7 +306,7 @@ export async function runEnvelopeCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: projectRoot });
+  const store = createRunStore({ rootDir: globalStageflowHome() });
 
   let runContext: RunContext;
   try {

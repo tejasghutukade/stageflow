@@ -10,6 +10,7 @@ import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
+import { alreadyUp, startTestService } from "./helpers/testInProcessService.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -115,7 +116,7 @@ function continueAgent(): AgentPort {
 }
 
 describe("runRunsCommand feedback-decide", () => {
-  it("continue after host-down park returns { ok, effect, loopId }", async () => {
+  it("continue after park returns { ok, effect, loopId }", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-runs-fb-cont-"));
     const store = createRunStore({ rootDir: root });
     const manager = new RunManager({
@@ -138,41 +139,39 @@ describe("runRunsCommand feedback-decide", () => {
     const before = await store.readRun(started.runId);
     const loopId = before.active_feedback_loop!.loop_id;
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      [
-        "feedback-decide",
-        "--run",
-        started.runId,
-        "--stage",
-        "review",
-        "--decision",
-        "continue",
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        createManager: (s) =>
-          new RunManager({
-            agent: continueAgent(),
-            store: s,
-            cwd: fixtures,
-          }),
-        io: cap.io,
-      },
-    );
-    expect(code).toBe(0);
-    expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
-      ok: true,
-      effect: "continued",
-      loopId,
-    });
-    const after = await store.readRun(started.runId);
-    expect(after.status).toBe("succeeded");
-    expect(after.feedback_loops[0]?.loop.state).toBe("continued");
+    const service = await startTestService(store, continueAgent(), fixtures);
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        [
+          "feedback-decide",
+          "--run",
+          started.runId,
+          "--stage",
+          "review",
+          "--decision",
+          "continue",
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+        ok: true,
+        effect: "continued",
+        loopId,
+      });
+      const after = await store.readRun(started.runId);
+      expect(after.status).toBe("succeeded");
+      expect(after.feedback_loops[0]?.loop.state).toBe("continued");
+    } finally {
+      await service.stop();
+    }
   });
 
   it("abandon fails the run", async () => {
@@ -196,40 +195,44 @@ describe("runRunsCommand feedback-decide", () => {
       return detail.active_feedback_loop?.state === "waiting_for_human";
     });
 
-    const cap = captureIo();
-    const code = await runRunsCommand(
-      [
-        "feedback-decide",
-        "--run",
-        started.runId,
-        "--stage",
-        "review",
-        "--decision",
-        "abandon",
-        "--reason",
-        "operator abandoned",
-        "--json",
-      ],
-      {
-        cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "down",
-        io: cap.io,
-      },
-    );
-    expect(code).toBe(0);
-    const payload = JSON.parse(cap.stdout.join("\n")) as {
-      ok: boolean;
-      effect: string;
-    };
-    expect(payload.ok).toBe(true);
-    expect(payload.effect).toBe("abandoned");
-    const after = await store.readRun(started.runId);
-    expect(after.status).toBe("failed");
+    const service = await startTestService(store, scriptedFakeAgent([]), fixtures);
+    try {
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        [
+          "feedback-decide",
+          "--run",
+          started.runId,
+          "--stage",
+          "review",
+          "--decision",
+          "abandon",
+          "--reason",
+          "operator abandoned",
+          "--json",
+        ],
+        {
+          cwd: fixtures,
+          hostBaseUrl: service.baseUrl,
+          ensureService: alreadyUp,
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      const payload = JSON.parse(cap.stdout.join("\n")) as {
+        ok: boolean;
+        effect: string;
+      };
+      expect(payload.ok).toBe(true);
+      expect(payload.effect).toBe("abandoned");
+      const after = await store.readRun(started.runId);
+      expect(after.status).toBe("failed");
+    } finally {
+      await service.stop();
+    }
   });
 
-  it("probeHost up exits 1 without mutating", async () => {
+  it("no service reachable exits 1 without mutating", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-runs-fb-host-"));
     const store = createRunStore({ rootDir: root });
     const manager = new RunManager({
@@ -251,7 +254,6 @@ describe("runRunsCommand feedback-decide", () => {
     });
     const before = await store.readRun(started.runId);
 
-    let constructed = false;
     const cap = captureIo();
     const code = await runRunsCommand(
       [
@@ -266,19 +268,15 @@ describe("runRunsCommand feedback-decide", () => {
       ],
       {
         cwd: fixtures,
-        projectRoot: root,
-        store,
-        probeHost: async () => "up",
-        createManager: () => {
-          constructed = true;
-          throw new Error("must not construct manager when host is up");
-        },
+        ensureService: async () => ({
+          ok: false,
+          reason: "timed_out",
+          message: "Timed out waiting for the global Stageflow service to become healthy.",
+        }),
         io: cap.io,
       },
     );
     expect(code).toBe(1);
-    expect(constructed).toBe(false);
-    expect(cap.stderr.join("\n")).toMatch(/http:\/\/127\.0\.0\.1:3847/);
     const after = await store.readRun(started.runId);
     expect(after.active_feedback_loop?.state).toBe("waiting_for_human");
     expect(after.status).toBe(before.status);
@@ -289,7 +287,7 @@ describe("runRunsCommand feedback-decide", () => {
     const code = await runRunsCommand(
       ["feedback-decide", "--run", "run-x", "--stage", "review"],
       {
-        probeHost: async () => "down",
+        ensureService: alreadyUp,
         io: cap.io,
       },
     );

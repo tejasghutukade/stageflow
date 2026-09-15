@@ -12,6 +12,7 @@ import {
   DEFAULT_PORT,
   type HttpHostEnvelope,
 } from "./createHttpHost.js";
+import { createOperatorRoutes } from "./http.js";
 
 export type McpServerOptions = {
   agent: AgentPort;
@@ -34,19 +35,17 @@ export async function startMcpServer(
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const { manager, store, cwd, agentDir, rootDir } = boot;
+  const providerAuthContext = boot.providerAuthContext;
 
   return createHttpHost({
     boot,
     host,
     port,
-    routes: async ({ method, pathname, res, json, boot: b }) => {
-      if (method === "GET" && pathname === "/api/health") {
-        json(res, 200, b.manager.getHealth());
-        return true;
-      }
-      json(res, 404, { error: "Not found" });
-      return true;
-    },
+    // Headless daemon: same REST API surface as `sf ui` (this is what lets
+    // `sf run`/`sf runs *` talk to an auto-started `sf mcp` over HTTP), just
+    // without serving the console's static UI files.
+    routes: createOperatorRoutes({ manager, store, cwd, agentDir, rootDir, providerAuthContext }),
   });
 }
 

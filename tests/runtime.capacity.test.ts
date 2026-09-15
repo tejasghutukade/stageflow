@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,10 +6,10 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import {
+  globalSettingsFilePath,
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
 } from "../src/runtime/settingsFile.js";
-import { storeRootFor } from "../src/runstore/paths.js";
 import { startUiServer } from "../src/server/http.js";
 
 async function jsonFetch(url: string, init?: RequestInit) {
@@ -35,6 +35,20 @@ describe("parseSlotCount", () => {
 });
 
 describe("RunManager.setMaxConcurrent", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-cap-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("throws with the shared message and leaves the prior cap in place", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cap-reject-"));
     const manager = new RunManager({
@@ -65,13 +79,77 @@ describe("RunManager.setMaxConcurrent", () => {
     });
 
     const persisted = JSON.parse(
-      await readFile(path.join(storeRootFor(root), "settings.json"), "utf8"),
+      await readFile(globalSettingsFilePath(), "utf8"),
     ) as { maxConcurrent: number };
     expect(persisted.maxConcurrent).toBe(4);
+  });
+
+  it("shares maxConcurrent across RunManager instances constructed against different projects", async () => {
+    const rootA = await mkdtemp(path.join(tmpdir(), "sf-cap-cross-a-"));
+    const rootB = await mkdtemp(path.join(tmpdir(), "sf-cap-cross-b-"));
+    const managerA = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store: createRunStore({ rootDir: rootA }),
+      cwd: rootA,
+      maxConcurrent: 3,
+    });
+
+    expect(managerA.setMaxConcurrent(5)).toMatchObject({ maxConcurrent: 5 });
+
+    const managerB = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store: createRunStore({ rootDir: rootB }),
+      cwd: rootB,
+    });
+
+    expect(managerB.getMaxConcurrent()).toBe(5);
+
+    expect(managerB.setMaxConcurrent(2)).toMatchObject({ maxConcurrent: 2 });
+
+    const managerC = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store: createRunStore({ rootDir: rootA }),
+      cwd: rootA,
+    });
+    expect(managerC.getMaxConcurrent()).toBe(2);
+  });
+
+  it("STAGEFLOW_MAX_CONCURRENT_RUNS still overrides when nothing is persisted yet", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cap-env-"));
+    const previousEnv = process.env.STAGEFLOW_MAX_CONCURRENT_RUNS;
+    process.env.STAGEFLOW_MAX_CONCURRENT_RUNS = "7";
+    try {
+      const manager = new RunManager({
+        agent: scriptedFakeAgent([]),
+        store: createRunStore({ rootDir: root }),
+        cwd: root,
+      });
+      expect(manager.getMaxConcurrent()).toBe(7);
+    } finally {
+      if (previousEnv === undefined) {
+        delete process.env.STAGEFLOW_MAX_CONCURRENT_RUNS;
+      } else {
+        process.env.STAGEFLOW_MAX_CONCURRENT_RUNS = previousEnv;
+      }
+    }
   });
 });
 
 describe("POST /api/settings slot rule", () => {
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-cap-http-home-"));
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
   it("returns 400 with the shared message for maxConcurrent 0", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cap-http-400-"));
     const started = await startUiServer({

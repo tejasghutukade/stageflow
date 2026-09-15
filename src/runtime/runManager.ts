@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
@@ -12,6 +13,7 @@ import { loadTaskFromYaml } from "../config/loadTask.js";
 import {
   deriveStatusFromStages,
   findUnhandledFailedStage,
+  type RunMeta,
   type RunStore,
 } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -47,9 +49,8 @@ import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
-  projectSettingsContext,
-  readMaxConcurrentFromContext,
-  writeMaxConcurrentToContext,
+  readMaxConcurrentFromGlobal,
+  writeMaxConcurrentToGlobal,
 } from "./settingsFile.js";
 import {
   StageHitlController,
@@ -218,14 +219,9 @@ export class RunManager {
     this.cwd = options.cwd ?? process.cwd();
     this.projectRoot = options.projectRoot ?? this.cwd;
     this.isGitProject = options.isGitProject ?? false;
-    const settingsCtx = projectSettingsContext(
-      this.cwd,
-      this.projectRoot,
-      this.isGitProject,
-    );
     this.maxConcurrent =
       options.maxConcurrent ??
-      readMaxConcurrentFromContext(settingsCtx) ??
+      readMaxConcurrentFromGlobal() ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
@@ -255,10 +251,7 @@ export class RunManager {
       throw new Error(INVALID_SLOT_COUNT_MESSAGE);
     }
     this.maxConcurrent = parsed;
-    writeMaxConcurrentToContext(
-      projectSettingsContext(this.cwd, this.projectRoot, this.isGitProject),
-      parsed,
-    );
+    writeMaxConcurrentToGlobal(parsed);
     return this.getHealth();
   }
 
@@ -562,6 +555,8 @@ export class RunManager {
     },
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
+    const pipelineAbsDir = path.dirname(path.resolve(cwd, input.pipeline));
+    const derivedProjectRoot = findProjectRoot(pipelineAbsDir) ?? this.projectRoot;
 
     let resolved;
     try {
@@ -604,7 +599,7 @@ export class RunManager {
         ciPrUrl: input.ciPrUrl,
         ciJobUrl: input.ciJobUrl,
       },
-      undefined,
+      derivedProjectRoot,
       resolved.kind === "path" ? resolved.taskPath : undefined,
     );
   }
@@ -703,6 +698,7 @@ export class RunManager {
     const insertedForResume = !wasActive;
 
     try {
+      const runProjectRoot = detail.project_root ?? this.projectRoot;
       const done = reconstructTimedOutAndContinue({
         runId,
         stageId,
@@ -710,9 +706,9 @@ export class RunManager {
         store: this.options.store,
         hitl: this.hitl,
         executionMode: this.executionMode,
-        cwd: this.cwd,
+        cwd: runProjectRoot,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
-        factoryCwd: this.projectRoot,
+        factoryCwd: runProjectRoot,
         ...(this.stageProcessLauncher !== undefined
           ? { stageProcessLauncher: this.stageProcessLauncher }
           : {}),
@@ -884,6 +880,7 @@ export class RunManager {
     }
 
     try {
+      let meta: RunMeta | undefined;
       let orchestrationConflict =
         this.active.has(runId) &&
         !this.attachedWaiting.has(waitKey(runId, stageId));
@@ -907,7 +904,7 @@ export class RunManager {
         let detail;
         try {
           detail = await this.options.store.readRun(runId);
-          await this.options.store.readRunMeta(runId);
+          meta = await this.options.store.readRunMeta(runId);
         } catch {
           this.retryInFlight.delete(retryKey);
           return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
@@ -930,12 +927,20 @@ export class RunManager {
           }
         }
       }
+      if (meta === undefined) {
+        try {
+          meta = await this.options.store.readRunMeta(runId);
+        } catch {
+          this.retryInFlight.delete(retryKey);
+          return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+        }
+      }
       const result = await this.retryCoordinator.retryStage({
         runId,
         stageId,
         store: this.options.store,
         agent: this.options.agent,
-        cwd: this.cwd,
+        cwd: meta.project_root ?? this.projectRoot,
         operatorCatalog: this.options.operatorCatalog,
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
@@ -1344,6 +1349,7 @@ export class RunManager {
         runId,
         this.cwd,
       );
+      const runProjectRoot = meta.project_root ?? this.projectRoot;
       const done = runPipelineDag({
         prepared: {
           task,
@@ -1354,8 +1360,8 @@ export class RunManager {
           },
           agent: this.options.agent,
           store: this.options.store,
-          cwd: this.cwd,
-          projectRoot: this.projectRoot,
+          cwd: runProjectRoot,
+          projectRoot: runProjectRoot,
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
@@ -1410,10 +1416,12 @@ export class RunManager {
     const eventOptions = { attempt };
 
     try {
+      const runMeta = await store.readRunMeta(runId);
+      const runProjectRoot = runMeta.project_root ?? this.projectRoot;
       const launchResult = await launcher.launch({
         runId,
         stageId,
-        rootDir: this.projectRoot,
+        rootDir: runProjectRoot,
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
@@ -1461,8 +1469,8 @@ export class RunManager {
           run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
           agent: this.options.agent,
           store,
-          cwd: this.cwd,
-          projectRoot: this.projectRoot,
+          cwd: meta.project_root ?? this.projectRoot,
+          projectRoot: meta.project_root ?? this.projectRoot,
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
@@ -1716,6 +1724,7 @@ export class RunManager {
     }
 
     try {
+      const runProjectRoot = meta.project_root ?? this.projectRoot;
       const { meta: loadedMeta, task, loaded, workspaceDir } =
         await loadRunContext(this.options.store, runId, this.cwd);
       const promise = runPipelineDag({
@@ -1725,8 +1734,8 @@ export class RunManager {
           run: { runId, workspaceDir },
           agent: this.options.agent,
           store: this.options.store,
-          cwd: this.cwd,
-          projectRoot: this.projectRoot,
+          cwd: runProjectRoot,
+          projectRoot: runProjectRoot,
           checkoutRoot: loadedMeta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,

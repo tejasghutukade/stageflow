@@ -27,8 +27,10 @@ import { readStageVerificationHistory } from "../runstore/verificationHistory.js
 import type { RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
+import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type {
   AbandonStageResult,
+  RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import {
@@ -47,6 +49,7 @@ import {
   DEFAULT_PORT,
   json,
   type HttpHostEnvelope,
+  type HttpHostRouteContext,
 } from "./createHttpHost.js";
 import { mapRetryStageFailure, mapStartFailure } from "./operatorResults.js";
 
@@ -246,21 +249,29 @@ export function defaultUiDistDir(): string {
   return path.resolve(here, "../ui");
 }
 
-export async function startUiServer(
-  options: UiServerOptions,
-): Promise<HttpHostEnvelope> {
-  const host = options.host ?? "127.0.0.1";
-  const port = options.port ?? DEFAULT_PORT;
-  const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
-  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
-  const { manager, store, cwd, agentDir } = boot;
-  const providerAuthContext = boot.providerAuthContext;
+export type OperatorRouteDeps = {
+  manager: RunManager;
+  store: RunStore;
+  cwd: string;
+  agentDir: string;
+  rootDir: string;
+  providerAuthContext: ProviderAuthContext | undefined;
+  /** Omit for a headless service (e.g. `sf mcp`) — GETs outside the API surface just 404. */
+  uiDistDir?: string;
+};
 
-  return createHttpHost({
-    boot,
-    host,
-    port,
-    routes: async ({ req, res, url, pathname, method }) => {
+/**
+ * The full operator-console route surface: REST API (runs, stages,
+ * catalog, settings, providers) plus, when `uiDistDir` is given, static
+ * console UI file serving. Shared by `startUiServer` (browser-facing) and
+ * `startMcpServer` (headless global-service daemon) — both need the REST
+ * API; only the former needs the UI files.
+ */
+export function createOperatorRoutes(
+  deps: OperatorRouteDeps,
+): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
+  const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
+  return async ({ req, res, url, pathname, method }) => {
       if (isMutatingApi(method, pathname)) {
         if (!assertLoopbackHttpAccess(req, res)) {
           return true;
@@ -349,6 +360,11 @@ export async function startUiServer(
           const body = (await readJsonBody(req)) as {
             task?: string | TaskFile;
             pipeline?: string;
+            checkoutOverride?: string;
+            skipGates?: boolean;
+            gitSha?: string;
+            ciPrUrl?: string;
+            ciJobUrl?: string;
           };
           if (
             typeof body.pipeline !== "string" ||
@@ -365,10 +381,46 @@ export async function startUiServer(
             });
             return true;
           }
-          const result = await manager.startRun({
-            task: body.task,
-            pipeline: body.pipeline.trim(),
-          });
+          if (
+            body.checkoutOverride !== undefined &&
+            typeof body.checkoutOverride !== "string"
+          ) {
+            json(res, 400, { error: "checkoutOverride must be a string" });
+            return true;
+          }
+          if (body.skipGates !== undefined && typeof body.skipGates !== "boolean") {
+            json(res, 400, { error: "skipGates must be a boolean" });
+            return true;
+          }
+          for (const field of ["gitSha", "ciPrUrl", "ciJobUrl"] as const) {
+            if (body[field] !== undefined && typeof body[field] !== "string") {
+              json(res, 400, { error: `${field} must be a string` });
+              return true;
+            }
+          }
+          let result: Awaited<ReturnType<typeof manager.startRun>>;
+          try {
+            result = await manager.startRun({
+              task: body.task,
+              pipeline: body.pipeline.trim(),
+              ...(body.checkoutOverride !== undefined
+                ? { checkoutOverride: body.checkoutOverride }
+                : {}),
+              ...(body.skipGates !== undefined ? { skipGates: body.skipGates } : {}),
+              ...(body.gitSha !== undefined ? { gitSha: body.gitSha } : {}),
+              ...(body.ciPrUrl !== undefined ? { ciPrUrl: body.ciPrUrl } : {}),
+              ...(body.ciJobUrl !== undefined ? { ciJobUrl: body.ciJobUrl } : {}),
+            });
+          } catch (err) {
+            if (err instanceof PipelineValidationError) {
+              json(res, 400, {
+                error: "Pipeline validation failed",
+                validation: err.result,
+              });
+              return true;
+            }
+            throw err;
+          }
           if (!result.ok) {
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
@@ -680,7 +732,7 @@ export async function startUiServer(
 
         if (
           await handleProjectMcpRoutes(req, res, {
-            projectRoot: boot.rootDir,
+            projectRoot: rootDir,
             json,
           })
         ) {
@@ -767,7 +819,7 @@ export async function startUiServer(
           return true;
         }
 
-        if (method === "GET") {
+        if (method === "GET" && uiDistDir !== undefined) {
           const served = await serveStatic(res, uiDistDir, pathname);
           if (served) return true;
           json(res, 404, {
@@ -786,7 +838,32 @@ export async function startUiServer(
         }
         return true;
       }
-    },
+  };
+}
+
+export async function startUiServer(
+  options: UiServerOptions,
+): Promise<HttpHostEnvelope> {
+  const host = options.host ?? "127.0.0.1";
+  const port = options.port ?? DEFAULT_PORT;
+  const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
+  const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
+  const { manager, store, cwd, agentDir, rootDir } = boot;
+  const providerAuthContext = boot.providerAuthContext;
+
+  return createHttpHost({
+    boot,
+    host,
+    port,
+    routes: createOperatorRoutes({
+      manager,
+      store,
+      cwd,
+      agentDir,
+      rootDir,
+      providerAuthContext,
+      uiDistDir,
+    }),
   });
 }
 

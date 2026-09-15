@@ -22,7 +22,7 @@ function formatUsd(amount: number): string {
 
 /** Best-effort total cost for a run; undefined (not thrown) on any read failure or when no stage reported usage. */
 async function tryReadTotalCostUsd(
-  store: RunStore | undefined,
+  store: Pick<RunStore, "readRun"> | undefined,
   runId: string,
 ): Promise<number | undefined> {
   if (!store) return undefined;
@@ -125,7 +125,7 @@ function baseRunCompletionPayload(
 
 async function formatRunCompletionJsonWithCost(
   result: PipelineRunResult,
-  store: RunStore | undefined,
+  store: Pick<RunStore, "readRun"> | undefined,
 ): Promise<string> {
   const totalCostUsd = await tryReadTotalCostUsd(store, result.runId);
   return stringify({
@@ -136,7 +136,7 @@ async function formatRunCompletionJsonWithCost(
 
 async function formatRunCompletionJsonWithStages(
   result: PipelineRunResult,
-  store: RunStore,
+  store: Pick<RunStore, "readRun">,
 ): Promise<string> {
   const detail = await store.readRun(result.runId);
   const projection = projectRun(detail);
@@ -201,7 +201,7 @@ export async function reportCliRun(
   options: {
     json?: boolean;
     io: CliRunReportIo;
-    store?: RunStore;
+    store?: Pick<RunStore, "readRun">;
     includeStages?: boolean;
   },
 ): Promise<number> {
