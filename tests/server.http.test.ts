@@ -1485,7 +1485,10 @@ describe("localhost HTTP API", () => {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ decision: "continue" }),
+          body: JSON.stringify({
+            decision: "continue",
+            reason: "ship the brief",
+          }),
         },
       );
       expect(decided.status).toBe(202);
@@ -1498,6 +1501,19 @@ describe("localhost HTTP API", () => {
       await waitFor(async () => {
         const detail = await store.readRun(runId);
         return detail.status === "succeeded";
+      });
+      const events = await store.listStageEvents(runId, "review");
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const succeededIdx = names.indexOf("succeeded", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(succeededIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "continue",
+        loopId,
+        reason: "ship the brief",
       });
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -1563,6 +1579,22 @@ describe("localhost HTTP API", () => {
 
       const after = await store.readRun(runId);
       expect(after.status).toBe("failed");
+      const events = await store.listStageEvents(runId, "review");
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const failedIdx = names.indexOf("failed", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(failedIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "abandon",
+        reason: "operator abandoned",
+      });
+      expect(events[failedIdx]).toMatchObject({
+        event: "failed",
+        reason: "operator abandoned",
+      });
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

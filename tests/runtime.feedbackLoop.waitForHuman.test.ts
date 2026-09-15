@@ -107,6 +107,41 @@ function sourceReviewPass(detail: RunDetail, replayIndex = 0) {
   );
 }
 
+type LooseStageEvent = { event: string; [key: string]: unknown };
+
+function assertDecidedTrail(
+  events: LooseStageEvent[],
+  expected: {
+    decision: "extend" | "continue" | "abandon";
+    loopId: string;
+    terminal: "succeeded" | "failed";
+    reason?: string;
+    omitReason?: boolean;
+  },
+) {
+  const names = events.map((e) => e.event);
+  const waitIdx = names.lastIndexOf("waiting_for_input");
+  const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+  const terminalIdx = names.indexOf(
+    expected.terminal,
+    decidedIdx === -1 ? waitIdx + 1 : decidedIdx + 1,
+  );
+  expect(waitIdx).toBeGreaterThanOrEqual(0);
+  expect(decidedIdx).toBeGreaterThan(waitIdx);
+  expect(terminalIdx).toBeGreaterThan(decidedIdx);
+  const decided = events[decidedIdx]!;
+  expect(decided.decision).toBe(expected.decision);
+  expect(decided.loopId).toBe(expected.loopId);
+  if (expected.omitReason) {
+    expect(decided).not.toHaveProperty("reason");
+  } else if (expected.reason !== undefined) {
+    expect(decided.reason).toBe(expected.reason);
+  }
+  if (expected.terminal === "failed" && expected.reason !== undefined) {
+    expect(events[terminalIdx]!.reason).toBe(expected.reason);
+  }
+}
+
 describe("runtime feedback-loop wait_for_human", () => {
   it("exhausts max_replays and waits without further replay or submit", async () => {
     const prepared = await prepareWaitForHumanRun();
@@ -188,7 +223,10 @@ describe("runtime feedback-loop wait_for_human", () => {
       maxActiveStagesPerRun: 4,
       executionMode: "inprocess",
       onFeedbackLoopWaiting: async ({ resolve }) => {
-        const decided = await resolve({ decision: "extend" });
+        const decided = await resolve({
+          decision: "extend",
+          reason: "one more replay",
+        });
         expect(decided.ok).toBe(true);
         if (decided.ok) expect(decided.effect).toBe("extended");
       },
@@ -208,6 +246,16 @@ describe("runtime feedback-loop wait_for_human", () => {
     const replay1Source = sourceReviewPass(detail, 0);
     expect(replay1Source?.status).not.toBe("waiting");
     expect(replay1Source?.status).not.toBe("running");
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "extend",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      reason: "one more replay",
+    });
   });
 
   it("continue decision releases downstream without another replay", async () => {
@@ -266,6 +314,16 @@ describe("runtime feedback-loop wait_for_human", () => {
       ?.stage_passes.find((pass) => pass.stage_id === "review");
     expect(projectedPass?.status).toBe("succeeded");
     expect(projectedPass?.finished_at).toBeTruthy();
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "continue",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      omitReason: true,
+    });
   });
 
   it("abandon decision fails the run", async () => {
@@ -315,6 +373,16 @@ describe("runtime feedback-loop wait_for_human", () => {
     const sourcePass = sourceReviewPass(detail);
     expect(sourcePass?.status).toBe("failed");
     expect(sourcePass?.finished_at).toBeTruthy();
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "abandon",
+      loopId: detail.feedback_loops![0]!.loop.loop_id,
+      terminal: "failed",
+      reason: "operator abandoned loop",
+    });
   });
 
   it("require_continue still fails closed at the limit", async () => {
@@ -416,14 +484,28 @@ describe("runtime feedback-loop wait_for_human", () => {
 
     const detail = await storeB.readRun(prepared.run.runId);
     const loopState = detail.feedback_loops![0]!.loop.state;
+    const events = await storeB.listStageEvents(prepared.run.runId, "review");
+    const decidedEvents = events.filter(
+      (e) => e.event === "feedback_loop_decided",
+    );
+    expect(decidedEvents).toHaveLength(1);
     if (first.ok && first.effect === "continued") {
       expect(loopState).toBe("continued");
       expect(detail.active_feedback_loop).toBeUndefined();
+      expect(decidedEvents[0]).toMatchObject({
+        decision: "continue",
+        loopId,
+      });
+      expect(decidedEvents[0]).not.toHaveProperty("reason");
     } else {
       expect(second.ok).toBe(true);
       if (second.ok) expect(second.effect).toBe("extended");
       expect(loopState).toBe("active");
       expect(detail.active_feedback_loop?.state).toBe("active");
+      expect(decidedEvents[0]).toMatchObject({
+        decision: "extend",
+        loopId,
+      });
     }
   });
 
@@ -457,6 +539,7 @@ describe("runtime feedback-loop wait_for_human", () => {
       store: prepared.store,
       runId: prepared.run.runId,
       decision: "continue",
+      reason: "ship the brief",
     });
     expect(decided.ok).toBe(true);
     if (decided.ok) expect(decided.effect).toBe("continued");
@@ -474,5 +557,15 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(sourcePass?.emitted_envelope).toEqual(
       history.loop.deferred_send_back?.feedback_envelope,
     );
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "continue",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      reason: "ship the brief",
+    });
   });
 });

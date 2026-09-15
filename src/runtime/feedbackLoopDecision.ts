@@ -66,6 +66,30 @@ export type ResolveFeedbackLoopDecisionResult =
 const DECISION_CONFLICT =
   "feedback loop decision conflict: no longer waiting_for_human";
 
+async function appendFeedbackLoopDecided(
+  store: RunStore,
+  runId: string,
+  loop: FeedbackLoopRecord,
+  decision: FeedbackLoopDecisionKind,
+  reason?: string,
+): Promise<void> {
+  const latest = await store.getLatestStageExecution(runId, loop.source_stage_id);
+  const attempt = latest?.attempt;
+  const eventOptions = attempt !== undefined ? { attempt } : undefined;
+  const trimmed = reason?.trim();
+  await store.appendStageEvent(
+    runId,
+    loop.source_stage_id,
+    {
+      event: "feedback_loop_decided",
+      decision,
+      loopId: loop.loop_id,
+      ...(trimmed ? { reason: trimmed } : {}),
+    },
+    eventOptions,
+  );
+}
+
 async function clearSourceWaiting(
   store: RunStore,
   runId: string,
@@ -206,6 +230,13 @@ export async function resolveFeedbackLoopDecision(options: {
         reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
       };
     }
+    await appendFeedbackLoopDecided(
+      store,
+      runId,
+      loop,
+      "extend",
+      options.reason,
+    );
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
 
     if (schedule === undefined) {
@@ -287,6 +318,13 @@ export async function resolveFeedbackLoopDecision(options: {
         reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
       };
     }
+    await appendFeedbackLoopDecided(
+      store,
+      runId,
+      loop,
+      "continue",
+      options.reason,
+    );
     await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
     await updateFeedbackReplaySourcePass({
@@ -331,6 +369,13 @@ export async function resolveFeedbackLoopDecision(options: {
       reason: `${DECISION_CONFLICT} (loop=${loop.loop_id})`,
     };
   }
+  await appendFeedbackLoopDecided(
+    store,
+    runId,
+    loop,
+    "abandon",
+    abandonReason,
+  );
   await terminalizeCurrentFeedbackReplay(store, runId, loop, "failed");
   await clearSourceWaiting(
     store,

@@ -305,7 +305,7 @@ Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/
   "stageId": "review",
   "decision": "continue",
   "loopId": "…",
-  "reason": "optional abandon reason"
+  "reason": "optional reason"
 }
 ```
 
@@ -313,9 +313,9 @@ Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/
 
 | Decision | Effect |
 |----------|--------|
-| `extend` | Increase `max_replays` by one and accept the deferred `send_back` |
-| `continue` | Mark the source succeeded and release the loop hold so successors can run |
-| `abandon` | Fail the source (run typically fails); optional `reason` |
+| `extend` | Increase `max_replays` by one and accept the deferred `send_back`. Optional `reason` is persisted on `feedback_loop_decided`. |
+| `continue` | Mark the source succeeded and release the loop hold so successors can run. Optional `reason` is persisted on `feedback_loop_decided`. |
+| `abandon` | Fail the source (run typically fails). Optional `reason` is persisted on `feedback_loop_decided` and on `{ event: "failed", reason }`. |
 
 **Success:** `{ "ok": true, "effect": "extended"|"continued"|"abandoned", "loopId": "…" }`
 

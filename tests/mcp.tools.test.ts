@@ -788,6 +788,20 @@ describe("MCP Tier 1 operator parity", () => {
         const detail = await store.readRun(runId);
         return detail.status === "succeeded";
       });
+
+      const clarifyEvents = await mcpCall(base, "list_stage_events", {
+        runId,
+        stageId: "clarify",
+      });
+      expect(clarifyEvents.isError).toBe(false);
+      const hitlEvents = clarifyEvents.payload.events as Array<{
+        event: string;
+      }>;
+      expect(hitlEvents.some((e) => e.event === "operator_prompt")).toBe(true);
+      expect(hitlEvents.some((e) => e.event === "operator_answer")).toBe(true);
+      expect(hitlEvents.some((e) => e.event === "feedback_loop_decided")).toBe(
+        false,
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -870,6 +884,7 @@ describe("MCP Tier 1 operator parity", () => {
         stageId: "review",
         decision: "continue",
         loopId,
+        reason: "ship the brief",
       });
       expect(decided.isError).toBe(false);
       expect(decided.payload).toEqual({
@@ -881,6 +896,30 @@ describe("MCP Tier 1 operator parity", () => {
       await waitFor(async () => {
         const detail = await store.readRun(runId);
         return detail.status === "succeeded";
+      });
+
+      const listedEvents = await mcpCall(base, "list_stage_events", {
+        runId,
+        stageId: "review",
+      });
+      expect(listedEvents.isError).toBe(false);
+      const events = listedEvents.payload.events as Array<{
+        event: string;
+        decision?: string;
+        loopId?: string;
+        reason?: string;
+      }>;
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const succeededIdx = names.indexOf("succeeded", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(succeededIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "continue",
+        loopId,
+        reason: "ship the brief",
       });
     } finally {
       await new Promise<void>((resolve, reject) => {
