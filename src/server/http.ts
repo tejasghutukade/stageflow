@@ -46,7 +46,11 @@ import {
   json,
   type HttpHostEnvelope,
 } from "./createHttpHost.js";
-import { mapRetryStageFailure, mapStartFailure } from "./operatorResults.js";
+import {
+  mapRetryStageFailure,
+  mapStartFailure,
+  mapStoreLookupError,
+} from "./operatorResults.js";
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -299,16 +303,9 @@ export async function startUiServer(
               textPlain(res, 200, content);
             }
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            if (message === "Artifact path denied") {
-              json(res, 403, { error: message });
-              return true;
-            }
-            const notFound =
-              message.startsWith("Run not found") ||
-              message.startsWith("Artifact not found") ||
-              /no such|not found/i.test(message);
-            json(res, notFound ? 404 : 400, { error: message });
+            const mapped = mapStoreLookupError(err, { policy: "artifact" });
+            const status = mapped.kind === "denied" ? 403 : mapped.status;
+            json(res, status, { error: mapped.error });
           }
           return true;
         }
@@ -322,9 +319,8 @@ export async function startUiServer(
           try {
             json(res, 200, await readStageVerificationHistory(store, runId, stageId));
           } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            const notFound = /not found|no such/i.test(message);
-            json(res, notFound ? 404 : 500, { error: message });
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
           }
           return true;
         }
@@ -335,9 +331,8 @@ export async function startUiServer(
             try {
               json(res, 200, await store.readRun(decodeURIComponent(rest)));
             } catch (err) {
-              json(res, 404, {
-                error: err instanceof Error ? err.message : String(err),
-              });
+              const mapped = mapStoreLookupError(err, { policy: "run" });
+              json(res, 404, { error: mapped.error });
             }
             return true;
           }

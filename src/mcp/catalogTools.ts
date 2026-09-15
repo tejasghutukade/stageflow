@@ -5,6 +5,7 @@ import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog } from "../config/validateCatalog.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
@@ -147,13 +148,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const detail = await store.readRun(runId);
         return textResult(projectRunForMcp(detail));
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound = /not found|no such|unknown run/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(
-          {
-            error: message,
-            status: notFound ? 404 : 500,
-          },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
@@ -193,16 +190,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
           true,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound =
-          message.startsWith("Run not found") ||
-          message.startsWith("Artifact not found") ||
-          /no such|not found/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "artifact" });
         return textResult(
-          {
-            error: message,
-            status: notFound ? 404 : 400,
-          },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }

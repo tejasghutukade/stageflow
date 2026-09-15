@@ -3,6 +3,7 @@ import {
   inferRetryStageErrorCode,
   mapRetryStageFailure,
   mapStartFailure,
+  mapStoreLookupError,
 } from "../src/server/operatorResults.js";
 
 describe("inferRetryStageErrorCode", () => {
@@ -127,5 +128,124 @@ describe("adapter packaging composition", () => {
     const body = mapRetryStageFailure(result);
     expect(body).not.toHaveProperty("status");
     expect(result.status).toBe(409);
+  });
+});
+
+describe("mapStoreLookupError", () => {
+  it("run policy maps not-found messages to 404", () => {
+    expect(mapStoreLookupError(new Error("Run not found: r1"), { policy: "run" })).toEqual({
+      error: "Run not found: r1",
+      status: 404,
+      kind: "not_found",
+    });
+    expect(mapStoreLookupError(new Error("no such row"), { policy: "run" })).toEqual({
+      error: "no such row",
+      status: 404,
+      kind: "not_found",
+    });
+    expect(mapStoreLookupError(new Error("unknown run"), { policy: "run" })).toEqual({
+      error: "unknown run",
+      status: 404,
+      kind: "not_found",
+    });
+  });
+
+  it("run policy maps non-matching errors to 500", () => {
+    expect(mapStoreLookupError(new Error("disk I/O failed"), { policy: "run" })).toEqual({
+      error: "disk I/O failed",
+      status: 500,
+      kind: "error",
+    });
+  });
+
+  it("artifact policy maps missing run/artifact to 404", () => {
+    expect(
+      mapStoreLookupError(new Error("Run not found: r1"), { policy: "artifact" }),
+    ).toEqual({
+      error: "Run not found: r1",
+      status: 404,
+      kind: "not_found",
+    });
+    expect(
+      mapStoreLookupError(new Error("Artifact not found: notes.md"), {
+        policy: "artifact",
+      }),
+    ).toEqual({
+      error: "Artifact not found: notes.md",
+      status: 404,
+      kind: "not_found",
+    });
+  });
+
+  it("artifact policy maps deny to kind denied with mapper status 400", () => {
+    expect(
+      mapStoreLookupError(new Error("Artifact path denied"), { policy: "artifact" }),
+    ).toEqual({
+      error: "Artifact path denied",
+      status: 400,
+      kind: "denied",
+    });
+  });
+
+  it("artifact policy maps other errors to 400", () => {
+    expect(
+      mapStoreLookupError(new Error("Artifact is not valid UTF-8 text"), {
+        policy: "artifact",
+      }),
+    ).toEqual({
+      error: "Artifact is not valid UTF-8 text",
+      status: 400,
+      kind: "error",
+    });
+  });
+
+  it("envelope policy includes envelope in the not-found match", () => {
+    expect(
+      mapStoreLookupError(new Error("Envelope not found: r1/s1"), {
+        policy: "envelope",
+      }),
+    ).toEqual({
+      error: "Envelope not found: r1/s1",
+      status: 404,
+      kind: "not_found",
+    });
+    expect(
+      mapStoreLookupError(new Error("missing envelope"), { policy: "envelope" }),
+    ).toEqual({
+      error: "missing envelope",
+      status: 404,
+      kind: "not_found",
+    });
+  });
+
+  it("envelope policy maps non-matching errors to 500", () => {
+    expect(
+      mapStoreLookupError(new Error("disk I/O failed"), { policy: "envelope" }),
+    ).toEqual({
+      error: "disk I/O failed",
+      status: 500,
+      kind: "error",
+    });
+  });
+
+  it("stringifies non-Error thrown values", () => {
+    expect(mapStoreLookupError("Run not found: r1", { policy: "run" })).toEqual({
+      error: "Run not found: r1",
+      status: 404,
+      kind: "not_found",
+    });
+  });
+
+  it("MCP uses mapper deny status; HTTP overrides to 403", () => {
+    const mapped = mapStoreLookupError(new Error("Artifact path denied"), {
+      policy: "artifact",
+    });
+    expect(mapped).toEqual({
+      error: "Artifact path denied",
+      status: 400,
+      kind: "denied",
+    });
+    const httpStatus = mapped.kind === "denied" ? 403 : mapped.status;
+    expect(httpStatus).toBe(403);
   });
 });
