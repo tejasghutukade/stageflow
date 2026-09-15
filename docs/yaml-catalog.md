@@ -690,11 +690,11 @@ Optional on any stage entry: `replay_safe` (boolean). **Omitted means safe** —
 - `replay_session: resume` maps to session mode `feedback_resume` (resume token from the prior attempt). `new_session` maps to `new_session`.
 - Artifacts stay attempt-scoped. Downstream stages still consume the latest accepted envelopes on the active route; the send-back feedback itself is the source envelope carried in Feedback Loop Context.
 
-Operator / host-down decisions when `on_max_replays: wait_for_human`: [CLI `sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide), MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
+Operator / host-down decisions when `on_max_replays: wait_for_human`: [CLI `sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide), MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`. While parked, the source stage pass is persisted as `waiting`; `extend`/`continue` then mark it `succeeded`, and `abandon` marks it `failed`.
 
 Fixtures: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml), [`feedback-loop-wait-human.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop-wait-human.pipeline.yaml).
 
-Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/).
+Walkthroughs: [`examples/feedback-loop/`](../examples/feedback-loop/), [`examples/mcp-hitl-tour/`](../examples/mcp-hitl-tour/).
 
 ### Skill binding {#skill-binding}
 

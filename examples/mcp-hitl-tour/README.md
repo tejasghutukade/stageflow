@@ -43,14 +43,14 @@ intake (free_text HITL)
 
 ## Prerequisites
 
-- This **feat/mcp-console-parity** tree, built (`npm run build && npm run ui:build`)
+- This Stageflow checkout, built (`npm run build && npm run ui:build`)
 - Provider auth connected
 - An MCP client (Cursor on **another** project is fine) pointed at `http://127.0.0.1:3847/mcp`
 
 Host the catalog from **this git root** so `list_pipelines` includes this example:
 
 ```bash
-cd /path/to/feat-mcp-console-parity
+cd /path/to/stageflow
 node dist/cli.js ui
 ```
 

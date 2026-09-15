@@ -141,9 +141,9 @@ See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP
 
-Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). Operator replies remain available in the console. Console and MCP stay valid when a host is up; mutating `sf runs` verbs refuse in that case.
+Use `list_waiting` / `answer_gate` and `wait_run` over the `/mcp` endpoint while `sf ui` or `sf mcp` is running — see [MCP](mcp.md#wait_run) for the compose loop (`wait_run` → `answer_gate` → `wait_run`). When `waiting_kind` is `feedback_loop_decision`, use [`decide_feedback_loop`](mcp.md#decide_feedback_loop) instead of `answer_gate` (host-down: [`sf runs feedback-decide`](cli-reference.md#sf-runs-feedback-decide)). Operator replies remain available in the console. Console and MCP stay valid when a host is up; mutating `sf runs` verbs refuse in that case.
 
-When no host is up, the same loop is `sf runs waiting` / `answer` / `wait`. After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
+When no host is up, the same loop is `sf runs waiting` / `answer` / `wait` (or `sf runs feedback-decide` for an exhausted feedback loop). After `sf run` exit `2`, list waiting gates, answer, then wait — do not treat `answer` `{ "ok": true }` as terminal. See [CLI reference — `sf runs`](cli-reference.md#sf-runs).
 
 When a coding-agent host is driving the run (the `stageflow-run` skill), a mappable gate is presented on that host's native question UI when one exists, then submitted with `answer_gate` (host up) or `sf runs answer --json` (host down). Open-ended `free_text` and hosts without a picker stay in chat. A representable `multi_question` is one picker call, not sequential cards. See [`skills/stageflow-run/references/native-question-ui.md`](../skills/stageflow-run/references/native-question-ui.md).
 
@@ -152,4 +152,5 @@ When a coding-agent host is driving the run (the `stageflow-run` skill), a mappa
 - [Envelopes](envelopes.md) — completing a stage after gates; [emit-phase verify](envelopes.md#verify-emit) for making a gate load-bearing
 - [CI / headless](ci.md) — `--skip-gates` in automation
 - [YAML catalog](yaml-catalog.md) — `gate_kinds` and `verify` fields
+- [`examples/mcp-hitl-tour/`](../examples/mcp-hitl-tour/) — MCP-first HITL gates, fan-out/join, and `wait_for_human` decide
 - [`tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml`](../tests/fixtures/pipelines/hitl-four-kinds-proving.pipeline.yaml)

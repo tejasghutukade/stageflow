@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP inspect parity with the operator console: read-only `list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` (no login, settings-write, or Stage MCP attach)
+- `describe_pipeline` includes Clone Chain, feedback-loop, and inbound route `if`/`on` wiring so agents can inspect before `start_run`
+- `read_artifact` returns PNG/JPEG/GIF/WebP as MCP image content blocks (text stays JSON; unknown binary still errors)
+- Lean `get_run` / `wait_run` (and the run resource) pass through `total_cost_usd` and clone `definition_id` when present on the store
+- `decide_feedback_loop` appends a durable `feedback_loop_decided` stage event with optional `reason` before succeeded/failed
+- Optional `attempt` on `get_envelope` to read a prior execution's stored envelope (omit = latest)
+- `examples/mcp-hitl-tour` walkthrough for MCP-first HITL (`answer_gate`) and feedback-loop decide
+
+### Fixed
+
+- Feedback-loop `wait_for_human` source passes persist as `waiting`, then `succeeded`/`failed` on continue/abandon, so `get_run` no longer leaves the pass `running`
+
 ## [0.19.0] - 2026-09-14
 
 ### Added

@@ -200,7 +200,7 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 
 Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`. `--json` is the `projectRun` object, including `pipeline_track` (diamond joins show both inbound edges). `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
 
-When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
+When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). On `on_max_replays: wait_for_human`, the loop source pass is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
 
 ### `sf runs verify`
 
