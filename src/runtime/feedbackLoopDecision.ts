@@ -8,7 +8,10 @@ import type {
   ResolvedPipelineDag,
   ResolvedPipelineStageNode,
 } from "../types/pipeline.js";
-import { terminalizeCurrentFeedbackReplay } from "./feedbackLoopCoordinator.js";
+import {
+  terminalizeCurrentFeedbackReplay,
+  updateFeedbackReplaySourcePass,
+} from "./feedbackLoopCoordinator.js";
 import type { FeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import { createFeedbackScheduleState } from "./feedbackLoopSchedule.js";
 import {
@@ -286,6 +289,16 @@ export async function resolveFeedbackLoopDecision(options: {
     }
     await terminalizeCurrentFeedbackReplay(store, runId, loop, "completed");
     await clearSourceWaiting(store, runId, loop.source_stage_id, "succeeded");
+    await updateFeedbackReplaySourcePass({
+      store,
+      runId,
+      loop,
+      sourceStageId: loop.source_stage_id,
+      status: "succeeded",
+      ...(deferred !== undefined
+        ? { envelope: deferred.feedback_envelope }
+        : {}),
+    });
     if (schedule !== undefined) {
       schedule.states.set(loop.source_stage_id, "succeeded");
       if (
@@ -326,6 +339,13 @@ export async function resolveFeedbackLoopDecision(options: {
     "failed",
     abandonReason,
   );
+  await updateFeedbackReplaySourcePass({
+    store,
+    runId,
+    loop,
+    sourceStageId: loop.source_stage_id,
+    status: "failed",
+  });
   if (schedule !== undefined) {
     schedule.states.set(loop.source_stage_id, "failed");
     releaseHold({ feedback: schedule.feedback });

@@ -7,10 +7,12 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import { projectRun } from "../src/projection/projectRun.js";
 import { resolveFeedbackLoopDecision } from "../src/runtime/feedbackLoopDecision.js";
 import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
+import type { RunDetail } from "../src/runstore/port.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
@@ -99,6 +101,12 @@ const sendBack = okEnvelope("send-back", {
   feedback_loop: { action: "send_back", target: "implement" },
 });
 
+function sourceReviewPass(detail: RunDetail, replayIndex = 0) {
+  return detail.feedback_loops?.[0]?.replays[replayIndex]?.stage_passes.find(
+    (pass) => pass.stage_id === "review",
+  );
+}
+
 describe("runtime feedback-loop wait_for_human", () => {
   it("exhausts max_replays and waits without further replay or submit", async () => {
     const prepared = await prepareWaitForHumanRun();
@@ -144,6 +152,9 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.feedback_loops?.[0]?.replays[0]?.replay.status).toBe(
       "waiting_for_human",
     );
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("waiting");
+    expect(sourcePass?.finished_at).toBeUndefined();
   });
 
   it("extend raises max by one, schedules another replay, then continue succeeds", async () => {
@@ -194,6 +205,9 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(history.loop.state).toBe("continued");
     expect(history.loop.policy.max_replays).toBe(2);
     expect(history.replays).toHaveLength(2);
+    const replay1Source = sourceReviewPass(detail, 0);
+    expect(replay1Source?.status).not.toBe("waiting");
+    expect(replay1Source?.status).not.toBe("running");
   });
 
   it("continue decision releases downstream without another replay", async () => {
@@ -240,6 +254,18 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(history.replays[0]?.replay.status).toBe("completed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("succeeded");
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("succeeded");
+    expect(sourcePass?.finished_at).toBeTruthy();
+    expect(sourcePass?.emitted_envelope).toEqual(
+      history.loop.deferred_send_back?.feedback_envelope,
+    );
+    const projectedPass = projectRun(detail)
+      .feedback_loops[0]
+      ?.replays[0]
+      ?.stage_passes.find((pass) => pass.stage_id === "review");
+    expect(projectedPass?.status).toBe("succeeded");
+    expect(projectedPass?.finished_at).toBeTruthy();
   });
 
   it("abandon decision fails the run", async () => {
@@ -286,6 +312,9 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.feedback_loops![0]!.replays[0]?.replay.status).toBe("failed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("failed");
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("failed");
+    expect(sourcePass?.finished_at).toBeTruthy();
   });
 
   it("require_continue still fails closed at the limit", async () => {
@@ -437,6 +466,13 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.feedback_loops![0]!.loop.state).toBe("continued");
     expect(detail.stages.find((s) => s.stage_id === "review")?.status).toBe(
       "succeeded",
+    );
+    const history = detail.feedback_loops![0]!;
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("succeeded");
+    expect(sourcePass?.finished_at).toBeTruthy();
+    expect(sourcePass?.emitted_envelope).toEqual(
+      history.loop.deferred_send_back?.feedback_envelope,
     );
   });
 });
