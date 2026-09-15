@@ -18,6 +18,7 @@ import { runResourceUri } from "../src/mcp/resources.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../src/runstore/port.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { mcpCall } from "./helpers/mcpCall.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
@@ -67,58 +68,6 @@ async function jsonFetch(url: string, init?: RequestInit) {
   const res = await fetch(url, init);
   const body = await res.json();
   return { status: res.status, body };
-}
-
-async function mcpCall(
-  base: string,
-  name: string,
-  args: Record<string, unknown> = {},
-  opts: { signal?: AbortSignal; meta?: Record<string, unknown> } = {},
-) {
-  const params: Record<string, unknown> = { name, arguments: args };
-  if (opts.meta !== undefined) {
-    params._meta = opts.meta;
-  }
-  const res = await fetch(`${base}/mcp`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "tools/call",
-      params,
-    }),
-    signal: opts.signal,
-  });
-  const text = await res.text();
-  const dataLine = text
-    .split("\n")
-    .find((line) => line.startsWith("data: "));
-  if (!dataLine) {
-    throw new Error(`no SSE data in MCP response: ${text.slice(0, 200)}`);
-  }
-  const message = JSON.parse(dataLine.slice("data: ".length)) as {
-    result?: {
-      content?: Array<{
-        type: string;
-        text?: string;
-        mimeType?: string;
-        data?: string;
-      }>;
-      isError?: boolean;
-    };
-    error?: unknown;
-  };
-  const contentText = message.result?.content?.[0]?.text ?? "";
-  return {
-    status: res.status,
-    isError: Boolean(message.result?.isError),
-    payload: contentText ? JSON.parse(contentText) : null,
-    raw: message,
-  };
 }
 
 async function mcpRpc(
@@ -1865,25 +1814,20 @@ describe("MCP Tier 1 operator parity", () => {
         path: rel,
       });
       expect(result.isError).toBe(false);
-      const content = result.raw.result?.content ?? [];
-      expect(content[0]).toEqual({
+      expect(result.content[0]?.type).toBe("image");
+      expect(result.content[0]).toEqual({
         type: "image",
         mimeType: "image/png",
         data: png.toString("base64"),
       });
-      const identity = JSON.parse(content[1]?.text ?? "{}") as {
-        runId?: string;
-        path?: string;
-        mimeType?: string;
-        content?: string;
-      };
-      expect(identity).toEqual({
+      expect(result.payload).toEqual({
         runId: created.runId,
         path: rel,
         mimeType: "image/png",
       });
-      expect(identity.content).toBeUndefined();
-      expect(content[1]?.text).not.toContain(png.toString("base64"));
+      expect(result.payload).not.toHaveProperty("data");
+      expect(JSON.stringify(result.payload)).not.toContain(png.toString("base64"));
+      expect(result.content[1]?.text).not.toContain(png.toString("base64"));
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
