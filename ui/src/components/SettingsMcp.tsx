@@ -55,7 +55,16 @@ export function SettingsMcp() {
             <span className="mono">get_run</span>,{" "}
             <span className="mono">get_health</span>,{" "}
             <span className="mono">list_runs</span>,{" "}
-            <span className="mono">read_artifact</span>.
+            <span className="mono">read_artifact</span>,{" "}
+            <span className="mono">wait_run</span>,{" "}
+            <span className="mono">answer_gate</span>,{" "}
+            <span className="mono">decide_feedback_loop</span>,{" "}
+            <span className="mono">describe_pipeline</span>,{" "}
+            <span className="mono">validate</span>,{" "}
+            <span className="mono">list_providers</span>,{" "}
+            <span className="mono">list_models</span>,{" "}
+            <span className="mono">list_project_mcp</span>,{" "}
+            <span className="mono">probe_project_mcp</span>.
           </span>
         </li>
       </ol>
@@ -75,8 +84,8 @@ export function SettingsMcp() {
           : "This URL is this console's origin plus /mcp. It must match the MCP endpoint line printed on boot."}
       </p>
       <p className="muted" style={{ margin: "var(--spacing-2) 0 0", fontSize: "var(--font-size-sm)" }}>
-        Held-stage answers stay in this console. MCP can start and inspect
-        runs; it cannot submit an answer.
+        MCP can submit a waiting-stage answer (<span className="mono">answer_gate</span>)
+        and a feedback-loop decision (<span className="mono">decide_feedback_loop</span>).
       </p>
     </section>
   );

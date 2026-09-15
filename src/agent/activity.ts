@@ -126,7 +126,13 @@ export type StageLifecycleEvent =
   /** Operator explicitly authorized a new attempt after verified failure. */
   | { event: "manual_recovery_requested"; guidance?: string }
   /** Operator chose to leave the verified failure terminal. */
-  | { event: "manual_recovery_stopped" };
+  | { event: "manual_recovery_stopped" }
+  | {
+      event: "feedback_loop_decided";
+      decision: "extend" | "continue" | "abandon";
+      loopId: string;
+      reason?: string;
+    };
 
 export type StageLogLine = StageActivityEvent | StageLifecycleEvent;
 

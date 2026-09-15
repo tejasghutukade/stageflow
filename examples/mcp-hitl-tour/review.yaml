@@ -1,0 +1,17 @@
+id: review
+system_prompt: |
+  Review brief.md against the task goal.
+  On every success you MUST emit feedback_loop send_back — never continue:
+
+  {"action":"send_back","target":"polish"}
+
+  This walkthrough always takes one polish replay, then parks for a human
+  feedback decision (MCP decide_feedback_loop). Do not continue to ship from
+  this stage.
+io:
+  input:
+    schema:
+      type: object
+  output:
+    schema:
+      type: object

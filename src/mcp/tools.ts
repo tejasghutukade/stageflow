@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { registerCatalogTools } from "./catalogTools.js";
 import { registerControlTools } from "./controlTools.js";
+import { registerProjectMcpTools } from "./projectMcpTools.js";
+import { registerProviderTools } from "./providerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
@@ -13,6 +15,8 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
 
   registerCatalogTools(server, deps);
   registerControlTools(server, deps);
+  registerProviderTools(server, deps);
+  registerProjectMcpTools(server, deps);
 
   server.registerTool(
     "wait_run",

@@ -6,15 +6,17 @@ import {
   type PipelineListing,
   type TaskListing,
 } from "../config/browseCatalog.js";
+import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
-import { readRunArtifact } from "./readArtifact.js";
-import { textResult } from "./toolResults.js";
+import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
+import { imageResult, textResult } from "./toolResults.js";
 
 /**
  * Every project a host serving a global store has ever recorded a run for,
@@ -105,6 +107,19 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
+    "list_models",
+    {
+      description:
+        "List catalog model ids from the project catalog (same source as GET /api/models)",
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const catalog = await browseCatalog(cwd);
+      return textResult({ models: catalog.models });
+    },
+  );
+
+  server.registerTool(
     "list_runs",
     {
       description:
@@ -180,13 +195,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const detail = await store.readRun(runId);
         return textResult(projectRunForMcp(detail));
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound = /not found|no such|unknown run/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(
-          {
-            error: message,
-            status: notFound ? 404 : 500,
-          },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
@@ -197,7 +208,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "read_artifact",
     {
       description:
-        "Read a text artifact from a run workspace by relative path (contained under the run workspace).",
+        "Read a run-workspace artifact by relative path (contained under the run workspace). Known image extensions (png, jpeg, gif, webp) return an MCP image content block. UTF-8 text returns JSON { runId, path, content }. Non-UTF-8 non-image files return isError 400.",
       inputSchema: z.object({
         runId: z.string(),
         path: z.string(),
@@ -205,19 +216,30 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     },
     async ({ runId, path: artifactPath }) => {
       try {
-        const content = await readRunArtifact(store, runId, artifactPath);
-        return textResult({ runId, path: artifactPath, content });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound =
-          message.startsWith("Run not found") ||
-          message.startsWith("Artifact not found") ||
-          /no such|not found/i.test(message);
+        const bytes = await readRunArtifactBytes(store, runId, artifactPath);
+        const classified = classifyArtifactContent(artifactPath, bytes);
+        if (classified.kind === "image") {
+          return imageResult(classified.mimeType, bytes, {
+            runId,
+            path: artifactPath,
+            mimeType: classified.mimeType,
+          });
+        }
+        if (classified.kind === "utf8") {
+          return textResult({
+            runId,
+            path: artifactPath,
+            content: bytes.toString("utf8"),
+          });
+        }
         return textResult(
-          {
-            error: message,
-            status: notFound ? 404 : 400,
-          },
+          { error: "Artifact is not valid UTF-8 text", status: 400 },
+          true,
+        );
+      } catch (err) {
+        const mapped = mapStoreLookupError(err, { policy: "artifact" });
+        return textResult(
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
@@ -287,7 +309,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "describe_pipeline",
     {
       description:
-        "Describe a pipeline DAG: stages with needs, fork, and gate_kinds. Input is a filesystem pipeline path (same as start_run).",
+        "Describe a pipeline DAG from a filesystem path (same as start_run): stages with inbound needs (id, on, optional if), fork, gate_kinds, Clone Chain clone_cap and clone_mode, and feedback_loop, entry, and replay_safe when set.",
       inputSchema: z.object({
         pipeline: z.string(),
       }),
@@ -300,26 +322,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const loaded = await loadPipeline(pipeline.trim(), {
           cwd: projectRootForPath(deps, pipeline.trim()),
         });
-        const gateById = new Map(
-          loaded.stages.map((s) => [s.id, s.gate_kinds] as const),
-        );
-        const stages = loaded.dag.nodes.map((node) => ({
-          id: node.id,
-          needs:
-            node.needsEdges.length > 1
-              ? node.needsEdges.map((edge) => ({ id: edge.id, on: [...edge.on] }))
-              : node.needs,
-          ...(node.fork !== undefined ? { fork: node.fork } : {}),
-          ...(node.clone_cap !== undefined ? { clone_cap: node.clone_cap } : {}),
-          ...(gateById.get(node.id) !== undefined
-            ? { gate_kinds: gateById.get(node.id) }
-            : {}),
-        }));
-        return textResult({
-          id: loaded.pipeline.id,
-          path: loaded.pipelinePath,
-          stages,
-        });
+        return textResult(describePipeline(loaded));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return textResult({ error: message, status: 404 }, true);

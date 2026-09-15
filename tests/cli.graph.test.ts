@@ -301,7 +301,20 @@ describe("sf graph integration", { timeout: 30_000 }, () => {
     expect(result.status).toBe(0);
     const parsed = JSON.parse(result.stdout) as {
       nodes: Array<Record<string, unknown>>;
+      roots?: unknown;
+      childrenOf?: unknown;
+      stages?: unknown;
+      path?: unknown;
     };
+    expect(parsed).toEqual(
+      expect.objectContaining({
+        nodes: expect.any(Array),
+        roots: expect.any(Array),
+        childrenOf: expect.any(Object),
+      }),
+    );
+    expect(parsed).not.toHaveProperty("stages");
+    expect(parsed).not.toHaveProperty("path");
     const byId = Object.fromEntries(parsed.nodes.map((n) => [n.id, n]));
     expect(byId.decompose).toMatchObject({ clone_cap: 8, clone_mode: "parallel", entry: true });
     expect(byId.align).toMatchObject({ clone_cap: 8, clone_mode: "sequential" });

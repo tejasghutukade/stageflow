@@ -138,6 +138,70 @@ describe.each(kinds)("stage executions (%s)", (kind) => {
     ).rejects.toThrow(/not found/);
   });
 
+  it("readEnvelope(attempt) returns that execution envelope; omit is latest", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-att-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 1)).resolves.toEqual({
+      status: "failure",
+      summary: "fail",
+      artifacts: [],
+    });
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "ok",
+      artifacts: [],
+    });
+  });
+
+  it("readEnvelope(attempt) rejects when the execution is missing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-miss-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await seedTwoAttempts(store, run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 99)).rejects.toThrow(
+      /not found/,
+    );
+  });
+
+  it("readEnvelope(attempt) rejects a null execution envelope instead of stages fallback", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), `sf-exec-env-null-${kind}-`));
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.writeEnvelope(
+      run.runId,
+      "build",
+      { status: "success", summary: "latest-stages", artifacts: [] },
+      { attempt: 1 },
+    );
+    await store.createStageExecution(run.runId, "build");
+
+    await expect(store.readEnvelope(run.runId, "build", 2)).rejects.toThrow(
+      `Envelope not found: ${run.runId}/build`,
+    );
+    await expect(store.readEnvelope(run.runId, "build")).resolves.toEqual({
+      status: "success",
+      summary: "latest-stages",
+      artifacts: [],
+    });
+  });
+
   it("listStageEvents filters by attempt", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-exec-events-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });

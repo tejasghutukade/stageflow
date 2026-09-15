@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { cp, mkdtemp, realpath, writeFile, mkdir } from "node:fs/promises";
+import { cp, mkdtemp, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { describePipeline } from "../src/config/describePipeline.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   createCompletedOnlyStageHandle,
   type AgentPort,
@@ -15,8 +17,11 @@ import { projectRunDetail } from "../src/runstore/runProjection.js";
 import { startUiServer } from "../src/server/http.js";
 import { projectRunForMcp } from "../src/mcp/projectRun.js";
 import { readRunArtifact } from "../src/mcp/readArtifact.js";
+import { runResourceUri } from "../src/mcp/resources.js";
+import type { RunPipelineDagSnapshot, RunStore } from "../src/runstore/port.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
+import { mcpCall } from "./helpers/mcpCall.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
@@ -68,16 +73,11 @@ async function jsonFetch(url: string, init?: RequestInit) {
   return { status: res.status, body };
 }
 
-async function mcpCall(
+async function mcpRpc(
   base: string,
-  name: string,
-  args: Record<string, unknown> = {},
-  opts: { signal?: AbortSignal; meta?: Record<string, unknown> } = {},
+  method: string,
+  params: Record<string, unknown> = {},
 ) {
-  const params: Record<string, unknown> = { name, arguments: args };
-  if (opts.meta !== undefined) {
-    params._meta = opts.meta;
-  }
   const res = await fetch(`${base}/mcp`, {
     method: "POST",
     headers: {
@@ -87,31 +87,20 @@ async function mcpCall(
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
-      method: "tools/call",
+      method,
       params,
     }),
-    signal: opts.signal,
   });
   const text = await res.text();
-  const dataLine = text
-    .split("\n")
-    .find((line) => line.startsWith("data: "));
+  const dataLine = text.split("\n").find((line) => line.startsWith("data: "));
   if (!dataLine) {
-    throw new Error(`no SSE data in MCP response: ${text.slice(0, 200)}`);
+    throw new Error(`no SSE data in MCP ${method}: ${text.slice(0, 200)}`);
   }
-  const message = JSON.parse(dataLine.slice("data: ".length)) as {
+  return JSON.parse(dataLine.slice("data: ".length)) as {
     result?: {
-      content?: Array<{ type: string; text: string }>;
-      isError?: boolean;
+      contents?: Array<{ text?: string }>;
     };
     error?: unknown;
-  };
-  const contentText = message.result?.content?.[0]?.text ?? "";
-  return {
-    status: res.status,
-    isError: Boolean(message.result?.isError),
-    payload: contentText ? JSON.parse(contentText) : null,
-    raw: message,
   };
 }
 
@@ -742,6 +731,61 @@ describe("MCP tools and HTTP inline task", () => {
     const projected = projectRunForMcp(detail);
     expect(projected.stages[0]?.pending_prompt).toEqual(pending_prompt);
   });
+
+  it("projectRunForMcp copies cost and definition_id when the store snapshot has them", () => {
+    const detail = projectRunDetail(
+      {
+        run_id: "r1",
+        pipeline_id: "clone-chain",
+        created_at: "t",
+        status: "succeeded",
+      },
+      [
+        {
+          stage_id: "author-diagrams~2",
+          definition_id: "author-diagrams",
+          status: "succeeded",
+          events: [{ event: "started" }, { event: "succeeded" }],
+          envelope: { status: "success", summary: "ok", artifacts: [] },
+          artifacts: [],
+          cost_usd: 0.0123,
+        },
+      ],
+      "id: x\ngoal: y\n",
+    );
+    const projected = projectRunForMcp(detail);
+    expect(projected.total_cost_usd).toBe(0.0123);
+    expect(projected.stages[0]?.cost_usd).toBe(0.0123);
+    expect(projected.stages[0]?.definition_id).toBe("author-diagrams");
+    expect(projected).not.toHaveProperty("task_yaml");
+    expect(projected.stages[0]).not.toHaveProperty("events");
+  });
+
+  it("projectRunForMcp omits unused cost rather than inventing 0", () => {
+    const detail = projectRunDetail(
+      {
+        run_id: "r1",
+        pipeline_id: "docs-only",
+        created_at: "t",
+        status: "succeeded",
+      },
+      [
+        {
+          stage_id: "clarify",
+          status: "succeeded",
+          events: [{ event: "started" }],
+          envelope: { status: "success", summary: "ok", artifacts: [] },
+          artifacts: [],
+        },
+      ],
+      "id: x\ngoal: y\n",
+    );
+    const projected = projectRunForMcp(detail);
+    expect(projected).not.toHaveProperty("total_cost_usd");
+    expect(projected.stages[0]).not.toHaveProperty("cost_usd");
+    expect(projected).not.toHaveProperty("task_yaml");
+    expect(projected.stages[0]).not.toHaveProperty("events");
+  });
 });
 
 async function waitFor(
@@ -883,6 +927,20 @@ describe("MCP Tier 1 operator parity", () => {
         const detail = await store.readRun(runId);
         return detail.status === "succeeded";
       });
+
+      const clarifyEvents = await mcpCall(base, "list_stage_events", {
+        runId,
+        stageId: "clarify",
+      });
+      expect(clarifyEvents.isError).toBe(false);
+      const hitlEvents = clarifyEvents.payload.events as Array<{
+        event: string;
+      }>;
+      expect(hitlEvents.some((e) => e.event === "operator_prompt")).toBe(true);
+      expect(hitlEvents.some((e) => e.event === "operator_answer")).toBe(true);
+      expect(hitlEvents.some((e) => e.event === "feedback_loop_decided")).toBe(
+        false,
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -965,6 +1023,7 @@ describe("MCP Tier 1 operator parity", () => {
         stageId: "review",
         decision: "continue",
         loopId,
+        reason: "ship the brief",
       });
       expect(decided.isError).toBe(false);
       expect(decided.payload).toEqual({
@@ -976,6 +1035,30 @@ describe("MCP Tier 1 operator parity", () => {
       await waitFor(async () => {
         const detail = await store.readRun(runId);
         return detail.status === "succeeded";
+      });
+
+      const listedEvents = await mcpCall(base, "list_stage_events", {
+        runId,
+        stageId: "review",
+      });
+      expect(listedEvents.isError).toBe(false);
+      const events = listedEvents.payload.events as Array<{
+        event: string;
+        decision?: string;
+        loopId?: string;
+        reason?: string;
+      }>;
+      const names = events.map((e) => e.event);
+      const waitIdx = names.lastIndexOf("waiting_for_input");
+      const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+      const succeededIdx = names.indexOf("succeeded", decidedIdx + 1);
+      expect(decidedIdx).toBeGreaterThan(waitIdx);
+      expect(succeededIdx).toBeGreaterThan(decidedIdx);
+      expect(events[decidedIdx]).toMatchObject({
+        event: "feedback_loop_decided",
+        decision: "continue",
+        loopId,
+        reason: "ship the brief",
       });
     } finally {
       await new Promise<void>((resolve, reject) => {
@@ -1213,6 +1296,57 @@ describe("MCP Tier 1 operator parity", () => {
       expect(envelope.isError).toBe(false);
       expect(envelope.payload.envelope.summary).toBe("clarify-ok");
       expect(envelope.payload.envelope.payload).toEqual({ n: 1 });
+      expect(envelope.payload).not.toHaveProperty("attempt");
+
+      await store.writeEnvelope(
+        runId,
+        "clarify",
+        {
+          status: "success",
+          summary: "attempt-1-prior",
+          artifacts: [],
+          payload: { n: 1 },
+        },
+        { attempt: 1 },
+      );
+      const second = await store.createStageExecution(runId, "clarify");
+      expect(second.attempt).toBe(2);
+      await store.writeEnvelope(
+        runId,
+        "clarify",
+        {
+          status: "success",
+          summary: "attempt-2-latest",
+          artifacts: [],
+          payload: { n: 2 },
+        },
+        { attempt: 2 },
+      );
+
+      const latest = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+      });
+      expect(latest.isError).toBe(false);
+      expect(latest.payload.envelope.summary).toBe("attempt-2-latest");
+      expect(latest.payload).not.toHaveProperty("attempt");
+
+      const prior = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+        attempt: 1,
+      });
+      expect(prior.isError).toBe(false);
+      expect(prior.payload.attempt).toBe(1);
+      expect(prior.payload.envelope.summary).toBe("attempt-1-prior");
+
+      const missingAttempt = await mcpCall(base, "get_envelope", {
+        runId,
+        stageId: "clarify",
+        attempt: 99,
+      });
+      expect(missingAttempt.isError).toBe(true);
+      expect(missingAttempt.payload.status).toBe(404);
 
       const missingRun = await mcpCall(base, "list_stage_events", {
         runId: "missing",
@@ -1227,8 +1361,6 @@ describe("MCP Tier 1 operator parity", () => {
       });
       expect(missingStage.isError).toBe(true);
       expect(missingStage.payload.status).toBe(404);
-
-      void store;
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -1425,20 +1557,13 @@ describe("MCP Tier 1 operator parity", () => {
       expect(scoped.payload.ok).toBe(false);
       expect(scoped.payload.findings.length).toBeGreaterThan(0);
 
+      const diamondPath = pipelinePath("diamond-fan-in");
       const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in"),
+        pipeline: diamondPath,
       });
       expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in");
-      expect(described.payload.stages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            id: "research",
-          }),
-          expect.objectContaining({
-            id: "synthesize",
-          }),
-        ]),
+      expect(described.payload).toEqual(
+        describePipeline(await loadPipeline(diamondPath, { cwd: catalogRoot })),
       );
 
       const missing = await mcpCall(base, "describe_pipeline", {
@@ -1462,26 +1587,24 @@ describe("MCP Tier 1 operator parity", () => {
     }
   });
 
-  it("describe_pipeline exposes scalar needs and structured diamond join edges", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-"));
+  it("describe_pipeline payload equals describePipeline helper", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-eq-"));
     const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
 
     try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in"),
-      });
-      expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in");
-      const byId = Object.fromEntries(
-        (described.payload.stages as Array<{ id: string }>).map((s) => [s.id, s]),
-      );
-      expect(byId.clarify).toMatchObject({ id: "clarify", needs: null });
-      expect(byId.research).toMatchObject({ id: "research", needs: "clarify" });
-      expect(byId.validation).toMatchObject({ id: "validation", needs: "clarify" });
-      expect(byId.synthesize?.needs).toEqual([
-        { id: "research", on: ["succeeded"] },
-        { id: "validation", on: ["succeeded"] },
-      ]);
+      for (const name of [
+        "diamond-fan-in",
+        "clone-chain-smallest",
+        "route-if-eq",
+        "route-loop-basic",
+      ]) {
+        const pipeline = pipelinePath(name);
+        const described = await mcpCall(base, "describe_pipeline", { pipeline });
+        expect(described.isError).toBe(false);
+        expect(described.payload).toEqual(
+          describePipeline(await loadPipeline(pipeline, { cwd: catalogRoot })),
+        );
+      }
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -1489,51 +1612,12 @@ describe("MCP Tier 1 operator parity", () => {
     }
   });
 
-  it("describe_pipeline preserves reversed YAML declaration order for diamond join", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-diamond-rev-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in-reversed"),
-      });
-      expect(described.isError).toBe(false);
-      expect(described.payload.id).toBe("diamond-fan-in-reversed");
-      const synthesize = (
-        described.payload.stages as Array<{ id: string; needs: unknown }>
-      ).find((s) => s.id === "synthesize");
-      expect(synthesize?.needs).toEqual([
-        { id: "validation", on: ["succeeded"] },
-        { id: "research", on: ["succeeded"] },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
-  });
-
-  it("describe_pipeline exposes declared on sets for accepted-failure diamond", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-describe-accepted-"));
-    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]));
-
-    try {
-      const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: pipelinePath("diamond-fan-in-accepted"),
-      });
-      expect(described.isError).toBe(false);
-      const synthesize = (
-        described.payload.stages as Array<{ id: string; needs: unknown }>
-      ).find((s) => s.id === "synthesize");
-      expect(synthesize?.needs).toEqual([
-        { id: "research", on: ["succeeded", "failed", "skipped"] },
-        { id: "validation", on: ["succeeded"] },
-      ]);
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
-    }
+  it("describe_pipeline does not import graph ASCII", async () => {
+    const src = await readFile(
+      new URL("../src/mcp/catalogTools.ts", import.meta.url),
+      "utf8",
+    );
+    expect(src).not.toMatch(/renderGraph|graphRender|graphCommand/);
   });
 
   it("get_run diamond pipeline_track has both inbound synthesize edges", async () => {
@@ -1682,6 +1766,196 @@ describe("MCP Tier 1 operator parity", () => {
       expect(escaped.isError).toBe(true);
       expect(escaped.payload.status).toBe(400);
       expect(String(escaped.payload.error)).toMatch(/\.\.|must not contain/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns UTF-8 text as JSON", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-txt-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "artifacts",
+      "note.txt",
+    );
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), "hello artifact", "utf8");
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(false);
+      expect(result.payload).toEqual({
+        runId: created.runId,
+        path: rel,
+        content: "hello artifact",
+      });
+      expect(result.raw.result?.content?.[0]?.type).toBe("text");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns MCP image content for a png", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-png-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "screenshot",
+      "attempts",
+      "1",
+      "artifacts",
+      "page.png",
+    );
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(false);
+      expect(result.content[0]?.type).toBe("image");
+      expect(result.content[0]).toEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: png.toString("base64"),
+      });
+      expect(result.payload).toEqual({
+        runId: created.runId,
+        path: rel,
+        mimeType: "image/png",
+      });
+      expect(result.payload).not.toHaveProperty("data");
+      expect(JSON.stringify(result.payload)).not.toContain(png.toString("base64"));
+      expect(result.content[1]?.text).not.toContain(png.toString("base64"));
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact returns 400 for non-UTF-8 non-image bytes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-bin-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "artifacts",
+      "blob.zip",
+    );
+    const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff, 0xfe]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), zip);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.payload.status).toBe(400);
+      expect(String(result.payload.error)).toMatch(/UTF-8|binary/i);
+      expect(String(result.payload.error)).not.toContain("\uFFFD");
+      expect(JSON.stringify(result.payload)).not.toContain(zip.toString("base64"));
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("read_artifact denies a png under .pi-agent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-read-png-deny-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "screenshot",
+      "attempts",
+      "1",
+      ".pi-agent",
+      "page.png",
+    );
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    await writeFile(path.join(created.workspaceDir, rel), png);
+
+    const { server, base } = await withMcpServer(
+      root,
+      scriptedFakeAgent([]),
+      store,
+    );
+
+    try {
+      const result = await mcpCall(base, "read_artifact", {
+        runId: created.runId,
+        path: rel,
+      });
+      expect(result.isError).toBe(true);
+      expect(result.payload.status).toBe(400);
+      expect(String(result.payload.error)).toMatch(/Artifact path denied/);
+      expect(result.raw.result?.content?.[0]?.type).not.toBe("image");
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -2159,3 +2433,130 @@ describe("MCP Tier 2 wait_run", () => {
     }
   });
 });
+
+function cloneInstanceDag(): RunPipelineDagSnapshot {
+  return {
+    stage_ids: ["author-diagrams~2"],
+    roots: ["author-diagrams~2"],
+    childrenOf: {},
+    nodes: [
+      {
+        id: "author-diagrams~2",
+        needs: null,
+        needsEdges: [],
+        ancestors: [],
+        stageIndex: 0,
+        definition_id: "author-diagrams",
+      },
+    ],
+  };
+}
+
+async function seedSucceededStage(
+  store: RunStore,
+  runId: string,
+  stageId: string,
+  opts: { cost_usd?: number } = {},
+) {
+  await store.createStageExecution(runId, stageId);
+  await store.appendStageEvent(runId, stageId, { event: "started" }, { attempt: 1 });
+  await store.appendStageEvent(runId, stageId, { event: "succeeded" }, { attempt: 1 });
+  await store.updateStageExecution(runId, stageId, 1, {
+    status: "succeeded",
+    envelope: { status: "success", summary: "ok", artifacts: [] },
+    ...(opts.cost_usd !== undefined ? { cost_usd: opts.cost_usd } : {}),
+  });
+}
+
+async function readRunResourcePayload(base: string, runId: string) {
+  const read = await mcpRpc(base, "resources/read", {
+    uri: runResourceUri(runId),
+  });
+  const text = read.result?.contents?.[0]?.text ?? "{}";
+  return JSON.parse(text) as Record<string, unknown> & {
+    stages: Array<Record<string, unknown>>;
+  };
+}
+
+describe("MCP lean run projection fields", () => {
+  it("get_run, wait_run nested run, and run resource share cost and definition_id omit-or-present rules", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-lean-cost-"));
+    const store = createRunStore({ rootDir: root });
+    const withCost = await store.createRun({
+      pipelineId: "clone-chain",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineDag: cloneInstanceDag(),
+    });
+    await seedSucceededStage(store, withCost.runId, "author-diagrams~2", {
+      cost_usd: 0.0123,
+    });
+    const unused = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await seedSucceededStage(store, unused.runId, "clarify");
+
+    const { server, base } = await withMcpServer(root, scriptedFakeAgent([]), store);
+    try {
+      const getWithCost = await mcpCall(base, "get_run", { runId: withCost.runId });
+      const waitWithCost = await mcpCall(base, "wait_run", {
+        runId: withCost.runId,
+        until: "terminal",
+        timeout_ms: 2_000,
+      });
+      const resourceWithCost = await readRunResourcePayload(base, withCost.runId);
+
+      expect(getWithCost.isError).toBe(false);
+      expect(waitWithCost.isError).toBe(false);
+      expect(getWithCost.payload.total_cost_usd).toBe(0.0123);
+      expect(waitWithCost.payload.run.total_cost_usd).toBe(0.0123);
+      expect(resourceWithCost.total_cost_usd).toBe(0.0123);
+
+      const costStage = getWithCost.payload.stages.find(
+        (s: { stage_id: string }) => s.stage_id === "author-diagrams~2",
+      );
+      const waitStage = waitWithCost.payload.run.stages.find(
+        (s: { stage_id: string }) => s.stage_id === "author-diagrams~2",
+      );
+      const resourceStage = resourceWithCost.stages.find(
+        (s) => s.stage_id === "author-diagrams~2",
+      );
+      expect(costStage?.cost_usd).toBe(0.0123);
+      expect(costStage?.definition_id).toBe("author-diagrams");
+      expect(costStage?.events).toBeUndefined();
+      expect(waitStage?.cost_usd).toBe(0.0123);
+      expect(waitStage?.definition_id).toBe("author-diagrams");
+      expect(waitStage?.events).toBeUndefined();
+      expect(resourceStage?.cost_usd).toBe(0.0123);
+      expect(resourceStage?.definition_id).toBe("author-diagrams");
+      expect(resourceStage?.events).toBeUndefined();
+      expect(getWithCost.payload.task_yaml).toBeUndefined();
+      expect(waitWithCost.payload.run.task_yaml).toBeUndefined();
+      expect(resourceWithCost.task_yaml).toBeUndefined();
+
+      const getUnused = await mcpCall(base, "get_run", { runId: unused.runId });
+      const waitUnused = await mcpCall(base, "wait_run", {
+        runId: unused.runId,
+        until: "terminal",
+        timeout_ms: 2_000,
+      });
+      const resourceUnused = await readRunResourcePayload(base, unused.runId);
+
+      expect(getUnused.payload.total_cost_usd).toBeUndefined();
+      expect(waitUnused.payload.run.total_cost_usd).toBeUndefined();
+      expect(resourceUnused.total_cost_usd).toBeUndefined();
+      expect(getUnused.payload.stages[0]?.cost_usd).toBeUndefined();
+      expect(waitUnused.payload.run.stages[0]?.cost_usd).toBeUndefined();
+      expect(resourceUnused.stages[0]?.cost_usd).toBeUndefined();
+      expect(getUnused.payload.stages[0]?.events).toBeUndefined();
+      expect(waitUnused.payload.run.stages[0]?.events).toBeUndefined();
+      expect(resourceUnused.stages[0]?.events).toBeUndefined();
+      expect(getUnused.payload.task_yaml).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

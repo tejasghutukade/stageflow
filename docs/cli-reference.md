@@ -200,7 +200,7 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 
 Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`. `--json` is the `projectRun` object, including `pipeline_track` (diamond joins show both inbound edges). `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
 
-When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
+When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). On `on_max_replays: wait_for_human`, the loop source pass is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
 
 ### `sf runs verify`
 
@@ -291,7 +291,7 @@ sf runs feedback-decide \
 | `--stage` | Feedback-loop **source** stage id (required) |
 | `--loop` | Optional loop id when more than one loop could match |
 | `--decision` | `extend` — bump `max_replays` by one and accept the deferred `send_back`. `continue` — treat the source as succeeded and advance downstream. `abandon` — fail the source (and typically the run) |
-| `--reason` | Optional text recorded on `abandon` |
+| `--reason` | Optional text persisted on `feedback_loop_decided` for `extend`, `continue`, and `abandon` |
 | `--json` | `{ "ok": true, "effect": "extended"\|"continued"\|"abandoned", "loopId" }` |
 
 Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and `POST /api/runs/:runId/stages/:stageId/feedback-decision`. Host-down mutate rules apply (refused while `sf ui` / `sf mcp` health responds on the default port).

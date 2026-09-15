@@ -91,7 +91,14 @@ export async function bootstrapStageflowHost(
     mcpStateless: options.mcpStateless,
   });
   const mcpHandler = createMcpHttpHandler(
-    { manager, store, cwd, runChangeBus },
+    {
+      manager,
+      store,
+      cwd,
+      runChangeBus,
+      providerAuthContext: options.providerAuthContext,
+      projectRoot: rootDir,
+    },
     { mcpStateless },
   );
   return {

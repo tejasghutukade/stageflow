@@ -18,6 +18,7 @@ catalog:
     - examples/route-if-tour
     - examples/verify-tour
     - examples/retry-tour
+    - examples/mcp-hitl-tour
   tasks:
     - examples/generic-fan-in
     - examples/stage-mcp
@@ -36,6 +37,7 @@ catalog:
     - examples/route-if-tour
     - examples/verify-tour
     - examples/retry-tour
+    - examples/mcp-hitl-tour
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

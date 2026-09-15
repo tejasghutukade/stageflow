@@ -7,10 +7,12 @@ import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { AgentPort, StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import { loadTaskFromYaml } from "../src/config/loadTask.js";
+import { projectRun } from "../src/projection/projectRun.js";
 import { resolveFeedbackLoopDecision } from "../src/runtime/feedbackLoopDecision.js";
 import { runPipelineDag } from "../src/runtime/pipelineScheduler.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../src/runstore/pipelineDagSnapshot.js";
+import type { RunDetail } from "../src/runstore/port.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 import { pipelinePath, SAMPLE_TASK } from "./helpers/fixturePaths.js";
@@ -99,6 +101,47 @@ const sendBack = okEnvelope("send-back", {
   feedback_loop: { action: "send_back", target: "implement" },
 });
 
+function sourceReviewPass(detail: RunDetail, replayIndex = 0) {
+  return detail.feedback_loops?.[0]?.replays[replayIndex]?.stage_passes.find(
+    (pass) => pass.stage_id === "review",
+  );
+}
+
+type LooseStageEvent = { event: string; [key: string]: unknown };
+
+function assertDecidedTrail(
+  events: LooseStageEvent[],
+  expected: {
+    decision: "extend" | "continue" | "abandon";
+    loopId: string;
+    terminal: "succeeded" | "failed";
+    reason?: string;
+    omitReason?: boolean;
+  },
+) {
+  const names = events.map((e) => e.event);
+  const waitIdx = names.lastIndexOf("waiting_for_input");
+  const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+  const terminalIdx = names.indexOf(
+    expected.terminal,
+    decidedIdx === -1 ? waitIdx + 1 : decidedIdx + 1,
+  );
+  expect(waitIdx).toBeGreaterThanOrEqual(0);
+  expect(decidedIdx).toBeGreaterThan(waitIdx);
+  expect(terminalIdx).toBeGreaterThan(decidedIdx);
+  const decided = events[decidedIdx]!;
+  expect(decided.decision).toBe(expected.decision);
+  expect(decided.loopId).toBe(expected.loopId);
+  if (expected.omitReason) {
+    expect(decided).not.toHaveProperty("reason");
+  } else if (expected.reason !== undefined) {
+    expect(decided.reason).toBe(expected.reason);
+  }
+  if (expected.terminal === "failed" && expected.reason !== undefined) {
+    expect(events[terminalIdx]!.reason).toBe(expected.reason);
+  }
+}
+
 describe("runtime feedback-loop wait_for_human", () => {
   it("exhausts max_replays and waits without further replay or submit", async () => {
     const prepared = await prepareWaitForHumanRun();
@@ -144,6 +187,9 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.feedback_loops?.[0]?.replays[0]?.replay.status).toBe(
       "waiting_for_human",
     );
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("waiting");
+    expect(sourcePass?.finished_at).toBeUndefined();
   });
 
   it("extend raises max by one, schedules another replay, then continue succeeds", async () => {
@@ -177,7 +223,10 @@ describe("runtime feedback-loop wait_for_human", () => {
       maxActiveStagesPerRun: 4,
       executionMode: "inprocess",
       onFeedbackLoopWaiting: async ({ resolve }) => {
-        const decided = await resolve({ decision: "extend" });
+        const decided = await resolve({
+          decision: "extend",
+          reason: "one more replay",
+        });
         expect(decided.ok).toBe(true);
         if (decided.ok) expect(decided.effect).toBe("extended");
       },
@@ -194,6 +243,19 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(history.loop.state).toBe("continued");
     expect(history.loop.policy.max_replays).toBe(2);
     expect(history.replays).toHaveLength(2);
+    const replay1Source = sourceReviewPass(detail, 0);
+    expect(replay1Source?.status).not.toBe("waiting");
+    expect(replay1Source?.status).not.toBe("running");
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "extend",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      reason: "one more replay",
+    });
   });
 
   it("continue decision releases downstream without another replay", async () => {
@@ -240,6 +302,28 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(history.replays[0]?.replay.status).toBe("completed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("succeeded");
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("succeeded");
+    expect(sourcePass?.finished_at).toBeTruthy();
+    expect(sourcePass?.emitted_envelope).toEqual(
+      history.loop.deferred_send_back?.feedback_envelope,
+    );
+    const projectedPass = projectRun(detail)
+      .feedback_loops[0]
+      ?.replays[0]
+      ?.stage_passes.find((pass) => pass.stage_id === "review");
+    expect(projectedPass?.status).toBe("succeeded");
+    expect(projectedPass?.finished_at).toBeTruthy();
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "continue",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      omitReason: true,
+    });
   });
 
   it("abandon decision fails the run", async () => {
@@ -286,6 +370,19 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.feedback_loops![0]!.replays[0]?.replay.status).toBe("failed");
     const review = detail.stages.find((s) => s.stage_id === "review");
     expect(review?.status).toBe("failed");
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("failed");
+    expect(sourcePass?.finished_at).toBeTruthy();
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "abandon",
+      loopId: detail.feedback_loops![0]!.loop.loop_id,
+      terminal: "failed",
+      reason: "operator abandoned loop",
+    });
   });
 
   it("require_continue still fails closed at the limit", async () => {
@@ -387,14 +484,28 @@ describe("runtime feedback-loop wait_for_human", () => {
 
     const detail = await storeB.readRun(prepared.run.runId);
     const loopState = detail.feedback_loops![0]!.loop.state;
+    const events = await storeB.listStageEvents(prepared.run.runId, "review");
+    const decidedEvents = events.filter(
+      (e) => e.event === "feedback_loop_decided",
+    );
+    expect(decidedEvents).toHaveLength(1);
     if (first.ok && first.effect === "continued") {
       expect(loopState).toBe("continued");
       expect(detail.active_feedback_loop).toBeUndefined();
+      expect(decidedEvents[0]).toMatchObject({
+        decision: "continue",
+        loopId,
+      });
+      expect(decidedEvents[0]).not.toHaveProperty("reason");
     } else {
       expect(second.ok).toBe(true);
       if (second.ok) expect(second.effect).toBe("extended");
       expect(loopState).toBe("active");
       expect(detail.active_feedback_loop?.state).toBe("active");
+      expect(decidedEvents[0]).toMatchObject({
+        decision: "extend",
+        loopId,
+      });
     }
   });
 
@@ -428,6 +539,7 @@ describe("runtime feedback-loop wait_for_human", () => {
       store: prepared.store,
       runId: prepared.run.runId,
       decision: "continue",
+      reason: "ship the brief",
     });
     expect(decided.ok).toBe(true);
     if (decided.ok) expect(decided.effect).toBe("continued");
@@ -438,5 +550,22 @@ describe("runtime feedback-loop wait_for_human", () => {
     expect(detail.stages.find((s) => s.stage_id === "review")?.status).toBe(
       "succeeded",
     );
+    const history = detail.feedback_loops![0]!;
+    const sourcePass = sourceReviewPass(detail);
+    expect(sourcePass?.status).toBe("succeeded");
+    expect(sourcePass?.finished_at).toBeTruthy();
+    expect(sourcePass?.emitted_envelope).toEqual(
+      history.loop.deferred_send_back?.feedback_envelope,
+    );
+    const events = await prepared.store.listStageEvents(
+      prepared.run.runId,
+      "review",
+    );
+    assertDecidedTrail(events, {
+      decision: "continue",
+      loopId: history.loop.loop_id,
+      terminal: "succeeded",
+      reason: "ship the brief",
+    });
   });
 });

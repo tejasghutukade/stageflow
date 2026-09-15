@@ -18,7 +18,7 @@ http://127.0.0.1:3847/mcp
 
 The URL is printed on boot. Point Cursor or another MCP client at this URL while the host process is alive.
 
-Stage agents consuming author-declared MCP is a different surface. Settings can inspect git-root `.mcp.json` names and Check connect without a run; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) plus Settings.
+Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe git-root `.mcp.json` servers the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
 
 ## Sessions (how MCP works)
 
@@ -148,6 +148,58 @@ List manifest-declared task paths from the project catalog.
 }
 ```
 
+### `list_models`
+
+List catalog model ids from the same browse source as `GET /api/models`.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "models": [
+    "anthropic/claude-sonnet-4-5",
+    "cursor/auto",
+    "cursor/composer-2-5"
+  ]
+}
+```
+
+There is no model-write, filter, or provider-login tool.
+
+### `list_project_mcp`
+
+List git-root `.mcp.json` servers as names and coarse transport only (same helper as `GET /api/project-mcp`). List never interpolates, spawns, or returns env, headers, args, command, or URLs.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "status": "ok",
+  "servers": [
+    { "name": "local", "transport": "stdio" },
+    { "name": "github", "transport": "http" }
+  ]
+}
+```
+
+`status` is `ok`, `missing_catalog`, or `invalid_config`. A reserved `stageflow` entry fails the whole catalog (`invalid_config`, empty `servers`), matching HTTP.
+
+Inspect is not attach. Stage MCP YAML `mcp:` still allowlists what a stage receives — see [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
+
+### `probe_project_mcp`
+
+Probe one named git-root `.mcp.json` server with isolated connect-and-exit (same helper as `POST /api/project-mcp/:name/probe`). Aborting the MCP request maps to helper `cancelled`, not `wait_run` `aborted`. Probe does not attach servers to a stage.
+
+**Input:** `{ "name": "github" }`
+
+**Output:** `{ "name": "github", "status": "connected" }`
+
+`status` is one of `connected`, `needs_auth`, `connect_failed`, `unresolved_var`, `invalid_config`, `missing_catalog`, `cancelled`. Helper statuses stay in the success payload (`isError` only if the tool itself fails).
+
 ### `list_runs`
 
 List known pipeline runs from the SQLite store.
@@ -190,6 +242,41 @@ Lightweight count and identity of waiting stages — no `pending_prompt`, `waiti
 
 **Output:** `{ "count": number, "runs": [ { "runId", "stageId", "kind?" } ] }` — `kind` mirrors `list_waiting`'s `waiting_kind`.
 
+### `list_providers`
+
+List login-capable model providers with per-row auth readiness and a Pi-home detect summary (same helpers as HTTP `GET /api/providers`, `GET /api/providers/:id/auth`, and `GET /api/providers/detect`). Read-only: it does not log in, log out, or start OAuth.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "authShell": "pi",
+  "via": "pi",
+  "detect": {
+    "piHomeUsable": true,
+    "credentialSource": "sf_owned",
+    "provisional": false,
+    "source": "sf_owned"
+  },
+  "providers": [
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "supportsApiKey": true,
+      "supportsOauth": true,
+      "oauthLabel": "Claude Pro/Max",
+      "configured": true,
+      "authKind": "oauth",
+      "source": "stored"
+    }
+  ]
+}
+```
+
+Env-only providers are omitted (same membership as `GET /api/providers`). An unconfigured provider is still a successful result with `configured: false`. Responses never include API keys, tokens, `authPath`, or credential file contents.
+
 ### `answer_gate`
 
 Deliver an operator answer for a waiting stage (same semantics as `POST /api/runs/:id/stages/:stageId/answer`).
@@ -226,7 +313,7 @@ Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/
   "stageId": "review",
   "decision": "continue",
   "loopId": "…",
-  "reason": "optional abandon reason"
+  "reason": "optional reason"
 }
 ```
 
@@ -234,9 +321,9 @@ Resolve a feedback-loop `wait_for_human` decision (same semantics as `POST /api/
 
 | Decision | Effect |
 |----------|--------|
-| `extend` | Increase `max_replays` by one and accept the deferred `send_back` |
-| `continue` | Mark the source succeeded and release the loop hold so successors can run |
-| `abandon` | Fail the source (run typically fails); optional `reason` |
+| `extend` | Increase `max_replays` by one and accept the deferred `send_back`. Optional `reason` is persisted on `feedback_loop_decided`. |
+| `continue` | Mark the source succeeded and release the loop hold so successors can run. Optional `reason` is persisted on `feedback_loop_decided`. |
+| `abandon` | Fail the source (run typically fails). Optional `reason` is persisted on `feedback_loop_decided` and on `{ event: "failed", reason }`. |
 
 **Success:** `{ "ok": true, "effect": "extended"|"continued"|"abandoned", "loopId": "…" }`
 
@@ -328,7 +415,7 @@ Poll run status without loading the full event stream.
 
 **Input:** `{ "runId": "…" }`
 
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes).
+**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes). On `on_max_replays: wait_for_human`, the loop **source** pass in `feedback_loops[].replays[].stage_passes` is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. The projection includes `total_cost_usd` and per-stage `cost_usd` / `definition_id` when the store has them.
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
@@ -414,6 +501,8 @@ List persisted stage log events (lifecycle/activity). Optional `attempt` scopes 
 
 **Output:** `{ "runId", "stageId", "attempt?", "events": [ … ] }`
 
+Lifecycle events include `{ event: "feedback_loop_decided", decision, loopId, reason? }` after a `decide_feedback_loop` CAS succeeds and before the source is marked `succeeded` or `failed`.
+
 ### `get_stage_verification`
 
 Read the after-phase verify history for one stage. Each attempt contains its verification
@@ -445,17 +534,17 @@ recovered again in that run.
 
 ### `get_envelope`
 
-Read the full `StageEnvelope` for a stage (latest attempt).
+Read the full `StageEnvelope` for a stage. Optional `attempt` (omit = latest). A provided attempt reads that execution's stored envelope.
 
-**Input:** `{ "runId", "stageId" }`
+**Input:** `{ "runId", "stageId", "attempt?" }`
 
-**Output:** `{ "runId", "stageId", "envelope": { … } }`
+**Output:** `{ "runId", "stageId", "attempt?", "envelope": { … } }`
 
 Returns `404` when the run, stage, or envelope is missing. MCP does **not** synthesize an envelope for fork-skipped stages. CLI `envelope get` synthesizes `{ status: "skipped", summary: "stage was fork-skipped", artifacts: [], fork_choice: null }` when the stage is skipped and no envelope is stored.
 
 ### `read_artifact`
 
-Read a text artifact from a run workspace.
+Read a run-workspace artifact by relative path.
 
 **Input:**
 
@@ -466,9 +555,13 @@ Read a text artifact from a run workspace.
 }
 ```
 
-**Output:** `{ "runId", "path", "content" }`
+**Output** depends on the file:
 
-UTF-8 text only. Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
+- Known image extensions (`png`, `jpeg`/`jpg`, `gif`, `webp`) — mime is by extension, not magic bytes. Primary content is an MCP image block `{ "type": "image", "mimeType", "data" }` (`data` is standard base64). A second JSON text block may include `{ "runId", "path", "mimeType" }` identity and does not repeat file bytes.
+- Valid UTF-8 non-image files — JSON text `{ "runId", "path", "content" }`.
+- Non-image files that are not valid UTF-8 — `isError` with `{ "error", "status": 400 }`.
+
+Path must be relative, with no `..`, and contained under the run workspace. Denied: any `.pi-agent` path segment, and files named `auth.json` (same rules as CLI `sf artifact read`). Returns `404` for missing run or artifact.
 
 Note: `stages/<stageId>/attempts/…` paths are **run workspace** layout, not catalog directories.
 
@@ -509,7 +602,13 @@ Describe a pipeline DAG from a filesystem pipeline path (same locator style as `
 }
 ```
 
-Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` (inverted from `route`). Scalar `needs` stays a string or `null`. A multi-parent join exposes the structured array (each item `{ id, on }`), including default `on: ["succeeded"]` for string YAML items. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml). `sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
+Catalog YAML authors outbound `route`; `describe_pipeline` still returns the **resolved** inbound snapshot as `needs` from `loadPipeline` (inverted from `route`). It is JSON, not `sf graph` ASCII.
+
+Scalar `needs` stays a string or `null` when the stage has one parent, default `on: ["succeeded"]`, and no `if`. A single parent becomes a one-element structured array `{ id, on, if? }` when that edge has `if` or a non-default `on`. A multi-parent join exposes the structured array (each item `{ id, on }`, plus `if` when present), including default `on: ["succeeded"]` for string YAML items. Omit `if` when the predicate is absent. See [`diamond-fan-in.pipeline.yaml`](../tests/fixtures/pipelines/diamond-fan-in.pipeline.yaml).
+
+Stage objects also include optional `clone_cap` and `clone_mode` on a Clone Chain emitter, plus `feedback_loop`, `entry`, and `replay_safe` when those fields are set on the resolved node.
+
+`sf run --json --include stages` does not include this graph — use `get_run` or `sf runs show --json` for `pipeline_track`.
 
 ### `retry_stage`
 
@@ -571,10 +670,10 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
-- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks`)
-- No provider/settings/catalog-write MCP tools
-- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence); use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
-- Tools return JSON text content blocks
+- No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
+- No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
+- Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
+- Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
 
 ## See also

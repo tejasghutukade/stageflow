@@ -41,6 +41,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [route-if-tour](route-if-tour/) | Deterministic `if` tour: operators, composition, skip, join fire/miss | `sf ui`, then pick `route-if-tour` |
 | [verify-tour](verify-tour/) | Verify check types: artifact, command, checklist, payload_schema, gate, checkout_changes | `sf ui`, then pick `verify-tour` |
 | [retry-tour](retry-tour/) | Retry surfaces: emit soft-reject, automatic repair, manual recover, ordinary Retry | `sf ui`, then pick `retry-tour` |
+| [mcp-hitl-tour](mcp-hitl-tour/) | MCP HITL tour: free_text gate, ungated fan-out + Clone Chain join, wait_for_human loop, artifacts | `sf ui` / MCP `start_run`, then [README](mcp-hitl-tour/README.md) |
 
 Current wiring tours: [`route-wiring-smoke-test`](route-wiring-smoke-test/), [`route-if-tour`](route-if-tour/).
 

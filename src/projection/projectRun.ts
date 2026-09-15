@@ -25,6 +25,8 @@ export type StageProjection = {
   artifacts: string[];
   last_at?: string;
   pending_prompt?: AskOperatorPrompt;
+  definition_id?: string;
+  cost_usd?: number;
 };
 
 export type RunProjection = {
@@ -50,6 +52,7 @@ export type RunProjection = {
   failed_reason?: RunSummary["failed_reason"];
   active_feedback_loop?: FeedbackLoopRecord;
   feedback_loops: FeedbackLoopHistory[];
+  total_cost_usd?: number;
 };
 
 export function projectRun(detail: RunDetail): RunProjection {
@@ -98,6 +101,9 @@ export function projectRun(detail: RunDetail): RunProjection {
     ...(detail.active_feedback_loop !== undefined
       ? { active_feedback_loop: detail.active_feedback_loop }
       : {}),
+    ...(detail.total_cost_usd !== undefined
+      ? { total_cost_usd: detail.total_cost_usd }
+      : {}),
     feedback_loops: detail.feedback_loops ?? [],
     stages: detail.stages.map((stage) => ({
       stage_id: stage.stage_id,
@@ -123,6 +129,10 @@ export function projectRun(detail: RunDetail): RunProjection {
       ...(stage.pending_prompt
         ? { pending_prompt: stage.pending_prompt }
         : {}),
+      ...(stage.definition_id !== undefined
+        ? { definition_id: stage.definition_id }
+        : {}),
+      ...(stage.cost_usd !== undefined ? { cost_usd: stage.cost_usd } : {}),
     })),
   };
 }

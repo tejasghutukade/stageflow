@@ -6,6 +6,7 @@ import type { AbandonStageResult } from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
+  mapStoreLookupError,
 } from "../server/operatorResults.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
@@ -134,8 +135,8 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       try {
         await store.readRunMeta(runId);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return textResult({ error: message, status: 404 }, true);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        return textResult({ error: mapped.error, status: 404 }, true);
       }
       try {
         const detail = await store.readRun(runId);
@@ -149,10 +150,9 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         const events = await store.listStageEvents(runId, stageId, attempt);
         return textResult({ runId, stageId, attempt, events });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound = /not found|no such/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(
-          { error: message, status: notFound ? 404 : 500 },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
@@ -175,10 +175,9 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           await readStageVerificationHistory(store, runId, stageId),
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound = /not found|no such/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(
-          { error: message, status: notFound ? 404 : 500 },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
@@ -238,18 +237,19 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "get_envelope",
     {
       description:
-        "Read the full StageEnvelope for a run stage (latest attempt). Returns 404 when absent.",
+        "Read the full StageEnvelope for a run stage. Optional attempt (omit = latest). Returns 404 when absent.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
+        attempt: z.number().int().positive().optional(),
       }),
     },
-    async ({ runId, stageId }) => {
+    async ({ runId, stageId, attempt }) => {
       try {
         await store.readRunMeta(runId);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        return textResult({ error: message, status: 404 }, true);
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        return textResult({ error: mapped.error, status: 404 }, true);
       }
       try {
         const detail = await store.readRun(runId);
@@ -259,13 +259,12 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
             true,
           );
         }
-        const envelope = await store.readEnvelope(runId, stageId);
-        return textResult({ runId, stageId, envelope });
+        const envelope = await store.readEnvelope(runId, stageId, attempt);
+        return textResult({ runId, stageId, attempt, envelope });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const notFound = /not found|no such|envelope/i.test(message);
+        const mapped = mapStoreLookupError(err, { policy: "envelope" });
         return textResult(
-          { error: message, status: notFound ? 404 : 500 },
+          { error: mapped.error, status: mapped.status },
           true,
         );
       }
