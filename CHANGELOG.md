@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-15
+
+### Added
+
+- `get_health`'s MCP response now includes a `version` field, so a host integration can detect a behavior change that doesn't add or remove a whole tool
+- New lightweight `get_waiting_summary` MCP tool — a cheap count/identity list of waiting stages (no prompt bodies, artifacts, or questions) for status-bar badges, scoped by optional `runId` or `path`, spanning every project by default
+
 ## [0.20.0] - 2026-09-15
 
 ### Added

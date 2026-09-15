@@ -182,6 +182,14 @@ List stages currently in `waiting_for_input`.
 
 For `waiting_kind: "feedback_loop_decision"`, `feedback_loop_id` and `deferred_target` identify the exhausted loop.
 
+### `get_waiting_summary`
+
+Lightweight count and identity of waiting stages — no `pending_prompt`, `waiting_artifacts`, or `waiting_questions`. Use this for a status-bar badge or a small waiting-items list; use `list_waiting` when you need the full prompt detail.
+
+**Input:** `{ "runId": "…", "path": "…" }` — both optional. `runId` scopes to one run (same as `list_waiting`). `path` scopes to one project, derived via the same `findProjectRoot` walk-up used everywhere else in this service. Omitting both spans every project the store knows about.
+
+**Output:** `{ "count": number, "runs": [ { "runId", "stageId", "kind?" } ] }` — `kind` mirrors `list_waiting`'s `waiting_kind`.
+
 ### `answer_gate`
 
 Deliver an operator answer for a waiting stage (same semantics as `POST /api/runs/:id/stages/:stageId/answer`).
@@ -261,9 +269,12 @@ Server health and soft-max run capacity.
   "maxConcurrent": 3,
   "slotsAvailable": 3,
   "activeStageProcesses": 0,
-  "maxActiveStageProcesses": null
+  "maxActiveStageProcesses": null,
+  "version": "0.20.0"
 }
 ```
+
+`version` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
 
 Default `maxConcurrent` is 3 (override via `STAGEFLOW_MAX_CONCURRENT_RUNS` or console settings). `maxActiveStageProcesses` is `null` when unlimited.
 
