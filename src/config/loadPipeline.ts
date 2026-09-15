@@ -1,6 +1,7 @@
 import { access } from "node:fs/promises";
 import path from "node:path";
 import type {
+  InlinePipelineDefinition,
   LoadedPipeline,
   PipelineConfig,
   PipelineStageSource,
@@ -16,7 +17,11 @@ import {
   type PayloadSchemaMap,
 } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
-import { mergePipelineStages } from "./mergePipelineIncludes.js";
+import {
+  mergeInlinePipelineStages,
+  mergePipelineStages,
+  type RawMergedEntry,
+} from "./mergePipelineIncludes.js";
 import {
   normalizePipelineStageEntries,
   toWiringRefs,
@@ -137,6 +142,9 @@ export async function resolvePipelinePath(
   }
 }
 
+/** Synthetic `pipelinePath` for a `LoadedPipeline` built from an inline object with no backing file. */
+export const INLINE_PIPELINE_PATH = "<inline>";
+
 async function loadPipelineFromPath(
   pipelinePath: string,
   cwd: string,
@@ -150,6 +158,55 @@ async function loadPipelineFromPath(
     return loadFailure(mergeOutcome.issues);
   }
 
+  return buildLoadedPipelineFromMerge(mergeOutcome.value, {
+    projectRoot,
+    requireIo,
+    pipelinePath: normalizedPipelinePath,
+  });
+}
+
+export async function loadPipelineFromObjectOutcome(
+  raw: InlinePipelineDefinition,
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
+): Promise<LoadOutcome<LoadedPipeline>> {
+  const projectRoot = options.projectRoot ?? options.cwd ?? process.cwd();
+  const requireIo = options.requireIo !== false;
+
+  const mergeOutcome = await mergeInlinePipelineStages(raw);
+  if (!mergeOutcome.ok) {
+    return loadFailure(mergeOutcome.issues);
+  }
+
+  return buildLoadedPipelineFromMerge(mergeOutcome.value, {
+    projectRoot,
+    requireIo,
+    pipelinePath: INLINE_PIPELINE_PATH,
+  });
+}
+
+export async function loadPipelineFromObject(
+  raw: InlinePipelineDefinition,
+  options: { cwd?: string; projectRoot?: string; requireIo?: boolean } = {},
+): Promise<LoadedPipeline> {
+  const outcome = await loadPipelineFromObjectOutcome(raw, options);
+  if (!outcome.ok) {
+    throw new Error(outcome.issues[0].message);
+  }
+  return outcome.value;
+}
+
+async function buildLoadedPipelineFromMerge(
+  merge: {
+    entries: RawMergedEntry[];
+    pipelineId: string;
+    agent?: string;
+    model?: string;
+    schemas?: PayloadSchemaMap;
+    warnings: LoadIssue[];
+  },
+  options: { projectRoot: string; requireIo: boolean; pipelinePath: string },
+): Promise<LoadOutcome<LoadedPipeline>> {
+  const { projectRoot, requireIo, pipelinePath } = options;
   const {
     entries: rawEntries,
     pipelineId,
@@ -157,8 +214,8 @@ async function loadPipelineFromPath(
     model: pipelineModel,
     schemas: pipelineSchemas,
     warnings: mergeWarnings,
-  } = mergeOutcome.value;
-  const ctx = { pipelineId, path: normalizedPipelinePath };
+  } = merge;
+  const ctx = { pipelineId, path: pipelinePath };
   const warnings = [...mergeWarnings];
 
   const normalizeOutcome = normalizePipelineStageEntries(rawEntries, ctx);
@@ -351,7 +408,7 @@ async function loadPipelineFromPath(
       pipeline,
       stages: loadedStages,
       dag,
-      pipelinePath: normalizedPipelinePath,
+      pipelinePath,
       stageSources,
     },
     warnings,

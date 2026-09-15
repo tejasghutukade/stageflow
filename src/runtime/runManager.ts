@@ -3,6 +3,7 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
@@ -545,7 +546,7 @@ export class RunManager {
 
   async startRun(
     input: StartTaskInput & {
-      pipeline: string;
+      pipeline: string | InlinePipelineDefinition;
       task?: string | TaskFile;
       checkoutOverride?: string;
       skipGates?: boolean;
@@ -555,8 +556,12 @@ export class RunManager {
     },
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
-    const pipelineAbsDir = path.dirname(path.resolve(cwd, input.pipeline));
-    const derivedProjectRoot = findProjectRoot(pipelineAbsDir) ?? this.projectRoot;
+    // An inline pipeline has no filesystem anchor to derive a project root from.
+    const derivedProjectRoot =
+      typeof input.pipeline === "string"
+        ? (findProjectRoot(path.dirname(path.resolve(cwd, input.pipeline))) ??
+          this.projectRoot)
+        : this.projectRoot;
 
     let resolved;
     try {
@@ -1537,7 +1542,7 @@ export class RunManager {
 
   private async reserveAndStartPipeline(
     taskYaml: string,
-    pipeline: string,
+    pipeline: string | InlinePipelineDefinition,
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,

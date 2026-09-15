@@ -369,7 +369,9 @@ Start runs until `slotsAvailable` is `0`; then wait for a run to finish or raise
 
 ### `start_run`
 
-Start a pipeline run using a **filesystem pipeline path** and either a catalog task file or an inline task object.
+Start a pipeline run using a **filesystem pipeline path**, or an **inline
+pipeline definition** authored directly in the call, and either a catalog
+task file or an inline task object.
 
 **Input (task file):**
 
@@ -395,6 +397,38 @@ Start a pipeline run using a **filesystem pipeline path** and either a catalog t
   }
 }
 ```
+
+**Input (inline pipeline):**
+
+```json
+{
+  "pipeline": {
+    "id": "quick-check",
+    "stages": [
+      {
+        "id": "check",
+        "system_prompt": "Review the diff for obvious bugs.",
+        "io": {
+          "input": { "schema": { "type": "object" } },
+          "output": { "schema": { "type": "object" } }
+        }
+      }
+    ]
+  },
+  "task": { "id": "t", "goal": "Check this change" }
+}
+```
+
+An inline `pipeline` is the same pipeline model as a file — `id`, `stages: [...]`,
+each stage the same shape as a YAML stage body (`system_prompt`, `io.input.schema`/
+`io.output.schema`, optional `model`/`gate_kinds`/`mcp`/`verify`/`timeout_ms`/
+`route`) — validated and executed through the exact same path a file-based
+pipeline uses, so the same errors (missing `io`, bad DAG shape, duplicate
+stage id) come back the same way. The one thing an inline pipeline can't do
+is reference an external stage file (`uses:`) — every stage body must be
+inline, since the whole point is nothing saved to disk. A run started from
+an inline pipeline has no `pipeline_path` and cannot later be `rerun` — see
+below.
 
 Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus `task_path` or `task` — no skip-gates, no CI identity flags, and no `--checkout` override (checkout comes from `task.checkout` only). HITL always parks.
 
@@ -649,6 +683,11 @@ Start a new run from a stored run’s `pipeline_path` plus task YAML (`RunManage
 **Success:** `{ "runId": "…" }` (new run id)
 
 Fails if catalog locators are missing (`400` / `404`). May return the same busy codes as `start_run` (`busy_capacity`, `busy_checkout`).
+
+A run started from an inline pipeline (see `start_run`) has no `pipeline_path`
+to replay from, so `rerun` fails with this same "missing pipeline_path" error
+— there's no special-cased error for inline runs. If you want a run to be
+replayable later, save the pipeline to a file.
 
 ## Cursor configuration
 

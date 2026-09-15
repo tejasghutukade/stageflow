@@ -12,6 +12,7 @@ import { validateCatalog, type ValidationResult } from "../config/validateCatalo
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -43,9 +44,30 @@ const taskFileSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional(),
 });
 
+/**
+ * Deliberately thin: only enough shape to route to the inline-pipeline
+ * loader. Real structural validation (required io schemas, DAG shape, stage
+ * id uniqueness) happens downstream through the same validator a file-based
+ * pipeline goes through, so a caller gets the same ValidationFinding-shaped
+ * error either way instead of a raw schema-validation error.
+ */
+const inlinePipelineSchema = z
+  .object({
+    id: z.string().min(1),
+    stages: z.array(z.record(z.string(), z.unknown())).min(1),
+    agent: z.unknown().optional(),
+    model: z.unknown().optional(),
+    schemas: z.unknown().optional(),
+  })
+  .strict();
+
 const startRunSchema = z
   .object({
-    pipeline: z.string().describe("Filesystem path to a pipeline YAML file"),
+    pipeline: z
+      .union([z.string(), inlinePipelineSchema])
+      .describe(
+        "Filesystem path to a pipeline YAML file, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
+      ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
   })
@@ -161,18 +183,29 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run using a filesystem pipeline path and either task_path (catalog task file) or an inline task object. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (same checkout leased), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout.",
+        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (same checkout leased), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout.",
       inputSchema: startRunSchema,
     },
     async ({ pipeline, task_path, task }) => {
-      if (!pipeline.trim()) {
+      if (typeof pipeline === "string" && !pipeline.trim()) {
         return textResult({ error: "pipeline is required" }, true);
       }
       const taskInput = task_path ?? task;
       if (taskInput === undefined) {
         return textResult({ error: "Exactly one of task_path or task is required" }, true);
       }
-      const result = await manager.startRun({ pipeline, task: taskInput });
+      let result;
+      try {
+        result = await manager.startRun({ pipeline, task: taskInput });
+      } catch (err) {
+        if (err instanceof PipelineValidationError) {
+          return textResult(
+            { error: "Pipeline validation failed", validation: err.result },
+            true,
+          );
+        }
+        throw err;
+      }
       if (!result.ok) {
         const { ok: _ok, reason, ...rest } = result;
         return textResult({ error: reason, ...rest }, true);

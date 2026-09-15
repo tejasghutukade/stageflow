@@ -12,6 +12,15 @@ export type PipelineConfig = {
   schemas?: Record<string, unknown>;
 };
 
+/** An inline pipeline definition authored directly in a `start_run` call, with no backing file. */
+export type InlinePipelineDefinition = {
+  id: string;
+  stages: Array<Record<string, unknown>>;
+  agent?: unknown;
+  model?: unknown;
+  schemas?: unknown;
+};
+
 export type PipelineForkConfig = {
   select: "one" | "subset";
   allow_none: boolean;

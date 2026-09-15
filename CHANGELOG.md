@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-09-15
+
+### Added
+
+- `start_run`'s `pipeline` field now also accepts an inline pipeline definition object (`{ id, stages: [...] }`), not just a filesystem path — validated and executed through the exact same path a file-based pipeline uses, so a host integration can delegate a well-defined, typed task without first writing and saving a YAML file. No new tool, no stage-count limit, no special-cased single-stage mode. A run started this way has no `pipeline_path` and can't be `rerun` — save it to a file if you want that.
+
+### Fixed
+
+- MCP `start_run` now returns a structured `{ error, validation }` body on a pipeline validation failure, matching `POST /api/runs`, instead of an uncaught bare-string error
+
 ## [0.21.0] - 2026-09-15
 
 ### Added

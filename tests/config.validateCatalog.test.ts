@@ -638,3 +638,52 @@ describe("validateCatalog stage MCP catalog inspect", () => {
     }
   });
 });
+
+describe("loadPipelineValidated — inline pipeline objects", () => {
+  const REQUIRED_IO = {
+    io: {
+      input: { schema: { type: "object" } },
+      output: { schema: { type: "object" } },
+    },
+  };
+
+  it("accepts an inline pipeline object directly, same shape as a file-based load", async () => {
+    const result = await loadPipelineValidated(
+      {
+        id: "inline-demo",
+        stages: [
+          {
+            id: "plan",
+            system_prompt: "Do work",
+            model: "anthropic/claude-sonnet-4-5",
+            ...REQUIRED_IO,
+          },
+        ],
+      },
+      { cwd: REPO_ROOT },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.loaded.pipeline.id).toBe("inline-demo");
+    expect(result.loaded.stages).toHaveLength(1);
+  });
+
+  it("an inline pipeline validation failure produces the same finding shape a bad file would", async () => {
+    const result = await loadPipelineValidated(
+      {
+        id: "inline-broken",
+        stages: [{ id: "plan", system_prompt: "Do work" }],
+      },
+      { cwd: REPO_ROOT },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.findings.some((f) => f.code === "stage.invalid_io")).toBe(true);
+  });
+
+  it("still accepts a plain string path — widened signature doesn't affect the existing file-based call", async () => {
+    clearFindProjectRootCacheForTests();
+    const result = await loadPipelineValidated(SINGLE_PIPELINE, { cwd: REPO_ROOT });
+    expect(result.ok).toBe(true);
+  });
+});
