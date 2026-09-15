@@ -65,6 +65,9 @@ describe("stageflow-run SKILL.md", () => {
   it("keeps the MCP submit path and does not mandate chat-only gates", () => {
     expect(gateSection).toMatch(/list_waiting/);
     expect(gateSection).toMatch(/answer_gate/);
+    expect(gateSection).toMatch(/waiting_kind/);
+    expect(gateSection).toMatch(/feedback_loop_decision/);
+    expect(gateSection).toMatch(/decide_feedback_loop/);
     expect(gateSection).toContain("references/native-question-ui.md");
     expect(gateSection).not.toMatch(/Collect the human's reply in this chat/);
     expect(gateSection).not.toMatch(/Ask once/);
@@ -75,6 +78,7 @@ describe("stageflow-run SKILL.md", () => {
   it("uses host-down CLI wait/answer instead of a disposable MCP bridge", () => {
     expect(body).toMatch(/sf runs waiting/);
     expect(body).toMatch(/sf runs answer/);
+    expect(body).toMatch(/sf runs feedback-decide/);
     expect(body).toMatch(/sf runs wait/);
     expect(body).not.toMatch(/## Bridge/);
     expect(body).not.toMatch(/start `sf mcp --mcp-stateless`/);
@@ -87,14 +91,48 @@ describe("stageflow-run SKILL.md", () => {
       "utf8",
     );
     expect(controlSurface).toMatch(
-      /Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`\./,
+      /Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs feedback-decide`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`\./,
     );
+    expect(controlSurface).toMatch(/decide_feedback_loop/);
+    expect(controlSurface).toMatch(/describe_pipeline/);
+    expect(controlSurface).toMatch(/validate/);
+    expect(controlSurface).toMatch(/read_artifact/);
+    expect(controlSurface).toMatch(/list_providers/);
+    expect(controlSurface).toMatch(/list_models/);
+    expect(controlSurface).toMatch(/list_project_mcp/);
+    expect(controlSurface).toMatch(/probe_project_mcp/);
+    expect(controlSurface).not.toMatch(/retry_stage/);
+    expect(controlSurface).not.toMatch(/recover_manual_stage/);
     expect(controlSurface).not.toMatch(/sf runs retry/);
     const mcpCall = readFileSync(path.join(skillDir, "scripts", "mcp-call.mjs"), "utf8");
-    expect(mcpCall).toMatch(/"answer_gate"/);
+    for (const name of [
+      "wait_run",
+      "answer_gate",
+      "decide_feedback_loop",
+      "list_providers",
+      "list_models",
+      "list_project_mcp",
+      "probe_project_mcp",
+      "list_pipelines",
+      "start_run",
+      "get_run",
+      "get_health",
+      "list_runs",
+      "read_artifact",
+      "describe_pipeline",
+      "validate",
+    ]) {
+      expect(mcpCall).toMatch(new RegExp(`"${name}"`));
+    }
     expect(mcpCall).not.toMatch(/retry_stage/);
+    expect(mcpCall).not.toMatch(/resume_stage/);
     expect(mcpCall).not.toMatch(/abandon_stage/);
+    expect(mcpCall).not.toMatch(/recover_manual_stage/);
+    expect(mcpCall).not.toMatch(/stop_manual_recovery/);
     expect(mcpCall).not.toMatch(/"rerun"/);
+    expect(body).toMatch(/decide_feedback_loop/);
+    expect(body).not.toMatch(/ignore mcp-call/i);
+    expect(body).not.toMatch(/bypass mcp-call/i);
   });
 
   it("locks picker routing, harvest, and confirm submit shape in the reference", () => {

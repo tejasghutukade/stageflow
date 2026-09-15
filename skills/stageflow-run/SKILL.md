@@ -47,7 +47,7 @@ If this chat already has a `runId` and the request is check, answer, or continue
 
 Prefer this harness's native Stageflow MCP tools when their names are already in the tool list. When they are not, call [`scripts/mcp-call.mjs`](scripts/mcp-call.mjs) — see [`references/mcp-call.md`](references/mcp-call.md). Use `--stateless` only when the **user** started the host with `--mcp-stateless`. Do not start `sf mcp` from this skill.
 
-Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `get_health`. Host question tools already in this harness's tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`) are for [Gate](#gate) presentation, not Stageflow MCP.
+Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `list_runs`, `answer_gate`, `decide_feedback_loop`, `read_artifact`, `describe_pipeline`, `validate`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`, `get_health`. Host question tools already in this harness's tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`) are for [Gate](#gate) presentation, not Stageflow MCP.
 
 ## MCP path
 
@@ -79,9 +79,19 @@ Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`
 
 ### Gate
 
-Read [`references/native-question-ui.md`](references/native-question-ui.md) before presenting a pending prompt.
-
 1. `list_waiting` with `{ "runId" }`.
+
+If `waiting_kind` is `feedback_loop_decision`, do not use [`references/native-question-ui.md`](references/native-question-ui.md) or `answer_gate`:
+
+1. Print the pending prompt text **verbatim**.
+2. Present extend / continue / abandon (picker if a host question tool is already in this harness's tool list; otherwise this chat).
+3. `decide_feedback_loop` with `{ "runId", "stageId", "decision" }` (`extend` | `continue` | `abandon`; optional `loopId` / `reason`).
+4. Return to [Wait](#wait).
+
+**Done when** `decide_feedback_loop` returns `{ "ok": true }` and Wait is re-entered. On `isError` (404 / 409), print the payload and collect a corrected decision the same way. Do not submit a loop decision through `answer_gate`.
+
+Otherwise this is a HITL gate. Read [`references/native-question-ui.md`](references/native-question-ui.md) before presenting a pending prompt.
+
 2. Print the pending prompt text **verbatim** (and artifacts / sub-questions when present).
 3. Present the decision as that reference directs:
    - If a host question tool is already in this harness's tool list and the gate is representable, invoke that picker. For `multi_question`, one picker call with one question per sub-item when **every** sub-question is representable, then one `answer_gate`; otherwise the **whole** gate in this chat.
@@ -125,9 +135,9 @@ Parse the single JSON document.
 
 ## CLI wait
 
-Host down after `sf run` exit `2`, or when this chat already has a `runId` and the host is down. Do not start `sf mcp`. Presentation follows [`references/native-question-ui.md`](references/native-question-ui.md). Submit with `sf runs answer --json`.
+Host down after `sf run` exit `2`, or when this chat already has a `runId` and the host is down. Do not start `sf mcp`. HITL presentation follows [`references/native-question-ui.md`](references/native-question-ui.md). Submit HITL with `sf runs answer --json`. If `waiting_kind` is `feedback_loop_decision`, present extend / continue / abandon and submit with `sf runs feedback-decide --json` — not `sf runs answer`.
 
-1. Probe again with [`../stageflow/scripts/detect-host.mjs`](../stageflow/scripts/detect-host.mjs) (the host may have appeared). Probe before each `sf runs answer`.
+1. Probe again with [`../stageflow/scripts/detect-host.mjs`](../stageflow/scripts/detect-host.mjs) (the host may have appeared). Probe before each `sf runs answer` or `sf runs feedback-decide`.
 2. **Up:** use that host — native tools if present, otherwise `mcp-call.mjs` (omit `--stateless` unless the user started the host with `--mcp-stateless`). Continue at [Gate](#gate).
 3. **Down:**
 
@@ -135,7 +145,15 @@ Host down after `sf run` exit `2`, or when this chat already has a `runId` and t
 sf runs waiting --run <runId> --json
 ```
 
-Print the pending prompt **verbatim**. Present it as native-question-ui directs (picker or chat). Map the reply with the [Gate](#gate) kind table.
+If `waiting_kind` is `feedback_loop_decision`, present extend / continue / abandon (picker or chat). Then:
+
+```
+sf runs feedback-decide --run <runId> --stage <stageId> --decision extend|continue|abandon --json
+```
+
+Success is `{ "ok": true }` exit `0` even if the run parks again. Do not treat decide as terminal.
+
+Otherwise print the pending prompt **verbatim**. Present it as native-question-ui directs (picker or chat). Map the reply with the [Gate](#gate) kind table.
 
 ```
 sf runs answer --run <runId> --stage <stageId> --answer '<json>' --json
@@ -151,13 +169,13 @@ A shorter `--timeout-ms` is fine when the harness timeout is tight. Default `600
 
 | `reason` | next |
 |---|---|
-| `waiting` or `already` with a waiting snapshot | `sf runs waiting` then answer |
+| `waiting` or `already` with a waiting snapshot | `sf runs waiting` then answer or feedback-decide |
 | `terminal` | [Report](#report) |
 | `timeout` | call `sf runs wait` again |
 
 Wait abort (exit `130`, `{ "error", "code": "aborted" }`) → [Report](#report): the run continues, resumable later. Stop. Do not reuse `sf run` exit `2` for wait.
 
-4. If `sf runs answer` refuses because the host came up, continue that gate via MCP [Gate](#gate). Do not dual-write.
+4. If `sf runs answer` or `sf runs feedback-decide` refuses because the host came up, continue that gate via MCP [Gate](#gate). Do not dual-write.
 
 If this chat ends before terminal, say the run stays in `.stageflow/` and to continue by re-invoking this skill (or starting a host and using MCP).
 
@@ -179,4 +197,4 @@ MCP `get_run` / `wait_run` and `sf runs wait` / `sf runs show` `--json` carry li
 
 ## Non-goals
 
-This job starts, watches, and answers runs. It does not require `sf ui`. The operator console is not the answer path. It does not register or invent an MCP tool. It does not start `sf mcp`. It does not retry, abandon, or rerun stages.
+This job starts, watches, and answers runs. It does not require `sf ui`. The operator console is not the answer path. It does not register or invent an MCP tool. It does not start `sf mcp`. It does not retry, resume, abandon, recover, or rerun stages.

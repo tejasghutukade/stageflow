@@ -8,7 +8,16 @@ const ALLOWED_TOOLS = new Set([
   "get_run",
   "wait_run",
   "list_waiting",
+  "list_runs",
   "answer_gate",
+  "decide_feedback_loop",
+  "read_artifact",
+  "describe_pipeline",
+  "validate",
+  "list_providers",
+  "list_models",
+  "list_project_mcp",
+  "probe_project_mcp",
   "get_health",
 ]);
 const PROTOCOL_VERSION = "2025-03-26";
