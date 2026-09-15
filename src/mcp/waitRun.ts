@@ -1,5 +1,6 @@
 import type { RunProjection } from "../projection/projectRun.js";
 import type { RunStore } from "../runstore/port.js";
+import { mapStoreLookupError } from "../server/operatorResults.js";
 import { projectRunForMcp } from "./projectRun.js";
 
 export type WaitUntil = "any" | "waiting" | "terminal";
@@ -151,12 +152,11 @@ export async function waitRun(opts: WaitRunOpts): Promise<WaitRunResult> {
     try {
       detail = await opts.store.readRun(opts.runId);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const notFound = /not found|no such|unknown run/i.test(message);
+      const mapped = mapStoreLookupError(err, { policy: "run" });
       return {
         ok: false,
-        error: message,
-        status: notFound ? 404 : 500,
+        error: mapped.error,
+        status: mapped.status,
       };
     }
 

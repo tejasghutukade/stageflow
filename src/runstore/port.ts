@@ -452,7 +452,11 @@ export interface RunStore {
     envelope: StageEnvelope,
     options?: { attempt?: number },
   ): Promise<void>;
-  readEnvelope(runId: string, stageId: string): Promise<StageEnvelope>;
+  readEnvelope(
+    runId: string,
+    stageId: string,
+    attempt?: number,
+  ): Promise<StageEnvelope>;
   appendStageEvent(
     runId: string,
     stageId: string,

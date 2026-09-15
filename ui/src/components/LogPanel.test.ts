@@ -116,6 +116,42 @@ describe("buildLogPanelSteps", () => {
     expect(steps.map((s) => s.label)).toEqual(["Stage started", "Agent started"]);
   });
 
+  it("labels a feedback loop decision as a system step with the reason", () => {
+    const events: StageLogEvent[] = [
+      {
+        event: "feedback_loop_decided",
+        decision: "continue",
+        loopId: "loop-1",
+        reason: "ship the brief",
+      },
+    ];
+    const steps = buildLogPanelSteps(events);
+    expect(steps).toEqual([
+      {
+        id: "step-0",
+        kind: "system",
+        label: "Feedback loop decided",
+        status: "succeeded",
+        detail: "continue — ship the brief",
+        at: undefined,
+        defaultExpanded: false,
+        sourceEvent: "feedback_loop_decided",
+      },
+    ]);
+  });
+
+  it("describes a feedback loop decision without a reason as decision-only", () => {
+    const steps = buildLogPanelSteps([
+      { event: "feedback_loop_decided", decision: "extend", loopId: "loop-1" },
+    ]);
+    expect(steps[0]).toMatchObject({
+      kind: "system",
+      label: "Feedback loop decided",
+      status: "succeeded",
+      detail: "extend",
+    });
+  });
+
   it("labels a Read tool call with just the filename, and hides its result content", () => {
     const events: StageLogEvent[] = [
       { event: "tool_start", toolName: "Read", toolCallId: "c1", argsPreview: '{"file_path":"/repo/src/index.ts"}' },

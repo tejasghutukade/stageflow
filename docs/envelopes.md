@@ -126,7 +126,7 @@ On replay, agents see a **Feedback Loop Context** section (JSON) with loop/repla
 
 After `max_replays`, behavior follows `on_max_replays` (`require_continue` or `wait_for_human`). Human decisions: [CLI](cli-reference.md#sf-runs-feedback-decide), [MCP `decide_feedback_loop`](mcp.md#decide_feedback_loop), or `POST /api/runs/:runId/stages/:stageId/feedback-decision`.
 
-Walkthrough: [`examples/feedback-loop/`](../examples/feedback-loop/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
+Walkthroughs: [`examples/feedback-loop/`](../examples/feedback-loop/), [`examples/mcp-hitl-tour/`](../examples/mcp-hitl-tour/). Fixture: [`feedback-loop.pipeline.yaml`](../tests/fixtures/pipelines/feedback-loop.pipeline.yaml).
 
 ### io schemas {#io-schemas}
 

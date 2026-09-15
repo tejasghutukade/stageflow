@@ -27,3 +27,45 @@ export function mapStartFailure(
   const { ok: _ok, status: _status, reason, ...rest } = result;
   return { error: reason, ...rest };
 }
+
+export type StoreLookupPolicy = "run" | "artifact" | "envelope";
+
+export type StoreLookupKind = "not_found" | "denied" | "error";
+
+export type StoreLookupMapped = {
+  error: string;
+  status: number;
+  kind: StoreLookupKind;
+};
+
+export function mapStoreLookupError(
+  err: unknown,
+  opts: { policy: StoreLookupPolicy },
+): StoreLookupMapped {
+  const error = err instanceof Error ? err.message : String(err);
+
+  if (opts.policy === "artifact") {
+    if (error === "Artifact path denied") {
+      return { error, status: 400, kind: "denied" };
+    }
+    const notFound =
+      error.startsWith("Run not found") ||
+      error.startsWith("Artifact not found") ||
+      /no such|not found/i.test(error);
+    return {
+      error,
+      status: notFound ? 404 : 400,
+      kind: notFound ? "not_found" : "error",
+    };
+  }
+
+  const notFound =
+    opts.policy === "envelope"
+      ? /not found|no such|envelope/i.test(error)
+      : /not found|no such|unknown run/i.test(error);
+  return {
+    error,
+    status: notFound ? 404 : 500,
+    kind: notFound ? "not_found" : "error",
+  };
+}

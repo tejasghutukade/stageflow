@@ -19,10 +19,10 @@ Start a host with `sf ui` or `sf mcp` when the user wants MCP. Do not auto-start
 
 ## When the host is up
 
-Use MCP tools over the Streamable HTTP endpoint at `{baseUrl}/mcp`. Tool names and payloads live in [docs/mcp.md](../../../docs/mcp.md). Typical talking-job tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `get_envelope`, `read_artifact`, `validate`, `get_health`.
+Use MCP tools over the Streamable HTTP endpoint at `{baseUrl}/mcp`. Tool names and payloads live in [docs/mcp.md](../../../docs/mcp.md). Typical talking-job tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`, `get_envelope`, `read_artifact`, `validate`, `describe_pipeline`, `get_health`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`.
 
 ## When the host is down
 
-Use the `sf` CLI. Command names and flags live in [docs/cli-reference.md](../../../docs/cli-reference.md). Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`.
+Use the `sf` CLI. Command names and flags live in [docs/cli-reference.md](../../../docs/cli-reference.md). Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs feedback-decide`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`.
 
 Probe before each mutating `sf runs` verb. If the probe is **up** or the command refuses because a host is up, continue that gate via MCP — do not start a second mutating writer, and do not start `sf mcp` as a disposable bridge.

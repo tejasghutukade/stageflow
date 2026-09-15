@@ -148,6 +148,8 @@ describe("runRunsCommand feedback-decide", () => {
         "review",
         "--decision",
         "continue",
+        "--reason",
+        "ship the brief",
         "--json",
       ],
       {
@@ -173,6 +175,19 @@ describe("runRunsCommand feedback-decide", () => {
     const after = await store.readRun(started.runId);
     expect(after.status).toBe("succeeded");
     expect(after.feedback_loops[0]?.loop.state).toBe("continued");
+    const events = await store.listStageEvents(started.runId, "review");
+    const names = events.map((e) => e.event);
+    const waitIdx = names.lastIndexOf("waiting_for_input");
+    const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+    const succeededIdx = names.indexOf("succeeded", decidedIdx + 1);
+    expect(decidedIdx).toBeGreaterThan(waitIdx);
+    expect(succeededIdx).toBeGreaterThan(decidedIdx);
+    expect(events[decidedIdx]).toMatchObject({
+      event: "feedback_loop_decided",
+      decision: "continue",
+      loopId,
+      reason: "ship the brief",
+    });
   });
 
   it("abandon fails the run", async () => {
@@ -227,6 +242,22 @@ describe("runRunsCommand feedback-decide", () => {
     expect(payload.effect).toBe("abandoned");
     const after = await store.readRun(started.runId);
     expect(after.status).toBe("failed");
+    const events = await store.listStageEvents(started.runId, "review");
+    const names = events.map((e) => e.event);
+    const waitIdx = names.lastIndexOf("waiting_for_input");
+    const decidedIdx = names.indexOf("feedback_loop_decided", waitIdx + 1);
+    const failedIdx = names.indexOf("failed", decidedIdx + 1);
+    expect(decidedIdx).toBeGreaterThan(waitIdx);
+    expect(failedIdx).toBeGreaterThan(decidedIdx);
+    expect(events[decidedIdx]).toMatchObject({
+      event: "feedback_loop_decided",
+      decision: "abandon",
+      reason: "operator abandoned",
+    });
+    expect(events[failedIdx]).toMatchObject({
+      event: "failed",
+      reason: "operator abandoned",
+    });
   });
 
   it("probeHost up exits 1 without mutating", async () => {

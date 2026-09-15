@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { RunStore } from "../runstore/port.js";
@@ -32,6 +33,25 @@ export function artifactMediaType(relativePath: string): string | undefined {
     default:
       return undefined;
   }
+}
+
+export type ClassifiedArtifactContent =
+  | { kind: "image"; mimeType: string }
+  | { kind: "utf8" }
+  | { kind: "binary" };
+
+export function classifyArtifactContent(
+  relativePath: string,
+  bytes: Buffer,
+): ClassifiedArtifactContent {
+  const mimeType = artifactMediaType(relativePath);
+  if (mimeType !== undefined) {
+    return { kind: "image", mimeType };
+  }
+  if (isUtf8(bytes)) {
+    return { kind: "utf8" };
+  }
+  return { kind: "binary" };
 }
 
 async function resolveRunArtifactFile(

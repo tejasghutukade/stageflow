@@ -190,7 +190,7 @@ Runtime state lives in **`<git-root>/.stageflow/`** when inside a git repository
 
 Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
 
-HITL-aware tools include `wait_run`, `answer_gate`, and `list_waiting`. Full tool list: [docs/mcp.md](docs/mcp.md).
+HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_feedback_loop`. Inspect tools (`list_providers`, `list_models`, `describe_pipeline`, …) are read-only. Full tool list: [docs/mcp.md](docs/mcp.md).
 
 Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
 
@@ -222,6 +222,7 @@ If you want deterministic YAML routing across many agents, look at [Conductor](h
 | [playwright-mcp](examples/playwright-mcp/) | One stage: open a page and save a PNG screenshot (Playwright MCP) |
 | [context7-mcp](examples/context7-mcp/) | Three stages: resolve a library, fetch docs, write a brief (Context7 MCP) |
 | [github-release](examples/github-release/) | Dogfood: draft + publish GitHub Release |
+| [mcp-hitl-tour](examples/mcp-hitl-tour/) | MCP-first HITL: gates, fan-out/join, `wait_for_human` decide |
 | [ci-validate](examples/ci-validate/) | Strict validate in CI |
 
 Index: [examples/README.md](examples/README.md)
