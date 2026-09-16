@@ -11,6 +11,7 @@ import {
   applyForkSkipsFromEnvelopes,
   hydrateScheduleFromStore,
   hydrateScheduleForRetryRoots,
+  resumeRun,
   runPipelineDag,
 } from "../src/runtime/pipelineScheduler.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
@@ -944,5 +945,103 @@ describe("forward route if eq scheduling", () => {
     );
     expect(agent.openCounts.get("page")).toBe(1);
     expect(agent.openCounts.get("notify")).toBe(1);
+  });
+});
+
+describe("resume after exclusive route-if", () => {
+  it("live startRun skips the unused exclusive sibling", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-excl-live-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = stageKeyedAgent({
+      decide: [
+        {
+          type: "emit",
+          envelope: okEnvelope("decide-ok", { payload: { branch: "branch-a" } }),
+        },
+      ],
+      "branch-a": [{ type: "emit", envelope: okEnvelope("branch-a-ok") }],
+      "branch-b": [{ type: "emit", envelope: okEnvelope("branch-b-ok") }],
+    });
+
+    const manager = new RunManager({ agent, store, cwd: fixtures });
+    const started = await manager.startRun({
+      task: SAMPLE_TASK,
+      pipeline: pipelinePath("route-if-exclusive"),
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+
+    await waitFor(async () => {
+      const meta = await store.readRunMeta(started.runId);
+      return meta.status === "succeeded" || meta.status === "failed";
+    });
+
+    const detail = await store.readRun(started.runId);
+    expect(detail.status).toBe("succeeded");
+    expect(detail.stages.find((s) => s.stage_id === "branch-a")?.status).toBe(
+      "succeeded",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "branch-b")?.status).toBe(
+      "skipped",
+    );
+    expect(agent.openCounts.get("branch-a")).toBe(1);
+    expect(agent.openCounts.get("branch-b")).toBeUndefined();
+  });
+
+  it("resumeRun after decide success skips the unused exclusive sibling", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-route-if-excl-resume-"));
+    const store = createRunStore({ rootDir: root });
+    const taskYaml = await readFile(SAMPLE_TASK, "utf8");
+    const task = loadTaskFromYaml(taskYaml, SAMPLE_TASK);
+    const loaded = await loadPipeline(pipelinePath("route-if-exclusive"), {
+      cwd: fixtures,
+    });
+    const run = await store.createRun({
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+    });
+
+    const envelope = okEnvelope("decide-ok", { payload: { branch: "branch-a" } });
+    await store.ensureStageWorkspace(run.runId, "decide");
+    await store.createStageExecution(run.runId, "decide");
+    await store.appendStageEvent(run.runId, "decide", { event: "started" });
+    await store.appendStageEvent(run.runId, "decide", { event: "succeeded" });
+    await store.writeEnvelope(run.runId, "decide", envelope);
+    await store.updateRunStatus(run.runId, "running");
+
+    const agent = stageKeyedAgent({
+      "branch-a": [{ type: "emit", envelope: okEnvelope("branch-a-ok") }],
+      "branch-b": [{ type: "emit", envelope: okEnvelope("branch-b-ok") }],
+    });
+
+    const result = await resumeRun({
+      prepared: {
+        task,
+        loaded,
+        run: { runId: run.runId, workspaceDir: run.workspaceDir },
+        agent,
+        store,
+        cwd: fixtures,
+      },
+      maxActiveStagesPerRun: 4,
+      resumeFromStageId: "decide",
+      initialPrior: envelope,
+      executionMode: "inprocess",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.reason).toBeUndefined();
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "branch-a")?.status).toBe(
+      "succeeded",
+    );
+    expect(detail.stages.find((s) => s.stage_id === "branch-b")?.status).toBe(
+      "skipped",
+    );
+    expect(agent.openCounts.get("branch-a")).toBe(1);
+    expect(agent.openCounts.get("branch-b")).toBeUndefined();
   });
 });
