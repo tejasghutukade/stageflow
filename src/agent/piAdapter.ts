@@ -494,8 +494,13 @@ function attachStageProgress(
   session: AgentSession,
   onActivity?: (event: StageActivityEvent) => void,
   usage?: StageUsage,
+  onAssistantTextDelta?: (delta: string) => void,
 ): () => void {
-  const observer = createStageActivityObserver({ onActivity, writeStderr: true });
+  const observer = createStageActivityObserver({
+    onActivity,
+    onAssistantTextDelta,
+    writeStderr: true,
+  });
   const verbose = readActivityVerbose();
 
   const unsubscribe = session.subscribe((event) => {
@@ -1497,7 +1502,12 @@ export class PiAgentAdapter implements AgentPort {
         return;
       }
       session = bound;
-      unsubscribeProgress = attachStageProgress(session, input.onActivity, wiring.usage);
+      unsubscribeProgress = attachStageProgress(
+        session,
+        input.onActivity,
+        wiring.usage,
+        input.onAssistantTextDelta,
+      );
     })();
 
     const runWithTimeout = async (

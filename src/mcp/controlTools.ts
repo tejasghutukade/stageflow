@@ -8,8 +8,10 @@ import {
   mapStartFailure,
   mapStoreLookupError,
 } from "../server/operatorResults.js";
+import { attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
+import { readStreamLogTail } from "./tailStreamLog.js";
 import { textResult } from "./toolResults.js";
 import { projectWaitingGates } from "./waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
@@ -149,6 +151,59 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         }
         const events = await store.listStageEvents(runId, stageId, attempt);
         return textResult({ runId, stageId, attempt, events });
+      } catch (err) {
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        return textResult(
+          { error: mapped.error, status: mapped.status },
+          true,
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "tail_stage_log",
+    {
+      description:
+        "Poll for new live assistant text a running (or recently finished) stage attempt has produced, since a byte-offset cursor. Separate from list_stage_events — no prompt/artifact/question detail, just the raw redacted text as it streamed. Omit since_offset to catch up on everything currently retained.",
+      inputSchema: z.object({
+        runId: z.string(),
+        stageId: z.string(),
+        attempt: z.number().int().positive().optional(),
+        since_offset: z.number().int().nonnegative().optional(),
+      }),
+    },
+    async ({ runId, stageId, attempt, since_offset }) => {
+      try {
+        await store.readRunMeta(runId);
+      } catch (err) {
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        return textResult({ error: mapped.error, status: 404 }, true);
+      }
+      try {
+        const detail = await store.readRun(runId);
+        const stage = detail.stages.find((s) => s.stage_id === stageId);
+        if (!stage) {
+          return textResult(
+            { error: `Stage not found: ${stageId}`, status: 404 },
+            true,
+          );
+        }
+        const effectiveAttempt = attempt ?? stage.attempt_count;
+        const attemptComplete =
+          effectiveAttempt < stage.attempt_count || stage.status !== "running";
+        const streamLogPath = attemptStreamLogPath(
+          store.getWorkspaceDir(runId),
+          stageId,
+          effectiveAttempt,
+        );
+        const tail = await readStreamLogTail(streamLogPath, since_offset);
+        return textResult({
+          text: tail.text,
+          next_offset: tail.nextOffset,
+          attempt_complete: attemptComplete,
+          ...(tail.truncated ? { truncated: true, earliest_offset: tail.earliestOffset } : {}),
+        });
       } catch (err) {
         const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(

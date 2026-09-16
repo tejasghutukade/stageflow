@@ -70,6 +70,8 @@ export type StageRunInput = {
   sessionMode?: StageSessionMode;
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
+  /** Optional raw assistant-text-delta sink, fired alongside onActivity, not instead of it. */
+  onAssistantTextDelta?: (delta: string) => void;
   skillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;

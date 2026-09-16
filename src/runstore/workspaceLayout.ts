@@ -43,6 +43,14 @@ export function attemptLogPath(
   return path.join(attemptWorkspaceDir(workspaceDir, stageId, attempt), "log.jsonl");
 }
 
+export function attemptStreamLogPath(
+  workspaceDir: string,
+  stageId: string,
+  attempt: number,
+): string {
+  return path.join(attemptWorkspaceDir(workspaceDir, stageId, attempt), "stream.log");
+}
+
 export function attemptEnvelopePath(
   workspaceDir: string,
   stageId: string,
