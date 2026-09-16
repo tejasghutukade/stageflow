@@ -3,14 +3,14 @@ import { pipelinePath, catalogLocators, LINEAR_EXPLICIT_PIPELINE } from "./helpe
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import { loadPipeline } from "../src/config/loadPipeline.js";
 import {
   STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
 } from "../src/config/resolveStageMcpServers.js";
-import { attemptArtifactsDir } from "../src/runstore/workspaceLayout.js";
+import { attemptArtifactsDir, attemptStreamLogPath } from "../src/runstore/workspaceLayout.js";
 import {
   appendOperatorAnswer,
   appendOperatorPrompt,
@@ -1332,5 +1332,85 @@ describe("openStageAttempt", () => {
       );
       expect(opened).toHaveLength(0);
     });
+  });
+});
+
+describe("openStageAttempt — stream-log wiring", () => {
+  let factoryCwd: string;
+
+  beforeEach(async () => {
+    factoryCwd = await mkdtemp(path.join(tmpdir(), "sf-boot-cwd-"));
+  });
+
+  it("constructs the writer at the attempt's stream-log path and threads onAssistantTextDelta through to openStage", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-stream-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const fakeWriter = {
+      onDelta: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+    };
+    const streamLogWriterFactory = vi.fn().mockReturnValue(fakeWriter);
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      streamLogWriterFactory,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(streamLogWriterFactory).toHaveBeenCalledWith(
+      attemptStreamLogPath(run.workspaceDir, "clarify", 1),
+    );
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.onAssistantTextDelta).toBe(fakeWriter.onDelta);
+  });
+
+  it("flushes the writer whenever onActivity fires, alongside the caller's own onActivity", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-stream-flush-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+    const fakeWriter = {
+      onDelta: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+    };
+    const callerOnActivity = vi.fn();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      onActivity: callerOnActivity,
+      streamLogWriterFactory: () => fakeWriter,
+    });
+
+    expect(result.ok).toBe(true);
+    const wrappedOnActivity = opened[0]?.onActivity;
+    expect(wrappedOnActivity).toBeDefined();
+
+    const activity = { event: "agent_start" as const };
+    wrappedOnActivity?.(activity);
+
+    expect(callerOnActivity).toHaveBeenCalledWith(activity);
+    expect(fakeWriter.flush).toHaveBeenCalledTimes(1);
   });
 });

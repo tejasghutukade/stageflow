@@ -16,7 +16,11 @@ import {
   stampStagePromptArtifactsDir,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
-import { attemptArtifactsDir } from "../runstore/workspaceLayout.js";
+import { attemptArtifactsDir, attemptStreamLogPath } from "../runstore/workspaceLayout.js";
+import {
+  createStageStreamLogWriter,
+  type StageStreamLogWriter,
+} from "./stageStreamLog.js";
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
@@ -64,6 +68,8 @@ export type StageAttemptOpenInput = {
   attemptCtx?: StageAttemptContext;
   operatorCatalog?: OperatorCatalog;
   onActivity?: StageRunInput["onActivity"];
+  /** Test seam; defaults to the real createStageStreamLogWriter. */
+  streamLogWriterFactory?: (streamLogPath: string) => StageStreamLogWriter;
   roots?: StageRoots;
   resumeToken?: string;
   sessionMode?: StageSessionMode;
@@ -330,6 +336,9 @@ export async function openStageAttempt(
 
   const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;
+  const streamWriter = (input.streamLogWriterFactory ?? createStageStreamLogWriter)(
+    attemptStreamLogPath(input.workspaceDir, stageId, attempt),
+  );
   const resumeToken =
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, stageId, attempt);
@@ -375,7 +384,11 @@ export async function openStageAttempt(
         : {}),
       resumeToken,
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
-      onActivity: input.onActivity,
+      onActivity: (event) => {
+        input.onActivity?.(event);
+        void streamWriter.flush();
+      },
+      onAssistantTextDelta: streamWriter.onDelta,
       forkEmitContext,
       cloneEmitContext,
       ...(feedbackLoopEmitContext !== undefined ? { feedbackLoopEmitContext } : {}),

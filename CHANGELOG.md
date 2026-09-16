@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-15
+
+### Added
+
+- Live output streaming for a running stage: assistant text is now captured as it streams, batched every ~300ms, redacted for secret-shaped substrings, and persisted to a small size-capped `stream.log` per stage attempt. New poll-based MCP tool `tail_stage_log` (`{ runId, stageId, attempt?, since_offset? }` → `{ text, next_offset, attempt_complete, truncated?, earliest_offset? }`) lets any watcher (the console, a host integration) follow along with a byte-offset cursor. Always on, no pipeline flag; purely additive — `log.jsonl`, `list_stage_events`, and `resources/subscribe` are unchanged.
+
 ## [0.22.0] - 2026-09-15
 
 ### Added

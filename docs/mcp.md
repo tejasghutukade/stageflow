@@ -537,6 +537,19 @@ List persisted stage log events (lifecycle/activity). Optional `attempt` scopes 
 
 Lifecycle events include `{ event: "feedback_loop_decided", decision, loopId, reason? }` after a `decide_feedback_loop` CAS succeeds and before the source is marked `succeeded` or `failed`.
 
+### `tail_stage_log`
+
+Poll for new live assistant text a stage attempt has produced, since a byte-offset cursor. Separate from `list_stage_events` — no milestones, no prompt/artifact/question detail, just the raw text as it streamed out of the model, batched every ~300ms and redacted for secret-shaped substrings before it's ever written to disk. Every stage gets this by default; there's no pipeline flag to turn it on. Poll-only — no push/SSE delivery.
+
+**Input:** `{ "runId", "stageId", "attempt?", "since_offset?" }` — `attempt` defaults to the stage's current/latest attempt. Omit `since_offset` on the first call to catch up on everything currently retained; pass back the previous response's `next_offset` on each subsequent call.
+
+**Output:** `{ "text", "next_offset", "attempt_complete", "truncated?", "earliest_offset?" }`
+
+- `attempt_complete`: `true` once that attempt is no longer the stage's actively-running one — poll until this flips, then stop.
+- `truncated` + `earliest_offset`: only present when `since_offset` predated the retained window (the log is capped at 256 KB per attempt; the oldest half is dropped when it fills up). The response still serves everything currently retained (from `earliest_offset` onward) in the same call — no need to re-request first.
+
+**Errors (`isError: true`):** `404` unknown run/stage.
+
 ### `get_stage_verification`
 
 Read the after-phase verify history for one stage. Each attempt contains its verification
