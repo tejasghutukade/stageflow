@@ -474,6 +474,33 @@ export function applyForkSkipsFromEnvelopes(
   }
 }
 
+async function applyEagerRouteIfSkipsFromEnvelopes(
+  dag: ResolvedPipelineDag,
+  states: Map<string, StageScheduleState>,
+  completedEnvelopes: Map<string, StageEnvelope>,
+  persistSkip: (id: string) => Promise<void>,
+): Promise<string | undefined> {
+  for (const [parentId, envelope] of completedEnvelopes) {
+    if (states.get(parentId) !== "succeeded") continue;
+    for (const childId of dag.childrenOf[parentId] ?? []) {
+      const child = dag.nodes.find((n) => n.id === childId);
+      if (!child) continue;
+      const result = classifyInboundAfterSuccess(
+        child,
+        parentId,
+        envelope.payload,
+      );
+      if (result === "missing_field") {
+        return parentId;
+      }
+      if (isEagerSingleParentIfSkip(child, parentId, envelope.payload)) {
+        await persistSkip(childId);
+      }
+    }
+  }
+  return undefined;
+}
+
 export function applyRetryRootDelta(
   dag: ResolvedPipelineDag,
   states: Map<string, StageScheduleState>,
@@ -797,6 +824,19 @@ export async function runPipelineDag(
     if (state !== "failed") continue;
     for (const id of cloneFailFastSkipIds(dag, stageId, completedEnvelopes)) {
       await persistSkipPending(id);
+    }
+  }
+
+  const missingRouteIfParent = await applyEagerRouteIfSkipsFromEnvelopes(
+    dag,
+    states,
+    completedEnvelopes,
+    persistSkipPending,
+  );
+  if (missingRouteIfParent !== undefined) {
+    schedulingHalted = true;
+    if (firstFailureReason === undefined) {
+      firstFailureReason = `stage "${missingRouteIfParent}": route if field missing from payload`;
     }
   }
 
@@ -1135,25 +1175,18 @@ export async function runPipelineDag(
       }
     }
 
-    const childIds = dag.childrenOf[stageId] ?? [];
-    for (const childId of childIds) {
-      const child = dag.nodes.find((node) => node.id === childId);
-      if (!child) continue;
-      const result = classifyInboundAfterSuccess(
-        child,
-        stageId,
-        envelope.payload,
-      );
-      if (result === "missing_field") {
-        schedulingHalted = true;
-        if (firstFailureReason === undefined) {
-          firstFailureReason = `stage "${stageId}": route if field missing from payload`;
-        }
-        return;
+    const missingParent = await applyEagerRouteIfSkipsFromEnvelopes(
+      dag,
+      states,
+      new Map([[stageId, envelope]]),
+      persistSkipPending,
+    );
+    if (missingParent !== undefined) {
+      schedulingHalted = true;
+      if (firstFailureReason === undefined) {
+        firstFailureReason = `stage "${missingParent}": route if field missing from payload`;
       }
-      if (isEagerSingleParentIfSkip(child, stageId, envelope.payload)) {
-        await persistSkipPending(childId);
-      }
+      return;
     }
 
     await reopenRunnableSkippedStages(

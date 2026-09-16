@@ -1,0 +1,48 @@
+id: route-if-exclusive
+stages:
+  - id: decide
+    entry: true
+    route:
+      - to: branch-a
+        if:
+          field: branch
+          op: eq
+          value: branch-a
+      - to: branch-b
+        if:
+          field: branch
+          op: eq
+          value: branch-b
+    system_prompt: Decide which branch to take.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+          required: [branch]
+          properties:
+            branch:
+              type: string
+  - id: branch-a
+    system_prompt: Run branch-a.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+  - id: branch-b
+    system_prompt: Run branch-b.
+    model: test/model
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
