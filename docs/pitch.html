@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stageflow — Pre-Seed</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+:root{
+  --black:#0a0b0d;
+  --floor:#15171b;
+  --floor-2:#1c1f24;
+  --cream:#f5efe3;
+  --cream-dim:#a29a90;
+  --cream-faint:#6b655f;
+  --rule:rgba(245,239,227,0.10);
+  --rule-strong:rgba(245,239,227,0.18);
+  --teal:#3ecfb2;
+  --teal-dim:#1f6d5c;
+  --amber:#e8a33d;
+  --amber-dim:#7a5522;
+  --violet:#a06cd5;
+  --violet-dim:#4f3470;
+  --fs-hero:clamp(3.2rem,9vw,7.5rem);
+  --fs-h1:clamp(2rem,4.6vw,3.6rem);
+  --fs-h2:clamp(1.4rem,2.4vw,1.9rem);
+  --fs-body:clamp(1rem,1.25vw,1.2rem);
+  --fs-small:0.85rem;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{background:var(--black); color:var(--cream);}
+body{
+  font-family:'IBM Plex Sans', sans-serif;
+  overflow:hidden;
+  height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+.display{font-family:'Bricolage Grotesque', sans-serif; font-weight:600;}
+.mono{font-family:'IBM Plex Mono', monospace;}
+::selection{background:var(--teal); color:var(--black);}
+:focus-visible{outline:2px solid var(--teal); outline-offset:3px;}
+
+/* ---------- ambient spotlight ---------- */
+.spotlight-rig{
+  position:fixed; inset:0; pointer-events:none; z-index:1;
+  transition:background 900ms ease;
+}
+@keyframes drift{
+  0%,100%{transform:translate(0,0) scale(1);}
+  50%{transform:translate(2%,-3%) scale(1.06);}
+}
+.spotlight-rig::before{
+  content:''; position:absolute; inset:-20%;
+  background:radial-gradient(circle at 50% 28%, var(--gel-color,var(--teal)) 0%, transparent 45%);
+  opacity:0.16; animation:drift 18s ease-in-out infinite;
+  transition:background 900ms ease;
+}
+
+/* ---------- stage marks rail ---------- */
+.marks-rail{
+  position:fixed; left:0; top:0; height:100vh; width:64px; z-index:20;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:0; background:linear-gradient(90deg, rgba(0,0,0,0.5), transparent);
+}
+.mark{
+  appearance:none; background:none; border:none; cursor:pointer;
+  width:64px; height:38px; position:relative; display:flex; align-items:center; justify-content:center;
+}
+.mark .x{
+  width:10px; height:10px; position:relative; opacity:0.35; transition:opacity 300ms, transform 300ms;
+}
+.mark .x::before,.mark .x::after{
+  content:''; position:absolute; background:var(--cream-dim); inset:0;
+}
+.mark .x::before{width:100%; height:1.5px; top:50%; transform:translateY(-50%);}
+.mark .x::after{height:100%; width:1.5px; left:50%; transform:translateX(-50%);}
+.mark.active .x{opacity:1; transform:scale(1.5); background:none;}
+.mark.active .x::before,.mark.active .x::after{background:var(--mark-color,var(--teal)); box-shadow:0 0 8px var(--mark-color,var(--teal));}
+
+/* ---------- hud ---------- */
+.hud{
+  position:fixed; bottom:22px; right:28px; z-index:20;
+  font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--cream-faint);
+  letter-spacing:0.05em;
+}
+.hud span{color:var(--cream-dim);}
+
+/* ---------- deck / acts ---------- */
+main.deck{
+  height:100vh; overflow-y:scroll; scroll-snap-type:y mandatory;
+  scrollbar-width:none;
+}
+main.deck::-webkit-scrollbar{display:none;}
+section.act{
+  height:100vh; scroll-snap-align:start; scroll-snap-stop:always;
+  position:relative; display:flex; flex-direction:column; justify-content:center;
+  padding:0 9vw 0 12vw; overflow:hidden; z-index:5;
+}
+.act-inner{max-width:1200px; width:100%; position:relative; z-index:5;}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.18em;
+  text-transform:uppercase; color:var(--eyebrow-color,var(--teal)); margin-bottom:1.1rem;
+  display:flex; align-items:center; gap:0.6rem;
+}
+.eyebrow::before{content:''; width:22px; height:1px; background:var(--eyebrow-color,var(--teal));}
+h1.act-title{font-size:var(--fs-h1); line-height:1.05; font-weight:600; margin-bottom:1.3rem; max-width:16ch;}
+p.lede{font-size:var(--fs-body); color:var(--cream-dim); max-width:52ch; line-height:1.6; margin-bottom:1.6rem;}
+.rule{height:1px; background:var(--rule); width:100%; margin:1.6rem 0;}
+ul.plain{list-style:none;}
+ul.plain li{
+  position:relative; padding-left:1.3rem; margin-bottom:0.85rem;
+  font-size:calc(var(--fs-body) * 0.92); line-height:1.55; color:var(--cream-dim); max-width:46ch;
+}
+ul.plain li::before{content:'—'; position:absolute; left:0; color:var(--eyebrow-color,var(--teal));}
+strong{color:var(--cream); font-weight:600;}
+code.chip{
+  font-family:'IBM Plex Mono',monospace; font-size:0.82em; background:var(--floor-2);
+  border:1px solid var(--rule-strong); border-radius:4px; padding:0.1em 0.5em; color:var(--teal);
+}
+.grid-two{display:grid; grid-template-columns:1fr 1fr; gap:4vw; align-items:center;}
+.pull{
+  font-family:'IBM Plex Mono',monospace; font-size:0.95rem; font-style:italic; color:var(--cream-dim);
+  border-left:2px solid var(--eyebrow-color,var(--teal)); padding-left:1rem; max-width:44ch; line-height:1.6;
+}
+
+@media (max-width:900px){
+  section.act{padding:0 7vw;}
+  .grid-two{grid-template-columns:1fr;}
+  .marks-rail{width:36px;}
+}
+@media (prefers-reduced-motion: reduce){
+  .spotlight-rig::before{animation:none;}
+}
+
+section[data-gel="teal"]{--eyebrow-color:var(--teal);}
+section[data-gel="amber"]{--eyebrow-color:var(--amber);}
+section[data-gel="violet"]{--eyebrow-color:var(--violet);}
+
+/* ---------- act 01: mess of notes ---------- */
+.mess{position:relative; height:340px;}
+.mess .note{
+  position:absolute; width:150px; height:104px; background:var(--floor-2);
+  border:1px solid var(--rule-strong); border-radius:2px; padding:14px;
+  box-shadow:0 14px 28px rgba(0,0,0,0.45);
+}
+.mess .note .scribble{height:5px; background:var(--cream-faint); opacity:0.35; margin-bottom:9px; border-radius:2px;}
+
+/* ---------- act 02: stage cards ---------- */
+.cards-row{display:flex; align-items:center; gap:0; margin-top:2.6rem; flex-wrap:wrap;}
+.stage-card{
+  width:112px; height:82px; background:var(--floor-2); border:1px solid var(--rule-strong);
+  border-radius:6px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px;
+}
+.stage-card .dot{width:8px;height:8px;border-radius:50%; background:var(--teal); box-shadow:0 0 8px var(--teal);}
+.stage-card .label{font-family:'IBM Plex Mono',monospace; font-size:0.76rem; color:var(--cream-dim);}
+.arrow-c{width:30px; height:1px; background:var(--rule-strong); position:relative;}
+.gate-badge{
+  width:32px;height:32px;border-radius:50%; background:var(--amber-dim); border:1.5px solid var(--amber);
+  display:flex; align-items:center; justify-content:center; font-size:0.8rem; margin:0 4px; flex-shrink:0;
+}
+
+/* ---------- act 03: console mock ---------- */
+#console-mock{
+  background:var(--floor); border:1px solid var(--rule-strong); border-radius:10px; padding:1.6rem;
+  height:260px;
+}
+.console-line{display:flex; align-items:center; gap:0.55rem; margin-bottom:0.75rem; font-family:'IBM Plex Mono',monospace; font-size:0.76rem; color:var(--cream-dim);}
+.console-dot{width:7px;height:7px;border-radius:50%; flex-shrink:0;}
+
+/* ---------- act 04: circle compare ---------- */
+.circle-compare-wrap{display:flex; align-items:center; gap:2.2rem; height:300px;}
+.circ{border-radius:50%; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; flex-shrink:0;}
+.circ.small{width:64px;height:64px; background:var(--floor-2); border:1px solid var(--rule-strong);}
+.circ.big{width:280px;height:280px; background:radial-gradient(circle at 35% 30%, var(--violet-dim), var(--floor-2)); border:1.5px solid var(--violet);}
+
+/* ---------- act 05: beams ---------- */
+.beams{position:relative; height:220px; margin-top:1.4rem; display:flex; align-items:flex-end; justify-content:center; gap:5vw;}
+.beam{width:130px; clip-path:polygon(38% 100%, 62% 100%, 100% 0%, 0% 0%);}
+
+/* ---------- act 06: stairs ---------- */
+.stairs{display:flex; align-items:flex-end; gap:2rem; height:280px; margin-top:0.6rem;}
+.step{border-radius:6px 6px 0 0; padding:1.1rem 1.2rem; width:220px;}
+
+/* ---------- act 07: market rows ---------- */
+.market-rows{display:flex; flex-direction:column; gap:0.65rem; max-width:920px;}
+.mrow{display:grid; grid-template-columns:1.5fr 2.4fr 1fr 0.9fr; gap:1rem; align-items:center; padding:0.85rem 1.1rem; border-left:3px solid var(--teal); background:rgba(255,255,255,0.02);}
+
+/* ---------- act 08: stat grid ---------- */
+.stat-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:1.3rem; max-width:920px;}
+.stat-card{border:1px solid var(--rule-strong); border-radius:8px; padding:1.3rem 1.2rem; text-align:left;}
+.stat-num{font-family:'IBM Plex Mono',monospace; font-size:2rem; color:var(--teal); font-weight:500;}
+.stat-cap{font-size:0.76rem; color:var(--cream-faint); margin-top:0.35rem;}
+
+/* ---------- act 09: positioning matrix ---------- */
+#matrix{position:relative; height:380px; border:1px solid var(--rule); border-radius:4px;}
+.mx-dot{position:absolute; border-radius:50%;}
+.mx-label{position:absolute; font-size:0.68rem; color:var(--cream-faint); white-space:nowrap; letter-spacing:0.04em;}
+
+/* ---------- act 10: business model split ---------- */
+.split-cards{display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; max-width:1000px;}
+.split-card{border:1px solid var(--rule-strong); border-radius:10px; padding:1.8rem;}
+
+/* ---------- act 11: timeline ---------- */
+.timeline{display:flex; align-items:flex-start; margin:2.2rem 0 1.8rem; position:relative; max-width:860px;}
+.tl-node{flex:1; position:relative; text-align:center; padding-top:22px;}
+.tl-node::before{content:''; position:absolute; top:5px; left:0; right:0; height:1px; background:var(--rule-strong); z-index:0;}
+.tl-node:first-child::before{left:50%;}
+.tl-node:last-child::before{right:50%;}
+.tl-dot{width:11px;height:11px;border-radius:50%; background:var(--amber); position:absolute; top:0; left:50%; transform:translateX(-50%); z-index:1; box-shadow:0 0 8px var(--amber);}
+.screenplay{max-width:640px; margin-top:0.4rem;}
+
+/* ---------- act 12: donut ---------- */
+#donut-wrap{display:flex; align-items:center; gap:2.4rem; margin-top:1rem;}
+.legend-item{display:flex; align-items:center; gap:0.6rem; font-size:0.82rem; color:var(--cream-dim); margin-bottom:0.7rem;}
+.legend-swatch{width:10px;height:10px;border-radius:2px; flex-shrink:0;}
+
+/* ---------- act 13: curtains ---------- */
+.curtain-l,.curtain-r{position:absolute; top:0; bottom:0; width:9vw; z-index:1; pointer-events:none;}
+.curtain-l{left:0; background:linear-gradient(90deg, var(--black), transparent);}
+.curtain-r{right:0; background:linear-gradient(270deg, var(--black), transparent);}
+
+/* ---------- print / PDF export: one act per page ---------- */
+@page{ size:1280px 720px; margin:0; }
+@media print{
+  .marks-rail, .hud, .spotlight-rig{display:none !important;}
+  html,body{height:auto !important; overflow:visible !important;}
+  main.deck{height:auto !important; overflow:visible !important; scroll-snap-type:none !important;}
+  section.act{
+    width:1280px; height:720px; page-break-after:always; break-after:page;
+    page-break-inside:avoid; break-inside:avoid; scroll-snap-align:none;
+  }
+  section.act:last-of-type{page-break-after:auto; break-after:auto;}
+  .grid-two{grid-template-columns:1fr 1fr !important;}
+  .mx-dot,.tl-dot,.stage-card .dot,.mark.active .x::before,.mark.active .x::after{box-shadow:none !important;}
+  *{ -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="spotlight-rig" id="spotlight"></div>
+
+<nav class="marks-rail" id="rail" aria-label="Slide navigation"></nav>
+
+<div class="hud"><span id="hud-cur">00</span> / 14</div>
+
+<main class="deck" id="deck">
+
+<!-- ACT 00 — TITLE -->
+<section class="act" data-gel="teal" data-eyebrow="none">
+  <div class="act-inner" style="padding-left:0;">
+    <p class="eyebrow" style="margin-bottom:2.2rem;">Pre-seed · 2026</p>
+    <h1 class="display" style="font-size:var(--fs-hero); line-height:0.95; letter-spacing:0.01em;">Stagefl<span style="margin-left:0.01em; display:inline-block;">ow</span></h1>
+    <p class="lede" style="font-size:var(--fs-h2); color:var(--cream); margin-top:1.2rem; max-width:34ch;">Open-source runtime for configurable multi-stage agent workflows.</p>
+    <p class="mono" style="color:var(--teal); font-style:italic; margin-top:1.6rem; font-size:1.05rem;">( Nothing improvised. Everything staged. )</p>
+    <div class="rule" style="max-width:420px; margin:2.4rem 0 1.4rem;"></div>
+    <p class="mono" style="font-size:0.85rem; color:var(--cream-faint);">Tejas Ghutukade, Founder &nbsp;·&nbsp; github.com/tejasghutukade/stageflow</p>
+  </div>
+</section>
+
+<!-- ACT 01 — THE PROBLEM -->
+<section class="act" data-gel="amber" data-eyebrow="amber">
+  <div class="act-inner grid-two">
+    <div>
+      <p class="eyebrow">Act One — The Problem</p>
+      <h1 class="act-title display">Every handoff<br>is ad hoc.</h1>
+      <ul class="plain">
+        <li>One long chat, or copy-pasted context between sessions</li>
+        <li>Every handoff is a shell script or a re-explained transcript</li>
+        <li>Artifacts get lost; context goes stale</li>
+        <li>The same flow can't run on a laptop, in CI, <em>and</em> via automation without a rewrite</li>
+      </ul>
+      <p class="pull" style="margin-top:1.6rem;">Stripe, Shopify, and Cloudflare already built private fixes for this — Minions, Roast, and an Astro issue-triage factory.</p>
+    </div>
+    <div class="mess" id="mess-notes" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 02 — THE SOLUTION -->
+<section class="act" data-gel="teal" data-eyebrow="teal">
+  <div class="act-inner">
+    <p class="eyebrow">Act One — The Fix</p>
+    <h1 class="act-title display">Stages are the unit<br>of composition.</h1>
+    <div class="cards-row" id="cards-row" aria-hidden="true"></div>
+    <ul class="plain" style="margin-top:2.2rem; max-width:100%; display:grid; grid-template-columns:1fr 1fr; gap:0 3vw;">
+      <li>Author a workflow as plain YAML — a pipeline of stages</li>
+      <li>Each stage runs in a <strong>fresh agent session</strong></li>
+      <li>Stages hand off through a <strong>typed envelope</strong></li>
+      <li>A <strong>human gate</strong> can pause the run anywhere</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ACT 03 — HOW IT WORKS -->
+<section class="act" data-gel="teal" data-eyebrow="teal">
+  <div class="act-inner grid-two">
+    <div>
+      <p class="eyebrow">Act One — In Practice</p>
+      <h1 class="act-title display" style="font-size:var(--fs-h1);">The same pipeline, everywhere.</h1>
+      <ul class="plain">
+        <li><code class="chip">sf run</code> locally</li>
+        <li><code class="chip">sf run --json</code> in CI, with predictable exit codes</li>
+        <li>MCP from other tools</li>
+        <li><code class="chip">sf ui</code> — local operator console: watch runs, answer gates, manage providers</li>
+      </ul>
+    </div>
+    <div id="console-mock" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 04 — TEAM -->
+<section class="act" data-gel="amber" data-eyebrow="amber">
+  <div class="act-inner">
+    <p class="eyebrow">Act One — Who Found It</p>
+    <h1 class="act-title display" style="font-size:var(--fs-h1);">Tejas Ghutukade</h1>
+    <p class="lede" style="margin-bottom:0.4rem;">Founder &amp; Solo Builder</p>
+    <div class="timeline" id="timeline"></div>
+    <div class="screenplay">
+      <p class="mono" style="font-size:0.8rem; letter-spacing:0.05em; color:var(--cream-faint); text-transform:uppercase; margin-bottom:0.5rem;">INT. CURSOR SESSION — AUG 16–18, 2026</p>
+      <p class="pull" style="border-color:var(--amber);">While building the console you just saw, a 7-phase session needed the same "don't stop until every to-do is done" reminder repeated after nearly every phase — the agent kept stopping short, forgetting what it had already done.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ACT 05 — THE BIG IDEA -->
+<section class="act" data-gel="violet" data-eyebrow="violet">
+  <div class="act-inner grid-two">
+    <div>
+      <p class="eyebrow">Act Two — The Market Shift</p>
+      <h1 class="act-title display">SaaS is starting<br>to sell outcomes.</h1>
+      <ul class="plain">
+        <li>Foundation Capital calls it <strong>"Service-as-Software"</strong></li>
+        <li>Sierra, Intercom, and Salesforce already price this way in production</li>
+        <li>IDC: <strong>70% of vendors refactor pricing around outcomes by 2028</strong></li>
+      </ul>
+      <p class="pull" style="margin-top:1.4rem;">You can't sell a guaranteed outcome on one unreliable prompt. You need a governed, auditable pipeline behind it.</p>
+    </div>
+    <div id="circle-compare" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 06 — WHY NOW -->
+<section class="act" data-gel="amber" data-eyebrow="amber">
+  <div class="act-inner">
+    <p class="eyebrow">Act Two — Why Now</p>
+    <h1 class="act-title display">Three lights,<br>one convergence.</h1>
+    <div class="beams" id="beams" aria-hidden="true"></div>
+    <div class="beam-labels" style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:2vw; margin-top:1rem; max-width:1000px;">
+      <p style="font-size:0.85rem; color:var(--cream-dim);"><strong style="color:var(--teal);">Agent orchestration</strong> is maturing — Stripe, Shopify, Cloudflare built private harnesses; Cognition raised at $26B</p>
+      <p style="font-size:0.85rem; color:var(--cream-dim);"><strong style="color:var(--amber);">Regulated industries</strong> already buy AI governance — Zania sells SOC2/HIPAA/PCI-DSS agents</p>
+      <p style="font-size:0.85rem; color:var(--cream-dim);"><strong style="color:var(--violet);">Outcome pricing</strong> is emerging downstream — Zendesk, Salesforce, Intercom shipped it</p>
+    </div>
+  </div>
+</section>
+
+<!-- ACT 07 — STRATEGY -->
+<section class="act" data-gel="teal" data-eyebrow="teal">
+  <div class="act-inner">
+    <p class="eyebrow">Act Three — The Strategy</p>
+    <h1 class="act-title display">A floor, then a ceiling.</h1>
+    <p class="pull" style="margin-bottom:1.6rem;">We're not betting on being paid for outcomes. We're betting on being the layer that makes outcomes safe to sell.</p>
+    <div class="stairs" id="stairs" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 08 — MARKET -->
+<section class="act" data-gel="amber" data-eyebrow="amber">
+  <div class="act-inner">
+    <p class="eyebrow">Act Three — Who Buys First</p>
+    <h1 class="act-title display" style="font-size:var(--fs-h1); margin-bottom:1.8rem;">Sequenced, not scattered.</h1>
+    <div class="market-rows" id="market-rows"></div>
+  </div>
+</section>
+
+<!-- ACT 09 — TRACTION -->
+<section class="act" data-gel="teal" data-eyebrow="teal">
+  <div class="act-inner">
+    <p class="eyebrow">Act Three — Proof So Far</p>
+    <h1 class="act-title display" style="font-size:var(--fs-h1); margin-bottom:2rem;">Two weeks in.</h1>
+    <div class="stat-grid" id="stat-grid"></div>
+    <p class="pull" style="margin-top:2rem;">In conversation with a Director of Software Engineering at a mid-size financial services company (Canada) — open-source adoption now, possible paid engagement later.</p>
+  </div>
+</section>
+
+<!-- ACT 10 — COMPETITION -->
+<section class="act" data-gel="violet" data-eyebrow="violet">
+  <div class="act-inner grid-two">
+    <div>
+      <p class="eyebrow">Act Four — The Landscape</p>
+      <h1 class="act-title display" style="font-size:var(--fs-h1);">We don't compete on intelligence.</h1>
+      <p class="lede">We compete on the runtime — declarative, local-first, bring-your-own-agent per stage.</p>
+      <p class="pull">Mastra ($35M raised) is a code-first TS framework — workflows in code, not YAML. Guild.ai ($44M raised) governs agents built elsewhere. Neither authors declarative pipelines.</p>
+    </div>
+    <div id="matrix" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 11 — BUSINESS MODEL -->
+<section class="act" data-gel="teal" data-eyebrow="teal">
+  <div class="act-inner">
+    <p class="eyebrow">Act Four — How We Make Money</p>
+    <h1 class="act-title display" style="font-size:var(--fs-h1); margin-bottom:2rem;">Open-core. Not a cut of outcomes.</h1>
+    <div class="split-cards" id="split-cards"></div>
+  </div>
+</section>
+
+<!-- ACT 12 — THE ASK -->
+<section class="act" data-gel="violet" data-eyebrow="violet">
+  <div class="act-inner grid-two">
+    <div>
+      <p class="eyebrow">Act Five — The Ask</p>
+      <h1 class="display" style="font-size:var(--fs-hero); line-height:0.95; margin-bottom:0.6rem;">$450K</h1>
+      <p class="lede" style="margin-top:0;">Pre-seed · 15 months of runway</p>
+      <p class="pull" style="margin-top:1.4rem;">Unlocks the paid governance tier and a first paying regulated-enterprise customer.</p>
+    </div>
+    <div id="donut-wrap" aria-hidden="true"></div>
+  </div>
+</section>
+
+<!-- ACT 13 — VISION -->
+<section class="act" data-gel="violet" data-eyebrow="violet" style="justify-content:center; align-items:center; text-align:center; padding:0 12vw;">
+  <div class="curtain-l"></div>
+  <div class="curtain-r"></div>
+  <div class="act-inner" style="text-align:center;">
+    <p class="mono" style="color:var(--violet); letter-spacing:0.15em; text-transform:uppercase; font-size:0.8rem; margin-bottom:2rem;">Act Five — Vision</p>
+    <p class="display" style="font-size:clamp(1.6rem,3vw,2.4rem); line-height:1.35; max-width:26ch; margin:0 auto; color:var(--cream-dim); font-weight:400;">If SaaS shifts from selling tools to selling outcomes, every company making that shift needs a reliable, auditable substrate underneath it.</p>
+    <p class="display" style="font-size:clamp(2rem,4vw,3.2rem); margin-top:2.2rem; color:var(--cream);">Boring business model.<br>Big tailwind.</p>
+    <p class="mono" style="margin-top:3rem; color:var(--cream-faint); letter-spacing:0.2em; font-size:0.75rem;">— CURTAIN —</p>
+  </div>
+</section>
+
+</main>
+
+<script>
+const gelColors = {teal:'#3ecfb2', amber:'#e8a33d', violet:'#a06cd5'};
+const acts = document.querySelectorAll('section.act');
+const rail = document.getElementById('rail');
+const spotlight = document.getElementById('spotlight');
+const hudCur = document.getElementById('hud-cur');
+const deck = document.getElementById('deck');
+
+acts.forEach((act,i)=>{
+  const btn = document.createElement('button');
+  btn.className = 'mark';
+  btn.setAttribute('aria-label', 'Go to act ' + (i+1));
+  btn.innerHTML = '<span class="x"></span>';
+  btn.style.setProperty('--mark-color', gelColors[act.dataset.gel] || '#3ecfb2');
+  btn.addEventListener('click', ()=> act.scrollIntoView({behavior:'smooth'}));
+  rail.appendChild(btn);
+});
+const marks = rail.querySelectorAll('.mark');
+
+const io = new IntersectionObserver((entries)=>{
+  entries.forEach(e=>{
+    if(e.isIntersecting && e.intersectionRatio > 0.6){
+      const idx = Array.from(acts).indexOf(e.target);
+      marks.forEach(m=>m.classList.remove('active'));
+      marks[idx].classList.add('active');
+      hudCur.textContent = String(idx).padStart(2,'0');
+      const gel = e.target.dataset.gel || 'teal';
+      spotlight.style.setProperty('--gel-color', gelColors[gel]);
+    }
+  });
+}, {threshold:[0.6], root:deck});
+acts.forEach(a=>io.observe(a));
+
+document.addEventListener('keydown',(e)=>{
+  const idx = Array.from(marks).findIndex(m=>m.classList.contains('active'));
+  if(e.key==='ArrowDown'||e.key==='ArrowRight'||e.key===' '){
+    e.preventDefault();
+    const next = acts[Math.min(idx+1, acts.length-1)];
+    next.scrollIntoView({behavior:'smooth'});
+  }
+  if(e.key==='ArrowUp'||e.key==='ArrowLeft'){
+    e.preventDefault();
+    const prev = acts[Math.max(idx-1,0)];
+    prev.scrollIntoView({behavior:'smooth'});
+  }
+});
+
+/* ===================== visualizations ===================== */
+const C = {teal:'#3ecfb2', amber:'#e8a33d', violet:'#a06cd5', cream:'#f5efe3'};
+
+// Act 01 — messy sticky notes
+const mess = document.getElementById('mess-notes');
+[
+  {top:'2%',left:'8%',rot:'-6deg'},
+  {top:'14%',left:'46%',rot:'4deg'},
+  {top:'46%',left:'2%',rot:'3deg'},
+  {top:'52%',left:'48%',rot:'-4deg'},
+  {top:'8%',left:'74%',rot:'7deg'},
+].forEach(n=>{
+  const note = document.createElement('div');
+  note.className='note';
+  note.style.top=n.top; note.style.left=n.left; note.style.transform=`rotate(${n.rot})`;
+  note.innerHTML='<div class="scribble" style="width:85%"></div><div class="scribble" style="width:60%"></div><div class="scribble" style="width:70%"></div><div class="scribble" style="width:40%"></div>';
+  mess.appendChild(note);
+});
+
+// Act 02 — stage cards with gate
+const cardsRow = document.getElementById('cards-row');
+['Clarify','Design','Implement','Review'].forEach((name,i)=>{
+  if(i>0){
+    if(i===2){
+      const gate=document.createElement('div'); gate.className='gate-badge'; gate.innerHTML='&#128274;';
+      cardsRow.appendChild(gate);
+    } else {
+      const arrow=document.createElement('div'); arrow.className='arrow-c'; cardsRow.appendChild(arrow);
+    }
+  }
+  const card=document.createElement('div'); card.className='stage-card';
+  card.innerHTML=`<div class="dot"></div><div class="label">${name}</div>`;
+  cardsRow.appendChild(card);
+});
+
+// Act 03 — console mock
+document.getElementById('console-mock').innerHTML = `
+  <div class="console-line"><span class="console-dot" style="background:${C.teal}"></span> clarify — succeeded</div>
+  <div class="console-line"><span class="console-dot" style="background:${C.teal}"></span> design — succeeded</div>
+  <div class="console-line"><span class="console-dot" style="background:${C.amber}"></span> gate — waiting for operator</div>
+  <div class="console-line" style="opacity:0.4"><span class="console-dot" style="background:#6b655f"></span> implement — queued</div>
+  <div class="console-line" style="opacity:0.4"><span class="console-dot" style="background:#6b655f"></span> review — queued</div>
+  <svg width="100%" height="64" style="margin-top:0.8rem;" viewBox="0 0 260 64" preserveAspectRatio="none">
+    <polyline points="0,54 40,38 80,42 120,14 160,28 200,8 240,22" fill="none" style="stroke:${C.teal}; stroke-width:1.6px;"/>
+  </svg>
+`;
+
+// Act 04 — circle compare
+document.getElementById('circle-compare').innerHTML = `
+  <div class="circle-compare-wrap">
+    <div class="circ small"><div style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;">$200B</div></div>
+    <div class="circ big"><div class="display" style="font-size:2.1rem;">$4.6T</div><div style="font-family:'IBM Plex Mono',monospace; font-size:0.68rem;color:var(--cream-faint);margin-top:0.3rem;">Service-as-Software</div></div>
+  </div>
+  <p style="font-family:'IBM Plex Mono',monospace; font-size:0.68rem;color:var(--cream-faint);margin-top:0.5rem;">Classic SaaS market vs. Foundation Capital's estimate</p>
+`;
+
+// Act 05 — beams
+const beams = document.getElementById('beams');
+[
+  {color:C.teal, height:'150px'},
+  {color:C.amber, height:'210px'},
+  {color:C.violet, height:'150px'},
+].forEach(b=>{
+  const beam=document.createElement('div'); beam.className='beam';
+  beam.style.height=b.height;
+  beam.style.background=`linear-gradient(to top, ${b.color}66, transparent)`;
+  beams.appendChild(beam);
+});
+
+// Act 06 — stairs
+const stairs = document.getElementById('stairs');
+[
+  {name:'WEDGE', sub:'now — engineering & SDLC', height:110, color:C.teal, outline:false},
+  {name:'EXPANSION', sub:'next — regulated governance', height:185, color:C.amber, outline:false},
+  {name:'CEILING', sub:'the bet — outcome substrate', height:260, color:C.violet, outline:true},
+].forEach(s=>{
+  const step=document.createElement('div'); step.className='step';
+  step.style.height=s.height+'px';
+  if(!s.outline){
+    step.style.background=`linear-gradient(180deg, ${s.color}2e, ${s.color}0d)`;
+    step.style.border=`1px solid ${s.color}`;
+  } else {
+    step.style.background='transparent';
+    step.style.border=`1.5px dashed ${s.color}99`;
+  }
+  step.innerHTML=`<div style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem;color:${s.color};letter-spacing:0.08em;">${s.name}</div><div style="font-size:0.72rem;color:var(--cream-faint);margin-top:0.5rem;max-width:16ch;">${s.sub}</div>`;
+  stairs.appendChild(step);
+});
+
+// Act 07 — market rows
+const marketRows = document.getElementById('market-rows');
+[
+  ['OSS maintainers','Manual triage across many repos','Maintainer','WEDGE',C.teal],
+  ['AI-forward startups (5-30 eng)','Need a Stripe/Shopify-style harness, without building one','CTO','WEDGE',C.teal],
+  ['Mid-size eng orgs (200-2000)','Already paying for Cursor/Claude/Codex; need to compose them','VP Eng','WEDGE',C.teal],
+  ['Regulated enterprise (fintech, health)','Need audit-grade governance over AI-driven work','CISO / Head of Eng','EXPANSION',C.amber],
+  ['Any company shifting to outcome-based delivery','Needs a reliable substrate underneath the outcome','Founder / Platform lead','CEILING',C.violet],
+].forEach(r=>{
+  const row=document.createElement('div'); row.className='mrow';
+  row.style.borderLeftColor=r[4];
+  row.innerHTML=`<div style="font-size:0.86rem;">${r[0]}</div><div style="font-size:0.78rem;color:var(--cream-dim);">${r[1]}</div><div style="font-family:'IBM Plex Mono',monospace; font-size:0.74rem;color:var(--cream-faint);">${r[2]}</div><div style="font-family:'IBM Plex Mono',monospace; font-size:0.7rem;color:${r[4]};text-align:right;">${r[3]}</div>`;
+  marketRows.appendChild(row);
+});
+
+// Act 08 — stat grid
+const statGrid = document.getElementById('stat-grid');
+[
+  ['146','commits shipped'],
+  ['~173/wk','npm downloads'],
+  ['~2 weeks','since public release'],
+  ['MIT','open-source license'],
+].forEach(s=>{
+  const card=document.createElement('div'); card.className='stat-card';
+  card.innerHTML=`<div class="stat-num">${s[0]}</div><div class="stat-cap">${s[1]}</div>`;
+  statGrid.appendChild(card);
+});
+
+// Act 09 — positioning matrix
+const matrix = document.getElementById('matrix');
+matrix.innerHTML = `
+  <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--rule);"></div>
+  <div style="position:absolute;top:50%;left:0;right:0;height:1px;background:var(--rule);"></div>
+  <div class="mx-label" style="top:10px;left:50%;transform:translateX(-50%); font-family:'IBM Plex Mono',monospace;">AUTHORS PIPELINES</div>
+  <div class="mx-label" style="bottom:10px;left:50%;transform:translateX(-50%); font-family:'IBM Plex Mono',monospace;">GOVERNS AGENTS</div>
+  <div class="mx-label" style="left:10px;top:50%;transform:translateY(-50%); font-family:'IBM Plex Mono',monospace;">CLOSED</div>
+  <div class="mx-label" style="right:10px;top:50%;transform:translateY(-50%); font-family:'IBM Plex Mono',monospace;">OPEN SOURCE</div>
+`;
+[
+  ['Stageflow',90,86,true],
+  ['Mastra',72,64,false],
+  ['LangGraph',64,74,false],
+  ['Guild.ai',18,20,false],
+  ['Cursor BG',16,32,false],
+  ['Devin',10,42,false],
+].forEach(d=>{
+  const size = d[3] ? 20:13;
+  const dot=document.createElement('div'); dot.className='mx-dot';
+  dot.style.width=size+'px'; dot.style.height=size+'px';
+  dot.style.left=`calc(${d[1]}% - ${size/2}px)`;
+  dot.style.top=`calc(${100-d[2]}% - ${size/2}px)`;
+  dot.style.background = d[3] ? C.teal : 'rgba(245,239,227,0.28)';
+  dot.style.border = d[3] ? `2px solid ${C.teal}` : '1px solid rgba(245,239,227,0.35)';
+  dot.style.boxShadow = d[3] ? `0 0 14px ${C.teal}` : 'none';
+  matrix.appendChild(dot);
+  const label=document.createElement('div'); label.className='mx-label';
+  label.style.fontFamily="'IBM Plex Mono',monospace";
+  label.textContent=d[0];
+  label.style.left=`calc(${d[1]}% + ${size+4}px)`;
+  label.style.top=`calc(${100-d[2]}% - 7px)`;
+  if(d[3]){label.style.color=C.teal; label.style.fontWeight='600'; label.style.fontSize='0.78rem';}
+  matrix.appendChild(label);
+});
+
+// Act 10 — business model split cards
+document.getElementById('split-cards').innerHTML = `
+  <div class="split-card" style="border-color:${C.teal};">
+    <div style="font-family:'IBM Plex Mono',monospace; color:${C.teal}; font-size:0.8rem; letter-spacing:0.08em; margin-bottom:1rem;">RUNTIME — FREE FOREVER</div>
+    <ul class="plain"><li>Open-source (MIT), self-hosted</li><li>Full pipeline authoring, HITL gates, MCP</li><li>No metering, no lock-in</li></ul>
+  </div>
+  <div class="split-card" style="border-color:${C.amber};">
+    <div style="font-family:'IBM Plex Mono',monospace; color:${C.amber}; font-size:0.8rem; letter-spacing:0.08em; margin-bottom:1rem;">GOVERNANCE TIER — PAID SUBSCRIPTION</div>
+    <ul class="plain"><li>Audit-trail exports, SSO, team management</li><li>Hosted operator console</li><li>Sold to regulated-enterprise buyers</li></ul>
+  </div>
+`;
+
+// Act 11 — timeline
+const timeline = document.getElementById('timeline');
+[
+  ['2017','eHealth Ontario','Healthcare FHIR systems'],
+  ['2018–22','Air Automotive Tracking','Event-driven microservices at scale'],
+  ['2022–2026','Vistaprint / Cimpress','Payments integrations, microservices'],
+  ['2026','Stageflow','Full-time, solo'],
+].forEach(t=>{
+  const node=document.createElement('div'); node.className='tl-node';
+  node.innerHTML=`<div class="tl-dot"></div><div style="font-family:'IBM Plex Mono',monospace; font-size:0.72rem;color:${C.amber};">${t[0]}</div><div style="font-size:0.82rem;margin-top:0.25rem;">${t[1]}</div><div style="font-size:0.68rem;color:var(--cream-faint);margin-top:0.15rem;">${t[2]}</div>`;
+  timeline.appendChild(node);
+});
+
+// Act 12 — donut chart (35 / 25 / 15 / 25)
+document.getElementById('donut-wrap').innerHTML = `
+  <svg width="190" height="190" viewBox="0 0 200 200">
+    <g transform="rotate(-90 100 100)">
+      <circle cx="100" cy="100" r="80" fill="none" style="stroke:${C.teal}" stroke-width="26" stroke-dasharray="175.93 502.65" stroke-dashoffset="0"/>
+      <circle cx="100" cy="100" r="80" fill="none" style="stroke:${C.amber}" stroke-width="26" stroke-dasharray="125.66 502.65" stroke-dashoffset="-175.93"/>
+      <circle cx="100" cy="100" r="80" fill="none" style="stroke:${C.violet}" stroke-width="26" stroke-dasharray="75.40 502.65" stroke-dashoffset="-301.59"/>
+      <circle cx="100" cy="100" r="80" fill="none" style="stroke:#6b655f" stroke-width="26" stroke-dasharray="125.66 502.65" stroke-dashoffset="-376.99"/>
+    </g>
+  </svg>
+  <div>
+    <div class="legend-item"><span class="legend-swatch" style="background:${C.teal};"></span> 35% Founder</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:${C.amber};"></span> 25% Contractor / design</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:${C.violet};"></span> 15% Infra</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#6b655f;"></span> 25% Early GTM &amp; ops</div>
+  </div>
+`;
+</script>
+</body>
+</html>

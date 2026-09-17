@@ -39,6 +39,7 @@ examples/prototyping/
 docs/*
 !docs/_config.yml
 !docs/*.md
+!docs/*.html
 !docs/img/
 !docs/img/**
 !docs/providers/
