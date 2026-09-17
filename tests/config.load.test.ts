@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FIXTURES_ROOT, pipelinePath, taskPath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,15 @@ import {
 } from "../src/runtime/stageRoots.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+
+function execFileGit(root: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile("git", ["-C", root, ...args], (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
 
 const FILE_IO = [
   "io:",
@@ -90,6 +100,49 @@ goal: Something
 checkout: 42
 `);
     expect(task.checkout).toBeUndefined();
+  });
+
+  it("loads an object-shaped checkout asking Stageflow to create/reuse a worktree", () => {
+    const task = loadTaskFromYaml(`
+id: auto-worktree
+goal: Something
+checkout:
+  branch: feature/auto
+  base: main
+`);
+    expect(task.checkout).toEqual({ branch: "feature/auto", base: "main" });
+  });
+
+  it("loads an object-shaped checkout with no branch/base (both auto-derived at resolve time)", () => {
+    const task = loadTaskFromYaml(`
+id: auto-worktree
+goal: Something
+checkout: {}
+`);
+    expect(task.checkout).toEqual({});
+  });
+
+  it("rejects (rather than silently drops) a checkout.branch that isn't a string", () => {
+    expect(() =>
+      loadTaskFromYaml(`
+id: bad-checkout-branch
+goal: Something
+checkout:
+  branch: 20240115
+`),
+    ).toThrow(/checkout\.branch must be a string/);
+  });
+
+  it("rejects (rather than silently drops) a checkout.base that isn't a string", () => {
+    expect(() =>
+      loadTaskFromYaml(`
+id: bad-checkout-base
+goal: Something
+checkout:
+  branch: feature/x
+  base: true
+`),
+    ).toThrow(/checkout\.base must be a string/);
   });
 
   it.skip("legacy valid fixture pipelines — migrated in S7", async () => {
@@ -564,5 +617,44 @@ describe("checkout path helpers", () => {
     await expect(
       resolveAndValidateCheckout({ id: "t", goal: "g", checkout: "  " }, undefined, "/f"),
     ).rejects.toThrow(/empty or whitespace/);
+  });
+
+  it("creates a worktree for an object-shaped task checkout instead of validating a pre-existing path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-checkout-worktree-"));
+    await execFileGit(root, ["init"]);
+    await execFileGit(root, ["config", "user.email", "test@example.com"]);
+    await execFileGit(root, ["config", "user.name", "Test"]);
+    await writeFile(path.join(root, "README.md"), "hi\n");
+    await execFileGit(root, ["add", "README.md"]);
+    await execFileGit(root, ["commit", "-m", "initial"]);
+
+    const task = { id: "ship-widget", goal: "g", checkout: { branch: "feature/auto-created" } };
+    const checkoutRoot = await resolveAndValidateCheckout(task, undefined, root);
+
+    expect(checkoutRoot).toMatch(/feature-auto-created$/);
+    const branch = await execFileGit(checkoutRoot!, ["branch", "--show-current"]);
+    expect(branch.trim()).toBe("feature/auto-created");
+
+    await rm(root, { recursive: true, force: true });
+    await rm(checkoutRoot!, { recursive: true, force: true });
+  });
+
+  it("resolving the same object-shaped checkout twice (as runManager.ts + pipelineRunner.ts both do per run start) doesn't create two worktrees", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-checkout-worktree-twice-"));
+    await execFileGit(root, ["init"]);
+    await execFileGit(root, ["config", "user.email", "test@example.com"]);
+    await execFileGit(root, ["config", "user.name", "Test"]);
+    await writeFile(path.join(root, "README.md"), "hi\n");
+    await execFileGit(root, ["add", "README.md"]);
+    await execFileGit(root, ["commit", "-m", "initial"]);
+
+    const task = { id: "ship-widget", goal: "g", checkout: { branch: "feature/twice" } };
+    const first = await resolveAndValidateCheckout(task, undefined, root);
+    const second = await resolveAndValidateCheckout(task, undefined, root);
+
+    expect(second).toBe(first);
+
+    await rm(root, { recursive: true, force: true });
+    await rm(first!, { recursive: true, force: true });
   });
 });

@@ -49,11 +49,13 @@ import {
 } from "../tools/askOperator.js";
 import type { CloneEmitContext, ForkEmitContext } from "../types/forkChoice.js";
 import type { PreEmitCheckOptions } from "../envelope/preEmitChecks.js";
+import { execInSandboxContainer as defaultExecInSandboxContainer } from "../runtime/sandboxContainer.js";
 
 export const STAGEFLOW_MCP_SERVER_NAME = "stageflow";
 export const EMIT_STAGE_ENVELOPE_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__emit_stage_envelope`;
 export const WRITE_STAGE_ARTIFACT_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__write_stage_artifact`;
 export const ASK_OPERATOR_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__ask_operator`;
+export const SANDBOX_BASH_TOOL_NAME = `mcp__${STAGEFLOW_MCP_SERVER_NAME}__sandbox_bash`;
 
 export type AskOperatorCapture = { prompt?: AskOperatorPrompt };
 
@@ -105,6 +107,18 @@ const askOperatorShape = {
   id: z.string().optional(),
   questions: z.array(z.record(z.string(), z.unknown())).optional(),
   artifacts: z.array(z.string()).optional(),
+};
+
+const sandboxBashShape = {
+  command: z.string().min(1),
+};
+
+type SandboxExecFn = typeof defaultExecInSandboxContainer;
+
+export type SandboxBashOptions = {
+  containerName: string;
+  dockerBin?: string;
+  execute?: SandboxExecFn;
 };
 
 /** Adapts a `{content, details?, isError?, terminate?}` tool result to plain MCP CallToolResult. */
@@ -160,6 +174,46 @@ function buildAskOperatorTool(
   );
 }
 
+/**
+ * Bash-in-a-Box (V2, docs/specs/stage-container-sandbox.md): the only tool
+ * that ever crosses into the stage attempt's sandboxed container. `Read`/
+ * `Write`/`Edit` stay the SDK's own built-ins operating on the host's copy
+ * of the mounted worktree — this tool exists purely so `claudeAdapter.ts`
+ * can alias the model's `Bash` calls onto it via `toolAliases`.
+ */
+function buildSandboxBashTool(options: SandboxBashOptions) {
+  const execute = options.execute ?? defaultExecInSandboxContainer;
+  return tool(
+    "sandbox_bash",
+    "Run a shell command inside this stage attempt's sandboxed container. File edits still go through Read/Write/Edit, which operate on the host's copy of the same mounted directory.",
+    sandboxBashShape,
+    async (args) => {
+      let result;
+      try {
+        result = await execute({
+          containerName: options.containerName,
+          command: args.command,
+          dockerBin: options.dockerBin,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `sandbox_bash could not run: ${message}` }],
+          isError: true,
+        };
+      }
+      const parts = [result.stdout];
+      if (result.stderr.trim().length > 0) {
+        parts.push(result.stderr);
+      }
+      parts.push(`Exit code: ${result.exitCode}`);
+      return {
+        content: [{ type: "text" as const, text: parts.join("\n") }],
+      };
+    },
+  );
+}
+
 export function buildStageflowMcpServer(options: {
   capture: EmitCapture;
   payloadSchema?: unknown;
@@ -171,6 +225,7 @@ export function buildStageflowMcpServer(options: {
     capture: AskOperatorCapture;
     allowedKinds?: readonly AskOperatorKind[];
   };
+  sandboxBash?: SandboxBashOptions;
 }): McpServerConfig {
   const emitDef = createEmitStageEnvelopeTool(
     options.capture,
@@ -204,6 +259,9 @@ export function buildStageflowMcpServer(options: {
     tools.push(
       buildAskOperatorTool(options.askOperator.capture, options.askOperator.allowedKinds),
     );
+  }
+  if (options.sandboxBash) {
+    tools.push(buildSandboxBashTool(options.sandboxBash));
   }
 
   return createSdkMcpServer({

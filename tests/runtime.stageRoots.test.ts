@@ -9,6 +9,7 @@ import {
   PI_CODING_AGENT_DIR_ENV,
   resolveAndValidateCheckout,
   rootsForStageWorker,
+  withContainerName,
   withResolvedAuthPath,
 } from "../src/runtime/stageRoots.js";
 import {
@@ -116,5 +117,22 @@ describe("StageRoots", () => {
       mkdirSync(roots.agentDir, { recursive: true });
       expect(existsSync(path.join(roots.agentDir, "auth.json"))).toBe(false);
     });
+  });
+});
+
+describe("withContainerName", () => {
+  it("leaves roots unchanged when containerName is undefined", () => {
+    const roots = buildStageRoots("/tmp/run", "clarify");
+    expect(withContainerName(roots, undefined)).toEqual(roots);
+  });
+
+  it("returns a new roots object with containerName set, without mutating the input", () => {
+    const roots = buildStageRoots("/tmp/run", "clarify");
+    const withContainer = withContainerName(roots, "stageflow-run-1-clarify-1-abc");
+    expect(withContainer).toEqual({
+      ...roots,
+      containerName: "stageflow-run-1-clarify-1-abc",
+    });
+    expect(roots).not.toHaveProperty("containerName");
   });
 });
