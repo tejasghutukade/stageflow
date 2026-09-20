@@ -15,6 +15,7 @@ import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
+import { isTerminalProjection, isWaitingProjection, waitRun } from "./waitRun.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -91,6 +92,16 @@ const runStageSchema = z
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
+    blocking: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of returning immediately with just { runId }",
+      ),
+    timeout_ms: z
+      .number()
+      .optional()
+      .describe("Wait budget in ms when blocking is true (same bounds as wait_run)"),
   })
   .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
     message: "Exactly one of task_path or task is required",
@@ -239,10 +250,10 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "run_stage",
     {
       description:
-        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and either task_path or an inline task. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. Returns { runId, stageId }.",
+        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and either task_path or an inline task. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
       inputSchema: runStageSchema,
     },
-    async ({ stage, task_path, task }) => {
+    async ({ stage, task_path, task, blocking, timeout_ms }) => {
       const taskInput = task_path ?? task;
       if (taskInput === undefined) {
         return textResult({ error: "Exactly one of task_path or task is required" }, true);
@@ -290,7 +301,43 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const { ok: _ok, reason, ...rest } = result;
         return textResult({ error: reason, ...rest }, true);
       }
-      return textResult({ runId: result.runId, stageId });
+      const runId = result.runId;
+      if (!blocking) {
+        return textResult({ runId, stageId });
+      }
+
+      const waited = await waitRun({ store, runId, timeoutMs: timeout_ms, until: "any" });
+      if (!waited.ok) {
+        return textResult(
+          {
+            error: waited.error,
+            ...(waited.status !== undefined ? { status: waited.status } : {}),
+            ...(waited.code !== undefined ? { code: waited.code } : {}),
+          },
+          true,
+        );
+      }
+      const stageProjection = waited.run.stages.find((s) => s.stage_id === stageId);
+      if (isTerminalProjection(waited.run)) {
+        return textResult({
+          runId,
+          stageId,
+          status: "completed",
+          envelope: stageProjection?.envelope ?? null,
+        });
+      }
+      if (isWaitingProjection(waited.run)) {
+        return textResult({
+          runId,
+          stageId,
+          status: "needs_input",
+          pending_prompt: stageProjection?.pending_prompt,
+          waiting_kind: waited.run.waiting_kind,
+          waiting_prompt_id: waited.run.waiting_prompt_id,
+          waiting_summary: waited.run.waiting_summary,
+        });
+      }
+      return textResult({ runId, stageId, status: "timeout" });
     },
   );
 

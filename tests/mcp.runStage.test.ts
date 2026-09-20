@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import type { AgentPort } from "../src/agent/port.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
@@ -328,5 +329,136 @@ describe("run_stage — standalone stage execution (MCP)", () => {
         ).toBe(false);
       },
     );
+  });
+
+  describe("blocking mode", () => {
+    it("a blocking call against a gate-free stage returns the final envelope directly, no polling", async () => {
+      await withServer(
+        [{ type: "emit", envelope: { status: "success", summary: "done", artifacts: [] } }],
+        async (base) => {
+          const started = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "check",
+              system_prompt: "Do work",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t", goal: "check" },
+            blocking: true,
+          });
+          expect(started.isError).toBe(false);
+          expect(started.payload.status).toBe("completed");
+          expect(started.payload.envelope.summary).toBe("done");
+          expect(started.payload.runId).toBeTruthy();
+          expect(started.payload.stageId).toBe("check");
+        },
+      );
+    });
+
+    it("a blocking call that parks returns needs_input; answering then waiting completes the same run via existing tools", async () => {
+      await withServer(
+        [
+          {
+            type: "wait_then_emit",
+            waitRequests: [{ kind: "free_text", id: "prompt-1", message: "hold" }],
+            envelope: { status: "success", summary: "clarified", artifacts: [] },
+          },
+        ],
+        async (base, store) => {
+          const started = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "clarify",
+              system_prompt: "Ask a question",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t", goal: "check" },
+            blocking: true,
+          });
+          expect(started.isError).toBe(false);
+          expect(started.payload.status).toBe("needs_input");
+          expect(started.payload.pending_prompt).toMatchObject({
+            kind: "free_text",
+            id: "prompt-1",
+          });
+          const runId = started.payload.runId as string;
+
+          const answered = await mcpCall(base, "answer_gate", {
+            runId,
+            stageId: "clarify",
+            answer: { promptId: "prompt-1", kind: "free_text", text: "yes" },
+          });
+          expect(answered.isError).toBe(false);
+
+          // No new HITL primitive: resuming after a needs_input result reuses
+          // the existing wait_run tool, exactly as a pipeline caller would.
+          const waited = await mcpCall(base, "wait_run", { runId, until: "terminal" });
+          expect(waited.isError).toBe(false);
+          // "already" (matched on the very first check, no poll-sleep needed)
+          // is just as valid a terminal wake as "terminal" here.
+          expect(["terminal", "already"]).toContain(waited.payload.reason);
+
+          await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
+        },
+      );
+    });
+
+    it("a blocking call respects the timeout budget instead of hanging indefinitely", async () => {
+      // A FakeAgent behavior always resolves (or fails/parks) near-instantly,
+      // so it can't exercise the "still running" timeout path. This stand-in
+      // AgentPort deliberately never resolves within the test's timeout_ms.
+      const hangingAgent: AgentPort = {
+        openStage(input) {
+          return {
+            stageId: input.stage.id,
+            async next() {
+              await new Promise((r) => setTimeout(r, 5000));
+              return { status: "completed", result: { ok: false, reason: "never" } };
+            },
+            deliverAnswer() {},
+            async close() {},
+          };
+        },
+        async runStage() {
+          await new Promise((r) => setTimeout(r, 5000));
+          return { ok: false, reason: "never" };
+        },
+      };
+
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-run-stage-timeout-"));
+      const store = createRunStore({ rootDir: storeRoot });
+      const { server } = await startUiServer({
+        agent: hangingAgent,
+        cwd: projectRoot,
+        store,
+        port: 0,
+        uiDistDir: path.join(storeRoot, "missing-ui"),
+        mcpStateless: true,
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected TCP address");
+      const base = `http://127.0.0.1:${address.port}`;
+
+      try {
+        const started = await mcpCall(base, "run_stage", {
+          stage: {
+            id: "check",
+            system_prompt: "Do work",
+            model: "anthropic/claude-sonnet-4-5",
+            ...REQUIRED_IO,
+          },
+          task: { id: "t", goal: "check" },
+          blocking: true,
+          timeout_ms: 300,
+        });
+        expect(started.isError).toBe(false);
+        expect(started.payload.status).toBe("timeout");
+        expect(started.payload.runId).toBeTruthy();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    }, 10000);
   });
 });
