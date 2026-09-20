@@ -582,6 +582,24 @@ Raw `--api-key` on the command line is **not** supported; use a prompt or `--api
 
 See [Providers](providers.md).
 
+## `sf a2a`
+
+Inbound A2A: let other agents invoke your published pipelines over JSON-RPC. See [A2A](a2a.md) for the full reference and walkthrough.
+
+```bash
+sf a2a validate [--config <path>]
+sf a2a list [--config <path>]
+sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `validate` | Load and check a publication config; prints the resolved publications as JSON |
+| `list` | Same check, plus a reminder that a running host needs an explicit restart to pick up changes |
+| `add-caller` | Register a new caller: writes its `id` and `token_env` name into `a2a.yaml` (creating the file if needed) and prints a generated token to export -- never writes a secret value to disk |
+
+`--config` defaults to `<project-root>/a2a.yaml` when omitted -- the same file `STAGEFLOW_A2A_CONFIG` overrides if set. `sf ui` uses this same resolution to decide whether A2A is enabled at all.
+
 ## Internal: `sf internal run-stage`
 
 Used by the runtime to execute a single stage in a worker process. Not intended for direct use.
@@ -601,6 +619,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills in CI |
+| `STAGEFLOW_A2A_CONFIG` | Explicit path to `a2a.yaml`, overriding auto-discovery at `<project-root>/a2a.yaml`. See [A2A](a2a.md) |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 
@@ -610,3 +629,4 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `pi_home` vs `sf_owned`
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
+- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC

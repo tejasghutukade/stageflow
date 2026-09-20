@@ -194,6 +194,12 @@ HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_
 
 Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
 
+## A2A
+
+MCP is for your own trusted, local tools. A2A is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines.
+
+Drop `a2a.yaml` next to `stageflow.yaml` and it's auto-discovered when `sf ui` starts -- no extra flag needed. `sf a2a add-caller <id>` registers a caller and generates its token. Full reference: [docs/a2a.md](docs/a2a.md).
+
 ## Stageflow vs Conductor
 
 Both projects address multi-step agent workflows. They differ in orchestration model and runtime.
@@ -242,6 +248,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
 | [docs/mcp.md](docs/mcp.md) | MCP tool reference |
+| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A) |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
