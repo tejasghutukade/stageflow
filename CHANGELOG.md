@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-09-20
+
+### Added
+
+- Inbound A2A: publish explicit pipelines as A2A capabilities that other agents invoke over JSON-RPC. Discovery via Agent Card and per-publication contracts, durable at-most-once run submission, invoke/poll/results, caller-answerable clarification gates, result freezing with opaque artifact downloads, per-caller rate limits and admission caps, and terminal-task/message retention. See `docs/a2a.md`.
+- `a2a.yaml` is auto-discovered at the project root (next to `stageflow.yaml`) when `sf ui` starts -- no environment variable required. `STAGEFLOW_A2A_CONFIG` still works as an explicit override for a config living outside the project. `sf a2a validate`/`sf a2a list` follow the same discovery rule, with `--config` now optional on both.
+- New `sf a2a add-caller <id>` command: generates a caller's token and writes its `id`/`token_env` name into `a2a.yaml` (scaffolding the file if it doesn't exist yet), printing the token to export -- never writes a secret value to disk.
+
 ## [0.23.0] - 2026-09-15
 
 ### Added
