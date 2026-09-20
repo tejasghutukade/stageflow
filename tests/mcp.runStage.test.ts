@@ -461,4 +461,129 @@ describe("run_stage — standalone stage execution (MCP)", () => {
       }
     }, 10000);
   });
+
+  describe("envelope reference input", () => {
+    it("resolves a reference to a prior standalone call's envelope and feeds its payload as the next stage's input", async () => {
+      await withServer(
+        [
+          {
+            type: "emit",
+            envelope: {
+              status: "success",
+              summary: "found three leads",
+              artifacts: [],
+              payload: { leads: ["a", "b", "c"] },
+            },
+          },
+          { type: "emit", envelope: { status: "success", summary: "summarized", artifacts: [] } },
+        ],
+        async (base, store) => {
+          const first = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "research",
+              system_prompt: "Research",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t1", goal: "research it" },
+          });
+          expect(first.isError).toBe(false);
+          const firstRunId = first.payload.runId as string;
+          await waitFor(async () => (await store.readRun(firstRunId)).status === "succeeded");
+
+          const second = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "summarize",
+              system_prompt: "Summarize",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            envelope_ref: { runId: firstRunId, stageId: "research" },
+          });
+          expect(second.isError).toBe(false);
+          const secondRunId = second.payload.runId as string;
+          await waitFor(async () => (await store.readRun(secondRunId)).status === "succeeded");
+
+          const secondDetail = await store.readRun(secondRunId);
+          const { parse } = await import("yaml");
+          const parsedTask = parse(secondDetail.task_yaml) as {
+            goal: string;
+            input?: Record<string, unknown>;
+          };
+          expect(parsedTask.goal).toBe("found three leads");
+          expect(parsedTask.input).toEqual({ leads: ["a", "b", "c"] });
+        },
+      );
+    });
+
+    it("resolves a reference to a stage inside an ordinary multi-stage pipeline run, not just standalone calls", async () => {
+      await withServer(
+        [{ type: "emit", envelope: { status: "success", summary: "from pipeline stage", artifacts: [], payload: { note: "hi" } } }],
+        async (base, store) => {
+          const pipelineRun = await mcpCall(base, "start_run", {
+            pipeline: "pipelines/docs-only.pipeline.yaml",
+            task: { id: "t", goal: "g" },
+          });
+          expect(pipelineRun.isError).toBe(false);
+          const pipelineRunId = pipelineRun.payload.runId as string;
+          // Only the first stage needs a stored envelope to be referenceable —
+          // don't require the whole (multi-stage) pipeline run to finish.
+          await waitFor(async () => {
+            const detail = await store.readRun(pipelineRunId);
+            return detail.stages[0]?.status === "succeeded";
+          });
+          const pipelineDetail = await store.readRun(pipelineRunId);
+          const firstStageId = pipelineDetail.stages[0]?.stage_id as string;
+
+          const standalone = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "picks-up",
+              system_prompt: "Pick up from that stage",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            envelope_ref: { runId: pipelineRunId, stageId: firstStageId },
+          });
+          expect(standalone.isError).toBe(false);
+        },
+      );
+    });
+
+    it("an unknown envelope reference fails with a clear 404-style error, matching get_envelope", async () => {
+      await withServer([], async (base) => {
+        const started = await mcpCall(base, "run_stage", {
+          stage: { id: "check", system_prompt: "Do work", ...REQUIRED_IO },
+          envelope_ref: { runId: "does-not-exist", stageId: "whatever" },
+        });
+        expect(started.isError).toBe(true);
+        expect(started.payload.status).toBe(404);
+      });
+    });
+
+    it("checkout stays explicit and is never implied by an envelope reference", async () => {
+      await withServer(
+        [
+          { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
+          { type: "emit", envelope: { status: "success", summary: "ok2", artifacts: [] } },
+        ],
+        async (base, store) => {
+          const first = await mcpCall(base, "run_stage", {
+            stage: { id: "a", system_prompt: "a", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+            task: { id: "t", goal: "g", checkout: projectRoot },
+          });
+          const firstRunId = first.payload.runId as string;
+          await waitFor(async () => (await store.readRun(firstRunId)).status === "succeeded");
+
+          const second = await mcpCall(base, "run_stage", {
+            stage: { id: "b", system_prompt: "b", model: "anthropic/claude-sonnet-4-5", ...REQUIRED_IO },
+            envelope_ref: { runId: firstRunId, stageId: "a" },
+          });
+          const secondRunId = second.payload.runId as string;
+          await waitFor(async () => (await store.readRun(secondRunId)).status === "succeeded");
+          const meta = await store.readRunMeta(secondRunId);
+          expect(meta.checkout_root).toBeUndefined();
+        },
+      );
+    });
+  });
 });

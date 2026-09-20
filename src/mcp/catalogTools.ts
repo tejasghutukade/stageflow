@@ -92,6 +92,22 @@ const runStageSchema = z
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
+    envelope_ref: z
+      .object({
+        runId: z.string(),
+        stageId: z.string(),
+        attempt: z.number().int().positive().optional(),
+      })
+      .optional()
+      .describe(
+        "Resolve a previously stored StageEnvelope (from another run_stage call or from any stage inside a full pipeline run) and use it as this stage's input, instead of an inline task/task_path. Its payload becomes input, its summary becomes goal.",
+      ),
+    checkout: z
+      .string()
+      .optional()
+      .describe(
+        "Optional checkout to use with envelope_ref (ignored with task/task_path, which carry their own checkout). Resolving envelope_ref never implies a checkout on its own.",
+      ),
     blocking: z
       .boolean()
       .optional()
@@ -103,9 +119,10 @@ const runStageSchema = z
       .optional()
       .describe("Wait budget in ms when blocking is true (same bounds as wait_run)"),
   })
-  .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
-    message: "Exactly one of task_path or task is required",
-  });
+  .refine(
+    (data) => [data.task_path, data.task, data.envelope_ref].filter(Boolean).length === 1,
+    { message: "Exactly one of task_path, task, or envelope_ref is required" },
+  );
 
 const runStatusSchema = z.enum(["created", "running", "succeeded", "failed"]);
 
@@ -250,13 +267,48 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "run_stage",
     {
       description:
-        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and either task_path or an inline task. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
+        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and exactly one of task_path, an inline task, or envelope_ref ({ runId, stageId, attempt? }) to resolve a previously stored envelope — from another run_stage call or any stage in a full pipeline run — as this stage's input. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
       inputSchema: runStageSchema,
     },
-    async ({ stage, task_path, task, blocking, timeout_ms }) => {
-      const taskInput = task_path ?? task;
+    async ({ stage, task_path, task, envelope_ref, checkout, blocking, timeout_ms }) => {
+      let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
+      if (envelope_ref) {
+        try {
+          await store.readRunMeta(envelope_ref.runId);
+        } catch (err) {
+          const mapped = mapStoreLookupError(err, { policy: "run" });
+          return textResult({ error: mapped.error, status: 404 }, true);
+        }
+        let envelope;
+        try {
+          const refDetail = await store.readRun(envelope_ref.runId);
+          if (!refDetail.stages.some((s) => s.stage_id === envelope_ref.stageId)) {
+            return textResult(
+              { error: `Stage not found: ${envelope_ref.stageId}`, status: 404 },
+              true,
+            );
+          }
+          envelope = await store.readEnvelope(
+            envelope_ref.runId,
+            envelope_ref.stageId,
+            envelope_ref.attempt,
+          );
+        } catch (err) {
+          const mapped = mapStoreLookupError(err, { policy: "envelope" });
+          return textResult({ error: mapped.error, status: mapped.status }, true);
+        }
+        taskInput = {
+          id: `ref-${envelope_ref.runId}-${envelope_ref.stageId}`,
+          goal: envelope.summary,
+          input: envelope.payload ?? {},
+          ...(checkout ? { checkout } : {}),
+        };
+      }
       if (taskInput === undefined) {
-        return textResult({ error: "Exactly one of task_path or task is required" }, true);
+        return textResult(
+          { error: "Exactly one of task_path, task, or envelope_ref is required" },
+          true,
+        );
       }
 
       let stageBody: Record<string, unknown>;
