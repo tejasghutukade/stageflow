@@ -50,6 +50,7 @@ import {
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
 import { SCHEMA_SQL } from "./schema.js";
+import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type RunRow = {
   run_id: string;
@@ -514,6 +515,14 @@ export class SqliteRunStore implements RunStore {
     await this.migratePromise;
   }
 
+  /**
+   * The connection this store owns, for the one caller allowed to share it: the composition root
+   * wiring the A2A tables into the same `state.db` file. Not part of the `RunStore` interface.
+   */
+  get connection(): Database.Database {
+    return this.db;
+  }
+
   getWorkspaceDir(runId: string): string {
     return runWorkspaceDir(this.storeRoot, runId);
   }
@@ -535,7 +544,12 @@ export class SqliteRunStore implements RunStore {
       ? normalizeCatalogPath(input.projectRoot)
       : null;
 
-    this.db
+    this.db.transaction(() => {
+      if (input.submission) {
+        const existing = this.readSubmission(input.submission.key);
+        if (existing) throw new RunSubmissionExistsError(existing);
+      }
+      this.db
       .prepare(
         `INSERT INTO runs
           (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root)
@@ -562,7 +576,24 @@ export class SqliteRunStore implements RunStore {
         project_root: projectRoot,
       });
 
+      if (input.submission) {
+        this.db.prepare("INSERT INTO run_submissions (submission_key, request_hash, run_id) VALUES (?, ?, ?)")
+          .run(input.submission.key, input.submission.requestHash, runId);
+      }
+    })();
+
     return { runId, workspaceDir };
+  }
+
+  private readSubmission(key: string): RunSubmissionRecord | null {
+    const row = this.db.prepare("SELECT submission_key AS key, request_hash AS requestHash, run_id AS runId FROM run_submissions WHERE submission_key = ?")
+      .get(key) as RunSubmissionRecord | undefined;
+    return row ?? null;
+  }
+
+  async getRunBySubmission(key: string): Promise<RunSubmissionRecord | null> {
+    await this.ready();
+    return this.readSubmission(key);
   }
 
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {

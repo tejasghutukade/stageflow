@@ -1,4 +1,5 @@
 import type { StageLogLine } from "../agent/activity.js";
+import type { RunSubmission, RunSubmissionRecord } from "./submission.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -372,6 +373,7 @@ export type FeedbackLoopHistory = {
 };
 
 export type CreateRunInput = {
+  submission?: RunSubmission;
   pipelineId: string;
   taskYaml: string;
   taskId?: string;
@@ -400,6 +402,7 @@ export type ListRunsFilter = {
  * run id is all you have (catalog / rehydrate).
  */
 export interface RunStore {
+  getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;

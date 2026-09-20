@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS runs (
   project_root TEXT
 );
 
+CREATE TABLE IF NOT EXISTS run_submissions (
+  submission_key TEXT PRIMARY KEY,
+  request_hash TEXT NOT NULL,
+  run_id TEXT NOT NULL UNIQUE REFERENCES runs(run_id)
+);
+
 CREATE TABLE IF NOT EXISTS stages (
   run_id TEXT NOT NULL,
   stage_id TEXT NOT NULL,

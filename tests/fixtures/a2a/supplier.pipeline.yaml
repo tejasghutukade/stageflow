@@ -1,0 +1,41 @@
+id: supplier-assessment
+model: anthropic/claude-sonnet-4-20250514
+stages:
+  - id: clarify
+    entry: true
+    system_prompt: Clarify the purchasing requirements for the supplier.
+    gate_kinds: [free_text]
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+      output:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+    route: [{ to: final_report }]
+  - id: final_report
+    system_prompt: Write the supplier assessment and emit the report artifact.
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            supplier: { type: string }
+          required: [supplier]
+      output:
+        schema:
+          type: object
+          properties:
+            recommendation: { type: string }
+          required: [recommendation]
+    verify:
+      - id: report
+        type: artifact
+        when: [emit]
+        basename: assessment.md

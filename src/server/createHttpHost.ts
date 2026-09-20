@@ -69,6 +69,12 @@ export async function createHttpHost(
     const url = new URL(req.url ?? "/", `http://${host}:${port}`);
     const pathname = url.pathname;
 
+    if (pathname === "/api/a2a/status" && method === "GET") {
+      json(res, 200, boot.a2a?.status ?? { state: "disabled" });
+      return;
+    }
+    if (await boot.a2a?.handle(req, res, pathname)) return;
+
     if (pathname === "/mcp") {
       if (!validateMcpHost(req, res) || !validateMcpOrigin(req, res)) {
         return;

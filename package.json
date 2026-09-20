@@ -61,6 +61,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@a2a-js/sdk": "1.1.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.263",
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",

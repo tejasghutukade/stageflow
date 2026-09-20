@@ -1,7 +1,9 @@
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { createA2aHost, type A2aHost } from "../a2a/server.js";
 import type { AgentPort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
-import { createRunStore, type RunStoreKind } from "../runstore/createStore.js";
+import type Database from "better-sqlite3";
+import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
@@ -33,6 +35,7 @@ export type StageflowHostOptions = {
 };
 
 export type StageflowHostBootstrap = {
+  a2a?: A2aHost;
   cwd: string;
   agentDir: string;
   rootDir: string;
@@ -57,9 +60,15 @@ export async function bootstrapStageflowHost(
     options.rootDir !== undefined
       ? findProjectRoot(rootDir) !== null
       : ctx.isGitProject;
-  const rawStore =
-    options.store ??
-    createRunStore({ rootDir: ctx.globalHome, kind: options.storeKind });
+  let rawStore: RunStore;
+  let sqliteConnection: Database.Database | undefined;
+  if (options.store) {
+    rawStore = options.store;
+  } else {
+    const created = createRunStoreWithConnection({ rootDir: ctx.globalHome, kind: options.storeKind });
+    rawStore = created.store;
+    sqliteConnection = created.connection;
+  }
   const boundBus = isRunStoreWrapped(rawStore)
     ? getRunChangeBusFromWrappedStore(rawStore)
     : undefined;
@@ -102,6 +111,7 @@ export async function bootstrapStageflowHost(
     { mcpStateless },
   );
   return {
+    a2a: await createA2aHost({ manager, runStore: store, rootDir: ctx.globalHome, connection: sqliteConnection }),
     cwd,
     agentDir,
     rootDir,

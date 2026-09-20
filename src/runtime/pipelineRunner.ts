@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import type { RunSubmission } from "../runstore/submission.js";
 import type { AgentPort } from "../agent/port.js";
 import {
   buildValidationResult,
@@ -81,6 +82,7 @@ function resolveStageProcessLauncher(
 }
 
 async function preparePipeline(options: {
+  submission?: RunSubmission;
   agent: AgentPort;
   store: RunStore;
   taskPath?: string;
@@ -154,6 +156,7 @@ async function preparePipeline(options: {
   );
 
   const run = await options.store.createRun({
+    submission: options.submission,
     pipelineId: loaded.pipeline.id,
     taskYaml,
     taskId: task.id,
@@ -275,6 +278,7 @@ export async function runPipeline(options: {
 
 /** Create the run immediately, then execute stages in the returned promise. */
 export async function startPipeline(options: {
+  submission?: RunSubmission;
   agent: AgentPort;
   store: RunStore;
   taskPath?: string;
@@ -296,6 +300,7 @@ export async function startPipeline(options: {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
   const prepared = await preparePipeline({
+    submission: options.submission,
     agent: options.agent,
     store: options.store,
     taskPath: options.taskPath,
