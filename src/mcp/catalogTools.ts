@@ -8,11 +8,13 @@ import {
 } from "../config/browseCatalog.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
+import { readYamlObject } from "../config/readYamlObject.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -67,6 +69,25 @@ const startRunSchema = z
       .union([z.string(), inlinePipelineSchema])
       .describe(
         "Filesystem path to a pipeline YAML file, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
+      ),
+    task_path: z.string().optional(),
+    task: taskFileSchema.optional(),
+  })
+  .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
+    message: "Exactly one of task_path or task is required",
+  });
+
+/**
+ * Deliberately thin, same reasoning as inlinePipelineSchema above: real
+ * structural validation of the stage body happens downstream through the
+ * same stage loader a pipeline's inline stage goes through.
+ */
+const runStageSchema = z
+  .object({
+    stage: z
+      .union([z.string(), z.record(z.string(), z.unknown())])
+      .describe(
+        "Filesystem path to a stage YAML file, or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
@@ -211,6 +232,65 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({ error: reason, ...rest }, true);
       }
       return textResult({ runId: result.runId });
+    },
+  );
+
+  server.registerTool(
+    "run_stage",
+    {
+      description:
+        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and either task_path or an inline task. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. Returns { runId, stageId }.",
+      inputSchema: runStageSchema,
+    },
+    async ({ stage, task_path, task }) => {
+      const taskInput = task_path ?? task;
+      if (taskInput === undefined) {
+        return textResult({ error: "Exactly one of task_path or task is required" }, true);
+      }
+
+      let stageBody: Record<string, unknown>;
+      if (typeof stage === "string") {
+        if (!stage.trim()) {
+          return textResult({ error: "stage is required" }, true);
+        }
+        const absPath = path.resolve(cwd, stage);
+        try {
+          stageBody = await readYamlObject(absPath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return textResult({ error: `Failed to read stage file: ${message}` }, true);
+        }
+      } else {
+        stageBody = stage;
+      }
+
+      if (typeof stageBody.id !== "string" || !stageBody.id.trim()) {
+        return textResult({ error: "stage.id is required" }, true);
+      }
+      const stageId = stageBody.id;
+
+      const pipeline: InlinePipelineDefinition = {
+        id: `standalone-${stageId}`,
+        stages: [stageBody],
+      };
+
+      let result;
+      try {
+        result = await manager.startRun({ pipeline, task: taskInput });
+      } catch (err) {
+        if (err instanceof PipelineValidationError) {
+          return textResult(
+            { error: "Stage validation failed", validation: err.result },
+            true,
+          );
+        }
+        throw err;
+      }
+      if (!result.ok) {
+        const { ok: _ok, reason, ...rest } = result;
+        return textResult({ error: reason, ...rest }, true);
+      }
+      return textResult({ runId: result.runId, stageId });
     },
   );
 
