@@ -1,8 +1,15 @@
+import path from "node:path";
 import { readRunArtifactBytes, artifactMediaType } from "../mcp/readArtifact.js";
+import { waitRun } from "../mcp/waitRun.js";
+import { readYamlObject } from "../config/readYamlObject.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
+import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
+import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
+import type { TaskFile } from "../types/task.js";
 import type { PublicationRegistry } from "./registry.js";
 import {
   A2aApplicationError,
@@ -13,6 +20,7 @@ import {
   parseIncomingMessage,
   submissionKeyFor,
   type IncomingMessage,
+  type RunStageCommand,
 } from "./contracts.js";
 import type Database from "better-sqlite3";
 import { A2aStore, type A2aTaskRow, type TaskState } from "./store.js";
@@ -34,6 +42,16 @@ export type PublicTask = {
   questions?: PublicQuestion[];
   waitingForOperator?: boolean;
   result?: { summary: string; payload?: Record<string, unknown>; artifacts: PublicArtifact[] };
+  /**
+   * The underlying run id — only ever populated for a "standalone" (ADR-0001
+   * run_stage) task. Published-capability (`invoke`) tasks keep the run id
+   * opaque, unchanged from before this field existed. Exposing it here is
+   * what makes ADR-0002's `envelope_ref` chaining ({runId, stageId}) usable
+   * from an A2A caller in the first place: run_stage's response is the only
+   * place a caller can learn the run id of a standalone call it just made,
+   * to hand to its *next* run_stage call.
+   */
+  runId?: string;
 };
 
 export type ArtifactRead = { bytes: Buffer; name: string; mediaType?: string };
@@ -43,6 +61,8 @@ export class A2aInvocations {
     private readonly registry: PublicationRegistry,
     private readonly manager: RunManager,
     private readonly runStore: RunStore,
+    /** Base directory a `stage`/`pipeline` filesystem reference in a run_stage call resolves against. */
+    private readonly rootDir: string,
     private readonly store: A2aStore,
     private readonly rateLimiter: RateLimiter = new RateLimiter(),
   ) {}
@@ -67,6 +87,9 @@ export class A2aInvocations {
     const message = parseIncomingMessage(raw);
     if (message.kind === "invoke") {
       return this.invoke(caller, message.messageId, message.contextId, message.capability, message.input);
+    }
+    if (message.kind === "run_stage") {
+      return this.runStandalone(caller, message);
     }
     return this.answer(caller, message.messageId, message.taskId, message.handle, message.answer);
   }
@@ -183,6 +206,143 @@ export class A2aInvocations {
     return this.projectTask(caller, taskId);
   }
 
+  /**
+   * ADR-0001's wildcard-access operation: run any catalog or inline
+   * stage/pipeline directly. Deliberately does NOT call `this.registry.get`/
+   * `.list` — that allowlist lookup is the entire mechanism `invoke` uses to
+   * restrict a caller to its published capabilities, and this operation's
+   * whole point is to bypass it. The caller is still authenticated (by the
+   * time `send` reaches here) and still rate-limited/admission-capped like
+   * any other task.
+   */
+  private async runStandalone(caller: Caller, cmd: RunStageCommand): Promise<PublicTask> {
+    let taskInput: string | TaskFile;
+    if (cmd.envelope_ref) {
+      const ref = cmd.envelope_ref;
+      try {
+        await this.runStore.readRunMeta(ref.runId);
+      } catch (err) {
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        throw new A2aApplicationError("not-found", mapped.error);
+      }
+      let envelope;
+      try {
+        const refDetail = await this.runStore.readRun(ref.runId);
+        if (!refDetail.stages.some((s) => s.stage_id === ref.stageId)) {
+          throw new A2aApplicationError("not-found", `Stage not found: ${ref.stageId}`);
+        }
+        envelope = await this.runStore.readEnvelope(ref.runId, ref.stageId, ref.attempt);
+      } catch (err) {
+        if (err instanceof A2aApplicationError) throw err;
+        const mapped = mapStoreLookupError(err, { policy: "envelope" });
+        throw new A2aApplicationError(mapped.kind === "not_found" ? "not-found" : "invalid-input", mapped.error);
+      }
+      taskInput = {
+        id: `ref-${ref.runId}-${ref.stageId}`,
+        goal: envelope.summary,
+        input: envelope.payload ?? {},
+        ...(cmd.checkout ? { checkout: cmd.checkout } : {}),
+      };
+    } else {
+      taskInput = (cmd.task_path ?? cmd.task)!;
+    }
+
+    let pipelineArg: string | InlinePipelineDefinition;
+    let resultStageId: string | undefined;
+    if (cmd.stage !== undefined) {
+      let stageBody: Record<string, unknown>;
+      if (typeof cmd.stage === "string") {
+        if (!cmd.stage.trim()) throw new A2aApplicationError("invalid-input", "stage is required");
+        const absPath = path.resolve(this.rootDir, cmd.stage);
+        try {
+          stageBody = await readYamlObject(absPath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new A2aApplicationError("invalid-input", `Failed to read stage file: ${message}`);
+        }
+      } else {
+        stageBody = cmd.stage;
+      }
+      if (typeof stageBody.id !== "string" || !stageBody.id.trim()) {
+        throw new A2aApplicationError("invalid-input", "stage.id is required");
+      }
+      resultStageId = stageBody.id;
+      const effectiveStageBody = cmd.model !== undefined ? { ...stageBody, model: cmd.model } : stageBody;
+      pipelineArg = { id: `standalone-${resultStageId}`, stages: [effectiveStageBody] };
+    } else {
+      const pipeline = cmd.pipeline!;
+      if (typeof pipeline === "string") {
+        if (!pipeline.trim()) throw new A2aApplicationError("invalid-input", "pipeline is required");
+        pipelineArg = pipeline;
+      } else {
+        if (typeof pipeline.id !== "string" || !pipeline.id.trim() || !Array.isArray(pipeline.stages)) {
+          throw new A2aApplicationError("invalid-input", "Inline pipeline requires id and stages");
+        }
+        pipelineArg = pipeline as unknown as InlinePipelineDefinition;
+      }
+      // No single result stage for a multi-stage pipeline call: finalize
+      // surfaces every stage's outcome instead of one envelope (see maybeFinalize).
+    }
+
+    const hash = contentHash({
+      operation: "run_stage",
+      stage: cmd.stage ?? null,
+      pipeline: cmd.pipeline ?? null,
+      task_path: cmd.task_path ?? null,
+      task: cmd.task ?? null,
+      envelope_ref: cmd.envelope_ref ?? null,
+      checkout: cmd.checkout ?? null,
+      model: cmd.model ?? null,
+    });
+    const replay = await this.replayOrThrow(caller, cmd.messageId, hash, "Message ID was already used for different input");
+    if (replay) return replay;
+    if (this.store.countNonterminal(caller.id) >= MAX_NONTERMINAL_TASKS_PER_CALLER) {
+      throw new A2aApplicationError("busy", "Too many active tasks for this caller; wait for one to finish");
+    }
+
+    const taskId = newTaskId();
+    const contextIdResolved = this.store.ensureContext(caller.id, cmd.contextId);
+
+    let result;
+    try {
+      result = await this.manager.startRun({ pipeline: pipelineArg, task: taskInput });
+    } catch (err) {
+      if (err instanceof PipelineValidationError) {
+        throw new A2aApplicationError(
+          "invalid-input",
+          "Stage/pipeline validation failed: " + JSON.stringify(err.result.findings),
+        );
+      }
+      throw err;
+    }
+    if (!result.ok) {
+      throw mapStartFailure(result);
+    }
+
+    this.store.createTask({
+      taskId,
+      contextId: contextIdResolved,
+      callerId: caller.id,
+      publicationId: "",
+      publicationRevision: "",
+      submissionKey: "a2a:standalone:" + taskId,
+      runId: result.runId,
+      kind: "standalone",
+      resultStageId: resultStageId ?? null,
+    });
+    if (result.done) {
+      void result.done
+        .catch(() => undefined)
+        .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+    }
+    this.store.recordMessage({ callerId: caller.id, messageId: cmd.messageId, taskId, operation: "run_stage", requestHash: hash, outcome: { ok: true } });
+
+    if (cmd.blocking) {
+      await waitRun({ store: this.runStore, runId: result.runId, timeoutMs: cmd.timeout_ms, until: "any" }).catch(() => undefined);
+    }
+    return this.projectTask(caller, taskId);
+  }
+
   private async answer(
     caller: Caller,
     messageId: string,
@@ -198,16 +358,31 @@ export class A2aInvocations {
     if (!decoded || decoded.taskId !== taskId) {
       throw new A2aApplicationError("stale-question", "Unknown or expired prompt handle");
     }
-    const publication = this.registry.get(caller.id, row.publication_id);
-    if (!publication || !publication.caller_answerable_stages.includes(decoded.stageId)) {
-      throw new A2aApplicationError("stale-question", "This prompt cannot be answered by the caller");
+    if (row.kind !== "standalone") {
+      // Published-capability tasks stay gated by the publication's own
+      // explicit caller_answerable_stages allowlist (config-time restricted
+      // to single-free_text-gate stages in registry.ts's validatePublication).
+      const publication = this.registry.get(caller.id, row.publication_id);
+      if (!publication || !publication.caller_answerable_stages.includes(decoded.stageId)) {
+        throw new A2aApplicationError("stale-question", "This prompt cannot be answered by the caller");
+      }
     }
+    // A "standalone" (ADR-0001 run_stage) task has no publication/allowlist to
+    // consult — the caller already owns this ad hoc run outright (requireOwnedTask
+    // above). Any of its own free_text prompts are answerable; the pending_prompt.kind
+    // check below (shared with the publication path) is what still keeps an
+    // operator-only gate (confirm, etc.) out of reach here, same as for `invoke`.
     if (!row.run_id) {
       throw new A2aApplicationError("stale-question", "Task has no active run to answer");
     }
     const detail = await this.runStore.readRun(row.run_id);
     const stage = detail.stages.find((candidate) => candidate.stage_id === decoded.stageId);
-    if (!stage || stage.status !== "waiting_for_input" || stage.pending_prompt?.id !== decoded.promptId) {
+    if (
+      !stage ||
+      stage.status !== "waiting_for_input" ||
+      stage.pending_prompt?.id !== decoded.promptId ||
+      stage.pending_prompt?.kind !== "free_text"
+    ) {
       throw new A2aApplicationError("stale-question", "This question is no longer pending");
     }
     let parsed;
@@ -235,6 +410,54 @@ export class A2aInvocations {
       return row;
     }
     if (detail.status !== "succeeded" && detail.status !== "failed") return row;
+    if (row.kind === "standalone") {
+      if (detail.status === "failed") {
+        await this.store.freezeFailed(row.task_id);
+        return this.store.getTask(row.task_id)!;
+      }
+      try {
+        if (row.result_stage_id) {
+          // A `stage`-shaped call: exactly one synthesized result stage, same
+          // as run_stage's MCP `blocking` result. Unlike the publication path,
+          // every artifact the stage produced is exposed (no declared-artifact
+          // allowlist to filter by — see ADR-0001).
+          const stage = detail.stages.find((candidate) => candidate.stage_id === row.result_stage_id);
+          if (!stage || !stage.envelope) throw new Error("Result stage did not produce an envelope");
+          const artifacts = [];
+          for (const match of stage.artifacts) {
+            const name = match.split("/").pop()!;
+            const bytes = await readRunArtifactBytes(this.runStore, row.run_id, match);
+            artifacts.push({ name, mediaType: artifactMediaType(name), bytes });
+          }
+          await this.store.freezeCompleted(row.task_id, {
+            summary: stage.envelope.summary,
+            payload: stage.envelope.payload,
+            artifacts,
+          });
+        } else {
+          // A `pipeline`-shaped call: no single designated result stage, so
+          // surface every stage's outcome instead of one envelope. Files are
+          // not copied here; per ADR-0002 a caller chains into the next
+          // standalone call via envelope_ref rather than downloading artifacts
+          // from this summary.
+          await this.store.freezeCompleted(row.task_id, {
+            summary: `Run ${detail.pipeline_id} completed`,
+            payload: {
+              stages: detail.stages.map((s) => ({
+                stageId: s.stage_id,
+                status: s.status,
+                summary: s.envelope?.summary,
+                payload: s.envelope?.payload,
+              })),
+            },
+            artifacts: [],
+          });
+        }
+      } catch {
+        await this.store.freezeFailed(row.task_id);
+      }
+      return this.store.getTask(row.task_id)!;
+    }
     const publication = this.registry.get(row.caller_id, row.publication_id);
     if (detail.status === "failed" || !publication) {
       await this.store.freezeFailed(row.task_id);
@@ -277,6 +500,7 @@ export class A2aInvocations {
   private async projectTask(caller: Caller, taskId: string): Promise<PublicTask> {
     let row = this.requireOwnedTask(caller, taskId);
     row = await this.maybeFinalize(row);
+    const runIdExtra = row.kind === "standalone" && row.run_id ? { runId: row.run_id } : {};
     if (row.state === "completed" || row.state === "failed") {
       const resultData = row.result_json
         ? (JSON.parse(row.result_json) as { summary: string; payload?: Record<string, unknown> })
@@ -284,15 +508,30 @@ export class A2aInvocations {
       const artifacts: PublicArtifact[] = this.store
         .listArtifacts(taskId)
         .map((artifact) => ({ id: artifact.artifact_id, name: artifact.name, mediaType: artifact.media_type ?? undefined, size: artifact.size }));
-      return this.buildTask(row, { result: resultData ? { summary: resultData.summary, payload: resultData.payload, artifacts } : undefined });
+      return this.buildTask(row, {
+        ...runIdExtra,
+        result: resultData ? { summary: resultData.summary, payload: resultData.payload, artifacts } : undefined,
+      });
     }
     if (!row.run_id) {
       return this.buildTask(row, { state: "submitted" });
     }
     const detail = await this.runStore.readRun(row.run_id);
-    const publication = this.registry.get(caller.id, row.publication_id);
     const waitingIds = detail.waiting_stage_ids ?? (detail.waiting_stage_id ? [detail.waiting_stage_id] : []);
-    const answerableIds = waitingIds.filter((id) => publication?.caller_answerable_stages.includes(id));
+    let answerableIds: string[];
+    if (row.kind === "standalone") {
+      // No publication/allowlist to consult (ADR-0001): the caller owns this
+      // whole ad hoc run, so any of its own free_text prompts are answerable —
+      // same free_text-only boundary invoke's publication config enforces,
+      // just read off the live prompt instead of a config list.
+      answerableIds = waitingIds.filter((id) => {
+        const stage = detail.stages.find((candidate) => candidate.stage_id === id);
+        return stage?.pending_prompt?.kind === "free_text";
+      });
+    } else {
+      const publication = this.registry.get(caller.id, row.publication_id);
+      answerableIds = waitingIds.filter((id) => publication?.caller_answerable_stages.includes(id));
+    }
     if (answerableIds.length > 0) {
       const questions: PublicQuestion[] = answerableIds.map((stageId) => {
         const stage = detail.stages.find((candidate) => candidate.stage_id === stageId)!;
@@ -300,10 +539,10 @@ export class A2aInvocations {
         const message = prompt.kind === "free_text" ? prompt.message : "Additional input required";
         return { handle: encodePromptHandle(row.task_id, stageId, prompt.id), message };
       });
-      return this.buildTask(row, { state: "input-required", questions });
+      return this.buildTask(row, { ...runIdExtra, state: "input-required", questions });
     }
     const state: TaskState = waitingIds.length > 0 || detail.status === "running" ? "working" : "submitted";
-    return this.buildTask(row, { state, waitingForOperator: waitingIds.length > 0 });
+    return this.buildTask(row, { ...runIdExtra, state, waitingForOperator: waitingIds.length > 0 });
   }
 }
 
@@ -325,5 +564,5 @@ export function createA2aInvocations(
   connection?: Database.Database,
   rateLimiter?: RateLimiter,
 ): A2aInvocations {
-  return new A2aInvocations(registry, manager, runStore, new A2aStore(rootDir, connection), rateLimiter);
+  return new A2aInvocations(registry, manager, runStore, rootDir, new A2aStore(rootDir, connection), rateLimiter);
 }

@@ -113,6 +113,30 @@ Answering a caller-answerable clarification question is another `SendMessage`, a
 
 `CancelTask` always resolves with the SDK's `TaskNotCancelableError` (`-32002`) — Stageflow does not claim to stop an in-flight run. Retry with a new message under the same context for a fresh attempt.
 
+## `run_stage`: wildcard-access standalone stage/pipeline calls
+
+Everything above this section is the explicit-publication model: nothing is reachable unless an operator wrote it into `a2a.yaml`'s `publications` list and named the caller in `allowed_callers`. `run_stage` is a second, deliberately different operation that bypasses that model entirely — see [ADR-0001](adr/0001-wildcard-access-for-standalone-stage-calls.md). Any caller with a valid bearer token for the host (any caller in `a2a.yaml`'s `callers` list, regardless of what — if anything — is published to them) can run **any** catalog or inline stage or pipeline through it, exactly the same wildcard-access default the standalone `run_stage` MCP tool and CLI give a local harness. This is a temporary trade-off for proving out standalone stage execution, not a hardened access-control surface — do not expose a host with real callers over an untrusted network expecting `run_stage` to be gated the way `invoke` is.
+
+The message carries one structured data part, mirroring the MCP tool's call shape:
+
+```json
+{
+  "contractVersion": 1,
+  "operation": "run_stage",
+  "stage": "stages/final_report.yaml",
+  "task": { "id": "t-1", "goal": "Assess Northstar", "input": { "supplier": "Northstar" } },
+  "blocking": true
+}
+```
+
+- Exactly one of `stage` (a catalog stage path, or an inline stage body object) or `pipeline` (a catalog pipeline path, or an inline `{ id, stages: [...] }` definition) is required. `stage` is synthesized into a one-stage pipeline internally, the same way the MCP `run_stage` tool does it.
+- Exactly one of `task_path`, `task` (an inline task object), or `envelope_ref` (`{ runId, stageId, attempt? }`) is required for input — the same three shapes `run_stage` accepts over MCP. `envelope_ref` resolves a previously stored `StageEnvelope` from **any** run this host knows about, standalone or pipeline, per [ADR-0002](adr/0002-envelope-references-for-chaining-standalone-stage-calls.md); its `summary` becomes the new call's `goal` and its `payload` becomes `input`. Artifacts are not auto-copied — read them yourself via `GET /a2a/artifacts/:taskId/:artifactId` on the task that produced them and inline whatever you need into the next call's `task.input`.
+- Optional `checkout` (only meaningful with `envelope_ref`), `model` (overrides the stage's own declared model for this call only), and `timeout_ms`.
+- `blocking: true` waits for the run to reach a terminal or waiting state on the server before the `SendMessage` response comes back, so a caller that doesn't want to poll `GetTask` gets a single-round-trip result up to `timeout_ms`. Omit it (or pass `false`) for the normal async A2A shape: the response reflects whatever state the run is in immediately (usually `submitted`/`working`), and the caller polls `GetTask` the same way it would for `invoke`.
+- The response is a normal A2A `Task`, using the same states as `invoke` (`submitted`/`working`/`input-required`/`completed`/`failed`). Its `metadata.runId` is the run id to hand to a later `run_stage` call's `envelope_ref` — this is the only place a run id is ever exposed over A2A; `invoke`'s published-capability tasks keep it opaque, unchanged.
+- HITL relay reuses `invoke`'s existing `input-required`/`answer` mechanics with no new protocol: a stage waiting on a `free_text` gate surfaces as `input-required` with an opaque prompt handle, answered with the existing `operation: "answer"` message against the task id. There is no per-stage `caller_answerable_stages` allowlist to configure — the caller who started a `run_stage` task already owns that whole ad hoc run outright, so any of its own `free_text` prompts are answerable; a `confirm`/`multi_question`/`artifact_backed` gate stays out of reach exactly like it does for `invoke`.
+- A `stage` call's result mirrors the publication `results` shape (`summary`/`payload`/artifacts), except every artifact the stage produced is exposed, not a configured subset. A `pipeline` call has no single designated result stage, so its `result.payload.stages` is an array of `{ stageId, status, summary, payload }` for every stage in the run instead of one envelope.
+
 ## Limits and retention
 
 | Setting | Default |
