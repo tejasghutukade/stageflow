@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { FakeAgent } from "../../src/agent/fakeAgent.js";
-import { createCompletedOnlyStageHandle, runStageViaOpen, type AgentPort } from "../../src/agent/port.js";
-import { attemptArtifactsDir } from "../../src/runstore/workspaceLayout.js";
+import { FakeAgent } from "../../../src/agent/fakeAgent.js";
+import { createCompletedOnlyStageHandle, runStageViaOpen, type AgentPort } from "../../../src/agent/port.js";
+import { attemptArtifactsDir } from "../../../src/runstore/workspaceLayout.js";
 
 /**
  * Fake execution backend for `tests/fixtures/a2a/{a2a,supplier}.yaml`: waits at the free_text
