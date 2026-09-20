@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createA2aInvocations } from "../src/a2a/service.js";
@@ -25,7 +25,7 @@ async function setup(configPath: string, agent = supplierAgent()) {
   const manager = new RunManager({ agent, store, cwd: root });
   const registry = await loadPublicationRegistry(configPath, env);
   const invocations = createA2aInvocations(registry, manager, store, root, connection, new RateLimiter());
-  return { invocations, manager, root };
+  return { invocations, manager, store, root };
 }
 
 function runStage(
@@ -215,5 +215,123 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
       ),
     ).rejects.toBeTruthy();
     expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it("a retry with a fresh messageId but identical content reuses the same task/run instead of starting a duplicate", async () => {
+    // Regression test: unlike invoke, run_stage originally had no
+    // content-hash-keyed submission dedup, only exact-messageId replay — so
+    // a caller retrying after a lost response (a fresh messageId, same
+    // logical call) would double-execute the stage. Mirrors invoke's own
+    // "durable at-most-once run submission" contract (docs/a2a.md).
+    const { invocations, manager, store } = await setup(gatedConfig, supplierAgent());
+    const call = {
+      stage: finalReportStage,
+      task: { id: "t11", goal: "assess", input: { supplier: "Northstar" } },
+      blocking: true as const,
+    };
+    const first = await invocations.send(caller, runStage(call, "m-11-first"));
+    expect(first.state).toBe("completed");
+    expect(first.runId).toBeTruthy();
+
+    // Same content, different messageId — the exact shape of a lost-response
+    // retry, which replayOrThrow's exact-messageId check alone cannot catch.
+    const retry = await invocations.send(caller, runStage(call, "m-11-retry"));
+    expect(retry.id).toBe(first.id);
+    expect(retry.runId).toBe(first.runId);
+
+    // Only one run was ever actually started for this content.
+    expect(manager.getActiveCount()).toBe(0);
+    const allRuns = await store.listRuns({});
+    expect(allRuns.filter((r) => r.run_id === first.runId).length).toBe(1);
+
+    // Genuinely different content still gets its own task/run.
+    const different = await invocations.send(
+      caller,
+      runStage(
+        { ...call, task: { id: "t12", goal: "assess", input: { supplier: "Southgate" } } },
+        "m-11-different",
+      ),
+    );
+    expect(different.id).not.toBe(first.id);
+    expect(different.runId).not.toBe(first.runId);
+  });
+
+  it("resolves a string `stage` filesystem reference against the project rootDir, not some other base directory", async () => {
+    // Regression test: production wiring (src/server/bootstrap.ts) once passed
+    // the global Stageflow home directory as A2aInvocations' rootDir instead
+    // of the project root, so a relative `stage` path silently resolved
+    // against the wrong base. setup() here intentionally uses two distinct
+    // directories — projectRoot (where the stage file actually lives, and
+    // where RunManager/RunStore operate) and a decoy globalHomeLike dir — to
+    // prove resolution must go through the rootDir this test controls, the
+    // same one bootstrap.ts must supply as the project root in production.
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-a2a-run-stage-project-"));
+    const decoyHome = await mkdtemp(path.join(tmpdir(), "sf-a2a-run-stage-decoy-home-"));
+    await mkdir(path.join(projectRoot, "stages"), { recursive: true });
+    await writeFile(
+      path.join(projectRoot, "stages", "check.yaml"),
+      [
+        "id: check",
+        "model: anthropic/claude-sonnet-4-5",
+        "system_prompt: Do work.",
+        "io:",
+        "  input:",
+        "    schema:",
+        "      type: object",
+        "  output:",
+        "    schema:",
+        "      type: object",
+        "",
+      ].join("\n"),
+    );
+    // Sanity: the decoy directory has no such file, so if resolution ever
+    // used it by mistake, this would fail with ENOENT the same way the
+    // original bug did against the real global home directory.
+    const { store, connection } = createRunStoreWithConnection({ rootDir: projectRoot });
+    const manager = new RunManager({ agent: supplierAgent(), store, cwd: projectRoot });
+    const registry = await loadPublicationRegistry(supplierConfig, env);
+    const invocations = createA2aInvocations(
+      registry,
+      manager,
+      store,
+      projectRoot,
+      connection,
+      new RateLimiter(),
+    );
+
+    const task = await invocations.send(
+      caller,
+      runStage(
+        { stage: "stages/check.yaml", task: { id: "t9", goal: "check" }, blocking: true },
+        "m-9",
+      ),
+    );
+    expect(task.state).toBe("completed");
+
+    // Constructing the exact same call but with rootDir pointed at the decoy
+    // directory (mirroring the original bug's shape) must fail to find the
+    // file — confirming resolution genuinely depends on the rootDir given,
+    // not on cwd or some other ambient path.
+    const { store: store2, connection: connection2 } = createRunStoreWithConnection({
+      rootDir: decoyHome,
+    });
+    const manager2 = new RunManager({ agent: supplierAgent(), store: store2, cwd: decoyHome });
+    const invocationsWithWrongRoot = createA2aInvocations(
+      registry,
+      manager2,
+      store2,
+      decoyHome,
+      connection2,
+      new RateLimiter(),
+    );
+    await expect(
+      invocationsWithWrongRoot.send(
+        caller,
+        runStage(
+          { stage: "stages/check.yaml", task: { id: "t10", goal: "check" }, blocking: true },
+          "m-10",
+        ),
+      ),
+    ).rejects.toMatchObject({ category: "invalid-input" });
   });
 });

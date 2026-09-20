@@ -296,16 +296,25 @@ export class A2aInvocations {
     });
     const replay = await this.replayOrThrow(caller, cmd.messageId, hash, "Message ID was already used for different input");
     if (replay) return replay;
-    if (this.store.countNonterminal(caller.id) >= MAX_NONTERMINAL_TASKS_PER_CALLER) {
+    // Same at-most-once-per-content shape as invoke: a resend under a FRESH
+    // messageId (e.g. the caller lost the first response) must still land on
+    // the same task/run rather than starting a duplicate, so this is keyed
+    // on content hash via submissionKey/getTaskBySubmissionKey, not messageId.
+    const submissionKey = submissionKeyFor(caller.id, "__run_stage__", hash);
+    const existingTask = this.store.getTaskBySubmissionKey(submissionKey);
+    if (!existingTask && this.store.countNonterminal(caller.id) >= MAX_NONTERMINAL_TASKS_PER_CALLER) {
       throw new A2aApplicationError("busy", "Too many active tasks for this caller; wait for one to finish");
     }
 
-    const taskId = newTaskId();
-    const contextIdResolved = this.store.ensureContext(caller.id, cmd.contextId);
+    const taskId = existingTask?.task_id ?? newTaskId();
+    const contextIdResolved = existingTask?.context_id ?? this.store.ensureContext(caller.id, cmd.contextId);
 
     let result;
     try {
-      result = await this.manager.startRun({ pipeline: pipelineArg, task: taskInput });
+      result = await this.manager.startRunOnce(
+        { pipeline: pipelineArg, task: taskInput },
+        { key: submissionKey, requestHash: hash },
+      );
     } catch (err) {
       if (err instanceof PipelineValidationError) {
         throw new A2aApplicationError(
@@ -319,21 +328,23 @@ export class A2aInvocations {
       throw mapStartFailure(result);
     }
 
-    this.store.createTask({
-      taskId,
-      contextId: contextIdResolved,
-      callerId: caller.id,
-      publicationId: "",
-      publicationRevision: "",
-      submissionKey: "a2a:standalone:" + taskId,
-      runId: result.runId,
-      kind: "standalone",
-      resultStageId: resultStageId ?? null,
-    });
-    if (result.done) {
-      void result.done
-        .catch(() => undefined)
-        .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+    if (!existingTask) {
+      this.store.createTask({
+        taskId,
+        contextId: contextIdResolved,
+        callerId: caller.id,
+        publicationId: "",
+        publicationRevision: "",
+        submissionKey,
+        runId: result.runId,
+        kind: "standalone",
+        resultStageId: resultStageId ?? null,
+      });
+      if (result.done) {
+        void result.done
+          .catch(() => undefined)
+          .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+      }
     }
     this.store.recordMessage({ callerId: caller.id, messageId: cmd.messageId, taskId, operation: "run_stage", requestHash: hash, outcome: { ok: true } });
 
