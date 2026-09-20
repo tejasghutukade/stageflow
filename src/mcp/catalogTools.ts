@@ -108,6 +108,12 @@ const runStageSchema = z
       .describe(
         "Optional checkout to use with envelope_ref (ignored with task/task_path, which carry their own checkout). Resolving envelope_ref never implies a checkout on its own.",
       ),
+    model: z
+      .string()
+      .optional()
+      .describe(
+        "Override the model/backend for this call only, taking precedence over the stage's own declared model and the global default. Omit to use the stage's own model (or the global default).",
+      ),
     blocking: z
       .boolean()
       .optional()
@@ -270,7 +276,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and exactly one of task_path, an inline task, or envelope_ref ({ runId, stageId, attempt? }) to resolve a previously stored envelope — from another run_stage call or any stage in a full pipeline run — as this stage's input. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
       inputSchema: runStageSchema,
     },
-    async ({ stage, task_path, task, envelope_ref, checkout, blocking, timeout_ms }) => {
+    async ({ stage, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms }) => {
       let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
       if (envelope_ref) {
         try {
@@ -331,10 +337,15 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({ error: "stage.id is required" }, true);
       }
       const stageId = stageBody.id;
+      // A call-level model override wins over both the stage's own declared
+      // model and the global default: it replaces the field the stage body
+      // itself would otherwise resolve through, rather than adding a new
+      // tier to resolveModel's stage > pipeline > global chain.
+      const effectiveStageBody = model !== undefined ? { ...stageBody, model } : stageBody;
 
       const pipeline: InlinePipelineDefinition = {
         id: `standalone-${stageId}`,
-        stages: [stageBody],
+        stages: [effectiveStageBody],
       };
 
       let result;

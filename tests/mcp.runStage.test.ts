@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { cp, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -584,6 +584,98 @@ describe("run_stage — standalone stage execution (MCP)", () => {
           expect(meta.checkout_root).toBeUndefined();
         },
       );
+    });
+  });
+
+  describe("per-call model override", () => {
+    it("an explicit model override wins over the stage's own declared model", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await withServer(
+          [{ type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } }],
+          async (base, store) => {
+            const started = await mcpCall(base, "run_stage", {
+              stage: {
+                id: "check",
+                system_prompt: "Do work",
+                model: "cursor/auto",
+                ...REQUIRED_IO,
+              },
+              model: "anthropic/claude-sonnet-4-5",
+              task: { id: "t", goal: "check" },
+            });
+            expect(started.isError).toBe(false);
+            const runId = started.payload.runId as string;
+            await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
+
+            const usedOverride = errSpy.mock.calls.some((args) =>
+              String(args[0] ?? "").includes("Running stage check (anthropic/claude-sonnet-4-5)"),
+            );
+            const usedStageDefault = errSpy.mock.calls.some((args) =>
+              String(args[0] ?? "").includes("Running stage check (cursor/auto)"),
+            );
+            expect(usedOverride).toBe(true);
+            expect(usedStageDefault).toBe(false);
+          },
+        );
+      } finally {
+        errSpy.mockRestore();
+      }
+    });
+
+    it("omitting the override falls back to the stage's own declared model", async () => {
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await withServer(
+          [{ type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } }],
+          async (base, store) => {
+            const started = await mcpCall(base, "run_stage", {
+              stage: {
+                id: "check",
+                system_prompt: "Do work",
+                model: "cursor/auto",
+                ...REQUIRED_IO,
+              },
+              task: { id: "t", goal: "check" },
+            });
+            expect(started.isError).toBe(false);
+            const runId = started.payload.runId as string;
+            await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
+
+            const usedStageDefault = errSpy.mock.calls.some((args) =>
+              String(args[0] ?? "").includes("Running stage check (cursor/auto)"),
+            );
+            expect(usedStageDefault).toBe(true);
+          },
+        );
+      } finally {
+        errSpy.mockRestore();
+      }
+    });
+
+    it("an invalid (empty) model override fails clearly instead of silently falling back to the stage default", async () => {
+      // Stageflow doesn't validate model ids against a known allowlist at
+      // load time (see parseModelField) — the one structurally-invalid value
+      // is an empty/whitespace string, which stage.model validation rejects.
+      await withServer([], async (base) => {
+        const started = await mcpCall(base, "run_stage", {
+          stage: {
+            id: "check",
+            system_prompt: "Do work",
+            model: "anthropic/claude-sonnet-4-5",
+            ...REQUIRED_IO,
+          },
+          model: "",
+          task: { id: "t", goal: "check" },
+        });
+        expect(started.isError).toBe(true);
+        expect(started.payload.error).toBe("Stage validation failed");
+        expect(
+          started.payload.validation.findings.some(
+            (f: { code: string }) => f.code === "stage.invalid_model",
+          ),
+        ).toBe(true);
+      });
     });
   });
 });
