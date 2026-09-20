@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { A2A_USAGE, runA2aCommand } from "./cli/a2aCommand.js";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +68,8 @@ const USAGE = `Usage:
   sf --version
   sf -V
   sf --help
+  sf a2a validate|list [--config <path>]
+  sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
@@ -79,6 +82,8 @@ ${RUN_USAGE}
 ${VALIDATE_USAGE}
 
 ${GRAPH_USAGE}
+
+${A2A_USAGE}
 
 ${MIGRATE_YAML_USAGE}
 
@@ -126,6 +131,7 @@ function parseArgs(argv: string[]): {
     command === "providers" ||
     command === "validate" ||
     command === "graph" ||
+    command === "a2a" ||
     command === "migrate-yaml" ||
     command === "run" ||
     command === "init" ||
@@ -312,6 +318,10 @@ async function main(argv: string[]): Promise<number> {
     }
 
     const ctx = await resolveStageflowContext(process.cwd());
+
+    if (parsed.command === "a2a") {
+      return runA2aCommand(argv.slice(3), { cwd: ctx.invocationCwd, projectRoot: ctx.projectRoot });
+    }
 
     if (parsed.command === "init") {
       return runInitCommand(argv.slice(3), { cwd: ctx.invocationCwd });

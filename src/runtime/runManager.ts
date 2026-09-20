@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
@@ -104,6 +105,31 @@ export type CapacityHealth = {
   maxActiveStageProcesses: number | null;
 };
 
+export type StartRunOnceResult =
+  | {
+      ok: true;
+      runId: string;
+      /** False only for the caller whose submission durably created this run for the first time. */
+      reused: boolean;
+      /**
+       * Present when this call observed the run being launched in this process — either it launched
+       * the run itself, or it piggybacked on another in-flight call to the same submission key while
+       * that launch was still starting. Absent when the submission was already durably committed by
+       * an earlier, separate call: `reused: true` does not by itself imply `done` is absent, since a
+       * piggybacked call is also `reused: true`. Callers that need completion regardless of which case
+       * they hit must still fall back to polling run status by `runId`.
+       */
+      done?: Promise<PipelineRunResult>;
+    }
+  | Extract<StartRunResult, { ok: false }>;
+
+function existingSubmissionResult(existing: RunSubmissionRecord, request: RunSubmission): StartRunOnceResult {
+  if (existing.requestHash !== request.requestHash) {
+    return { ok: false, status: 409, reason: "Submission key was already used for different input" };
+  }
+  return { ok: true, runId: existing.runId, reused: true };
+}
+
 export type { DeliverAnswerResult };
 
 export type { RetryStageResult };
@@ -157,6 +183,7 @@ async function toCheckoutLeaseKey(absPath: string): Promise<string> {
 }
 
 export class RunManager {
+  private readonly submissionsInFlight = new Map<string, { requestHash: string; result: Promise<StartRunOnceResult> }>();
   private readonly active = new Map<string, ActiveEntry>();
   private readonly checkoutLeases = new Map<string, string>();
   private readonly provisionalIds = new Set<string>();
@@ -544,6 +571,45 @@ export class RunManager {
     return { ok: true, runId, stageId };
   }
 
+  async startRunOnce(
+    input: Parameters<RunManager["startRun"]>[0],
+    submission: RunSubmission,
+  ): Promise<StartRunOnceResult> {
+    if (!submission.key.trim() || submission.key.length > 256 || !/^[a-f0-9]{64}$/.test(submission.requestHash)) {
+      return { ok: false, status: 400, reason: "Submission requires a key and SHA-256 request hash" };
+    }
+    const pending = this.submissionsInFlight.get(submission.key);
+    if (pending) {
+      if (pending.requestHash !== submission.requestHash) {
+        return { ok: false, status: 409, reason: "Submission key was already used for different input" };
+      }
+      const result = await pending.result;
+      return result.ok ? { ...result, reused: true } : result;
+    }
+    const result = this.startSubmittedRun(input, submission);
+    this.submissionsInFlight.set(submission.key, { requestHash: submission.requestHash, result });
+    try {
+      return await result;
+    } finally {
+      this.submissionsInFlight.delete(submission.key);
+    }
+  }
+
+  private async startSubmittedRun(
+    input: Parameters<RunManager["startRun"]>[0],
+    submission: RunSubmission,
+  ): Promise<StartRunOnceResult> {
+    const existing = await this.options.store.getRunBySubmission(submission.key);
+    if (existing) return existingSubmissionResult(existing, submission);
+    try {
+      const result = await this.startRun(input, submission);
+      return result.ok ? { ok: true, runId: result.runId, reused: false, done: result.done } : result;
+    } catch (error) {
+      if (error instanceof RunSubmissionExistsError) return existingSubmissionResult(error.submission, submission);
+      throw error;
+    }
+  }
+
   async startRun(
     input: StartTaskInput & {
       pipeline: string | InlinePipelineDefinition;
@@ -554,6 +620,7 @@ export class RunManager {
       ciPrUrl?: string;
       ciJobUrl?: string;
     },
+    submission?: RunSubmission,
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
     // An inline pipeline has no filesystem anchor to derive a project root from.
@@ -606,6 +673,7 @@ export class RunManager {
       },
       derivedProjectRoot,
       resolved.kind === "path" ? resolved.taskPath : undefined,
+      submission,
     );
   }
 
@@ -1554,6 +1622,7 @@ export class RunManager {
     },
     projectRoot?: string,
     taskPath?: string,
+    submission?: RunSubmission,
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -1580,6 +1649,7 @@ export class RunManager {
 
     try {
       const started = await startPipeline({
+        submission,
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -1602,7 +1672,7 @@ export class RunManager {
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
       this.clearReservation(reserved.provisionalId);
-      if (err instanceof PipelineValidationError) {
+      if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {
         throw err;
       }
       return {

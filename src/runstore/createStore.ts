@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import type Database from "better-sqlite3";
 import type { RunStore } from "./port.js";
 import { migrateLegacyStoreRoot, storeRootFor } from "./paths.js";
 import { SqliteRunStore } from "./sqlite/SqliteRunStore.js";
@@ -25,15 +26,25 @@ function resolveKind(kind?: string): "sqlite" {
 }
 
 /**
- * Factory at the application edge. Call sites should receive the returned `RunStore`
- * and must not branch on backend kind.
+ * Composition-root factory: hands back the concrete SQLite connection alongside the `RunStore`,
+ * for the one caller wiring a second, colocated store (A2A's tables) into the same `state.db`
+ * file. Ordinary call sites use `createRunStore` below and never see this.
  */
-export function createRunStore(config: RunStoreConfig): RunStore {
+export function createRunStoreWithConnection(config: RunStoreConfig): { store: RunStore; connection: Database.Database } {
   resolveKind(config.kind);
   migrateLegacyStoreRoot(config.rootDir);
   const storeRoot = storeRootFor(config.rootDir);
   mkdirSync(storeRoot, { recursive: true });
-  return new SqliteRunStore(storeRoot);
+  const store = new SqliteRunStore(storeRoot);
+  return { store, connection: store.connection };
+}
+
+/**
+ * Factory at the application edge. Call sites should receive the returned `RunStore`
+ * and must not branch on backend kind.
+ */
+export function createRunStore(config: RunStoreConfig): RunStore {
+  return createRunStoreWithConnection(config).store;
 }
 
 export type { RunStore };
