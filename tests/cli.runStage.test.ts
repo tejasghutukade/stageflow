@@ -58,16 +58,22 @@ describe("sf run-stage --help / wiring", () => {
     expect(result.stdout).toMatch(/sf run-stage/);
   });
 
-  it("does not collide with `sf internal run-stage`", () => {
-    // The internal worker entry point stays reachable under `internal`, and
-    // is a totally separate dispatch branch from the new top-level command.
-    const help = runCli(["run-stage", "--help"]);
-    expect(help.status).toBe(0);
-    // internal run-stage requires --run-id/--stage-id and is not routed here
-    const internal = runCli(["internal", "run-stage"]);
-    expect(internal.status).not.toBe(0);
-    expect(internal.stderr + internal.stdout).toMatch(/--run-id/);
-  });
+  it(
+    "does not collide with `sf internal run-stage`",
+    () => {
+      // The internal worker entry point stays reachable under `internal`, and
+      // is a totally separate dispatch branch from the new top-level command.
+      const help = runCli(["run-stage", "--help"]);
+      expect(help.status).toBe(0);
+      // internal run-stage requires --run-id/--stage-id and is not routed here
+      const internal = runCli(["internal", "run-stage"]);
+      expect(internal.status).not.toBe(0);
+      expect(internal.stderr + internal.stdout).toMatch(/--run-id/);
+    },
+    // Two real tsx subprocess spawns — the default 5s timeout can flake
+    // under full-suite parallel load (CPU contention across 200+ files).
+    15000,
+  );
 });
 
 describe("sf run-stage arg validation", () => {
