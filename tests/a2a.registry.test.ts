@@ -5,6 +5,7 @@ import path from "node:path";
 import { parse, stringify } from "yaml";
 import { loadPublicationRegistry } from "../src/a2a/registry.js";
 import { runA2aCommand } from "../src/cli/a2aCommand.js";
+import { resolveA2aConfigPath } from "../src/a2a/configDiscovery.js";
 
 const fixture = path.resolve("tests/fixtures/a2a");
 const env = { PROCUREMENT_TOKEN: "p".repeat(40), OTHER_TOKEN: "o".repeat(40) };
@@ -64,5 +65,59 @@ describe("A2A publication registry", () => {
     const config = path.join(fixture, "a2a.yaml");
     await expect(loadPublicationRegistry(config, {})).rejects.toThrow("requires a token");
     await expect(loadPublicationRegistry(config, { ...env, OTHER_TOKEN: env.PROCUREMENT_TOKEN })).rejects.toThrow("Duplicate caller credential");
+  });
+});
+
+describe("A2A config auto-discovery", () => {
+  it("prefers STAGEFLOW_A2A_CONFIG, then <projectRoot>/a2a.yaml, then undefined", async () => {
+    const root = await copyFixture();
+    expect(resolveA2aConfigPath(root, {})).toBe(path.join(root, "a2a.yaml"));
+    expect(resolveA2aConfigPath(root, { STAGEFLOW_A2A_CONFIG: "/elsewhere/a2a.yaml" })).toBe("/elsewhere/a2a.yaml");
+    const empty = await mkdtemp(path.join(tmpdir(), "sf-a2a-empty-"));
+    roots.push(empty);
+    expect(resolveA2aConfigPath(empty, {})).toBeUndefined();
+  });
+
+  it("validates and lists via auto-discovery when --config is omitted", async () => {
+    const root = await copyFixture();
+    const lines: string[] = [];
+    expect(await runA2aCommand(["validate"], { cwd: root, projectRoot: root, env, log: (line) => lines.push(line) })).toBe(0);
+    expect(lines.join()).toContain("supplier_assessment");
+  });
+
+  it("reports a clear error when no config is found anywhere", async () => {
+    const empty = await mkdtemp(path.join(tmpdir(), "sf-a2a-empty-"));
+    roots.push(empty);
+    const errors: string[] = [];
+    expect(await runA2aCommand(["validate"], { cwd: empty, projectRoot: empty, env: {}, error: (line) => errors.push(line) })).toBe(1);
+    expect(errors.join()).toContain("No A2A configuration found");
+  });
+});
+
+describe("sf a2a add-caller", () => {
+  it("creates a fresh config when none exists, and flags it as incomplete", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-addcaller-"));
+    roots.push(root);
+    const lines: string[] = [];
+    const code = await runA2aCommand(["add-caller", "acme"], { cwd: root, projectRoot: root, log: (line) => lines.push(line) });
+    expect(code).toBe(0);
+    const written = parse(await readFile(path.join(root, "a2a.yaml"), "utf8"));
+    expect(written.callers).toEqual([{ id: "acme", token_env: "ACME_TOKEN" }]);
+    expect(lines.join("\n")).toMatch(/export ACME_TOKEN=[0-9a-f]{48}/);
+    expect(lines.join("\n")).toContain("no publications yet");
+  });
+
+  it("appends to an existing config without disturbing publications, and rejects a duplicate id", async () => {
+    const root = await copyFixture();
+    const code = await runA2aCommand(["add-caller", "acme", "--token-env", "ACME_SECRET"], { cwd: root, projectRoot: root, log: () => undefined });
+    expect(code).toBe(0);
+    const written = parse(await readFile(path.join(root, "a2a.yaml"), "utf8"));
+    expect(written.callers.map((c: { id: string }) => c.id)).toEqual(["procurement", "other", "acme"]);
+    expect(written.publications).toHaveLength(1);
+
+    const errors: string[] = [];
+    const dup = await runA2aCommand(["add-caller", "acme"], { cwd: root, projectRoot: root, error: (line) => errors.push(line) });
+    expect(dup).toBe(1);
+    expect(errors.join()).toContain("already exists");
   });
 });

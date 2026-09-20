@@ -10,17 +10,32 @@ Not implemented: streaming (`SendStreamingMessage`/`SubscribeToTask`), active pi
 
 ## Enabling the host
 
-Set `STAGEFLOW_A2A_CONFIG` to an absolute path before starting the Stageflow daemon. The host reads the file once at startup — there is no hot reload. Unset means A2A is disabled entirely.
+Drop an `a2a.yaml` file at the project root, next to `stageflow.yaml` — the daemon auto-discovers it, the same way it already auto-discovers the pipeline catalog. No environment variable, no flag; if the file isn't there, A2A is simply disabled.
+
+`STAGEFLOW_A2A_CONFIG` still works as an explicit override, for a config file that lives outside the project (or during migration from an earlier setup):
 
 ```bash
 export STAGEFLOW_A2A_CONFIG=/etc/stageflow/a2a.yaml
 ```
 
-Validate a configuration locally without touching a running daemon:
+Either way, the host reads the file once at startup — there is no hot reload. Editing `a2a.yaml` (or a publication's pipeline) requires an explicit restart to take effect; the drift check described below exists precisely to stop a live edit from silently taking effect without one.
+
+Register a caller without hand-editing YAML or hand-generating a token:
 
 ```bash
-sf a2a validate --config ./a2a.yaml
-sf a2a list --config ./a2a.yaml
+sf a2a add-caller procurement-assistant
+# Generated a token for caller "procurement-assistant". Export it before starting the host
+# (or store it in your secrets manager):
+#   export PROCUREMENT_ASSISTANT_TOKEN=<64 hex chars>
+```
+
+This only writes the caller's `id` and `token_env` name to `a2a.yaml` — never a secret value. Granting that caller access to a specific publication is still a separate, explicit edit to that publication's `allowed_callers`, on purpose: creating a caller identity and authorizing it to invoke something are different facts, and auto-granting access as a side effect would undercut "nothing is exposed unless a human wrote it down."
+
+Validate a configuration locally without touching a running daemon — `--config` is optional on both and follows the same auto-discovery rule as the host:
+
+```bash
+sf a2a validate [--config ./a2a.yaml]
+sf a2a list [--config ./a2a.yaml]
 ```
 
 `GET /api/a2a/status` on the local host reports `{ state: "disabled" | "enabled" | "configuration_error", configPath? }` so operators can tell whether a running daemon actually picked up a config change (it needs a restart).

@@ -240,7 +240,7 @@ export type A2aHost = {
 
 export async function createA2aHost(
   runtime: A2aRuntime,
-  configPath: string | undefined = process.env.STAGEFLOW_A2A_CONFIG,
+  configPath?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<A2aHost> {
   let registry: PublicationRegistry | undefined;

@@ -68,7 +68,8 @@ const USAGE = `Usage:
   sf --version
   sf -V
   sf --help
-  sf a2a validate|list --config <path>
+  sf a2a validate|list [--config <path>]
+  sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 
 Stageflow (sf) runs YAML-defined automatic stage pipelines.
 
@@ -319,7 +320,7 @@ async function main(argv: string[]): Promise<number> {
     const ctx = await resolveStageflowContext(process.cwd());
 
     if (parsed.command === "a2a") {
-      return runA2aCommand(argv.slice(3), { cwd: ctx.invocationCwd });
+      return runA2aCommand(argv.slice(3), { cwd: ctx.invocationCwd, projectRoot: ctx.projectRoot });
     }
 
     if (parsed.command === "init") {

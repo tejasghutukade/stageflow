@@ -4,6 +4,7 @@ import type { AgentPort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
+import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
@@ -111,7 +112,10 @@ export async function bootstrapStageflowHost(
     { mcpStateless },
   );
   return {
-    a2a: await createA2aHost({ manager, runStore: store, rootDir: ctx.globalHome, connection: sqliteConnection }),
+    a2a: await createA2aHost(
+      { manager, runStore: store, rootDir: ctx.globalHome, connection: sqliteConnection },
+      resolveA2aConfigPath(rootDir),
+    ),
     cwd,
     agentDir,
     rootDir,
