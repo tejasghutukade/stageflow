@@ -517,23 +517,53 @@ describe("run_stage — standalone stage execution (MCP)", () => {
     });
 
     it("resolves a reference to a stage inside an ordinary multi-stage pipeline run, not just standalone calls", async () => {
+      // A controlled two-stage inline pipeline (not an existing fixture) so
+      // the topology — and which stage gets which scripted behavior — is
+      // fully deterministic, unlike a multi-entry fixture pipeline.
       await withServer(
-        [{ type: "emit", envelope: { status: "success", summary: "from pipeline stage", artifacts: [], payload: { note: "hi" } } }],
+        [
+          {
+            type: "emit",
+            envelope: {
+              status: "success",
+              summary: "from pipeline stage",
+              artifacts: [],
+              payload: { note: "hi" },
+            },
+          },
+          { type: "emit", envelope: { status: "success", summary: "second stage ok", artifacts: [] } },
+        ],
         async (base, store) => {
           const pipelineRun = await mcpCall(base, "start_run", {
-            pipeline: "pipelines/docs-only.pipeline.yaml",
+            pipeline: {
+              id: "two-stage",
+              stages: [
+                {
+                  id: "first",
+                  entry: true,
+                  system_prompt: "First",
+                  model: "anthropic/claude-sonnet-4-5",
+                  ...REQUIRED_IO,
+                  route: [{ to: "second" }],
+                },
+                {
+                  id: "second",
+                  system_prompt: "Second",
+                  model: "anthropic/claude-sonnet-4-5",
+                  ...REQUIRED_IO,
+                },
+              ],
+            },
             task: { id: "t", goal: "g" },
           });
           expect(pipelineRun.isError).toBe(false);
           const pipelineRunId = pipelineRun.payload.runId as string;
-          // Only the first stage needs a stored envelope to be referenceable —
-          // don't require the whole (multi-stage) pipeline run to finish.
+          // Only the "first" stage needs a stored envelope to be
+          // referenceable — don't require the whole run to finish.
           await waitFor(async () => {
             const detail = await store.readRun(pipelineRunId);
-            return detail.stages[0]?.status === "succeeded";
+            return detail.stages.find((s) => s.stage_id === "first")?.status === "succeeded";
           });
-          const pipelineDetail = await store.readRun(pipelineRunId);
-          const firstStageId = pipelineDetail.stages[0]?.stage_id as string;
 
           const standalone = await mcpCall(base, "run_stage", {
             stage: {
@@ -542,7 +572,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
               model: "anthropic/claude-sonnet-4-5",
               ...REQUIRED_IO,
             },
-            envelope_ref: { runId: pipelineRunId, stageId: firstStageId },
+            envelope_ref: { runId: pipelineRunId, stageId: "first" },
           });
           expect(standalone.isError).toBe(false);
         },
@@ -676,6 +706,126 @@ describe("run_stage — standalone stage execution (MCP)", () => {
           ),
         ).toBe(true);
       });
+    });
+  });
+
+  describe("reference-scoped artifact access", () => {
+    it("a caller resolves a referenced envelope's artifact list, reads the bytes, and inlines them into the next call's input — using the existing get_envelope/read_artifact tools, no new tool needed", async () => {
+      const { mkdir, writeFile: writeFileFs } = await import("node:fs/promises");
+      const artifactRelPath = path.join(
+        "stages",
+        "research",
+        "attempts",
+        "1",
+        "artifacts",
+        "findings.md",
+      );
+      const producingAgent: AgentPort = {
+        openStage(input) {
+          return {
+            stageId: input.stage.id,
+            async next() {
+              const absPath = path.join(input.roots.runWorkspaceDir, artifactRelPath);
+              await mkdir(path.dirname(absPath), { recursive: true });
+              await writeFileFs(absPath, "# Findings\n\nThree leads found.", "utf8");
+              return {
+                status: "completed",
+                result: {
+                  ok: true,
+                  envelope: {
+                    status: "success",
+                    summary: "researched",
+                    artifacts: [artifactRelPath],
+                    payload: {},
+                  },
+                },
+              };
+            },
+            deliverAnswer() {},
+            async close() {},
+          };
+        },
+        async runStage(input) {
+          const handle = this.openStage(input);
+          const event = await handle.next();
+          if (event.status !== "completed") throw new Error("unexpected wait");
+          return event.result;
+        },
+      };
+
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-run-stage-artifact-"));
+      const store = createRunStore({ rootDir: storeRoot });
+      const { server } = await startUiServer({
+        agent: producingAgent,
+        cwd: projectRoot,
+        store,
+        port: 0,
+        uiDistDir: path.join(storeRoot, "missing-ui"),
+        mcpStateless: true,
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected TCP address");
+      const base = `http://127.0.0.1:${address.port}`;
+
+      try {
+        const started = await mcpCall(base, "run_stage", {
+          stage: {
+            id: "research",
+            system_prompt: "Research",
+            model: "anthropic/claude-sonnet-4-5",
+            ...REQUIRED_IO,
+          },
+          task: { id: "t", goal: "research it" },
+        });
+        expect(started.isError).toBe(false);
+        const runId = started.payload.runId as string;
+        await waitFor(async () => (await store.readRun(runId)).status === "succeeded");
+
+        // Caller resolves the reference: which artifacts does it declare?
+        const envelopeResult = await mcpCall(base, "get_envelope", {
+          runId,
+          stageId: "research",
+        });
+        expect(envelopeResult.isError).toBe(false);
+        expect(envelopeResult.payload.envelope.artifacts).toEqual([artifactRelPath]);
+
+        // Caller reads the bytes via the existing artifact-read tool.
+        const artifact = await mcpCall(base, "read_artifact", {
+          runId,
+          path: envelopeResult.payload.envelope.artifacts[0],
+        });
+        expect(artifact.isError).toBe(false);
+        expect(artifact.payload.content).toContain("Three leads found.");
+
+        // Caller inlines that content into the next call's typed input —
+        // no automatic copying into a new workspace (ADR-0002).
+        const summarize = await mcpCall(base, "run_stage", {
+          stage: {
+            id: "summarize",
+            system_prompt: "Summarize the findings given in the input",
+            model: "anthropic/claude-sonnet-4-5",
+            io: {
+              input: {
+                schema: {
+                  type: "object",
+                  properties: { findings: { type: "string" } },
+                },
+              },
+              output: { schema: { type: "object" } },
+            },
+          },
+          task: {
+            id: "t2",
+            goal: "summarize",
+            input: { findings: artifact.payload.content },
+          },
+        });
+        expect(summarize.isError).toBe(false);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
     });
   });
 });
