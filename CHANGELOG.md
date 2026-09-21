@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-09-21
+
+### Added
+
+- `run_stage`: run a single stage directly, without authoring a pipeline — a catalog stage path or a bare inline stage body, exactly one of `task_path`/`task`/`envelope_ref` for input, optional `blocking`/`timeout_ms` for a single-round-trip result instead of poll, and a per-call `model` override. Internally synthesizes a one-stage pipeline and runs it through the exact same path `start_run` uses, so it gets the same persistence, `verify`/retry, and HITL behavior and is pollable with `wait_run`/`get_envelope` like any other run. Exposed identically as an MCP tool, a new `sf run-stage` CLI command (distinct from the existing internal-only `sf internal run-stage`), and a new A2A operation. See `docs/mcp.md#run_stage`, `docs/cli-reference.md#sf-run-stage`, `docs/a2a.md`.
+- `envelope_ref`: chain a `run_stage` call off a previously stored `StageEnvelope` — from another `run_stage` call or from any stage inside a full pipeline run — instead of an inline task. Accepts either one reference or an array of them; multiple references are resolved and namespaced under their `stageId` in the next call's `input` (disambiguated by `runId` on a `stageId` collision), with summaries combined into `goal`.
+- A2A's `run_stage` operation deliberately bypasses `a2a.yaml`'s `publications`/`allowed_callers` allowlist — any authenticated caller can run any catalog or inline stage/pipeline through it, the same wildcard-access default the MCP tool and CLI give a local harness. A temporary trade-off for proving out standalone stage execution, not a hardened access-control surface; existing `invoke`/`answer` and their allowlist enforcement are unchanged.
+
 ## [0.24.0] - 2026-09-20
 
 ### Added
