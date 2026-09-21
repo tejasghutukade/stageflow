@@ -5,6 +5,7 @@ import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   FeedbackLoopConfig,
+  InlinePipelineDefinition,
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
 import type { CompletionCheck } from "../types/completion.js";
@@ -68,6 +69,14 @@ export type RunMeta = {
   pipeline_path?: string;
   task_path?: string;
   project_root?: string;
+  /**
+   * The raw pipeline body for a run started from an inline pipeline
+   * (no pipeline_path). Lets a fresh stage-worker process — which has no
+   * memory of the original in-process call — reconstruct the pipeline
+   * without needing a catalog file, mirroring how task_yaml already lets
+   * task reconstruction work without a task_path.
+   */
+  inline_pipeline?: InlinePipelineDefinition;
 };
 
 export type CreatedRun = {
@@ -385,6 +394,8 @@ export type CreateRunInput = {
   pipelinePath?: string;
   taskPath?: string;
   projectRoot?: string;
+  /** Raw inline pipeline body, persisted only when pipelinePath is absent. */
+  inlinePipeline?: InlinePipelineDefinition;
 };
 
 export type ListRunsFilter = {
