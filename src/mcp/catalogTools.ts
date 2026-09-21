@@ -14,6 +14,10 @@ import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import {
+  EnvelopeRefError,
+  resolveEnvelopeRefsToTask,
+} from "../runtime/resolveEnvelopeRef.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { isTerminalProjection, isWaitingProjection, waitRun } from "./waitRun.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
@@ -83,6 +87,12 @@ const startRunSchema = z
  * structural validation of the stage body happens downstream through the
  * same stage loader a pipeline's inline stage goes through.
  */
+const envelopeRefSchema = z.object({
+  runId: z.string(),
+  stageId: z.string(),
+  attempt: z.number().int().positive().optional(),
+});
+
 const runStageSchema = z
   .object({
     stage: z
@@ -93,14 +103,10 @@ const runStageSchema = z
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
     envelope_ref: z
-      .object({
-        runId: z.string(),
-        stageId: z.string(),
-        attempt: z.number().int().positive().optional(),
-      })
+      .union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)])
       .optional()
       .describe(
-        "Resolve a previously stored StageEnvelope (from another run_stage call or from any stage inside a full pipeline run) and use it as this stage's input, instead of an inline task/task_path. Its payload becomes input, its summary becomes goal.",
+        "Resolve one or more previously stored StageEnvelopes (from another run_stage call or from any stage inside a full pipeline run) and use them as this stage's input, instead of an inline task/task_path. A single ref: its payload becomes input, its summary becomes goal. Multiple refs (an array): each resolved payload is namespaced under its stageId in input (disambiguated by runId on a stageId collision), and summaries are combined into goal.",
       ),
     checkout: z
       .string()
@@ -280,35 +286,13 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
       if (envelope_ref) {
         try {
-          await store.readRunMeta(envelope_ref.runId);
+          taskInput = await resolveEnvelopeRefsToTask(store, envelope_ref, checkout);
         } catch (err) {
-          const mapped = mapStoreLookupError(err, { policy: "run" });
-          return textResult({ error: mapped.error, status: 404 }, true);
-        }
-        let envelope;
-        try {
-          const refDetail = await store.readRun(envelope_ref.runId);
-          if (!refDetail.stages.some((s) => s.stage_id === envelope_ref.stageId)) {
-            return textResult(
-              { error: `Stage not found: ${envelope_ref.stageId}`, status: 404 },
-              true,
-            );
+          if (err instanceof EnvelopeRefError) {
+            return textResult({ error: err.message, status: err.status }, true);
           }
-          envelope = await store.readEnvelope(
-            envelope_ref.runId,
-            envelope_ref.stageId,
-            envelope_ref.attempt,
-          );
-        } catch (err) {
-          const mapped = mapStoreLookupError(err, { policy: "envelope" });
-          return textResult({ error: mapped.error, status: mapped.status }, true);
+          throw err;
         }
-        taskInput = {
-          id: `ref-${envelope_ref.runId}-${envelope_ref.stageId}`,
-          goal: envelope.summary,
-          input: envelope.payload ?? {},
-          ...(checkout ? { checkout } : {}),
-        };
       }
       if (taskInput === undefined) {
         return textResult(

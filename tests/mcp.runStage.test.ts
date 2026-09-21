@@ -828,4 +828,163 @@ describe("run_stage — standalone stage execution (MCP)", () => {
       }
     });
   });
+
+  describe("multiple envelope references", () => {
+    it("resolves an array of envelope_refs, namespacing each payload under its stageId", async () => {
+      await withServer(
+        [
+          {
+            type: "emit",
+            envelope: {
+              status: "success",
+              summary: "found leads",
+              artifacts: [],
+              payload: { leads: ["a", "b"] },
+            },
+          },
+          {
+            type: "emit",
+            envelope: {
+              status: "success",
+              summary: "catchy title",
+              artifacts: [],
+              payload: { title: "Great Leads" },
+            },
+          },
+          { type: "emit", envelope: { status: "success", summary: "combined", artifacts: [] } },
+        ],
+        async (base, store) => {
+          const research = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "research",
+              system_prompt: "Research",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t1", goal: "research it" },
+          });
+          const researchRunId = research.payload.runId as string;
+          await waitFor(async () => (await store.readRun(researchRunId)).status === "succeeded");
+
+          const titleize = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "titleize",
+              system_prompt: "Titleize",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t2", goal: "titleize it" },
+          });
+          const titleizeRunId = titleize.payload.runId as string;
+          await waitFor(async () => (await store.readRun(titleizeRunId)).status === "succeeded");
+
+          const combined = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "combine",
+              system_prompt: "Combine",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            envelope_ref: [
+              { runId: researchRunId, stageId: "research" },
+              { runId: titleizeRunId, stageId: "titleize" },
+            ],
+          });
+          expect(combined.isError).toBe(false);
+          const combinedRunId = combined.payload.runId as string;
+          await waitFor(async () => (await store.readRun(combinedRunId)).status === "succeeded");
+
+          const combinedDetail = await store.readRun(combinedRunId);
+          const { parse } = await import("yaml");
+          const parsedTask = parse(combinedDetail.task_yaml) as {
+            goal: string;
+            input?: Record<string, unknown>;
+          };
+          expect(parsedTask.input).toEqual({
+            research: { leads: ["a", "b"] },
+            titleize: { title: "Great Leads" },
+          });
+          expect(parsedTask.goal).toContain("research: found leads");
+          expect(parsedTask.goal).toContain("titleize: catchy title");
+        },
+      );
+    });
+
+    it("a single-item array behaves identically to a bare object envelope_ref (input = payload verbatim, not namespaced)", async () => {
+      await withServer(
+        [
+          {
+            type: "emit",
+            envelope: {
+              status: "success",
+              summary: "found leads",
+              artifacts: [],
+              payload: { leads: ["a"] },
+            },
+          },
+          { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
+        ],
+        async (base, store) => {
+          const research = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "research",
+              system_prompt: "Research",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t1", goal: "research it" },
+          });
+          const researchRunId = research.payload.runId as string;
+          await waitFor(async () => (await store.readRun(researchRunId)).status === "succeeded");
+
+          const next = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "next",
+              system_prompt: "Next",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            envelope_ref: [{ runId: researchRunId, stageId: "research" }],
+          });
+          expect(next.isError).toBe(false);
+          const nextRunId = next.payload.runId as string;
+          await waitFor(async () => (await store.readRun(nextRunId)).status === "succeeded");
+
+          const nextDetail = await store.readRun(nextRunId);
+          const { parse } = await import("yaml");
+          const parsedTask = parse(nextDetail.task_yaml) as { input?: Record<string, unknown> };
+          expect(parsedTask.input).toEqual({ leads: ["a"] });
+        },
+      );
+    });
+
+    it("fails clearly when one ref in a multi-ref array is unknown, resolving no stage", async () => {
+      await withServer(
+        [{ type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } }],
+        async (base, store) => {
+          const research = await mcpCall(base, "run_stage", {
+            stage: {
+              id: "research",
+              system_prompt: "Research",
+              model: "anthropic/claude-sonnet-4-5",
+              ...REQUIRED_IO,
+            },
+            task: { id: "t1", goal: "research it" },
+          });
+          const researchRunId = research.payload.runId as string;
+          await waitFor(async () => (await store.readRun(researchRunId)).status === "succeeded");
+
+          const started = await mcpCall(base, "run_stage", {
+            stage: { id: "check", system_prompt: "Do work", ...REQUIRED_IO },
+            envelope_ref: [
+              { runId: researchRunId, stageId: "research" },
+              { runId: "does-not-exist", stageId: "whatever" },
+            ],
+          });
+          expect(started.isError).toBe(true);
+          expect(started.payload.status).toBe(404);
+        },
+      );
+    });
+  });
 });

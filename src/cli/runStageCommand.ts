@@ -7,14 +7,14 @@ import {
 import { resolveAbsolute } from "./hostClient.js";
 
 export const RUN_STAGE_USAGE = `Usage:
-  sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
+  sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>] [--envelope-ref ...]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
 
 Run a single stage directly against the shared Stageflow service, without authoring a pipeline file. Distinct from the internal-only, worker-process-only \`sf internal run-stage\`.
   --stage <path>          Filesystem path to a catalog stage YAML file
   --stage-inline <json>   Inline stage body object ({ id, system_prompt, io, ... } — no uses:/route/pipeline wrapper)
   --task <path>           Filesystem path to a catalog task YAML file
   --task-inline <json>    Inline task object ({ id, goal, ... })
-  --envelope-ref <ref>    Resolve a previously stored StageEnvelope as this stage's input instead of a task: <runId>:<stageId>[:<attempt>]
+  --envelope-ref <ref>    Resolve a previously stored StageEnvelope as this stage's input instead of a task: <runId>:<stageId>[:<attempt>]. Repeat to pass more than one — each resolved payload is namespaced under its stageId in input (disambiguated by runId on a stageId collision), and summaries are combined into goal.
   --checkout <path>       Optional checkout to use with --envelope-ref (--task/--task-inline carry their own checkout)
   --model <id>            Override the model/backend for this call only, ahead of the stage's own declared model
   --blocking              Wait for the run to reach a terminal or waiting state and print the result in this same call, instead of returning immediately with just the run id
@@ -31,7 +31,7 @@ export type RunStageToolArgs = {
   stage: string | Record<string, unknown>;
   task_path?: string;
   task?: Record<string, unknown>;
-  envelope_ref?: RunStageEnvelopeRef;
+  envelope_ref?: RunStageEnvelopeRef | RunStageEnvelopeRef[];
   checkout?: string;
   model?: string;
   blocking?: boolean;
@@ -65,7 +65,7 @@ type ParsedRunStageArgs = {
   stageInline?: string;
   task?: string;
   taskInline?: string;
-  envelopeRef?: string;
+  envelopeRef?: string[];
   checkout?: string;
   model?: string;
   timeoutMs?: number;
@@ -83,7 +83,7 @@ function parseRunStageCliArgs(args: string[]): ParsedRunStageArgs {
   let stageInline: string | undefined;
   let task: string | undefined;
   let taskInline: string | undefined;
-  let envelopeRef: string | undefined;
+  let envelopeRef: string[] | undefined;
   let checkout: string | undefined;
   let model: string | undefined;
   let timeoutMs: number | undefined;
@@ -124,7 +124,7 @@ function parseRunStageCliArgs(args: string[]): ParsedRunStageArgs {
       if (value === undefined || value.length === 0) {
         throw new Error("Missing value for --envelope-ref");
       }
-      envelopeRef = value;
+      envelopeRef = [...(envelopeRef ?? []), value];
     } else if (arg === "--checkout") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -449,7 +449,7 @@ export async function runRunStageCommand(
 
   let taskPath: string | undefined;
   let task: Record<string, unknown> | undefined;
-  let envelopeRef: RunStageEnvelopeRef | undefined;
+  let envelopeRef: RunStageEnvelopeRef | RunStageEnvelopeRef[] | undefined;
   if (parsed.task !== undefined) {
     taskPath = resolveAbsolute(cwd, parsed.task);
   } else if (parsed.taskInline !== undefined) {
@@ -461,7 +461,8 @@ export async function runRunStageCommand(
     }
   } else {
     try {
-      envelopeRef = parseEnvelopeRefFlag(parsed.envelopeRef!);
+      const refs = parsed.envelopeRef!.map(parseEnvelopeRefFlag);
+      envelopeRef = refs.length === 1 ? refs[0] : refs;
     } catch (err) {
       out.error(err instanceof Error ? err.message : String(err));
       return 1;

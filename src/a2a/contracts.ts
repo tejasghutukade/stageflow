@@ -75,7 +75,7 @@ const runStageDataPart = z
     pipeline: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
-    envelope_ref: envelopeRefSchema.optional(),
+    envelope_ref: z.union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)]).optional(),
     checkout: z.string().optional(),
     model: z.string().optional(),
     blocking: z.boolean().optional(),
@@ -125,7 +125,7 @@ export type RunStageCommand = {
   pipeline?: string | Record<string, unknown>;
   task_path?: string;
   task?: TaskFileInput;
-  envelope_ref?: EnvelopeRefInput;
+  envelope_ref?: EnvelopeRefInput | EnvelopeRefInput[];
   checkout?: string;
   model?: string;
   blocking?: boolean;

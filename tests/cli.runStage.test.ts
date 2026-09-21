@@ -289,6 +289,41 @@ describe("sf run-stage call shapes", () => {
     expect(code).toBe(0);
   });
 
+  it("repeating --envelope-ref collects multiple refs into an array", async () => {
+    const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
+      expect(args.envelope_ref).toEqual([
+        { runId: "run-a", stageId: "research" },
+        { runId: "run-b", stageId: "titleize", attempt: 3 },
+      ]);
+      return { isError: false, payload: { runId: "run-8", stageId: "combine" } };
+    });
+    const code = await runRunStageCommand(
+      [
+        "--stage",
+        "stages/combine.yaml",
+        "--envelope-ref",
+        "run-a:research",
+        "--envelope-ref",
+        "run-b:titleize:3",
+      ],
+      { cwd: "/proj", callTool },
+    );
+    expect(code).toBe(0);
+  });
+
+  it("a single --envelope-ref stays a bare object, not a one-element array", async () => {
+    const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
+      expect(Array.isArray(args.envelope_ref)).toBe(false);
+      expect(args.envelope_ref).toEqual({ runId: "run-a", stageId: "research" });
+      return { isError: false, payload: { runId: "run-9", stageId: "combine" } };
+    });
+    const code = await runRunStageCommand(
+      ["--stage", "stages/combine.yaml", "--envelope-ref", "run-a:research"],
+      { cwd: "/proj", callTool },
+    );
+    expect(code).toBe(0);
+  });
+
   it("model override: passed through as model", async () => {
     const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
       expect(args.model).toBe("anthropic/claude-sonnet-4-5");

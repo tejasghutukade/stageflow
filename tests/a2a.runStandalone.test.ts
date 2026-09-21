@@ -334,4 +334,43 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
       ),
     ).rejects.toMatchObject({ category: "invalid-input" });
   });
+
+  it("resolves an array of envelope_refs, namespacing each payload under its stageId (shared resolveEnvelopeRefsToTask, same as MCP)", async () => {
+    const { invocations } = await setup(gatedConfig, supplierAgent());
+    const first = await invocations.send(
+      caller,
+      runStage(
+        { stage: finalReportStage, task: { id: "t13", goal: "assess", input: { supplier: "Northstar" } }, blocking: true },
+        "m-13",
+      ),
+    );
+    expect(first.state).toBe("completed");
+    const firstRunId = first.runId!;
+
+    const secondStage = { ...finalReportStage, id: "final_report_2" };
+    const second = await invocations.send(
+      caller,
+      runStage({ stage: secondStage, task: { id: "t14", goal: "assess again" }, blocking: true }, "m-14"),
+    );
+    expect(second.state).toBe("completed");
+    const secondRunId = second.runId!;
+
+    const combined = await invocations.send(
+      caller,
+      runStage(
+        {
+          stage: { ...finalReportStage, id: "combined" },
+          envelope_ref: [
+            { runId: firstRunId, stageId: "final_report" },
+            { runId: secondRunId, stageId: "final_report_2" },
+          ],
+          blocking: true,
+        },
+        "m-15",
+      ),
+    );
+    expect(combined.state).toBe("completed");
+    expect(combined.id).not.toBe(first.id);
+    expect(combined.id).not.toBe(second.id);
+  });
 });

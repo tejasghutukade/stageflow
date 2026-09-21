@@ -4,10 +4,13 @@ import { waitRun } from "../mcp/waitRun.js";
 import { readYamlObject } from "../config/readYamlObject.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
-import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import {
+  EnvelopeRefError,
+  resolveEnvelopeRefsToTask,
+} from "../runtime/resolveEnvelopeRef.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import type { TaskFile } from "../types/task.js";
 import type { PublicationRegistry } from "./registry.js";
@@ -218,31 +221,17 @@ export class A2aInvocations {
   private async runStandalone(caller: Caller, cmd: RunStageCommand): Promise<PublicTask> {
     let taskInput: string | TaskFile;
     if (cmd.envelope_ref) {
-      const ref = cmd.envelope_ref;
       try {
-        await this.runStore.readRunMeta(ref.runId);
+        taskInput = await resolveEnvelopeRefsToTask(this.runStore, cmd.envelope_ref, cmd.checkout);
       } catch (err) {
-        const mapped = mapStoreLookupError(err, { policy: "run" });
-        throw new A2aApplicationError("not-found", mapped.error);
-      }
-      let envelope;
-      try {
-        const refDetail = await this.runStore.readRun(ref.runId);
-        if (!refDetail.stages.some((s) => s.stage_id === ref.stageId)) {
-          throw new A2aApplicationError("not-found", `Stage not found: ${ref.stageId}`);
+        if (err instanceof EnvelopeRefError) {
+          throw new A2aApplicationError(
+            err.kind === "not_found" ? "not-found" : "invalid-input",
+            err.message,
+          );
         }
-        envelope = await this.runStore.readEnvelope(ref.runId, ref.stageId, ref.attempt);
-      } catch (err) {
-        if (err instanceof A2aApplicationError) throw err;
-        const mapped = mapStoreLookupError(err, { policy: "envelope" });
-        throw new A2aApplicationError(mapped.kind === "not_found" ? "not-found" : "invalid-input", mapped.error);
+        throw err;
       }
-      taskInput = {
-        id: `ref-${ref.runId}-${ref.stageId}`,
-        goal: envelope.summary,
-        input: envelope.payload ?? {},
-        ...(cmd.checkout ? { checkout: cmd.checkout } : {}),
-      };
     } else {
       taskInput = (cmd.task_path ?? cmd.task)!;
     }
