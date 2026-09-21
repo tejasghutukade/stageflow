@@ -443,6 +443,80 @@ Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus
 
 Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
 
+### `run_stage`
+
+Run a single stage directly, without authoring a pipeline. Internally this synthesizes a one-stage pipeline and executes it through the exact same run path `start_run` uses — the resulting run shows up in `list_runs`/`get_run` and is polled with `wait_run`/`get_envelope` like any other run, and gets the same persistence, `verify`/retry, and HITL behavior a pipeline stage gets. `sf run-stage` (see [CLI reference](cli-reference.md#sf-run-stage)) gives a shell/script caller the same capability.
+
+**Input:**
+
+```json
+{
+  "stage": "stages/check.yaml",
+  "task": { "id": "t", "goal": "Check this change" }
+}
+```
+
+`stage` is a filesystem path to a stage YAML file, or a bare inline stage body authored directly in the call (`{ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? }` — no `uses:`/`route:`/pipeline wrapper). Exactly one of `task_path`, an inline `task`, or `envelope_ref` is required.
+
+**Chaining with `envelope_ref`:** instead of a task, resolve a previously stored `StageEnvelope` and use it as this call's input:
+
+```json
+{
+  "stage": "stages/summarize.yaml",
+  "envelope_ref": { "runId": "…", "stageId": "research" }
+}
+```
+
+The referenced envelope's `summary` becomes `goal`, its `payload` becomes `input`. A reference can point at the envelope of another `run_stage` call or at any stage inside a full pipeline run. There is no browse/enumerate endpoint — a reference only resolves for a caller that already holds the `{ runId, stageId }` pair.
+
+`envelope_ref` also accepts an **array** of references, to combine more than one prior result in a single call:
+
+```json
+{
+  "stage": "stages/combine.yaml",
+  "envelope_ref": [
+    { "runId": "…", "stageId": "research" },
+    { "runId": "…", "stageId": "titleize" }
+  ]
+}
+```
+
+Each resolved payload is namespaced under its `stageId` in `input` (disambiguated by `runId` only if two references share a `stageId`), and summaries are combined into `goal`.
+
+**Other fields:**
+
+| Field | Meaning |
+|-------|---------|
+| `checkout` | Optional working directory to use with `envelope_ref` (`task`/`task_path` carry their own `checkout`; resolving a reference never implies one on its own) |
+| `model` | Overrides the stage's own declared model (and the global default) for this call only |
+| `blocking` | When `true`, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of `{ runId, stageId }` |
+| `timeout_ms` | Wait budget in ms when `blocking` is `true` (same bounds as `wait_run`) |
+
+**Success output (async, default):** `{ "runId": "…", "stageId": "…" }`
+
+**Success output (`blocking: true`):**
+
+```json
+{
+  "runId": "…",
+  "stageId": "…",
+  "status": "completed",
+  "envelope": { "status": "success", "summary": "…", "artifacts": [], "payload": {} }
+}
+```
+
+`status` is one of:
+
+| `status` | Meaning |
+|----------|---------|
+| `completed` | Terminal. `envelope` is the stage's final envelope, `null` if the stage failed without ever emitting one |
+| `needs_input` | The stage parked on a human-in-the-loop gate. `pending_prompt`/`waiting_kind`/`waiting_prompt_id`/`waiting_summary` are included — answer with the existing `answer_gate` tool, same as a pipeline stage, then poll with `wait_run` |
+| `timeout` | The wait budget elapsed; the run is still going — poll with `wait_run`/`get_run` |
+
+**Error output** (`isError: true`): the same `Pipeline validation failed` shape `start_run` returns for a structurally invalid stage body (reported as `Stage validation failed`), plus the same `404`-style errors `get_envelope` returns when an `envelope_ref` doesn't resolve.
+
+Access is deliberately unrestricted for this tool: any authenticated caller of this host can run any catalog or inline stage/pipeline through `run_stage` — there is no publish/allowlist step the way A2A's `invoke` operation has. This is a temporary trade-off for proving out standalone stage execution, not a hardened access-control surface.
+
 ### `get_run`
 
 Poll run status without loading the full event stream.
@@ -722,6 +796,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 - No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
+- `run_stage` access is unrestricted for any authenticated caller of this host (no publish/allowlist step); it has no `rerun` support (no stored `pipeline_path`, the same constraint an inline `start_run` pipeline has)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
 - No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
@@ -733,7 +808,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json`, Settings inspect, and stage `mcp` names (not this host)
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, `sf run-stage` (the 1:1 CLI counterpart of `run_stage`), and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
 - [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`
