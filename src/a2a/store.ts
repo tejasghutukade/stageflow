@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS a2a_tasks (
   run_id TEXT,
   state TEXT NOT NULL,
   result_json TEXT,
+  kind TEXT NOT NULL DEFAULT 'invoke',
+  result_stage_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -54,6 +56,8 @@ CREATE INDEX IF NOT EXISTS a2a_artifacts_task ON a2a_artifacts(task_id);
 
 export type TaskState = "submitted" | "working" | "input-required" | "completed" | "failed";
 
+export type TaskKind = "invoke" | "standalone";
+
 export type A2aTaskRow = {
   task_id: string;
   context_id: string;
@@ -64,6 +68,14 @@ export type A2aTaskRow = {
   run_id: string | null;
   state: TaskState;
   result_json: string | null;
+  /** "invoke" (published-capability task) or "standalone" (ADR-0001 run_stage wildcard task). */
+  kind: TaskKind;
+  /**
+   * For a "standalone" task started from a single `stage`, the stage whose
+   * envelope is the task result. Null for a "standalone" task started from a
+   * `pipeline` (no single designated result stage) and always null for "invoke".
+   */
+  result_stage_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -118,7 +130,25 @@ export class A2aStore {
       this.ownsConnection = true;
     }
     this.db.exec(SCHEMA_SQL);
+    this.migrateAddStandaloneColumns();
     this.artifactsRoot = path.join(storeRoot, "a2a-artifacts");
+  }
+
+  /**
+   * Additive migration for a `state.db` created before the run_stage A2A
+   * operation existed: `CREATE TABLE IF NOT EXISTS` above never alters an
+   * already-existing a2a_tasks table, so a pre-existing one is missing these
+   * two columns. Same PRAGMA table_info-guarded ADD COLUMN pattern as
+   * src/runstore/sqlite/SqliteRunStore.ts.
+   */
+  private migrateAddStandaloneColumns(): void {
+    const cols = this.db.prepare(`PRAGMA table_info(a2a_tasks)`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === "kind")) {
+      this.db.exec(`ALTER TABLE a2a_tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'invoke'`);
+    }
+    if (!cols.some((c) => c.name === "result_stage_id")) {
+      this.db.exec(`ALTER TABLE a2a_tasks ADD COLUMN result_stage_id TEXT`);
+    }
   }
 
   close(): void {
@@ -191,13 +221,15 @@ export class A2aStore {
     publicationRevision: string;
     submissionKey: string;
     runId: string;
+    kind?: TaskKind;
+    resultStageId?: string | null;
   }): A2aTaskRow {
     const at = nowIso();
     this.db
       .prepare(
         `INSERT INTO a2a_tasks
-          (task_id, context_id, caller_id, publication_id, publication_revision, submission_key, run_id, state, result_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', NULL, ?, ?)`,
+          (task_id, context_id, caller_id, publication_id, publication_revision, submission_key, run_id, state, result_json, kind, result_stage_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'submitted', NULL, ?, ?, ?, ?)`,
       )
       .run(
         params.taskId,
@@ -207,6 +239,8 @@ export class A2aStore {
         params.publicationRevision,
         params.submissionKey,
         params.runId,
+        params.kind ?? "invoke",
+        params.resultStageId ?? null,
         at,
         at,
       );
