@@ -18,6 +18,10 @@ import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
 import { imageResult, textResult } from "./toolResults.js";
+import {
+  findTokenShapedField,
+  tokenRejectedPayload,
+} from "../runtime/startPayload.js";
 
 /**
  * Every project a host serving a global store has ever recorded a run for,
@@ -35,12 +39,23 @@ function projectRootForPath(deps: McpToolDeps, catalogPath: string): string {
   return findProjectRoot(absDir) ?? deps.cwd;
 }
 
+const gitIdentitySchema = z
+  .object({
+    name: z.string().optional(),
+    email: z.string().optional(),
+  })
+  .strict();
+
 const taskFileSchema = z.object({
   id: z.string(),
   goal: z.string(),
   context: z.string().optional(),
   constraints: z.string().optional(),
   checkout: z.string().optional(),
+  repository: z.string().optional(),
+  ref: z.string().optional(),
+  run_branch_template: z.string().optional(),
+  git_identity: gitIdentitySchema.optional(),
   input: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -70,7 +85,13 @@ const startRunSchema = z
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
+    checkout_override: z.string().optional(),
+    skip_gates: z.boolean().optional(),
+    git_sha: z.string().optional(),
+    ci_pr_url: z.string().optional(),
+    ci_job_url: z.string().optional(),
   })
+  .passthrough()
   .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
     message: "Exactly one of task_path or task is required",
   });
@@ -183,10 +204,24 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (same checkout leased), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout.",
+        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object (optional repository/ref binding). Optional checkout_override, skip_gates, git_sha, ci_pr_url, ci_job_url match REST. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (path-checkout lease only), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout. Token-shaped fields are rejected with start.token_rejected.",
       inputSchema: startRunSchema,
     },
-    async ({ pipeline, task_path, task }) => {
+    async (args) => {
+      const tokenField = findTokenShapedField(args);
+      if (tokenField !== undefined) {
+        return textResult(tokenRejectedPayload(tokenField), true);
+      }
+      const {
+        pipeline,
+        task_path,
+        task,
+        checkout_override,
+        skip_gates,
+        git_sha,
+        ci_pr_url,
+        ci_job_url,
+      } = args;
       if (typeof pipeline === "string" && !pipeline.trim()) {
         return textResult({ error: "pipeline is required" }, true);
       }
@@ -196,7 +231,17 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       }
       let result;
       try {
-        result = await manager.startRun({ pipeline, task: taskInput });
+        result = await manager.startRun({
+          pipeline,
+          task: taskInput,
+          ...(checkout_override !== undefined
+            ? { checkoutOverride: checkout_override }
+            : {}),
+          ...(skip_gates !== undefined ? { skipGates: skip_gates } : {}),
+          ...(git_sha !== undefined ? { gitSha: git_sha } : {}),
+          ...(ci_pr_url !== undefined ? { ciPrUrl: ci_pr_url } : {}),
+          ...(ci_job_url !== undefined ? { ciJobUrl: ci_job_url } : {}),
+        });
       } catch (err) {
         if (err instanceof PipelineValidationError) {
           return textResult(

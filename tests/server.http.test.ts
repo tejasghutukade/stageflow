@@ -20,6 +20,13 @@ import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoo
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import {
+  resetBareCacheStateForTests,
+  setBareCacheRemoteUrlOverrideForTests,
+} from "../src/git/cache.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -4057,3 +4064,137 @@ describe("project MCP probe HTTP", () => {
     }
   });
 });
+
+describe("HTTP repository binding surfaces (U7)", () => {
+  afterAll(() => {
+    setBareCacheRemoteUrlOverrideForTests(null);
+    resetBareCacheStateForTests();
+    resetGlobalStageflowHomeForTests();
+  });
+
+  it("rejects token-shaped start fields and body-level binding stays on task", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-token-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const token = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: pipelinePath("docs-only"),
+          task: { id: "t", goal: "g" },
+          github_token: "nope",
+        }),
+      });
+      expect(token.status).toBe(400);
+      expect(token.body.code).toBe("start.token_rejected");
+      expect(token.body.field).toBe("github_token");
+
+      const conflict = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: pipelinePath("docs-only"),
+          task: {
+            id: "t",
+            goal: "g",
+            repository: "acme/api",
+            ref: "main",
+            checkout: "/tmp/x",
+          },
+        }),
+      });
+      expect(conflict.status).toBe(400);
+      expect(conflict.body.code).toBe("task.binding_conflict");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("starts a repository task and get_run shows binding", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-u7-home-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    resetBareCacheStateForTests();
+
+    const source = await mkdtemp(path.join(tmpdir(), "sf-http-u7-src-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: source });
+    await writeFile(path.join(source, "README"), "hi\n");
+    execFileSync("git", ["add", "README"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: source });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
+
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-run-"));
+    const agent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          }),
+        });
+      },
+      async runStage() {
+        return {
+          ok: true as const,
+          envelope: {
+            status: "success" as const,
+            summary: "ok",
+            artifacts: [],
+            payload: {},
+          },
+        };
+      },
+    };
+    const { server, base } = await withServer(root, agent);
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: pipelinePath("docs-only"),
+          task: {
+            id: "repo-task",
+            goal: "edit",
+            repository: "acme/api",
+            ref: "main",
+          },
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+      await waitUntilIdleHealth(base);
+      const detail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(detail.status).toBe(200);
+      expect(detail.body.binding).toMatchObject({
+        kind: "repository",
+        repository: "acme/api",
+        ref: "main",
+        resolved_sha: sha,
+      });
+      expect(detail.body.binding.run_branch).toMatch(/^stageflow\/run-/);
+      expect(detail.body.binding.checkout_root).toContain("worktrees");
+    } finally {
+      setBareCacheRemoteUrlOverrideForTests(null);
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

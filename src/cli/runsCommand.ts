@@ -46,7 +46,7 @@ export const RUNS_USAGE = `Usage:
   sf runs retry --run <runId> --stage <stageId> [--json]
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
-  sf runs rerun --run <runId> [--json]`;
+  sf runs rerun --run <runId> [--pinned] [--json]`;
 
 export type RunsCommandIo = {
   log: (line: string) => void;
@@ -115,7 +115,7 @@ const FEEDBACK_DECIDE_FLAGS = new Set([
 ]);
 const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
-const RERUN_FLAGS = new Set(["--run", "--json", "--help", "-h"]);
+const RERUN_FLAGS = new Set(["--run", "--pinned", "--json", "--help", "-h"]);
 
 const VALUE_FLAGS = new Set([
   "--status",
@@ -148,6 +148,7 @@ type ParsedRunsArgs = {
   answer?: string;
   guidance?: string;
   stop?: boolean;
+  pinned?: boolean;
   loopId?: string;
   decision?: string;
   reason?: string;
@@ -211,6 +212,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let answer: string | undefined;
   let guidance: string | undefined;
   let stop = false;
+  let pinned = false;
   let loopId: string | undefined;
   let decision: string | undefined;
   let reason: string | undefined;
@@ -224,6 +226,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     } else if (arg === "--stop") {
       if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
       stop = true;
+    } else if (arg === "--pinned") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      pinned = true;
     } else if (VALUE_FLAGS.has(arg)) {
       if (!allowed.has(arg)) {
         throw new Error(`Unknown flag: ${arg}`);
@@ -267,6 +272,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     answer,
     guidance,
     stop,
+    pinned,
     loopId,
     decision,
     reason,
@@ -857,7 +863,11 @@ export async function runRunsCommand(
       if (!parsed.runId) {
         return usageError(out, "Missing --run");
       }
-      const started = await httpRerun(base, parsed.runId);
+      const started = await httpRerun(
+        base,
+        parsed.runId,
+        parsed.pinned ? { pinned: true } : undefined,
+      );
       if (!started.ok) {
         return reportCliRun(
           { kind: "start-failure", started },

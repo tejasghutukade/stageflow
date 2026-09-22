@@ -31,7 +31,14 @@ export type StartFailureCode =
   | "git_missing"
   | "insufficient_disk"
   | "pinned_sha_unavailable"
-  | "invalid_run_branch";
+  | "invalid_run_branch"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid"
+  | "task.invalid_shape"
+  | "task.load_error"
+  | "start.token_rejected";
 
 export type MaterializedBinding = {
   runId: string;

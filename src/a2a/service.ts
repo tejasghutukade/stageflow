@@ -157,7 +157,18 @@ export class A2aInvocations {
     const taskId = existingTask?.task_id ?? newTaskId();
     const contextIdResolved = existingTask?.context_id ?? this.store.ensureContext(caller.id, contextId);
     const result = await this.manager.startRunOnce(
-      { pipeline: publication.pipeline, task: { id: taskId, goal: publication.goal, input: input as Record<string, unknown> } },
+      {
+        pipeline: publication.pipeline,
+        task: {
+          id: taskId,
+          goal: publication.goal,
+          input: input as Record<string, unknown>,
+          ...(publication.repository !== undefined
+            ? { repository: publication.repository }
+            : {}),
+          ...(publication.ref !== undefined ? { ref: publication.ref } : {}),
+        },
+      },
       { key: submissionKey, requestHash: hash },
     );
     if (!result.ok) {

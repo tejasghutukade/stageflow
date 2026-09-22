@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { cp, mkdtemp, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,6 +20,7 @@ import { readRunArtifact } from "../src/mcp/readArtifact.js";
 import { runResourceUri } from "../src/mcp/resources.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../src/runstore/port.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { RunManager } from "../src/runtime/runManager.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { mcpCall } from "./helpers/mcpCall.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
@@ -2553,6 +2554,114 @@ describe("MCP lean run projection fields", () => {
       expect(resourceUnused.stages[0]?.events).toBeUndefined();
       expect(getUnused.payload.task_yaml).toBeUndefined();
     } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("MCP start_run repository binding (U7)", () => {
+  it("accepts repository task, rejects token fields, and forwards skip_gates/checkout_override", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-u7-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          }),
+        });
+      },
+      async runStage() {
+        return {
+          ok: true as const,
+          envelope: {
+            status: "success" as const,
+            summary: "ok",
+            artifacts: [],
+            payload: {},
+          },
+        };
+      },
+    };
+    const { server } = await startUiServer({
+      agent,
+      cwd: catalogRoot,
+      rootDir: root,
+      store,
+      port: 0,
+      uiDistDir: path.join(root, "missing-ui"),
+      mcpStateless: true,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP");
+    const url = `http://127.0.0.1:${address.port}`;
+
+    const spy = vi.spyOn(RunManager.prototype, "startRun");
+    try {
+      const tokenReject = await mcpCall(url, "start_run", {
+        pipeline: pipelinePath("docs-only"),
+        task: { id: "tok", goal: "nope" },
+        github_token: "should-not-work",
+      });
+      expect(tokenReject.isError).toBe(true);
+      expect(tokenReject.payload.code).toBe("start.token_rejected");
+      expect(tokenReject.payload.field).toBe("github_token");
+
+      const conflict = await mcpCall(url, "start_run", {
+        pipeline: pipelinePath("docs-only"),
+        task: {
+          id: "conflict",
+          goal: "both",
+          repository: "acme/api",
+          ref: "main",
+        },
+        checkout_override: "/tmp/some-path",
+      });
+      expect(conflict.isError).toBe(true);
+      expect(conflict.payload.code).toBe("task.binding_conflict");
+
+      const skipCall = await mcpCall(url, "start_run", {
+        pipeline: pipelinePath("docs-only"),
+        task: { id: "skip", goal: "gates" },
+        skip_gates: true,
+        git_sha: "abc",
+        ci_pr_url: "https://example.com/pr/1",
+        ci_job_url: "https://example.com/job/1",
+      });
+      expect(skipCall.isError).toBe(false);
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skipGates: true,
+          gitSha: "abc",
+          ciPrUrl: "https://example.com/pr/1",
+          ciJobUrl: "https://example.com/job/1",
+        }),
+      );
+      await waitUntilIdleHealth(url);
+
+      const tools = await mcpListTools(url);
+      const start = tools.find((t) => t.name === "start_run");
+      expect(start?.description).toMatch(/path-checkout lease|skip_gates|token/i);
+
+      const rerunSpy = vi.spyOn(RunManager.prototype, "rerun").mockResolvedValue({
+        ok: false,
+        reason: "stopped",
+        status: 400,
+      });
+      await mcpCall(url, "rerun", { runId: "missing", pinned: true });
+      expect(rerunSpy).toHaveBeenCalledWith("missing", { pinned: true });
+      rerunSpy.mockRestore();
+    } finally {
+      spy.mockRestore();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

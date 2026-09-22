@@ -1,6 +1,6 @@
 import path from "node:path";
 import { stringify as stringifyYaml } from "yaml";
-import { parseTaskFile } from "../config/loadTask.js";
+import { coerceTaskFile } from "../config/loadTask.js";
 import { relPath, type ValidationFinding } from "../config/validateCatalog.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
 import type { LoadedPipeline } from "../types/pipeline.js";
@@ -17,7 +17,7 @@ export type ResolvedTaskInput =
   | { kind: "yaml"; taskYaml: string };
 
 export function isTaskFile(value: unknown): value is TaskFile {
-  return parseTaskFile(value, "task").ok;
+  return coerceTaskFile(value) !== undefined;
 }
 
 export function taskFileToYaml(task: TaskFile): string {
@@ -103,9 +103,9 @@ export function resolveStartTaskInput(
     return { kind: "path", taskPath: resolveTaskPath(input.task, cwd) };
   }
 
-  const parsed = parseTaskFile(input.task, "task");
-  if (parsed.ok) {
-    return { kind: "yaml", taskYaml: taskFileToYaml(parsed.value) };
+  const coerced = coerceTaskFile(input.task);
+  if (coerced !== undefined) {
+    return { kind: "yaml", taskYaml: taskFileToYaml(coerced) };
   }
 
   throw new Error("task path, task object, or taskYaml is required");

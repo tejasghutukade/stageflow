@@ -189,6 +189,10 @@ describe("optional task input", () => {
     expect(source).toMatch(
       /input:\s*z\.record\(z\.string\(\),\s*z\.unknown\(\)\)\.optional\(\)/,
     );
+    expect(source).toMatch(/repository:\s*z\.string\(\)\.optional\(\)/);
+    expect(source).toMatch(/ref:\s*z\.string\(\)\.optional\(\)/);
+    expect(source).toMatch(/checkout_override:\s*z\.string\(\)\.optional\(\)/);
+    expect(source).toMatch(/skip_gates:\s*z\.boolean\(\)\.optional\(\)/);
   });
 });
 

@@ -36,6 +36,10 @@ import {
   parseSlotCount,
 } from "../runtime/settingsFile.js";
 import { isTaskFile } from "../runtime/taskInput.js";
+import {
+  findTokenShapedField,
+  tokenRejectedPayload,
+} from "../runtime/startPayload.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -350,7 +354,13 @@ export function createOperatorRoutes(
         }
 
         if (method === "POST" && pathname === "/api/runs") {
-          const body = (await readJsonBody(req)) as {
+          const body = (await readJsonBody(req)) as Record<string, unknown>;
+          const tokenField = findTokenShapedField(body);
+          if (tokenField !== undefined) {
+            json(res, 400, tokenRejectedPayload(tokenField));
+            return true;
+          }
+          const typed = body as {
             task?: string | TaskFile;
             pipeline?: string;
             checkoutOverride?: string;
@@ -360,14 +370,14 @@ export function createOperatorRoutes(
             ciJobUrl?: string;
           };
           if (
-            typeof body.pipeline !== "string" ||
-            !body.pipeline.trim() ||
-            body.task === undefined
+            typeof typed.pipeline !== "string" ||
+            !typed.pipeline.trim() ||
+            typed.task === undefined
           ) {
             json(res, 400, { error: "task and pipeline are required" });
             return true;
           }
-          if (typeof body.task !== "string" && !isTaskFile(body.task)) {
+          if (typeof typed.task !== "string" && !isTaskFile(typed.task)) {
             json(res, 400, {
               error:
                 "task must be a path string or TaskFile object (id and goal required)",
@@ -375,18 +385,18 @@ export function createOperatorRoutes(
             return true;
           }
           if (
-            body.checkoutOverride !== undefined &&
-            typeof body.checkoutOverride !== "string"
+            typed.checkoutOverride !== undefined &&
+            typeof typed.checkoutOverride !== "string"
           ) {
             json(res, 400, { error: "checkoutOverride must be a string" });
             return true;
           }
-          if (body.skipGates !== undefined && typeof body.skipGates !== "boolean") {
+          if (typed.skipGates !== undefined && typeof typed.skipGates !== "boolean") {
             json(res, 400, { error: "skipGates must be a boolean" });
             return true;
           }
           for (const field of ["gitSha", "ciPrUrl", "ciJobUrl"] as const) {
-            if (body[field] !== undefined && typeof body[field] !== "string") {
+            if (typed[field] !== undefined && typeof typed[field] !== "string") {
               json(res, 400, { error: `${field} must be a string` });
               return true;
             }
@@ -394,15 +404,15 @@ export function createOperatorRoutes(
           let result: Awaited<ReturnType<typeof manager.startRun>>;
           try {
             result = await manager.startRun({
-              task: body.task,
-              pipeline: body.pipeline.trim(),
-              ...(body.checkoutOverride !== undefined
-                ? { checkoutOverride: body.checkoutOverride }
+              task: typed.task,
+              pipeline: typed.pipeline.trim(),
+              ...(typed.checkoutOverride !== undefined
+                ? { checkoutOverride: typed.checkoutOverride }
                 : {}),
-              ...(body.skipGates !== undefined ? { skipGates: body.skipGates } : {}),
-              ...(body.gitSha !== undefined ? { gitSha: body.gitSha } : {}),
-              ...(body.ciPrUrl !== undefined ? { ciPrUrl: body.ciPrUrl } : {}),
-              ...(body.ciJobUrl !== undefined ? { ciJobUrl: body.ciJobUrl } : {}),
+              ...(typed.skipGates !== undefined ? { skipGates: typed.skipGates } : {}),
+              ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),
+              ...(typed.ciPrUrl !== undefined ? { ciPrUrl: typed.ciPrUrl } : {}),
+              ...(typed.ciJobUrl !== undefined ? { ciJobUrl: typed.ciJobUrl } : {}),
             });
           } catch (err) {
             if (err instanceof PipelineValidationError) {
@@ -424,7 +434,17 @@ export function createOperatorRoutes(
 
         if (method === "POST" && pathname.match(/^\/api\/runs\/[^/]+\/rerun$/)) {
           const runId = decodeURIComponent(pathname.split("/")[3] ?? "");
-          const result = await manager.rerun(runId);
+          const body = (await readJsonBody(req)) as {
+            pinned?: boolean;
+          };
+          if (body.pinned !== undefined && typeof body.pinned !== "boolean") {
+            json(res, 400, { error: "pinned must be a boolean" });
+            return true;
+          }
+          const result = await manager.rerun(
+            runId,
+            body.pinned !== undefined ? { pinned: body.pinned } : undefined,
+          );
           if (!result.ok) {
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;

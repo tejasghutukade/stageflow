@@ -16,30 +16,17 @@ function parseGitIdentity(raw: unknown): TaskGitIdentity | undefined {
   return identity;
 }
 
-export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
+/** Structural TaskFile shape only — does not enforce workspace binding XOR. */
+export function coerceTaskFile(raw: unknown): TaskFile | undefined {
   const record = raw as Record<string, unknown> | null | undefined;
   if (typeof record?.id !== "string" || typeof record?.goal !== "string") {
-    return loadFailure([
-      {
-        code: "task.invalid_shape",
-        message: `Invalid ${source}: id and goal are required strings`,
-        category: "task",
-        taskId: typeof record?.id === "string" ? record.id : undefined,
-      },
-    ]);
+    return undefined;
   }
   if (record.input !== undefined && !isPlainObject(record.input)) {
-    return loadFailure([
-      {
-        code: "task.invalid_shape",
-        message: `Invalid ${source}: input must be an object`,
-        category: "task",
-        taskId: record.id,
-      },
-    ]);
+    return undefined;
   }
 
-  const task: TaskFile = {
+  return {
     id: record.id,
     goal: record.goal,
     context: typeof record.context === "string" ? record.context : undefined,
@@ -55,6 +42,31 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
       : {}),
     ...(record.input !== undefined ? { input: record.input } : {}),
   };
+}
+
+export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
+  const record = raw as Record<string, unknown> | null | undefined;
+  const task = coerceTaskFile(raw);
+  if (task === undefined) {
+    if (typeof record?.id === "string" && typeof record?.goal === "string") {
+      return loadFailure([
+        {
+          code: "task.invalid_shape",
+          message: `Invalid ${source}: input must be an object`,
+          category: "task",
+          taskId: record.id,
+        },
+      ]);
+    }
+    return loadFailure([
+      {
+        code: "task.invalid_shape",
+        message: `Invalid ${source}: id and goal are required strings`,
+        category: "task",
+        taskId: typeof record?.id === "string" ? record.id : undefined,
+      },
+    ]);
+  }
 
   const binding = resolveWorkspaceBinding(task);
   if (!binding.ok) {

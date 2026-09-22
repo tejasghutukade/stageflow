@@ -12,7 +12,7 @@ import {
   assertTimedOutStageEligible,
   reconstructTimedOutAndContinue,
 } from "./resumeTimedOut.js";
-import { loadTaskFromYaml } from "../config/loadTask.js";
+import { loadTaskFromYamlOutcome } from "../config/loadTask.js";
 import {
   deriveStatusFromStages,
   findUnhandledFailedStage,
@@ -1677,13 +1677,29 @@ export class RunManager {
     let pathCheckoutRoot: string | undefined;
     let binding: WorkspaceBinding;
     try {
-      task = loadTaskFromYaml(taskYaml, taskLabel);
-      const bindingOutcome = resolveWorkspaceBinding(task, { checkoutOverride });
-      if (!bindingOutcome.ok) {
+      const loaded = loadTaskFromYamlOutcome(taskYaml, taskLabel);
+      if (!loaded.ok) {
+        const issue = loaded.issues[0];
         return {
           ok: false,
-          reason: bindingOutcome.issues[0]?.message ?? "Invalid workspace binding",
+          reason: issue?.message ?? "Invalid task",
           status: 400,
+          ...(issue?.code !== undefined
+            ? { code: issue.code as StartFailureCode }
+            : {}),
+        };
+      }
+      task = loaded.value;
+      const bindingOutcome = resolveWorkspaceBinding(task, { checkoutOverride });
+      if (!bindingOutcome.ok) {
+        const issue = bindingOutcome.issues[0];
+        return {
+          ok: false,
+          reason: issue?.message ?? "Invalid workspace binding",
+          status: 400,
+          ...(issue?.code !== undefined
+            ? { code: issue.code as StartFailureCode }
+            : {}),
         };
       }
       binding = bindingOutcome.value;

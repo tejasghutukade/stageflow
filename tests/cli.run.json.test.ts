@@ -866,3 +866,95 @@ describe("sf run --json --include stages (U3)", () => {
     );
   });
 });
+
+describe("sf run repository binding overrides (U7)", () => {
+  it("mentions --repository and --ref on help", () => {
+    const result = runCli(["run", "--help"]);
+    expect(result.status).toBe(0);
+    const out = result.stdout + result.stderr;
+    expect(out).toMatch(/--repository/);
+    expect(out).toMatch(/--ref/);
+  });
+
+  it("returns task.repository_ref_required for --repository without --ref", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-ref-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload).toMatchObject({
+      ok: false,
+      outcome: "failed",
+      code: "task.repository_ref_required",
+    });
+  });
+
+  it("returns task.binding_conflict when --repository/--ref combine with --checkout", async () => {
+    const cap = captureIo();
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-u7-conflict-"));
+    const store = createRunStore({ rootDir: root });
+    const manager = new RunManager({
+      agent: {
+        openStage() {
+          throw new Error("should not run");
+        },
+        async runStage() {
+          throw new Error("should not run");
+        },
+      },
+      store,
+      cwd: root,
+    });
+    const code = await runRunCommand(
+      [
+        "--json",
+        "--task",
+        sampleTask,
+        "--pipeline",
+        singlePipeline,
+        "--repository",
+        "acme/api",
+        "--ref",
+        "main",
+        "--checkout",
+        path.join(root, "checkout"),
+      ],
+      {
+        io: cap.io,
+        cwd: root,
+        startRun: (input) => manager.startRun(input),
+      },
+    );
+    expect(code).toBe(1);
+    const payload = JSON.parse(cap.stdoutText());
+    expect(payload.code).toBe("task.binding_conflict");
+  });
+});

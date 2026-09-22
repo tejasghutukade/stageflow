@@ -35,7 +35,7 @@ import { PACKAGE_VERSION } from "./package-meta.js";
 
 const USAGE = `Usage:
   sf init
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
@@ -52,7 +52,7 @@ const USAGE = `Usage:
   sf runs retry --run <runId> --stage <stageId> [--json]
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
-  sf runs rerun --run <runId> [--json]
+  sf runs rerun --run <runId> [--pinned] [--json]
   sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf mcp [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf providers list
@@ -106,6 +106,8 @@ function parseArgs(argv: string[]): {
   pipeline?: string;
   port?: number;
   checkout?: string;
+  repository?: string;
+  ref?: string;
   mcpStateless?: boolean;
 } {
   const args = argv.slice(2);
@@ -151,6 +153,8 @@ function parseArgs(argv: string[]): {
   let pipeline: string | undefined;
   let port: number | undefined;
   let checkout: string | undefined;
+  let repository: string | undefined;
+  let ref: string | undefined;
   let mcpStateless = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--task") {
@@ -163,6 +167,18 @@ function parseArgs(argv: string[]): {
         throw new Error("Missing value for --checkout");
       }
       checkout = raw;
+    } else if (args[i] === "--repository") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --repository");
+      }
+      repository = raw;
+    } else if (args[i] === "--ref") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --ref");
+      }
+      ref = raw;
     } else if (args[i] === "--port") {
       const raw = args[++i];
       port = Number(raw);
@@ -173,7 +189,17 @@ function parseArgs(argv: string[]): {
       mcpStateless = true;
     }
   }
-  return { help: false, command, task, pipeline, port, checkout, mcpStateless };
+  return {
+    help: false,
+    command,
+    task,
+    pipeline,
+    port,
+    checkout,
+    repository,
+    ref,
+    mcpStateless,
+  };
 }
 
 export function parseRunStageArgs(argv: string[]): {

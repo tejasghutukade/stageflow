@@ -13,6 +13,7 @@ import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
 import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
+import type { TaskFile } from "../types/task.js";
 
 async function postJson(
   base: string,
@@ -134,7 +135,7 @@ function toStartFailure(
 
 export type HttpStartRunInput = {
   pipeline: string;
-  task: string;
+  task: string | TaskFile;
   checkoutOverride?: string;
   skipGates?: boolean;
   gitSha?: string;
@@ -167,8 +168,16 @@ export async function httpStartRun(
   };
 }
 
-export async function httpRerun(base: string, runId: string): Promise<StartRunResult> {
-  const { status, body } = await postJson(base, `/api/runs/${enc(runId)}/rerun`, {});
+export async function httpRerun(
+  base: string,
+  runId: string,
+  options?: { pinned?: boolean },
+): Promise<StartRunResult> {
+  const { status, body } = await postJson(
+    base,
+    `/api/runs/${enc(runId)}/rerun`,
+    options?.pinned !== undefined ? { pinned: options.pinned } : {},
+  );
   if (status !== 202) return toStartFailure(status, body);
   const newRunId = (body as { runId: string }).runId;
   return {

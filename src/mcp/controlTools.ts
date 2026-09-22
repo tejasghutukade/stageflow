@@ -409,13 +409,17 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "rerun",
     {
       description:
-        "Start a new run from a completed or failed run's pipeline/task locators. Returns { runId } for the new run.",
+        "Start a new run from a completed or failed run's pipeline/task locators. Optional pinned: true replays the prior resolved_sha for repository bindings. Returns { runId } for the new run.",
       inputSchema: z.object({
         runId: z.string(),
+        pinned: z.boolean().optional(),
       }),
     },
-    async ({ runId }) => {
-      const result = await manager.rerun(runId);
+    async ({ runId, pinned }) => {
+      const result = await manager.rerun(
+        runId,
+        pinned !== undefined ? { pinned } : undefined,
+      );
       if (!result.ok) {
         return textResult(
           {

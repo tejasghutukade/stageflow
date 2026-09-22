@@ -1,6 +1,11 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { parse as parseYaml } from "yaml";
+import { coerceTaskFile } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
 import type { StartRunResult } from "../runtime/runManager.js";
+import type { TaskFile } from "../types/task.js";
 import {
   ensureGlobalService,
   hostBaseUrl,
@@ -19,7 +24,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 
@@ -36,6 +41,8 @@ type ParsedRunArgs = {
   task?: string;
   pipeline?: string;
   checkout?: string;
+  repository?: string;
+  ref?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
@@ -44,7 +51,7 @@ type ParsedRunArgs = {
 };
 
 export type StartRunFn = (input: {
-  task: string;
+  task: string | TaskFile;
   pipeline: string;
   checkoutOverride?: string;
   skipGates?: boolean;
@@ -64,6 +71,8 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let task: string | undefined;
   let pipeline: string | undefined;
   let checkout: string | undefined;
+  let repository: string | undefined;
+  let ref: string | undefined;
   let gitSha: string | undefined;
   let ciPrUrl: string | undefined;
   let ciJobUrl: string | undefined;
@@ -96,6 +105,18 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
         throw new Error("Missing value for --checkout");
       }
       checkout = value;
+    } else if (arg === "--repository") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --repository");
+      }
+      repository = value;
+    } else if (arg === "--ref") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --ref");
+      }
+      ref = value;
     } else if (arg === "--git-sha") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -155,12 +176,31 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
     task,
     pipeline,
     checkout,
+    repository,
+    ref,
     gitSha,
     ciPrUrl,
     ciJobUrl,
     operatorCwd,
     operatorAgentDir,
   };
+}
+
+async function loadTaskWithBindingOverrides(
+  taskPath: string,
+  cwd: string,
+  overrides: { repository?: string; ref?: string },
+): Promise<TaskFile> {
+  const absolute = path.resolve(cwd, taskPath);
+  const yamlText = await readFile(absolute, "utf8");
+  const raw = parseYaml(yamlText);
+  const task = coerceTaskFile(raw);
+  if (task === undefined) {
+    throw new Error(`Invalid task file ${absolute}: id and goal are required strings`);
+  }
+  if (overrides.repository !== undefined) task.repository = overrides.repository;
+  if (overrides.ref !== undefined) task.ref = overrides.ref;
+  return task;
 }
 
 function defaultStartRun(
@@ -175,7 +215,10 @@ function defaultStartRun(
     }
     return httpStartRun(base, {
       pipeline: resolveAbsolute(cwd, input.pipeline),
-      task: resolveAbsolute(cwd, input.task),
+      task:
+        typeof input.task === "string"
+          ? resolveAbsolute(cwd, input.task)
+          : input.task,
       ...(input.checkoutOverride !== undefined
         ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
         : {}),
@@ -272,8 +315,17 @@ export async function runRunCommand(
     options.store ?? (parsed.includeStages ? httpStoreReader(base) : undefined);
 
   try {
+    const hasBindingOverride =
+      parsed.repository !== undefined || parsed.ref !== undefined;
+    const taskInput: string | TaskFile = hasBindingOverride
+      ? await loadTaskWithBindingOverrides(parsed.task, cwd, {
+          repository: parsed.repository,
+          ref: parsed.ref,
+        })
+      : parsed.task;
+
     const started = await startRun({
-      task: parsed.task,
+      task: taskInput,
       pipeline: parsed.pipeline,
       checkoutOverride: parsed.checkout,
       ...(parsed.skipGates ? { skipGates: true } : {}),
