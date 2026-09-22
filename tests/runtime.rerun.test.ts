@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { pipelinePath, catalogLocators, taskPath, SAMPLE_TASK, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +25,20 @@ function successEnvelope(summary: string) {
 }
 
 describe("run manager re-run", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("re-run creates a new run id with the same task snapshot and pipeline", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-"));
     const store = createRunStore({ rootDir: root });

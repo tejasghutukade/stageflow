@@ -1752,8 +1752,21 @@ describe("localhost HTTP API", () => {
         slotsAvailable: 2,
         activeStageProcesses: 0,
         maxActiveStageProcesses: null,
+        disk: {
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        },
       });
       expect(idle.body).not.toHaveProperty("inFlight");
+      for (const key of Object.keys(idle.body.disk) as Array<
+        keyof typeof idle.body.disk
+      >) {
+        expect(idle.body.disk[key]).toBeGreaterThanOrEqual(0);
+      }
 
       const first = await jsonFetch(`${base}/api/runs`, {
         method: "POST",
@@ -1806,110 +1819,120 @@ describe("localhost HTTP API", () => {
   });
 
   it("POST /api/runs returns structured busy_capacity vs busy_checkout", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
-    const agent = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [freeTextPrompt],
-        envelope: {
-          status: "success",
-          summary: "hold",
-          artifacts: [],
-        },
-      },
-    ]);
-    const { server, base } = await withServer(root, agent, undefined, {
-      maxConcurrent: 1,
-    });
-
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     try {
-      const first = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: pipelinePath("single"),
-          task: { id: "holder", goal: "hold slot", checkout },
-        }),
-      });
-      expect(first.status).toBe(202);
-      const holderId = first.body.runId as string;
-
-      await waitFor(async () => {
-        const health = await jsonFetch(`${base}/api/health`);
-        return health.body.activeRunIds?.includes(holderId);
-      });
-
-      const capacity = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: pipelinePath("single"),
-          task: { id: "cap", goal: "over max" },
-        }),
-      });
-      expect(capacity.status).toBe(409);
-      expect(capacity.body.code).toBe("busy_capacity");
-      expect(capacity.body.error).toBeTruthy();
-      expect(capacity.body.activeCount).toBe(1);
-      expect(capacity.body.maxConcurrent).toBe(1);
-      expect(capacity.body.activeRunIds).toEqual([holderId]);
-      expect(capacity.body).not.toHaveProperty("conflictingRunId");
-
-      const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
-      const otherAgent = scriptedFakeAgent([
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
+      const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
+      const agent = scriptedFakeAgent([
         {
           type: "wait_then_emit",
           waitRequests: [freeTextPrompt],
           envelope: {
             status: "success",
-            summary: "hold2",
+            summary: "hold",
             artifacts: [],
           },
         },
       ]);
-      const other = await withServer(otherRoot, otherAgent, undefined, {
-        maxConcurrent: 3,
+      const { server, base } = await withServer(root, agent, undefined, {
+        maxConcurrent: 1,
       });
+
       try {
-        const bound = await jsonFetch(`${other.base}/api/runs`, {
+        const first = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             pipeline: pipelinePath("single"),
-            task: { id: "a", goal: "first", checkout },
+            task: { id: "holder", goal: "hold slot", checkout },
           }),
         });
-        expect(bound.status).toBe(202);
-        const conflictId = bound.body.runId as string;
+        expect(first.status).toBe(202);
+        const holderId = first.body.runId as string;
+
         await waitFor(async () => {
-          const health = await jsonFetch(`${other.base}/api/health`);
-          return health.body.activeRunIds?.includes(conflictId);
+          const health = await jsonFetch(`${base}/api/health`);
+          return health.body.activeRunIds?.includes(holderId);
         });
 
-        const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+        const capacity = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             pipeline: pipelinePath("single"),
-            task: { id: "b", goal: "same checkout", checkout },
+            task: { id: "cap", goal: "over max" },
           }),
         });
-        expect(checkoutBusy.status).toBe(409);
-        expect(checkoutBusy.body.code).toBe("busy_checkout");
-        expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
-        expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
-        expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
-        expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        expect(capacity.status).toBe(409);
+        expect(capacity.body.code).toBe("busy_capacity");
+        expect(capacity.body.error).toBeTruthy();
+        expect(capacity.body.activeCount).toBe(1);
+        expect(capacity.body.maxConcurrent).toBe(1);
+        expect(capacity.body.activeRunIds).toEqual([holderId]);
+        expect(capacity.body).not.toHaveProperty("conflictingRunId");
+
+        const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
+        const otherAgent = scriptedFakeAgent([
+          {
+            type: "wait_then_emit",
+            waitRequests: [freeTextPrompt],
+            envelope: {
+              status: "success",
+              summary: "hold2",
+              artifacts: [],
+            },
+          },
+        ]);
+        const other = await withServer(otherRoot, otherAgent, undefined, {
+          maxConcurrent: 3,
+        });
+        try {
+          const bound = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: pipelinePath("single"),
+              task: { id: "a", goal: "first", checkout },
+            }),
+          });
+          expect(bound.status).toBe(202);
+          const conflictId = bound.body.runId as string;
+          await waitFor(async () => {
+            const health = await jsonFetch(`${other.base}/api/health`);
+            return health.body.activeRunIds?.includes(conflictId);
+          });
+
+          const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: pipelinePath("single"),
+              task: { id: "b", goal: "same checkout", checkout },
+            }),
+          });
+          expect(checkoutBusy.status).toBe(409);
+          expect(checkoutBusy.body.code).toBe("busy_checkout");
+          expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
+          expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
+          expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
+          expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            other.server.close((err) => (err ? reject(err) : resolve()));
+          });
+        }
       } finally {
         await new Promise<void>((resolve, reject) => {
-          other.server.close((err) => (err ? reject(err) : resolve()));
+          server.close((err) => (err ? reject(err) : resolve()));
         });
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
@@ -2054,6 +2077,8 @@ describe("localhost HTTP API", () => {
 
   it("POST /api/settings lowering the cap does not evict active runs", async () => {
     const previousHome = process.env.HOME;
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-home-"));
     process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-"));
@@ -2139,6 +2164,11 @@ describe("localhost HTTP API", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = previousHome;
+      }
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
       }
     }
   });

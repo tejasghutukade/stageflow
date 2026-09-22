@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -137,6 +137,20 @@ describe("sf run --json parse (U1)", { timeout: 15_000 }, () => {
 });
 
 describe("sf run start-failure mapping (U2)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("human busy start exits 1 with busy_capacity stderr, never 409", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-run-json-busy-"));
     const store = createRunStore({ rootDir: storeRoot });

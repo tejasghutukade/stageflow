@@ -223,9 +223,22 @@ describe("MCP tools and HTTP inline task", () => {
         activeStageProcesses: 0,
         maxActiveStageProcesses: null,
         version: PACKAGE_VERSION,
+        disk: {
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        },
       });
       expect(health.payload).not.toHaveProperty("inFlight");
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
+      for (const key of Object.keys(health.payload.disk) as Array<
+        keyof typeof health.payload.disk
+      >) {
+        expect(health.payload.disk[key]).toBeGreaterThanOrEqual(0);
+      }
 
       const started = await mcpCall(base, "start_run", {
         pipeline: pipelinePath("docs-only"),
@@ -409,105 +422,123 @@ describe("MCP tools and HTTP inline task", () => {
   }, 15000);
 
   it("get_health / start_run expose soft-max capacity (AE5; not exclusive inFlight)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cap-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-mcp-co-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [
-          {
-            kind: "free_text",
-            id: "prompt-1",
-            message: "hold",
-          },
-        ],
-        envelope: {
-          status: "success",
-          summary: "hold",
-          artifacts: [],
-        },
-      },
-      {
-        type: "wait_then_emit",
-        waitRequests: [
-          {
-            kind: "free_text",
-            id: "prompt-1",
-            message: "hold2",
-          },
-        ],
-        envelope: {
-          status: "success",
-          summary: "hold2",
-          artifacts: [],
-        },
-      },
-    ]);
-
-    const { server } = await startUiServer({
-      agent,
-      cwd: catalogRoot,
-      store,
-      port: 0,
-      uiDistDir: path.join(root, "missing-ui"),
-      maxConcurrent: 1,
-      mcpStateless: true,
-    });
-
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP address");
-      }
-      const base = `http://127.0.0.1:${address.port}`;
+      const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cap-"));
+      const checkout = await mkdtemp(path.join(tmpdir(), "sf-mcp-co-"));
+      const store = createRunStore({ rootDir: root });
+      const agent = scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [
+            {
+              kind: "free_text",
+              id: "prompt-1",
+              message: "hold",
+            },
+          ],
+          envelope: {
+            status: "success",
+            summary: "hold",
+            artifacts: [],
+          },
+        },
+        {
+          type: "wait_then_emit",
+          waitRequests: [
+            {
+              kind: "free_text",
+              id: "prompt-1",
+              message: "hold2",
+            },
+          ],
+          envelope: {
+            status: "success",
+            summary: "hold2",
+            artifacts: [],
+          },
+        },
+      ]);
 
-      const tools = await mcpListTools(base);
-      const getHealth = tools.find((t) => t.name === "get_health");
-      const startRun = tools.find((t) => t.name === "start_run");
-      expect(getHealth?.description ?? "").not.toMatch(/inFlight/i);
-      expect(getHealth?.description ?? "").not.toMatch(/exclusive/i);
-      expect(getHealth?.description ?? "").toMatch(/soft max|capacity|active/i);
-      expect(startRun?.description ?? "").not.toMatch(/inFlight/i);
-      expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
-
-      const first = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
-        task: { id: "holder", goal: "hold", checkout },
-      });
-      expect(first.isError).toBe(false);
-      const holderId = first.payload.runId as string;
-
-      for (let i = 0; i < 80; i++) {
-        const h = await mcpCall(base, "get_health");
-        if (h.payload.activeRunIds?.includes(holderId)) break;
-        await new Promise((r) => setTimeout(r, 25));
-      }
-
-      const health = await mcpCall(base, "get_health");
-      expect(health.payload).toMatchObject({
-        ok: true,
-        activeCount: 1,
+      const { server } = await startUiServer({
+        agent,
+        cwd: catalogRoot,
+        store,
+        port: 0,
+        uiDistDir: path.join(root, "missing-ui"),
         maxConcurrent: 1,
-        slotsAvailable: 0,
+        mcpStateless: true,
       });
-      expect(health.payload.activeRunIds).toEqual([holderId]);
-      expect(health.payload).not.toHaveProperty("inFlight");
 
-      const overCap = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
-        task: { id: "over", goal: "no slot" },
-      });
-      expect(overCap.isError).toBe(true);
-      expect(overCap.payload.code).toBe("busy_capacity");
-      expect(overCap.payload.status).toBe(409);
-      expect(overCap.payload.activeCount).toBe(1);
-      expect(overCap.payload.maxConcurrent).toBe(1);
-      expect(overCap.payload.activeRunIds).toEqual([holderId]);
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected TCP address");
+        }
+        const base = `http://127.0.0.1:${address.port}`;
+
+        const tools = await mcpListTools(base);
+        const getHealth = tools.find((t) => t.name === "get_health");
+        const startRun = tools.find((t) => t.name === "start_run");
+        expect(getHealth?.description ?? "").not.toMatch(/inFlight/i);
+        expect(getHealth?.description ?? "").not.toMatch(/exclusive/i);
+        expect(getHealth?.description ?? "").toMatch(/soft max|capacity|active/i);
+        expect(startRun?.description ?? "").not.toMatch(/inFlight/i);
+        expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
+
+        const first = await mcpCall(base, "start_run", {
+          pipeline: pipelinePath("single"),
+          task: { id: "holder", goal: "hold", checkout },
+        });
+        expect(first.isError).toBe(false);
+        const holderId = first.payload.runId as string;
+
+        for (let i = 0; i < 80; i++) {
+          const h = await mcpCall(base, "get_health");
+          if (h.payload.activeRunIds?.includes(holderId)) break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
+
+        const health = await mcpCall(base, "get_health");
+        expect(health.payload).toMatchObject({
+          ok: true,
+          activeCount: 1,
+          maxConcurrent: 1,
+          slotsAvailable: 0,
+        });
+        expect(health.payload.activeRunIds).toEqual([holderId]);
+        expect(health.payload).not.toHaveProperty("inFlight");
+        expect(health.payload.disk).toEqual({
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        });
+
+        const overCap = await mcpCall(base, "start_run", {
+          pipeline: pipelinePath("single"),
+          task: { id: "over", goal: "no slot" },
+        });
+        expect(overCap.isError).toBe(true);
+        expect(overCap.payload.code).toBe("busy_capacity");
+        expect(overCap.payload.status).toBe(409);
+        expect(overCap.payload.activeCount).toBe(1);
+        expect(overCap.payload.maxConcurrent).toBe(1);
+        expect(overCap.payload.activeRunIds).toEqual([holderId]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
