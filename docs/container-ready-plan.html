@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stageflow container plan — dispatch upgrades</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Literata:opsz,wght@7..72,400;7..72,600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --board: #1a2030;
+      --panel: #252d3f;
+      --rail: #3a4558;
+      --ticket: #ece8e0;
+      --ticket-edge: #c8c2b6;
+      --ink: #12151c;
+      --muted: #6b7385;
+      --copper: #a86b3a;
+      --keep: #2f6b52;
+      --keep-bg: rgba(47, 107, 82, 0.14);
+      --change: #b8432f;
+      --change-bg: rgba(184, 67, 47, 0.12);
+      --add: #2d5f8f;
+      --add-bg: rgba(45, 95, 143, 0.14);
+      --envelope: #d4a84b;
+      --focus: #6eb5ff;
+      --font-display: "Barlow Semi Condensed", system-ui, sans-serif;
+      --font-body: "Literata", Georgia, serif;
+      --font-mono: "Share Tech Mono", ui-monospace, monospace;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      background: var(--board);
+      color: var(--ticket);
+      font-family: var(--font-body);
+      font-size: 1.05rem;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    :focus-visible {
+      outline: 2px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    a {
+      color: var(--envelope);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    a:hover { color: #f0c96a; }
+
+    .shell {
+      max-width: 58rem;
+      margin: 0 auto;
+      padding: 1.25rem 1rem 4rem;
+    }
+
+    .hero {
+      position: relative;
+      padding: 2rem 1.25rem 2.5rem;
+      margin-bottom: 2rem;
+      background: linear-gradient(165deg, var(--panel) 0%, var(--board) 70%);
+      border: 1px solid var(--rail);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .hero-inner { position: relative; z-index: 1; }
+
+    .hero-tag {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--copper);
+      border: 1px solid var(--copper);
+      padding: 0.2rem 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .hero h1 {
+      font-family: var(--font-display);
+      font-weight: 700;
+      font-size: clamp(1.65rem, 5vw, 2.35rem);
+      line-height: 1.12;
+      letter-spacing: 0.02em;
+      margin: 0 0 1rem;
+      color: var(--ticket);
+      text-transform: uppercase;
+    }
+
+    .hero .thesis {
+      font-size: 1.12rem;
+      max-width: 42em;
+      margin: 0;
+      color: #d8d4cc;
+    }
+
+    .legend {
+      display: grid;
+      gap: 0.75rem;
+      margin: 2rem 0;
+    }
+
+    @media (min-width: 640px) {
+      .legend { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    .legend-card {
+      padding: 1rem 1.1rem;
+      border-radius: 2px;
+      border: 1px solid var(--rail);
+      background: var(--panel);
+    }
+
+    .legend-card h2 {
+      font-family: var(--font-display);
+      font-size: 0.85rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin: 0 0 0.5rem;
+    }
+
+    .legend-card.keep h2 { color: var(--keep); }
+    .legend-card.change h2 { color: var(--change); }
+    .legend-card.add h2 { color: var(--add); }
+
+    .legend-card p {
+      margin: 0;
+      font-size: 0.92rem;
+      color: #b8b4ac;
+    }
+
+    .matrix-wrap {
+      margin: 2.5rem 0;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table.matrix {
+      width: 100%;
+      min-width: 320px;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+
+    .matrix th,
+    .matrix td {
+      text-align: left;
+      padding: 0.65rem 0.75rem;
+      border-bottom: 1px solid var(--rail);
+      vertical-align: top;
+    }
+
+    .matrix th {
+      font-family: var(--font-display);
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: var(--panel);
+    }
+
+    .matrix td:first-child {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: var(--copper);
+      white-space: nowrap;
+    }
+
+    .badge {
+      display: inline-block;
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0.15rem 0.4rem;
+      border-radius: 1px;
+    }
+
+    .badge.keep { background: var(--keep-bg); color: #7bc4a0; border: 1px solid var(--keep); }
+    .badge.change { background: var(--change-bg); color: #e88a7a; border: 1px solid var(--change); }
+    .badge.add { background: var(--add-bg); color: #7eb0e0; border: 1px solid var(--add); }
+
+    .phases {
+      margin: 2.5rem 0;
+      padding: 1.25rem 0;
+      border-top: 1px solid var(--rail);
+      border-bottom: 1px solid var(--rail);
+    }
+
+    .phases h2 {
+      font-family: var(--font-display);
+      font-size: 1rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      margin: 0 0 1.25rem;
+      color: var(--ticket-edge);
+    }
+
+    .phase-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .phase-strip li {
+      flex: 1 1 calc(50% - 0.5rem);
+      min-width: 140px;
+      background: var(--panel);
+      border: 1px solid var(--rail);
+      padding: 0.75rem 0.85rem;
+      position: relative;
+      opacity: 0;
+      transform: translateY(12px);
+    }
+
+    @media (min-width: 720px) {
+      .phase-strip li { flex: 1 1 auto; }
+    }
+
+    .phase-strip li.revealed {
+      opacity: 1;
+      transform: translateY(0);
+      transition: opacity 0.45s ease, transform 0.45s ease;
+    }
+
+    .phase-num {
+      font-family: var(--font-mono);
+      font-size: 0.7rem;
+      color: var(--copper);
+    }
+
+    .phase-title {
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      display: block;
+      margin-top: 0.2rem;
+    }
+
+    .phase-strip li small {
+      display: block;
+      margin-top: 0.35rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.35;
+    }
+
+    .section-head {
+      font-family: var(--font-display);
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin: 2.5rem 0 1rem;
+      padding-left: 0.75rem;
+      border-left: 3px solid var(--copper);
+    }
+
+    .upgrade {
+      background: var(--ticket);
+      color: var(--ink);
+      margin: 1rem 0 1.5rem;
+      padding: 0;
+      border-radius: 2px;
+      box-shadow: 4px 4px 0 var(--rail);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .upgrade::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 14px;
+      background: repeating-linear-gradient(
+        180deg,
+        var(--ticket-edge) 0,
+        var(--ticket-edge) 6px,
+        transparent 6px,
+        transparent 10px
+      );
+      border-right: 2px dashed #a8a29a;
+    }
+
+    .upgrade-inner {
+      padding: 1.1rem 1.15rem 1.15rem 1.6rem;
+    }
+
+    .upgrade h3 {
+      font-family: var(--font-display);
+      font-size: 1.05rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      margin: 0 0 0.75rem;
+      color: var(--ink);
+    }
+
+    .upgrade dl {
+      margin: 0;
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .upgrade dt {
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .upgrade dd {
+      margin: 0.15rem 0 0;
+      font-size: 0.95rem;
+    }
+
+    .upgrade dd a { color: var(--add); }
+
+    .upgrade .why {
+      margin-top: 0.85rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--ticket-edge);
+      font-size: 0.92rem;
+    }
+
+    .current-plan {
+      background: var(--panel);
+      border: 1px solid var(--rail);
+      padding: 1.25rem 1.35rem;
+      margin: 2rem 0;
+    }
+
+    .current-plan h2 {
+      font-family: var(--font-display);
+      font-size: 0.9rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      margin: 0 0 1rem;
+      color: var(--ticket-edge);
+    }
+
+    .current-plan ol {
+      margin: 0;
+      padding-left: 1.25rem;
+    }
+
+    .current-plan li {
+      margin-bottom: 0.65rem;
+      font-size: 0.92rem;
+      color: #c8c4bc;
+    }
+
+    .current-plan li strong {
+      color: var(--ticket);
+      font-weight: 600;
+    }
+
+    .non-copy {
+      margin: 2rem 0;
+      padding: 1rem 1.15rem;
+      border: 1px dashed var(--rail);
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .non-copy h2 {
+      font-family: var(--font-display);
+      font-size: 0.85rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin: 0 0 0.75rem;
+      color: var(--muted);
+    }
+
+    .non-copy ul {
+      margin: 0;
+      padding-left: 1.1rem;
+      font-size: 0.88rem;
+      color: #9a968e;
+    }
+
+    .non-copy li { margin-bottom: 0.4rem; }
+
+    .dispatch-viz {
+      margin: 2rem 0;
+      padding: 1rem;
+      background: var(--panel);
+      border: 1px solid var(--rail);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.4;
+      color: #8a909c;
+      overflow-x: auto;
+    }
+
+    .dispatch-viz .lane { color: var(--envelope); }
+    .dispatch-viz .host { color: var(--copper); }
+    .dispatch-viz .crate { color: #7eb0e0; }
+
+    footer {
+      margin-top: 3rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-family: var(--font-mono);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .phase-strip li {
+        opacity: 1;
+        transform: none;
+      }
+      .phase-strip li.revealed { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div class="hero-inner">
+        <span class="hero-tag">Plan dispatch · container-ready</span>
+        <h1>The locked Docker plan is right on shape; it is thin on survival.</h1>
+        <p class="thesis">Intentic’s deploy model is not a product to clone—it is proof that a published agent Host needs separated durable state, an explicit network contract, and image hygiene before Repository, Worktree, and Harness features matter. Stageflow should keep the self-hosted Host-in-a-crate decision and upgrade the plan so a Run’s envelopes and operator history cannot be erased by a stage’s <code>bash</code>, and so binding wide without a control token is a startup error, not an undocumented RCE surface.</p>
+      </div>
+    </header>
+
+    <div class="legend" aria-label="Keep change add legend">
+      <div class="legend-card keep">
+        <h2>Keep</h2>
+        <p>Locked decisions that match Stageflow’s domain-agnostic staged-runtime model: container as Host, optional Catalog mount, Repository XOR Checkout, MCP Harness, fat userland later.</p>
+      </div>
+      <div class="legend-card change">
+        <h2>Plan change</h2>
+        <p>Conflicts with locked intent—especially “no operator auth” when the image binds <code>0.0.0.0</code> and exposes MCP plus mutating REST.</p>
+      </div>
+      <div class="legend-card add">
+        <h2>Plan add</h2>
+        <p>Extends the lock without reversing it: volume topology, GC, compose hygiene, allowed-hosts story, harness ergonomics.</p>
+      </div>
+    </div>
+
+    <div class="dispatch-viz" aria-hidden="true">
+      <span class="crate">[ DOCKER CRATE ]</span> ──► <span class="host">HOST</span> (UI · MCP · A2A · headless Runs)
+      <br>
+      <span class="lane">Catalog</span> /optional /workspace ──► stages ──► envelopes ──► <span class="lane">next stage</span>
+      <br>
+      volume bay: <span class="host">~/.stageflow</span> (store · cache · Worktrees) ∥ agent-writable Checkout
+    </div>
+
+    <section class="phases" aria-labelledby="phases-title">
+      <h2 id="phases-title">Revised phase strip (vs bind → git → skills → Dockerfile)</h2>
+      <ol class="phase-strip" id="phase-strip">
+        <li data-delay="0"><span class="phase-num">Phase 0</span><span class="phase-title">Plumbing</span><small>Bind, HOME/store contract, PID1, signals, headless creds, health+version, engines ≥22.19</small></li>
+        <li data-delay="80"><span class="phase-num">Phase 1</span><span class="phase-title">Safety</span><small>Control token, refuse non-loopback without token, scopes, stage env allowlist, gate reads</small></li>
+        <li data-delay="160"><span class="phase-num">Phase 2</span><span class="phase-title">Git</span><small>Repository+ref, bare cache, Worktree per RunId, STAGEFLOW_CHECKOUT, GC, credential helper</small></li>
+        <li data-delay="240"><span class="phase-num">Phase 3</span><span class="phase-title">Harness</span><small>start_run skills, list_skills, optional save_as, A2A mount story</small></li>
+        <li data-delay="320"><span class="phase-num">Phase 4</span><span class="phase-title">Image</span><small>Multi-arch Dockerfile, tini, non-root, compose 127.0.0.1:3847, HEALTHCHECK</small></li>
+        <li data-delay="400"><span class="phase-num">Phase 5</span><span class="phase-title">Polish</span><small>Update/rollback doc, HITL unattended pattern, backup paragraph, optional run-command</small></li>
+      </ol>
+    </section>
+
+    <h2 class="section-head">Locked decisions — keep / change / add</h2>
+    <div class="matrix-wrap">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Locked item</th>
+            <th>Verdict</th>
+            <th>Upgrade</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td>Self-hosted Host in Docker: UI + MCP + A2A + headless Runs</td>
+            <td><span class="badge keep">keep</span></td>
+            <td>Add Phase 0 plumbing before calling it container-ready.</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>No Stageflow operator auth; DIY gate; localhost:3847</td>
+            <td><span class="badge change">plan change</span></td>
+            <td>Optional <code>STAGEFLOW_CONTROL_TOKEN</code>; refuse start if bind is non-loopback without it. No Google identity—reuse A2A token pattern.</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>Default 127.0.0.1; image 0.0.0.0; Host/Origin localhost; SSH tunnel remote</td>
+            <td><span class="badge add">plan add</span></td>
+            <td><code>STAGEFLOW_ALLOWED_HOSTS</code> or document “tunnel only”; extend gate to GET reads.</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td>Container is Host; <code>-p 3847:3847</code>; <code>docker exec … sf …</code></td>
+            <td><span class="badge keep">keep</span></td>
+            <td>Ship compose with <code>127.0.0.1:3847:3847</code>, <code>init: true</code>, log rotation—Intentic’s one-file hygiene.</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td>Optional <code>/workspace</code>; no-mount MCP inline; A2A needs on-disk files</td>
+            <td><span class="badge add">plan add</span></td>
+            <td>Document A2A requires mount + restart, or add config source outside <code>/workspace</code>.</td>
+          </tr>
+          <tr>
+            <td>6–7</td>
+            <td>Checkout XOR Repository; cache + Worktree per RunId under <code>~/.stageflow</code></td>
+            <td><span class="badge keep">keep</span> <span class="badge add">extend</span></td>
+            <td>Store on named volume—not in Checkout; GC TTL; stable <code>STAGEFLOW_CHECKOUT</code>.</td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td><code>GITHUB_TOKEN</code> on container env; PR is a stage (<code>gh</code>)</td>
+            <td><span class="badge keep">keep</span> <span class="badge add">extend</span></td>
+            <td><code>*_FILE</code> secrets; stage env allowlist—token not in every <code>bash</code>.</td>
+          </tr>
+          <tr>
+            <td>9–10</td>
+            <td>MCP Harness; inline pipeline; skills on start_run</td>
+            <td><span class="badge keep">keep</span> <span class="badge add">extend</span></td>
+            <td>Optional <code>save_as</code> for rerun; <code>list_skills</code> with origin.</td>
+          </tr>
+          <tr>
+            <td>11–12</td>
+            <td>Fat agent image later; order bind → git → skills → Dockerfile</td>
+            <td><span class="badge add">plan add</span></td>
+            <td>Insert Phase 0–1 before git; Dockerfile after Host features—unchanged intent, fuller order.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="section-head">Plan upgrades</h2>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Split store from agent-writable Checkout</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>Worktrees under <code>~/.stageflow</code>; optional <code>/workspace</code> for Catalog + path Checkout. Store relocation not in the locked set.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/docs/docker/">Recovery history lives on a separate volume from <code>/work</code></a> so an agent cannot <code>rm -rf</code> the record you need to recover.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Named volume at <code>/home/stageflow/.stageflow</code> for SQLite, bare-clone cache, Worktrees, provider auth. Optional bind <code>/workspace</code> for Catalog only. Deny stage file tools on store paths.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> A Run’s recovery DB must not sit inside the Checkout a stage can delete. Bind-mounted SQLite on macOS/Windows is a corruption risk; the Host serving multiple Repositories needs one store.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Control token when the Host is reachable off-loopback</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>No operator auth; “their networking.” A2A already uses per-caller bearer tokens.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/api/auth/">Program credentials are header-borne, hashed at rest, scoped at mint, revocable.</a></dd>
+          <dt>Do instead / in addition</dt>
+          <dd><span class="badge change">plan change</span> One shared <code>STAGEFLOW_CONTROL_TOKEN</code> (or <code>_FILE</code>) on <code>/mcp</code> and mutating REST; <code>read</code> vs <code>drive</code> scopes; <strong>refuse to start</strong> if bind is non-loopback and no token is set.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> Unauthenticated MCP <code>start_run</code> with inline pipelines and stage <code>bash</code> is remote code execution—with <code>GITHUB_TOKEN</code> in the same process. Loopback Host checks are not a deliberate auth model.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Loopback Host/Origin vs reverse proxy</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>SSH tunnel to <code>localhost:3847</code>; image binds <code>0.0.0.0</code>.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/docs/docker/">No inbound port for real access—tunnel carries TLS;</a> the published loopback port is a same-machine shortcut.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Either <code>STAGEFLOW_ALLOWED_HOSTS</code> on MCP validators and <code>assertLoopbackHttpAccess</code>, or document “reverse proxy unsupported; tunnel only.” Apply the same gate to <strong>read</strong> APIs—not only mutations.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> nginx at <code>sf.example.com</code> 403s today with no escape hatch. Reads on <code>0.0.0.0</code> leak Run transcripts and artifacts without any Host check.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>GITHUB_TOKEN not inherited by every stage</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>Token on container env only; Harness does not pass it; PR remains a stage using <code>gh</code>.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/api/secrets/">Secrets sit where the agent cannot read them;</a> substitution happens at command time.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Stage worker env allowlist: provider keys and control token stay out of stage <code>bash</code>. <code>GIT_ASKPASS</code> / credential helper for push stages; <code>GITHUB_TOKEN_FILE</code> at the boundary.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> Forked stage workers inherit the Host environment today. Any Run that can run arbitrary stages can exfiltrate a blanket token—releases and ops pipelines included.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Worktree GC + stable Checkout path</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>Worktree per RunId until run delete/gc—gc unspecified.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/docs/troubleshooting/">Finished lanes archive after three days by default</a> because each holds a full checkout.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Default TTL, <code>sf runs gc</code>, disk hint in list/health. Export <code>STAGEFLOW_CHECKOUT</code>; document that verify commands and prompts must not hardcode <code>~/.stageflow/worktrees/&lt;runId&gt;</code>.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> A VPS Host running nightly release or research Runs will fill its volume without GC. Harness-authored paths break when every Run’s Worktree path changes.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>A2A without <code>/workspace</code></h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>No mount: MCP inline works; A2A needs on-disk publications and <code>a2a.yaml</code>, read once at boot.</dd>
+          <dt>Intentic lesson</dt>
+          <dd>External harness surfaces are explicit; config drift fails loudly—not hot reload.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>State plainly: A2A requires the Catalog mount and a container restart to change publications—or mount <code>a2a.yaml</code> from a second path/env source.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> Operators who expect invoke-only A2A in a mountless crate get a disabled surface. The Harness that only speaks A2A cannot drive headless publications there.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Optional <code>save_as</code> for inline Harness runs</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>Inline JSON pipeline on MCP = create+run; no <code>rerun</code> without a path.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/api/skills/">Durable artifacts and explicit APIs</a> beat one-shot sessions when a Harness retries.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Opt-in <code>save_as</code> on <code>start_run</code> writes pipeline YAML into the Catalog (needs <code>/workspace</code>) and sets <code>pipeline_path</code> for <code>rerun</code>.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> CI and ops Harnesses that author inline pipelines hit a dead end on failure. Default inline stays non-durable; rerun becomes an explicit Operator choice.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Image &amp; compose hygiene (one file)</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd>Dockerfile after Host features; fat image with git, bash, <code>gh</code>; not a sandbox.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/docs/quickstart/">Compose ships <code>init: true</code>, log rotation, loopback publish, named volumes, no host docker socket.</a></dd>
+          <dt>Do instead / in addition</dt>
+          <dd>tini/SIGTERM drain, multi-arch for <code>better-sqlite3</code>, <code>HEALTHCHECK</code> with version, non-root user, <code>*_FILE</code> for secrets, <strong>never</strong> mount <code>docker.sock</code>, no added caps / no <code>--privileged</code>, <code>ports: "127.0.0.1:3847:3847"</code>.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> Forked stage workers need a reaper. The container <em>is</em> the isolation boundary—document that plainly for domain-agnostic pipelines, not as a coding-agent sandbox.</p>
+      </div>
+    </article>
+
+    <article class="upgrade">
+      <div class="upgrade-inner">
+        <h3>Harness skills: materialize + observability</h3>
+        <dl>
+          <dt>Current plan</dt>
+          <dd><code>skills</code> on <code>start_run</code> as name→files for that Run; stages still <code>skill: name</code>.</dd>
+          <dt>Intentic lesson</dt>
+          <dd><a href="https://intentic.dev/api/skills/">List skills with origin and precedence</a> so operators know which file loaded.</dd>
+          <dt>Do instead / in addition</dt>
+          <dd>Run-scoped materialization (keep scope); add <code>list_skills</code> with origin <code>project</code> | <code>operator</code> | <code>run</code> and shadowing rules.</dd>
+        </dl>
+        <p class="why"><strong>Why for Stageflow:</strong> Research and release stages that share skill names need debuggable resolution—not guesswork in the Operator console.</p>
+      </div>
+    </article>
+
+    <section class="current-plan" id="current-plan">
+      <h2>Current plan (locked)</h2>
+      <ol>
+        <li><strong>Self-hosted Host in Docker:</strong> UI + MCP + A2A + headless Runs.</li>
+        <li><strong>No Stageflow operator auth;</strong> DIY if wanted; local <code>localhost:3847</code>; server = their networking.</li>
+        <li><strong>Default listen 127.0.0.1;</strong> <code>--host</code> / <code>STAGEFLOW_BIND</code>; image uses <code>0.0.0.0</code>; Host/Origin stays localhost (SSH tunnel for remote).</li>
+        <li><strong>Container is the Host;</strong> <code>-p 3847:3847</code>; CLI is <code>docker exec … sf …</code>.</li>
+        <li><strong>Optional <code>/workspace</code> mount;</strong> no-mount MCP inline; A2A needs on-disk files.</li>
+        <li><strong>Checkout</strong> = local dir. <strong>Repository</strong> = GitHub owner/repo + required ref. XOR. Host clone cache + Worktree per RunId under <code>~/.stageflow</code>. PR is a stage (<code>gh</code>). <code>GITHUB_TOKEN</code> on container env only.</li>
+        <li><strong>MCP is the Harness</strong> (inline JSON pipeline = create+run, no rerun). <strong>A2A</strong> = on-disk publications only.</li>
+        <li><strong>Skills on <code>start_run</code></strong> as name→files for that Run.</li>
+        <li><strong>Fat agent image later</strong> (Node ≥22.19, git, bash, gh). Not a sandbox. Dockerfile after Host features.</li>
+        <li><strong>Agreed order:</strong> bind + PID1/no-browser + HOME + headless creds → repository/worktree → <code>start_run</code> skills → Dockerfile.</li>
+      </ol>
+    </section>
+
+    <div class="non-copy">
+      <h2>Explicit non-copies from Intentic</h2>
+      <ul>
+        <li>Hosted tunnel hub and vanity reachability</li>
+        <li>Google identity, member tiers, trust-on-first-use owner</li>
+        <li>Nested Docker engine, <code>SYS_ADMIN</code>, host <code>docker.sock</code></li>
+        <li>Conversation / fleet UI; SDLC-as-product framing (“land”, chores as primitives)</li>
+        <li>Remote runners before single-container Host is solid</li>
+        <li>Full <code>sandbox.toml</code> / capability marketplace—borrow rules (unknown keys error), not the artifact</li>
+      </ul>
+    </div>
+
+    <footer>
+      Source: container-ready analysis · Stageflow domain-agnostic Host / Run / Catalog / Checkout / Repository / Worktree / Harness / Operator
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      var strip = document.getElementById("phase-strip");
+      if (!strip) return;
+      var items = strip.querySelectorAll("li");
+      var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+      if (reduced) {
+        items.forEach(function (li) { li.classList.add("revealed"); });
+        return;
+      }
+
+      requestAnimationFrame(function () {
+        items.forEach(function (li) {
+          var delay = parseInt(li.getAttribute("data-delay") || "0", 10);
+          setTimeout(function () {
+            li.classList.add("revealed");
+          }, delay);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
