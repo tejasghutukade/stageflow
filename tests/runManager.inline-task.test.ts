@@ -161,7 +161,10 @@ describe("run manager inline task", () => {
       pipeline: pipelinePath("docs-only"),
       task: { id: "a", goal: "first" },
     });
-    await new Promise((r) => setTimeout(r, 20));
+    const deadline = Date.now() + 2_000;
+    while (manager.getActiveCount() === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
     expect(manager.getActiveCount()).toBeGreaterThan(0);
 
     const second = await manager.startRun({
