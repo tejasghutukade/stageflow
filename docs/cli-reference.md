@@ -105,6 +105,60 @@ Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, 
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
 
+## `sf run-stage` {#sf-run-stage}
+
+Run a single stage directly against the shared Stageflow service, without authoring a pipeline file — the CLI counterpart of the MCP [`run_stage`](mcp.md#run_stage) tool (it talks to the same running `sf ui`/`sf mcp` service over MCP). Distinct from the internal-only, worker-process-only `sf internal run-stage` below.
+
+```bash
+sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>] [--envelope-ref ...]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--stage` | Filesystem path to a catalog stage YAML file |
+| `--stage-inline` | Inline stage body JSON (`{ id, system_prompt, io, ... }` — no `uses:`/`route:`/pipeline wrapper) |
+| `--task` | Filesystem path to a catalog task YAML file |
+| `--task-inline` | Inline task JSON (`{ id, goal, ... }`) |
+| `--envelope-ref` | Resolve a previously stored `StageEnvelope` as this stage's input instead of a task: `<runId>:<stageId>[:<attempt>]`. Repeat the flag to pass more than one — each resolved payload is namespaced under its `stageId` in `input` (disambiguated by `runId` on a `stageId` collision), and summaries are combined into `goal` |
+| `--checkout` | Optional working directory to use with `--envelope-ref` (`--task`/`--task-inline` carry their own checkout) |
+| `--model` | Override the model/backend for this call only, ahead of the stage's own declared model |
+| `--blocking` | Wait for the run to reach a terminal or waiting state and print the result in this same call, instead of just printing the run id |
+| `--timeout-ms` | Wait budget in ms when `--blocking` is set |
+| `--json` | Machine-readable JSON output |
+
+Exactly one of `--stage`/`--stage-inline` is required, and exactly one of `--task`/`--task-inline`/`--envelope-ref`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Async mode: call accepted, run started. Blocking mode: stage completed with a successful envelope |
+| `1` | Tool-level error (bad input, validation failure, unknown `envelope_ref`), or blocking mode completed with a failed envelope |
+| `2` | Blocking mode: the stage parked on a human-in-the-loop gate (`needs_input`), or the `--timeout-ms` budget elapsed before the run finished |
+
+Async mode (the default) prints `{ runId, stageId }` and exits `0` immediately — poll or inspect with `sf runs show --run <runId>` / `sf runs wait --run <runId>` like any other run.
+
+Examples:
+
+```bash
+# Async: start a catalog stage, print the run id
+sf run-stage --stage stages/research.yaml --task tasks/research.task.yaml
+
+# Blocking: wait for the result in this same call
+sf run-stage --stage stages/research.yaml --task-inline '{"id":"t","goal":"Research it"}' --blocking
+
+# Chain off a prior run's envelope instead of a task
+sf run-stage --stage stages/summarize.yaml --envelope-ref 2026-09-21T17-44-36-201Z-9411d9:research --blocking
+
+# Combine two prior results in one call
+sf run-stage --stage stages/combine.yaml \
+  --envelope-ref 2026-09-21T17-44-36-201Z-9411d9:research \
+  --envelope-ref 2026-09-21T17-48-08-307Z-cc78f9:titleize \
+  --blocking
+```
+
+Access is deliberately unrestricted, the same as the MCP tool: `sf run-stage` can run any catalog or inline stage the caller names, with no publish/allowlist step.
+
 ## `sf runs`
 
 Inspect and control existing stored runs (in-progress, parked, or terminal). These verbs are not a 1:1 MCP tool list and they do not list pipelines or tasks. `sf run` stays the blocking start command.
@@ -629,4 +683,5 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `pi_home` vs `sf_owned`
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
-- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC
+- [MCP](mcp.md#run_stage) — `run_stage`, the tool `sf run-stage` talks to
+- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus the wildcard-access `run_stage` operation

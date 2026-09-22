@@ -67,6 +67,11 @@ function invokeMessage(capability: string, input: unknown, messageId?: string): 
   return messageId ? { ...message, messageId } : message;
 }
 
+function runStageMessage(fields: Record<string, unknown>, messageId?: string): Message {
+  const message = dataMessage("", { contractVersion: 1, operation: "run_stage", ...fields });
+  return messageId ? { ...message, messageId } : message;
+}
+
 async function waitForState(client: Awaited<ReturnType<typeof clientFor>>, taskId: string, states: number[]): Promise<Task> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const task = (await client.getTask({ tenant: "", id: taskId, historyLength: undefined })) as Task;
@@ -190,6 +195,31 @@ describe("A2A invocation", () => {
         metadata: undefined,
       }),
     ).rejects.toThrow(/cannot be answered/);
+  });
+
+  it("run_stage (ADR-0001 wildcard-access operation) reaches an inline stage over HTTP even though gated.yaml only publishes an unrelated capability", async () => {
+    const { url } = await host(gatedConfig, supplierAgent());
+    const client = await clientFor(url, env.PROCUREMENT_TOKEN);
+    const sent = (await client.sendMessage({
+      tenant: "",
+      message: runStageMessage({
+        stage: {
+          id: "final_report",
+          model: "anthropic/claude-sonnet-4-5",
+          system_prompt: "Write the supplier assessment and emit the report artifact.",
+          io: { input: { schema: { type: "object" } }, output: { schema: { type: "object" } } },
+        },
+        task: { id: "t-http", goal: "assess", input: { supplier: "Northstar" } },
+        blocking: true,
+      }),
+      configuration: undefined,
+      metadata: undefined,
+    })) as Task;
+    expect(sent.status.state).toBe(3); // TASK_STATE_COMPLETED
+    expect(sent.metadata?.runId).toBeTruthy();
+    const resultArtifact = sent.artifacts.find((a) => a.artifactId === "result")!;
+    const payloadPart = resultArtifact.parts[0].content as { $case: "data"; value: { recommendation: string } };
+    expect(payloadPart.value.recommendation).toBe("approve");
   });
 
   it("fails closed on invalid configuration and enforces transport limits", async () => {

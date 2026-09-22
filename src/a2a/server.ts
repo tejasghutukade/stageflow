@@ -132,7 +132,11 @@ function toWireTask(publicUrl: string, task: PublicTask): Task {
     },
     artifacts,
     history: [],
-    metadata: undefined,
+    // Only ever set for a "standalone" (ADR-0001 run_stage) task — see PublicTask.runId.
+    // This is how a caller learns the run id it needs to chain into its next
+    // run_stage call via envelope_ref (ADR-0002); invoke's published-capability
+    // tasks keep the run id opaque, unchanged from before this field existed.
+    metadata: task.runId ? { runId: task.runId } : undefined,
   };
 }
 

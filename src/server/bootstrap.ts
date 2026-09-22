@@ -113,7 +113,7 @@ export async function bootstrapStageflowHost(
   );
   return {
     a2a: await createA2aHost(
-      { manager, runStore: store, rootDir: ctx.globalHome, connection: sqliteConnection },
+      { manager, runStore: store, rootDir, connection: sqliteConnection },
       resolveA2aConfigPath(rootDir),
     ),
     cwd,

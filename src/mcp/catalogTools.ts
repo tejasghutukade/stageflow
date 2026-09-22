@@ -8,11 +8,18 @@ import {
 } from "../config/browseCatalog.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
+import { readYamlObject } from "../config/readYamlObject.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import {
+  EnvelopeRefError,
+  resolveEnvelopeRefsToTask,
+} from "../runtime/resolveEnvelopeRef.js";
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
+import { isTerminalProjection, isWaitingProjection, waitRun } from "./waitRun.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -74,6 +81,60 @@ const startRunSchema = z
   .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
     message: "Exactly one of task_path or task is required",
   });
+
+/**
+ * Deliberately thin, same reasoning as inlinePipelineSchema above: real
+ * structural validation of the stage body happens downstream through the
+ * same stage loader a pipeline's inline stage goes through.
+ */
+const envelopeRefSchema = z.object({
+  runId: z.string(),
+  stageId: z.string(),
+  attempt: z.number().int().positive().optional(),
+});
+
+const runStageSchema = z
+  .object({
+    stage: z
+      .union([z.string(), z.record(z.string(), z.unknown())])
+      .describe(
+        "Filesystem path to a stage YAML file, or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
+      ),
+    task_path: z.string().optional(),
+    task: taskFileSchema.optional(),
+    envelope_ref: z
+      .union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)])
+      .optional()
+      .describe(
+        "Resolve one or more previously stored StageEnvelopes (from another run_stage call or from any stage inside a full pipeline run) and use them as this stage's input, instead of an inline task/task_path. A single ref: its payload becomes input, its summary becomes goal. Multiple refs (an array): each resolved payload is namespaced under its stageId in input (disambiguated by runId on a stageId collision), and summaries are combined into goal.",
+      ),
+    checkout: z
+      .string()
+      .optional()
+      .describe(
+        "Optional checkout to use with envelope_ref (ignored with task/task_path, which carry their own checkout). Resolving envelope_ref never implies a checkout on its own.",
+      ),
+    model: z
+      .string()
+      .optional()
+      .describe(
+        "Override the model/backend for this call only, taking precedence over the stage's own declared model and the global default. Omit to use the stage's own model (or the global default).",
+      ),
+    blocking: z
+      .boolean()
+      .optional()
+      .describe(
+        "When true, wait for the run to reach a terminal or waiting state and return the result in this same call, instead of returning immediately with just { runId }",
+      ),
+    timeout_ms: z
+      .number()
+      .optional()
+      .describe("Wait budget in ms when blocking is true (same bounds as wait_run)"),
+  })
+  .refine(
+    (data) => [data.task_path, data.task, data.envelope_ref].filter(Boolean).length === 1,
+    { message: "Exactly one of task_path, task, or envelope_ref is required" },
+  );
 
 const runStatusSchema = z.enum(["created", "running", "succeeded", "failed"]);
 
@@ -211,6 +272,119 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         return textResult({ error: reason, ...rest }, true);
       }
       return textResult({ runId: result.runId });
+    },
+  );
+
+  server.registerTool(
+    "run_stage",
+    {
+      description:
+        "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and exactly one of task_path, an inline task, or envelope_ref ({ runId, stageId, attempt? }) to resolve a previously stored envelope — from another run_stage call or any stage in a full pipeline run — as this stage's input. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
+      inputSchema: runStageSchema,
+    },
+    async ({ stage, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms }) => {
+      let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
+      if (envelope_ref) {
+        try {
+          taskInput = await resolveEnvelopeRefsToTask(store, envelope_ref, checkout);
+        } catch (err) {
+          if (err instanceof EnvelopeRefError) {
+            return textResult({ error: err.message, status: err.status }, true);
+          }
+          throw err;
+        }
+      }
+      if (taskInput === undefined) {
+        return textResult(
+          { error: "Exactly one of task_path, task, or envelope_ref is required" },
+          true,
+        );
+      }
+
+      let stageBody: Record<string, unknown>;
+      if (typeof stage === "string") {
+        if (!stage.trim()) {
+          return textResult({ error: "stage is required" }, true);
+        }
+        const absPath = path.resolve(cwd, stage);
+        try {
+          stageBody = await readYamlObject(absPath);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return textResult({ error: `Failed to read stage file: ${message}` }, true);
+        }
+      } else {
+        stageBody = stage;
+      }
+
+      if (typeof stageBody.id !== "string" || !stageBody.id.trim()) {
+        return textResult({ error: "stage.id is required" }, true);
+      }
+      const stageId = stageBody.id;
+      // A call-level model override wins over both the stage's own declared
+      // model and the global default: it replaces the field the stage body
+      // itself would otherwise resolve through, rather than adding a new
+      // tier to resolveModel's stage > pipeline > global chain.
+      const effectiveStageBody = model !== undefined ? { ...stageBody, model } : stageBody;
+
+      const pipeline: InlinePipelineDefinition = {
+        id: `standalone-${stageId}`,
+        stages: [effectiveStageBody],
+      };
+
+      let result;
+      try {
+        result = await manager.startRun({ pipeline, task: taskInput });
+      } catch (err) {
+        if (err instanceof PipelineValidationError) {
+          return textResult(
+            { error: "Stage validation failed", validation: err.result },
+            true,
+          );
+        }
+        throw err;
+      }
+      if (!result.ok) {
+        const { ok: _ok, reason, ...rest } = result;
+        return textResult({ error: reason, ...rest }, true);
+      }
+      const runId = result.runId;
+      if (!blocking) {
+        return textResult({ runId, stageId });
+      }
+
+      const waited = await waitRun({ store, runId, timeoutMs: timeout_ms, until: "any" });
+      if (!waited.ok) {
+        return textResult(
+          {
+            error: waited.error,
+            ...(waited.status !== undefined ? { status: waited.status } : {}),
+            ...(waited.code !== undefined ? { code: waited.code } : {}),
+          },
+          true,
+        );
+      }
+      const stageProjection = waited.run.stages.find((s) => s.stage_id === stageId);
+      if (isTerminalProjection(waited.run)) {
+        return textResult({
+          runId,
+          stageId,
+          status: "completed",
+          envelope: stageProjection?.envelope ?? null,
+        });
+      }
+      if (isWaitingProjection(waited.run)) {
+        return textResult({
+          runId,
+          stageId,
+          status: "needs_input",
+          pending_prompt: stageProjection?.pending_prompt,
+          waiting_kind: waited.run.waiting_kind,
+          waiting_prompt_id: waited.run.waiting_prompt_id,
+          waiting_summary: waited.run.waiting_summary,
+        });
+      }
+      return textResult({ runId, stageId, status: "timeout" });
     },
   );
 

@@ -168,6 +168,7 @@ async function preparePipeline(options: {
     pipelinePath,
     taskPath,
     projectRoot,
+    inlinePipeline: typeof options.pipeline === "string" ? undefined : options.pipeline,
   });
   const executionMode = readStageExecutionMode(
     process.env,
