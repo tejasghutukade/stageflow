@@ -516,6 +516,21 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async setSlimmedAt(runId: string, slimmedAt: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET slimmed_at = @slimmed_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        slimmed_at: slimmedAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
   async deleteRun(runId: string): Promise<void> {
     await this.ready();
     const deleteAll = this.db.transaction(() => {

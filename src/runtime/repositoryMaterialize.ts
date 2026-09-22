@@ -170,7 +170,15 @@ export type MaterializeOptions = {
   pinned?: { ref: string; resolvedSha: string };
 };
 
-export async function reclaimWorkspaceBinding(meta: RunMeta): Promise<void> {
+export type ReclaimWorkspaceBindingOptions = {
+  /** When true, remove the worktree but leave `run_branch` (SLIM must keep the branch). */
+  keepRunBranch?: boolean;
+};
+
+export async function reclaimWorkspaceBinding(
+  meta: RunMeta,
+  options?: ReclaimWorkspaceBindingOptions,
+): Promise<void> {
   if (derivedBindingKindFromMeta(meta) !== "repository") {
     return;
   }
@@ -182,6 +190,9 @@ export async function reclaimWorkspaceBinding(meta: RunMeta): Promise<void> {
   try {
     await worktreePrune(cachePath);
   } catch {
+  }
+  if (options?.keepRunBranch) {
+    return;
   }
   try {
     await deleteBranch(cachePath, meta.run_branch!);

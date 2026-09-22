@@ -456,6 +456,8 @@ export interface RunStore {
     diskBytes: number,
     measuredAt: string,
   ): Promise<void>;
+  /** Record that SLIM reclaim completed for this run (R18 idempotency gate). */
+  setSlimmedAt(runId: string, slimmedAt: string): Promise<void>;
   /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
   deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
