@@ -49,7 +49,7 @@ import {
   stageDir,
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
-import { SCHEMA_SQL } from "./schema.js";
+import { applyPendingMigrations } from "./migrations/index.js";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type RunRow = {
@@ -183,188 +183,6 @@ function readSqliteBusyTimeoutMs(): number {
   return parsed;
 }
 
-function ensureCheckoutRootColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "checkout_root")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN checkout_root TEXT`);
-  }
-}
-
-function ensureCiIdentityColumns(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  for (const name of ["git_sha", "ci_pr_url", "ci_job_url"] as const) {
-    if (!names.has(name)) {
-      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
-    }
-  }
-}
-
-function ensurePipelineDagColumn(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === "pipeline_dag_json")) {
-    db.exec(`ALTER TABLE runs ADD COLUMN pipeline_dag_json TEXT`);
-  }
-}
-
-function ensureRunLocatorColumns(db: Database.Database): void {
-  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  for (const name of ["pipeline_path", "task_path", "project_root"] as const) {
-    if (!names.has(name)) {
-      db.exec(`ALTER TABLE runs ADD COLUMN ${name} TEXT`);
-    }
-  }
-}
-
-function ensureStageExecutionsTable(db: Database.Database): void {
-  db.exec(`
-CREATE TABLE IF NOT EXISTS stage_executions (
-  run_id TEXT NOT NULL,
-  stage_id TEXT NOT NULL,
-  attempt INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  verification_outcome TEXT NOT NULL DEFAULT 'not_run',
-  started_at TEXT,
-  finished_at TEXT,
-  envelope_json TEXT,
-  PRIMARY KEY (run_id, stage_id, attempt),
-  FOREIGN KEY (run_id) REFERENCES runs(run_id)
-);
-CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
-  ON stage_executions (run_id, stage_id, attempt);
-`);
-}
-
-function ensureStageExecutionVerificationOutcomeColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_executions)`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === "verification_outcome")) {
-    db.exec(
-      `ALTER TABLE stage_executions ADD COLUMN verification_outcome TEXT NOT NULL DEFAULT 'not_run'`,
-    );
-  }
-}
-
-function ensureStageExecutionCostColumns(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_executions)`)
-    .all() as { name: string }[];
-  const names = new Set(cols.map((c) => c.name));
-  if (!names.has("cost_usd")) {
-    db.exec(`ALTER TABLE stage_executions ADD COLUMN cost_usd REAL`);
-  }
-  if (!names.has("usage_json")) {
-    db.exec(`ALTER TABLE stage_executions ADD COLUMN usage_json TEXT`);
-  }
-}
-
-function backfillVerificationOutcomes(db: Database.Database): void {
-  db.exec(`
-UPDATE stage_executions
-SET verification_outcome = CASE
-  WHEN status = 'succeeded'
-    AND EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-        AND check_result.status != 'passed'
-    )
-    THEN 'passed'
-  WHEN status = 'failed'
-    AND EXISTS (
-      SELECT 1 FROM verification_check_results AS check_result
-      WHERE check_result.run_id = stage_executions.run_id
-        AND check_result.stage_id = stage_executions.stage_id
-        AND check_result.attempt = stage_executions.attempt
-    )
-    THEN 'failed'
-  ELSE verification_outcome
-END
-WHERE verification_outcome = 'not_run';
-`);
-}
-
-function ensureStageEventsAttemptColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(stage_events)`)
-    .all() as { name: string }[];
-  if (!cols.some((c) => c.name === "attempt")) {
-    db.exec(`ALTER TABLE stage_events ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1`);
-    db.exec(`
-CREATE INDEX IF NOT EXISTS idx_stage_events_run_stage_attempt_at
-  ON stage_events (run_id, stage_id, attempt, at);
-`);
-  }
-}
-
-function ensureVerificationCheckResultsTable(db: Database.Database): void {
-  db.exec(`
-CREATE TABLE IF NOT EXISTS verification_check_results (
-  run_id TEXT NOT NULL,
-  stage_id TEXT NOT NULL,
-  attempt INTEGER NOT NULL,
-  check_id TEXT NOT NULL,
-  check_type TEXT NOT NULL,
-  status TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  evidence_json TEXT,
-  PRIMARY KEY (run_id, stage_id, attempt, check_id),
-  FOREIGN KEY (run_id, stage_id, attempt)
-    REFERENCES stage_executions(run_id, stage_id, attempt)
-);
-CREATE INDEX IF NOT EXISTS idx_verification_check_results_execution
-  ON verification_check_results (run_id, stage_id, attempt, check_id);
-`);
-}
-
-function ensureFeedbackReplayStagePassEnvelopeColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "emitted_envelope_json")) {
-    db.exec(
-      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN emitted_envelope_json TEXT`,
-    );
-  }
-}
-
-function ensureFeedbackReplayStagePassSessionOriginColumn(
-  db: Database.Database,
-): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_replay_stage_passes)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "session_origin_attempt")) {
-    db.exec(
-      `ALTER TABLE feedback_replay_stage_passes ADD COLUMN session_origin_attempt INTEGER`,
-    );
-  }
-}
-
-function ensureFeedbackLoopDeferredSendBackColumn(db: Database.Database): void {
-  const cols = db
-    .prepare(`PRAGMA table_info(feedback_loops)`)
-    .all() as { name: string }[];
-  if (cols.length === 0) return;
-  if (!cols.some((c) => c.name === "deferred_send_back_json")) {
-    db.exec(
-      `ALTER TABLE feedback_loops ADD COLUMN deferred_send_back_json TEXT`,
-    );
-  }
-}
-
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
     run_id: row.run_id,
@@ -493,20 +311,8 @@ export class SqliteRunStore implements RunStore {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
-    this.db.exec(SCHEMA_SQL);
-    ensureCheckoutRootColumn(this.db);
-    ensureCiIdentityColumns(this.db);
-    ensurePipelineDagColumn(this.db);
-    ensureRunLocatorColumns(this.db);
-    ensureStageExecutionsTable(this.db);
-    ensureStageExecutionVerificationOutcomeColumn(this.db);
-    ensureStageExecutionCostColumns(this.db);
-    ensureStageEventsAttemptColumn(this.db);
-    ensureVerificationCheckResultsTable(this.db);
-    ensureFeedbackReplayStagePassEnvelopeColumn(this.db);
-    ensureFeedbackReplayStagePassSessionOriginColumn(this.db);
-    ensureFeedbackLoopDeferredSendBackColumn(this.db);
-    backfillVerificationOutcomes(this.db);
+    this.db.pragma("foreign_keys = ON");
+    applyPendingMigrations(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }
 
