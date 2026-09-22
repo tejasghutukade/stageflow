@@ -116,6 +116,7 @@ describe("durableRootDiskBreakdown + GET /api/health", () => {
     expect(breakdown.repos_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.state_db_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.a2a_artifacts_bytes).toBeGreaterThanOrEqual(0);
+    expect(breakdown.cache_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.free_bytes).toBeGreaterThanOrEqual(0);
     expect(breakdown.runs_bytes).toBeGreaterThan(0);
     expect(breakdown.worktrees_bytes).toBeGreaterThan(0);
@@ -156,6 +157,7 @@ describe("durableRootDiskBreakdown + GET /api/health", () => {
       expect(body.disk.repos_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.state_db_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.a2a_artifacts_bytes).toBeGreaterThanOrEqual(0);
+      expect(body.disk.cache_bytes).toBeGreaterThanOrEqual(0);
       expect(body.disk.free_bytes).toBeGreaterThanOrEqual(0);
     } finally {
       await new Promise<void>((resolve, reject) => {

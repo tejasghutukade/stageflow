@@ -1,4 +1,5 @@
 import { redact } from "./redact.js";
+import { getNamedSecrets } from "./namedSecrets.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -225,7 +226,10 @@ export function createLogger(options: CreateLoggerOptions = {}): Logger {
       ...fields,
     };
 
-    const redacted = redact(record, { knownSecrets }) as LogRecord;
+    const redacted = redact(record, {
+      knownSecrets,
+      namedSecrets: getNamedSecrets(),
+    }) as LogRecord;
     write(serializeRecord(redacted, format, maxLineBytes));
   };
 

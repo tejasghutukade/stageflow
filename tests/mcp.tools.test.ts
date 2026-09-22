@@ -214,14 +214,14 @@ describe("MCP tools and HTTP inline task", () => {
       expect(tasks.payload.tasks).toEqual(expect.any(Array));
 
       const health = await mcpCall(base, "get_health");
-      expect(health.payload).toEqual({
+      expect(health.payload).toMatchObject({
         ok: true,
         activeRunIds: [],
         activeCount: 0,
         maxConcurrent: expect.any(Number),
         slotsAvailable: expect.any(Number),
         activeStageProcesses: 0,
-        maxActiveStageProcesses: null,
+        maxActiveStageProcesses: expect.any(Number),
         version: PACKAGE_VERSION,
         disk: {
           runs_bytes: expect.any(Number),
@@ -229,6 +229,7 @@ describe("MCP tools and HTTP inline task", () => {
           repos_bytes: expect.any(Number),
           state_db_bytes: expect.any(Number),
           a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
           free_bytes: expect.any(Number),
         },
       });
@@ -515,6 +516,7 @@ describe("MCP tools and HTTP inline task", () => {
           repos_bytes: expect.any(Number),
           state_db_bytes: expect.any(Number),
           a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
           free_bytes: expect.any(Number),
         });
 

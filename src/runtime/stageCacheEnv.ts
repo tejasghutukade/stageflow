@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { globalStageflowHome } from "../project/globalHome.js";
 
@@ -21,4 +22,24 @@ export function computeCacheEnvVars(
     GOMODCACHE: path.join(cache, "go", "mod"),
     CARGO_HOME: path.join(cache, "cargo"),
   };
+}
+
+let cacheEnsured = false;
+
+/** Lazily create shared cache directories at first stage launch. */
+export function ensureStageCacheDirs(
+  home: string = globalStageflowHome(),
+): Record<string, string> {
+  const vars = computeCacheEnvVars(home);
+  if (!cacheEnsured) {
+    for (const value of Object.values(vars)) {
+      mkdirSync(value, { recursive: true });
+    }
+    cacheEnsured = true;
+  }
+  return vars;
+}
+
+export function resetStageCacheDirsForTests(): void {
+  cacheEnsured = false;
 }

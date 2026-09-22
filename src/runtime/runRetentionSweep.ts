@@ -18,6 +18,9 @@ import {
 } from "./repositoryMaterialize.js";
 import { deleteRunEverywhere } from "./runDeletion.js";
 
+// Slot 6: $STAGEFLOW_HOME/cache is shared dependency state — never walk or
+// delete it from slim/purge; health reports it as disk.cache_bytes separately.
+
 export type RetentionSweepReport = {
   slimmed: string[];
   purged: string[];

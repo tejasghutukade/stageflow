@@ -40,6 +40,9 @@ import {
 } from "./server/controlToken.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION } from "./package-meta.js";
+import { installProxyDispatcher } from "./net/proxy.js";
+import { warnMissingCaPaths } from "./preflight/tls.js";
+import { logger as cliLogger } from "./logging/logger.js";
 
 const USAGE = `Usage:
   sf init
@@ -324,6 +327,9 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
   if (process.env[SF_STAGE_WORKER] !== "1") {
     process.env[SF_STAGE_WORKER] = "1";
   }
+  installProxyDispatcher(process.env, {
+    log: (msg) => cliLogger.info("proxy.dispatcher", msg),
+  });
   const parsed = parseRunStageArgs(argv);
   const outcome = await runStageWorker({
     runId: parsed.runId,
@@ -368,6 +374,15 @@ function isNoOpenEnabled(
 
 async function main(argv: string[]): Promise<number> {
   try {
+    installProxyDispatcher(process.env, {
+      log: (msg) => cliLogger.info("proxy.dispatcher", msg),
+    });
+    for (const warning of warnMissingCaPaths(process.env)) {
+      cliLogger.warn(
+        "tls.ca_missing",
+        `${warning.name} points to missing path: ${warning.path}`,
+      );
+    }
     const parsed = parseArgs(argv);
     if (parsed.help) {
       console.log(USAGE);

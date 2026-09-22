@@ -83,6 +83,7 @@ import path from "node:path";
 import {
   logger as rootLogger,
 } from "../logging/logger.js";
+import { registerNamedSecrets } from "../logging/namedSecrets.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -1294,6 +1295,7 @@ export async function runPipelineDag(
         attemptDir,
       });
       grants = resolved.grants;
+      registerNamedSecrets(resolved.knownValues);
       for (const warning of resolved.warnings) {
         rootLogger.warn("stage.secrets", warning, {
           run_id: run.runId,

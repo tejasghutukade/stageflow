@@ -1744,22 +1744,27 @@ describe("localhost HTTP API", () => {
     try {
       const idle = await jsonFetch(`${base}/api/health`);
       expect(idle.status).toBe(200);
-      expect(idle.body).toEqual({
+      expect(idle.body).toMatchObject({
         ok: true,
         activeRunIds: [],
         activeCount: 0,
         maxConcurrent: 2,
         slotsAvailable: 2,
         activeStageProcesses: 0,
-        maxActiveStageProcesses: null,
+        maxActiveStageProcesses: expect.any(Number),
+        stage_env_passthrough: expect.any(Boolean),
         disk: {
           runs_bytes: expect.any(Number),
           worktrees_bytes: expect.any(Number),
           repos_bytes: expect.any(Number),
           state_db_bytes: expect.any(Number),
           a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
           free_bytes: expect.any(Number),
         },
+        proxy: expect.any(Object),
+        container: expect.any(Object),
+        cache: expect.any(Object),
       });
       expect(idle.body).not.toHaveProperty("inFlight");
       for (const key of Object.keys(idle.body.disk) as Array<

@@ -7,16 +7,19 @@ import {
   type Logger,
 } from "../logging/logger.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { redactString } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
   readMaxActiveStageProcesses,
 } from "./stageConcurrency.js";
+import { getContainerLimits } from "./containerLimits.js";
 import {
   buildStageEnvironment,
   isAmbientBlockedEnv,
   isForeverDeniedSecret,
   type ResolvedStageGrants,
 } from "./stageEnvironment.js";
-import { computeCacheEnvVars } from "./stageCacheEnv.js";
+import { ensureStageCacheDirs } from "./stageCacheEnv.js";
 import {
   SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
@@ -57,6 +60,7 @@ export type ActiveStageProcess = {
 
 type TrackedChild = ActiveStageProcess & {
   child: ChildProcess;
+  hostInitiatedKill: boolean;
 };
 
 export type StageProcessLauncherOptions = {
@@ -72,7 +76,7 @@ function flushCappedPartial(
   text: string,
   maxLineBytes: number,
 ): string {
-  let remaining = text;
+  let remaining = redactString(text, { namedSecrets: getNamedSecrets() });
   while (Buffer.byteLength(remaining, "utf8") > maxLineBytes) {
     const bytes = Buffer.from(remaining, "utf8");
     const originalBytes = bytes.byteLength;
@@ -124,7 +128,11 @@ function isStageWorkerResult(value: unknown): value is StageWorkerResult {
   return type === "succeeded" || type === "failed" || type === "waiting";
 }
 
-function resultFromExitCode(code: number | null): StageLaunchResult {
+function resultFromExitCode(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  hostInitiatedKill: boolean,
+): StageLaunchResult {
   if (code === STAGE_WORKER_EXIT.SUCCEEDED) {
     return { type: "succeeded" };
   }
@@ -134,9 +142,17 @@ function resultFromExitCode(code: number | null): StageLaunchResult {
   if (code === STAGE_WORKER_EXIT.FAILED) {
     return { type: "failed", reason: "stage failed" };
   }
+  if (signal === "SIGKILL" && !hostInitiatedKill) {
+    return { type: "failed", reason: "worker_oom_killed" };
+  }
   return {
     type: "failed",
-    reason: code === null ? "stage process exited" : `stage process exit ${code}`,
+    reason:
+      code === null
+        ? signal
+          ? `stage process exited (${signal})`
+          : "stage process exited"
+        : `stage process exit ${code}`,
   };
 }
 
@@ -178,6 +194,7 @@ export class StageProcessLauncher {
   private readonly active = new Map<string, TrackedChild>();
   private readonly waitQueue: Array<() => void> = [];
   private slotsHeld = 0;
+  private readonly heapMb: number;
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
@@ -196,6 +213,7 @@ export class StageProcessLauncher {
       this.env,
       options.maxActiveStageProcesses,
     );
+    this.heapMb = getContainerLimits().maxOldSpaceSizeMb;
     this.cliEntry =
       options.cliEntry ??
       fileURLToPath(new URL("../cli.js", import.meta.url));
@@ -217,6 +235,7 @@ export class StageProcessLauncher {
 
   signalAllActive(signal: NodeJS.Signals): void {
     for (const entry of this.active.values()) {
+      entry.hostInitiatedKill = true;
       signalProcessGroup(entry.child.pid, signal);
     }
   }
@@ -232,6 +251,10 @@ export class StageProcessLauncher {
     );
     if (children.length === 0) {
       return;
+    }
+
+    for (const entry of children) {
+      entry.hostInitiatedKill = true;
     }
 
     await Promise.all(
@@ -328,7 +351,7 @@ export class StageProcessLauncher {
     const hostEnv: NodeJS.ProcessEnv = { ...process.env, ...this.env };
     const built = buildStageEnvironment({
       hostEnv,
-      cacheVars: computeCacheEnvVars(),
+      cacheVars: ensureStageCacheDirs(),
       grants: input.grants,
       attemptHome: input.attemptHome,
       packageVersion: PACKAGE_VERSION,
@@ -354,6 +377,8 @@ export class StageProcessLauncher {
       env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       detached: true,
+      // Explicit: do not inherit Host execArgv; set heap from cgroup budget.
+      execArgv: [`--max-old-space-size=${this.heapMb}`],
     });
 
     const key = activeKey(input.runId, input.stageId);
@@ -362,6 +387,7 @@ export class StageProcessLauncher {
       runId: input.runId,
       stageId: input.stageId,
       startedAt: Date.now(),
+      hostInitiatedKill: false,
     };
     this.active.set(key, tracked);
 
@@ -394,9 +420,11 @@ export class StageProcessLauncher {
         finish(resultFromWorkerMessage(message));
       });
 
-      child.on("exit", (code) => {
+      child.on("exit", (code, signal) => {
         if (settled) return;
-        finish(resultFromExitCode(code));
+        finish(
+          resultFromExitCode(code, signal, tracked.hostInitiatedKill),
+        );
       });
 
       child.on("error", (err) => {

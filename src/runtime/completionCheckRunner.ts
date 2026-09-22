@@ -5,6 +5,8 @@ import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { resolveBashPath } from "../preflight/bash.js";
+import { redactString } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
@@ -310,10 +312,20 @@ async function runCommandCheck(
       command: check.run,
       cwd,
       exit_code: execution.exit_code,
-      stdout: execution.stdout,
-      stderr: execution.stderr,
+      stdout: redactString(execution.stdout, {
+        namedSecrets: getNamedSecrets(),
+      }),
+      stderr: redactString(execution.stderr, {
+        namedSecrets: getNamedSecrets(),
+      }),
       timed_out: execution.timed_out,
-      ...(execution.error !== undefined ? { error: execution.error } : {}),
+      ...(execution.error !== undefined
+        ? {
+            error: redactString(execution.error, {
+              namedSecrets: getNamedSecrets(),
+            }),
+          }
+        : {}),
     };
     if (execution.timed_out) return result(check, "failed", evidence, "command timed out");
     if (execution.error !== undefined) return result(check, "error", evidence, execution.error);
