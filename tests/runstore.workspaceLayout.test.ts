@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -11,10 +11,13 @@ import {
   attemptLogPath,
   attemptSessionPath,
   attemptWorkspaceDir,
+  classifyRealPathContainment,
+  durableRootFileToolDenial,
   envelopePath,
   isInsideDir,
   listArtifactNames,
   resolveArtifactTarget,
+  STAGEFLOW_PATH_DENIED,
   stageArtifactsDir,
   stageDir,
   stageLogPath,
@@ -116,6 +119,24 @@ describe("RunWorkspaceLayout", () => {
     expect(isInsideDir("/a/b/c", "/a/b")).toBe(true);
     expect(isInsideDir("/a/b", "/a/b")).toBe(true);
     expect(isInsideDir("/a/other", "/a/b")).toBe(false);
+  });
+
+  it("classifyRealPathContainment follows symlinks for outside detection", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-layout-contain-"));
+    const workspace = path.join(root, "runs", "r1");
+    const secret = path.join(root, "state.db");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(secret, "db");
+    const link = path.join(workspace, "link-db");
+    await symlink(secret, link);
+
+    await expect(classifyRealPathContainment(link, workspace)).resolves.toEqual({
+      status: "outside",
+      realPath: await realpath(secret),
+    });
+    await expect(
+      durableRootFileToolDenial(link, workspace, root),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
   });
 
   it("listArtifactNames walks nested files", async () => {

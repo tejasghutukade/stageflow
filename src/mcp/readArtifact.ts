@@ -1,8 +1,8 @@
 import { isUtf8 } from "node:buffer";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { RunStore } from "../runstore/port.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
+import { classifyRealPathContainment } from "../runstore/workspaceLayout.js";
 
 function assertSafeRunId(runId: string): void {
   if (typeof runId !== "string" || runId.trim().length === 0) {
@@ -80,20 +80,15 @@ async function resolveRunArtifactFile(
   await store.readRunMeta(runId);
 
   const workspaceDir = store.getWorkspaceDir(runId);
-  const workspaceReal = await realpath(workspaceDir);
   const candidate = path.resolve(workspaceDir, relativePath);
-  let fileReal: string;
-  try {
-    fileReal = await realpath(candidate);
-  } catch {
+  const containment = await classifyRealPathContainment(candidate, workspaceDir);
+  if (containment.status === "missing") {
     throw new Error(`Artifact not found: ${relativePath}`);
   }
-
-  if (!isInsideDir(fileReal, workspaceReal)) {
+  if (containment.status === "outside") {
     throw new Error("path escapes the run workspace");
   }
-
-  return fileReal;
+  return containment.realPath;
 }
 
 export async function readRunArtifact(

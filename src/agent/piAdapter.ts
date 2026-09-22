@@ -35,6 +35,7 @@ import path from "node:path";
 import {
   type AgentSession,
   type EventBus,
+  type ExtensionFactory,
   type InlineExtension,
   createAgentSession,
   DefaultResourceLoader,
@@ -92,7 +93,47 @@ import {
   composeTimeoutResumePrompt,
   stageTimeoutReason,
 } from "./stageTimeout.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  durableRootFileToolDenial,
+  STAGEFLOW_PATH_DENIED,
+} from "../runstore/workspaceLayout.js";
 
+export { STAGEFLOW_PATH_DENIED };
+
+export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
+
+const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit"]);
+
+export function createDurableRootPathDenyExtension(options: {
+  runWorkspaceDir: string;
+  durableRoot: string;
+}): ExtensionFactory {
+  const { runWorkspaceDir, durableRoot } = options;
+  return (pi) => {
+    pi.on("tool_call", async (event, ctx) => {
+      if (!PATH_DENY_FILE_TOOLS.has(event.toolName)) {
+        return undefined;
+      }
+      const rawPath = (event.input as { path?: unknown }).path;
+      if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
+        return undefined;
+      }
+      const candidate = path.isAbsolute(rawPath)
+        ? rawPath
+        : path.resolve(ctx.cwd, rawPath);
+      const reason = await durableRootFileToolDenial(
+        candidate,
+        runWorkspaceDir,
+        durableRoot,
+      );
+      if (reason !== undefined) {
+        return { block: true, reason };
+      }
+      return undefined;
+    });
+  };
+}
 /**
  * Stage tool allowlist for sealed Pi sessions.
  * Includes `ask_operator` unless `gateKinds` is an empty list (R6).
@@ -1111,6 +1152,16 @@ async function prepareStageSessionWiring(
       restoreProvider?.();
       return { ok: false, reason };
     };
+    const extensionFactories: InlineExtension[] = [
+      {
+        name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: createDurableRootPathDenyExtension({
+          runWorkspaceDir: roots.runWorkspaceDir,
+          durableRoot: globalStageflowHome(),
+        }),
+      },
+      ...(attached.extensionFactories ?? []),
+    ];
     const loader = createSealedResourceLoader({
       cwd: roots.cwd,
       agentDir: roots.agentDir,
@@ -1120,9 +1171,7 @@ async function prepareStageSessionWiring(
       ...(input.skillFilePath !== undefined
         ? { additionalSkillPaths: [input.skillFilePath] }
         : {}),
-      ...(attached.extensionFactories !== undefined
-        ? { extensionFactories: attached.extensionFactories }
-        : {}),
+      extensionFactories,
       ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });
     await loader.reload();
