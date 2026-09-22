@@ -47,7 +47,7 @@ If this chat already has a `runId` and the request is check, answer, or continue
 
 Prefer this harness's native Stageflow MCP tools when their names are already in the tool list. When they are not, call [`scripts/mcp-call.mjs`](scripts/mcp-call.mjs) — see [`references/mcp-call.md`](references/mcp-call.md). Use `--stateless` only when the **user** started the host with `--mcp-stateless`. Do not start `sf mcp` from this skill.
 
-Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `list_runs`, `answer_gate`, `decide_feedback_loop`, `read_artifact`, `describe_pipeline`, `validate`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`, `get_health`. Host question tools already in this harness's tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`) are for [Gate](#gate) presentation, not Stageflow MCP.
+Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `list_runs`, `answer_gate`, `decide_feedback_loop`, `read_artifact`, `list_checkout_changes`, `get_run_diff`, `read_checkout_file`, `describe_pipeline`, `validate`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`, `get_health`. Host question tools already in this harness's tool list (`AskQuestion`, `AskUserQuestion`, `ask_user`) are for [Gate](#gate) presentation, not Stageflow MCP.
 
 ## MCP path
 

@@ -18,9 +18,15 @@ import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
   artifactMediaType,
+  classifyArtifactContent,
   readRunArtifact,
   readRunArtifactBytes,
 } from "../mcp/readArtifact.js";
+import {
+  getRunDiff,
+  listCheckoutChanges,
+  readCheckoutFileBytes,
+} from "../mcp/checkoutTools.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -316,6 +322,116 @@ export function createOperatorRoutes(
             } else {
               const content = await readRunArtifact(store, runId, artifactPath);
               textPlain(res, 200, content);
+            }
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "artifact" });
+            const status = mapped.kind === "denied" ? 403 : mapped.status;
+            json(res, status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const changesMatch = pathname.match(/^\/api\/runs\/([^/]+)\/changes$/);
+        if (method === "GET" && changesMatch) {
+          const runId = decodeURIComponent(changesMatch[1] ?? "");
+          try {
+            const result = await listCheckoutChanges(store, runId);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            json(res, 200, {
+              runId,
+              changes: result.changes,
+              truncated: result.truncated,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const diffMatch = pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
+        if (method === "GET" && diffMatch) {
+          const runId = decodeURIComponent(diffMatch[1] ?? "");
+          const modeParam = url.searchParams.get("mode");
+          const mode =
+            modeParam === "patch" || modeParam === "stat" ? modeParam : undefined;
+          const filterPath = url.searchParams.get("path") ?? undefined;
+          const maxBytesRaw = url.searchParams.get("maxBytes");
+          const maxBytes =
+            maxBytesRaw !== null && maxBytesRaw.trim() !== ""
+              ? Number(maxBytesRaw)
+              : undefined;
+          try {
+            const result = await getRunDiff(store, runId, {
+              mode,
+              path: filterPath ?? undefined,
+              maxBytes:
+                maxBytes !== undefined && Number.isFinite(maxBytes)
+                  ? maxBytes
+                  : undefined,
+            });
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            json(res, 200, {
+              runId,
+              mode: result.mode,
+              base_sha: result.base_sha,
+              base_source: result.base_source,
+              content: result.content,
+              truncated: result.truncated,
+              untracked: result.untracked,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const checkoutFileMatch = pathname.match(/^\/api\/runs\/([^/]+)\/file$/);
+        if (method === "GET" && checkoutFileMatch) {
+          const runId = decodeURIComponent(checkoutFileMatch[1] ?? "");
+          const filePath = url.searchParams.get("path");
+          if (filePath === null || filePath.trim().length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          try {
+            const result = await readCheckoutFileBytes(store, runId, filePath);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            const mediaType = artifactMediaType(filePath);
+            if (mediaType !== undefined) {
+              res.writeHead(200, {
+                "Content-Type": mediaType,
+                "Content-Length": result.bytes.length,
+              });
+              res.end(result.bytes);
+            } else {
+              const classified = classifyArtifactContent(filePath, result.bytes);
+              if (classified.kind !== "utf8") {
+                json(res, 400, {
+                  error: "Checkout file is not valid UTF-8 text",
+                });
+                return true;
+              }
+              textPlain(res, 200, result.bytes.toString("utf8"));
             }
           } catch (err) {
             const mapped = mapStoreLookupError(err, { policy: "artifact" });

@@ -71,3 +71,66 @@ export function runTaskLabel(run: {
   }
   return run.task_id ?? run.pipeline_id;
 }
+
+export type BindingLocatorInput = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+  run_branch?: string;
+  checkout_root?: string;
+};
+
+function truncateSha(sha: string): string {
+  return sha.length > 7 ? sha.slice(0, 7) : sha;
+}
+
+function pathBasename(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  const parts = normalized.split("/");
+  return parts[parts.length - 1] || filePath;
+}
+
+export function bindingLocatorText(binding: BindingLocatorInput): string {
+  if (binding.kind === "unbound") return "unbound";
+  if (binding.kind === "checkout") {
+    if (!binding.checkout_root) return "checkout · unavailable";
+    return `checkout · ${pathBasename(binding.checkout_root)}`;
+  }
+  const parts = ["repository"];
+  if (binding.repository) parts.push(binding.repository);
+  if (binding.ref) parts.push(binding.ref);
+  if (binding.resolved_sha) parts.push(truncateSha(binding.resolved_sha));
+  if (binding.run_branch) parts.push(binding.run_branch);
+  if (parts.length === 1 && !binding.repository) {
+    return "repository · unavailable";
+  }
+  return parts.join(" · ");
+}
+
+export function bindingLocatorTitle(binding: BindingLocatorInput): string {
+  if (binding.kind === "unbound") return "unbound";
+  if (binding.kind === "checkout") {
+    return binding.checkout_root ?? "checkout unavailable";
+  }
+  const lines: string[] = [];
+  if (binding.resolved_sha) lines.push(binding.resolved_sha);
+  if (binding.checkout_root) lines.push(binding.checkout_root);
+  return lines.length > 0 ? lines.join("\n") : bindingLocatorText(binding);
+}
+
+export function bindingListCompactText(binding: {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+}): string {
+  if (binding.kind === "unbound") return "unbound";
+  if (binding.kind === "checkout") return "checkout";
+  const parts = ["repository"];
+  if (binding.repository) parts.push(binding.repository);
+  if (binding.ref) parts.push(binding.ref);
+  if (binding.resolved_sha) parts.push(truncateSha(binding.resolved_sha));
+  return parts.join(" · ");
+}
+

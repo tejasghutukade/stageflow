@@ -27,10 +27,10 @@ Walk each `catalog.pipelines` / `catalog.tasks` root. Match `catalog.patterns.pi
 An existing `task_path` from `list_tasks`, or an inline `task` object built from the stated goal:
 
 ```json
-{ "id": "<slug>", "goal": "<goal>", "context": "optional", "constraints": "optional", "checkout": "optional" }
+{ "id": "<slug>", "goal": "<goal>", "context": "optional", "constraints": "optional", "checkout": "optional", "repository": "optional", "ref": "optional" }
 ```
 
-`start_run` accepts that object. Do not write a scratch file on the MCP path.
+`start_run` accepts that object. Do not write a scratch file on the MCP path. After start, inspect checkout state with `list_checkout_changes`, `get_run_diff`, or `read_checkout_file` when the human asks what changed in the bound tree.
 
 ### CLI
 

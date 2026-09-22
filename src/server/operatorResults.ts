@@ -51,6 +51,7 @@ export function mapStoreLookupError(
     const notFound =
       error.startsWith("Run not found") ||
       error.startsWith("Artifact not found") ||
+      error.startsWith("Checkout file not found") ||
       /no such|not found/i.test(error);
     return {
       error,

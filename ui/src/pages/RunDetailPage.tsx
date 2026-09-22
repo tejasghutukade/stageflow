@@ -13,7 +13,12 @@ import {
   type StageVerificationHistory,
 } from "../api";
 import { useRunCatalogHandle } from "../catalog/useRunCatalog";
-import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
+import {
+  bindingLocatorText,
+  bindingLocatorTitle,
+  runLocatorSubtitle,
+  runTaskLabel,
+} from "../catalog/displayCatalogPath";
 import { ReplyZone } from "../ReplyZone";
 import { AttemptCountBadge } from "../components/AttemptCountBadge";
 import { CostBadge, formatCostUsd } from "../components/CostBadge";
@@ -635,6 +640,14 @@ export function RunDetailPage({
             {run ? (
               <span className="topbar__sub" title={runLocatorSubtitle(run)}>
                 {runLocatorSubtitle(run)}
+              </span>
+            ) : null}
+            {run?.binding ? (
+              <span
+                className="topbar__sub"
+                title={bindingLocatorTitle(run.binding)}
+              >
+                {bindingLocatorText(run.binding)}
               </span>
             ) : null}
             {run ? (

@@ -175,6 +175,18 @@ export type FeedbackDecisionResult =
     }
   | { ok: false; error: string; status?: number };
 
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
+};
+
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
@@ -185,6 +197,7 @@ export type RunSummary = {
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding?: RunBindingCompact;
   stages: CompactStage[];
   waiting_stage_id?: string;
   waiting_stage_ids?: string[];
@@ -325,7 +338,8 @@ export type StageVerificationHistory = {
   };
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding?: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;

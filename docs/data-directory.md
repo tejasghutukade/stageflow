@@ -21,8 +21,8 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
-| `repos/` | disposable | Reserved name (bare-clone cache in a later slot) |
-| `worktrees/` | disposable | Reserved name (per-run worktrees in a later slot) |
+| `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
+| `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start |
 | `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
 

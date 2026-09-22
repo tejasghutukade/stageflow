@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useRunCatalog } from "../catalog/useRunCatalog";
-import { runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
+import { bindingListCompactText, runLocatorSubtitle, runTaskLabel } from "../catalog/displayCatalogPath";
 import {
   bucketViews,
   runsFilterCounts,
@@ -85,7 +85,12 @@ export function RunsPage({
           >
             <span className="rrow__id">
               <span className="rrow__task">{runTaskLabel(run)}</span>
-              <span className="rrow__pipe">{runLocatorSubtitle(run)} · {run.run_id.slice(0, 8)}</span>
+              <span className="rrow__pipe">
+                {runLocatorSubtitle(run)}
+                {run.binding ? ` · ${bindingListCompactText(run.binding)}` : ""}
+                {" · "}
+                {run.run_id.slice(0, 8)}
+              </span>
             </span>
             <span className="rrow__right">
               <CostBadge costUsd={run.total_cost_usd} />

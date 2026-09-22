@@ -61,4 +61,50 @@ describe("ui displayCatalogPath", () => {
   it("returns the pipeline label when the task label is missing", () => {
     expect(catalogPaths.runLocatorSubtitle({ pipeline_id: "demo" })).toBe("demo");
   });
+
+  it("formats binding locators by kind (U8)", () => {
+    expect(catalogPaths.bindingLocatorText({ kind: "unbound" })).toBe("unbound");
+    expect(
+      catalogPaths.bindingLocatorText({
+        kind: "checkout",
+        checkout_root: "/tmp/work/my-project",
+      }),
+    ).toBe("checkout · my-project");
+    expect(
+      catalogPaths.bindingLocatorTitle({
+        kind: "checkout",
+        checkout_root: "/tmp/work/my-project",
+      }),
+    ).toBe("/tmp/work/my-project");
+
+    expect(
+      catalogPaths.bindingLocatorText({
+        kind: "repository",
+        repository: "acme/api",
+        ref: "main",
+        resolved_sha: "abcdef0123456789",
+        run_branch: "stageflow/run-1",
+        checkout_root: "/home/.stageflow/worktrees/run-1",
+      }),
+    ).toBe("repository · acme/api · main · abcdef0 · stageflow/run-1");
+    expect(
+      catalogPaths.bindingLocatorTitle({
+        kind: "repository",
+        resolved_sha: "abcdef0123456789",
+        checkout_root: "/home/.stageflow/worktrees/run-1",
+      }),
+    ).toBe("abcdef0123456789\n/home/.stageflow/worktrees/run-1");
+
+    expect(
+      catalogPaths.bindingListCompactText({
+        kind: "repository",
+        repository: "acme/api",
+        ref: "main",
+        resolved_sha: "abcdef0123456789",
+      }),
+    ).toBe("repository · acme/api · main · abcdef0");
+    expect(catalogPaths.bindingListCompactText({ kind: "checkout" })).toBe(
+      "checkout",
+    );
+  });
 });

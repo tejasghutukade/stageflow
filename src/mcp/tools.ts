@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { registerCatalogTools } from "./catalogTools.js";
+import { registerCheckoutTools } from "./checkoutTools.js";
 import { registerControlTools } from "./controlTools.js";
 import { registerProjectMcpTools } from "./projectMcpTools.js";
 import { registerProviderTools } from "./providerTools.js";
@@ -15,6 +16,7 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
 
   registerCatalogTools(server, deps);
   registerControlTools(server, deps);
+  registerCheckoutTools(server, deps);
   registerProviderTools(server, deps);
   registerProjectMcpTools(server, deps);
 

@@ -139,6 +139,38 @@ describe("readRunArtifact deny-list", () => {
       readRunArtifactBytes(store, created.runId, rel),
     ).rejects.toThrow(/Artifact path denied/);
   });
+
+  it("denies symlink escape outside the run workspace", async () => {
+    const outside = await mkdtemp(path.join(tmpdir(), "sf-art-out-"));
+    await writeFile(path.join(outside, "secret.txt"), "nope");
+    const root = await mkdtemp(path.join(tmpdir(), "sf-art-symlink-"));
+    const store = createRunStore({ rootDir: root });
+    const created = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: a\ngoal: g\n",
+      taskId: "a",
+    });
+    const rel = path.join(
+      "stages",
+      "clarify",
+      "attempts",
+      "1",
+      "artifacts",
+      "escape.txt",
+    );
+    await mkdir(path.dirname(path.join(created.workspaceDir, rel)), {
+      recursive: true,
+    });
+    const { symlinkSync } = await import("node:fs");
+    symlinkSync(
+      path.join(outside, "secret.txt"),
+      path.join(created.workspaceDir, rel),
+    );
+
+    await expect(readRunArtifact(store, created.runId, rel)).rejects.toThrow(
+      /escapes the run workspace/,
+    );
+  });
 });
 
 describe("classifyArtifactContent", () => {

@@ -169,6 +169,36 @@ export function statusPorcelain(
   return runGitSync(baseOpts(repoDir, args, TIMEOUT.default, opts)).stdout;
 }
 
+export async function statusPorcelainZ(
+  repoDir: string,
+  opts?: GitCallOptions,
+): Promise<string> {
+  const result = await runGit(
+    baseOpts(
+      repoDir,
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+      TIMEOUT.default,
+      opts,
+    ),
+  );
+  return result.stdout;
+}
+
+export async function lsFilesOthersZ(
+  repoDir: string,
+  opts?: GitCallOptions,
+): Promise<string> {
+  const result = await runGit(
+    baseOpts(
+      repoDir,
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+      TIMEOUT.default,
+      opts,
+    ),
+  );
+  return result.stdout;
+}
+
 export async function checkRefFormat(
   branchName: string,
   opts?: GitCallOptions,
