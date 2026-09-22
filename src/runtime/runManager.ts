@@ -63,6 +63,7 @@ import {
 } from "./stageHitl.js";
 import {
   resolveAndValidateCheckout,
+  stageBindingEnvFromRun,
 } from "./stageRoots.js";
 import { orchestrateAnswerResume } from "./answerResume.js";
 import { reconstructAndContinue as resumeReconstructAndContinue } from "./resumeReconstruct.js";
@@ -1530,6 +1531,17 @@ export class RunManager {
     try {
       const runMeta = await store.readRunMeta(runId);
       const runProjectRoot = runMeta.project_root ?? this.projectRoot;
+      const { meta, task, loaded } = await loadRunContext(
+        store,
+        runId,
+        runProjectRoot,
+      );
+      const stageBinding = stageBindingEnvFromRun({
+        meta,
+        task,
+        runWorkspaceDir: workspaceDir,
+        hostEnv: process.env,
+      });
       const launchResult = await launcher.launch({
         runId,
         stageId,
@@ -1538,6 +1550,8 @@ export class RunManager {
         resumeAnswer: opaqueAnswer,
         attempt,
         sessionFilePath,
+        env: stageBinding.env,
+        bindingKind: stageBinding.kind,
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
@@ -1567,12 +1581,6 @@ export class RunManager {
       } catch {
         // downstream resume may read envelope from store
       }
-
-      const { meta, task, loaded } = await loadRunContext(
-        store,
-        runId,
-        this.cwd,
-      );
 
       const rest = await resumeRun({
         prepared: {

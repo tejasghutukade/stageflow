@@ -1,3 +1,5 @@
+import { writeFileSync } from "node:fs";
+
 const stageId = (() => {
   for (let i = 0; i < process.argv.length; i++) {
     if (process.argv[i] === "--stage-id") {
@@ -11,13 +13,21 @@ const delayByStage = { a: 500, b: 500, c: 100, slow: 30_000 };
 const delay = delayByStage[stageId] ?? Number(process.env.MOCK_DELAY ?? "50");
 const exitCode = Number(process.env.MOCK_EXIT_CODE ?? "0");
 
+if (process.env.MOCK_DUMP_ENV) {
+  const keys = (process.env.MOCK_DUMP_KEYS ?? "").split(",").filter(Boolean);
+  const dumped = {};
+  for (const key of keys) {
+    dumped[key] = process.env[key] ?? null;
+  }
+  writeFileSync(process.env.MOCK_DUMP_ENV, JSON.stringify(dumped));
+}
+
 if (process.env.MOCK_STDERR) {
   process.stderr.write(process.env.MOCK_STDERR);
   if (!process.env.MOCK_STDERR.endsWith("\n")) {
     process.stderr.write("\n");
   }
 }
-
 if (process.env.MOCK_IPC) {
   const msg = JSON.parse(process.env.MOCK_IPC);
   if (typeof process.send === "function") {

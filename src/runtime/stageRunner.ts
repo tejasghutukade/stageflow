@@ -72,6 +72,7 @@ export type RunStageOptions = {
   sessionMode?: StageSessionMode;
   feedbackLoopContext?: FeedbackLoopContext;
   resumeToken?: string;
+  stageEnv?: Record<string, string>;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -240,6 +241,7 @@ export async function runStage(
     sessionMode,
     feedbackLoopContext,
     resumeToken,
+    stageEnv,
   } = options;
   const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
@@ -314,6 +316,7 @@ export async function runStage(
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),
+      ...(stageEnv !== undefined ? { stageEnv } : {}),
       onActivity: (event) => {
         enqueueActivity(event);
       },

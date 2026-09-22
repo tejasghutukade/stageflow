@@ -1,6 +1,7 @@
 import type { StageRunResult } from "../agent/port.js";
 import type { RunStageOutcome } from "./stageRunner.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import type { DerivedBindingKind } from "./stageRoots.js";
 
 export const SF_STAGE_WORKER = "SF_STAGE_WORKER";
 
@@ -20,6 +21,8 @@ export type StageWorkerInput = {
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  env?: Record<string, string>;
+  bindingKind?: DerivedBindingKind;
 };
 
 export type StageWorkerResult =

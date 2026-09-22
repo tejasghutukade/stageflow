@@ -9,7 +9,10 @@ import {
 } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
-import { resolveAndValidateCheckout } from "./stageRoots.js";
+import {
+  resolveAndValidateCheckout,
+  resolveEffectiveGitIdentity,
+} from "./stageRoots.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageHitlController } from "./stageHitl.js";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
@@ -167,6 +170,11 @@ async function preparePipeline(options: {
     options.projectRoot ?? options.cwd,
   );
 
+  const gitIdentity = resolveEffectiveGitIdentity(
+    process.env,
+    task.git_identity,
+  );
+
   const run = await options.store.createRun({
     submission: options.submission,
     runId: options.runId,
@@ -185,6 +193,8 @@ async function preparePipeline(options: {
     ref: options.ref,
     resolvedSha: options.resolvedSha,
     runBranch: options.runBranch,
+    gitAuthorName: gitIdentity.name,
+    gitAuthorEmail: gitIdentity.email,
   });
   const executionMode = readStageExecutionMode(
     process.env,

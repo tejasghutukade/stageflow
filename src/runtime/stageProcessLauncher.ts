@@ -9,6 +9,10 @@ import {
   type StageWorkerResult,
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import {
+  overlayStageBindingEnv,
+  type DerivedBindingKind,
+} from "./stageRoots.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -20,6 +24,8 @@ export type StageLaunchInput = {
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  env?: Record<string, string>;
+  bindingKind?: DerivedBindingKind;
 };
 
 export type StageLaunchResult =
@@ -205,9 +211,18 @@ export class StageProcessLauncher {
       args.push("--skip-gates");
     }
 
+    const childEnv =
+      input.env !== undefined
+        ? overlayStageBindingEnv(
+            { ...process.env, ...this.env },
+            input.env,
+            input.bindingKind ?? "unbound",
+          )
+        : { ...process.env, ...this.env };
+
     const child = fork(this.cliEntry, args, {
       cwd: input.rootDir,
-      env: { ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" },
+      env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
       stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
 

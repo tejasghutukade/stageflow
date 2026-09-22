@@ -77,10 +77,17 @@ export type StageAttemptOpenInput = {
   completedEnvelopes?: Map<string, StageEnvelope>;
   stageId?: string;
   feedbackLoopContext?: FeedbackLoopContext;
+  stageEnv?: Record<string, string>;
 };
 
 export type StageAttemptOpenResult =
-  | { ok: true; handle: StageHandle; roots: StageRoots; prior: StageEnvelope | null }
+  | {
+      ok: true;
+      handle: StageHandle;
+      roots: StageRoots;
+      prior: StageEnvelope | null;
+      stageEnv?: Record<string, string>;
+    }
   | { ok: false; reason: string };
 
 async function resolveStageSkillForRun(
@@ -106,6 +113,7 @@ async function resolveAttemptMcpServers(
   allowlist: readonly string[] | undefined,
   factoryCwd: string | undefined,
   artifactsDir: string,
+  stageEnv?: Record<string, string>,
 ): Promise<ResolvedMcpServers | undefined> {
   const names = allowlist ?? [];
   if (names.length === 0) return undefined;
@@ -121,6 +129,7 @@ async function resolveAttemptMcpServers(
     allowlist: names,
     env: {
       ...process.env,
+      ...(stageEnv ?? {}),
       [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
     },
   });
@@ -133,6 +142,7 @@ async function openStageWithOperatorCatalog(
   catalog: OperatorCatalog | undefined,
   factoryCwd: string | undefined,
   artifactsDir: string,
+  stageEnv?: Record<string, string>,
 ): Promise<OpenStageWithOperatorCatalogResult> {
   const skill = await resolveStageSkillForRun(input.stage, catalog);
   if (!skill.ok) return skill;
@@ -142,6 +152,7 @@ async function openStageWithOperatorCatalog(
       input.stage.mcp,
       factoryCwd,
       artifactsDir,
+      stageEnv,
     );
   } catch (err) {
     if (err instanceof StageMcpError) {
@@ -405,6 +416,7 @@ export async function openStageAttempt(
     input.operatorCatalog,
     input.factoryCwd,
     attemptArtifactsDir(input.workspaceDir, stageId, attempt),
+    input.stageEnv,
   );
   if (!opened.ok) return opened;
   return {
@@ -412,5 +424,6 @@ export async function openStageAttempt(
     handle: opened.handle,
     roots,
     prior: priorResult.prior,
+    ...(input.stageEnv !== undefined ? { stageEnv: input.stageEnv } : {}),
   };
 }

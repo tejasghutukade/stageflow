@@ -68,6 +68,7 @@ import { runStage, isRunStageWaiting } from "./stageRunner.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { stageBindingEnvFromRun } from "./stageRoots.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -671,10 +672,16 @@ export async function runPipelineDag(
     options.initialSchedule ??
     (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
   let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  const runMeta = await store.readRunMeta(run.runId);
   if (hydratedDag === undefined) {
-    const meta = await store.readRunMeta(run.runId);
-    dag = meta.pipeline_dag ?? fallbackDag;
+    dag = runMeta.pipeline_dag ?? fallbackDag;
   }
+  const stageBinding = stageBindingEnvFromRun({
+    meta: runMeta,
+    task,
+    runWorkspaceDir: run.workspaceDir,
+    hostEnv: process.env,
+  });
   const stageById = buildStageConfigById(loaded);
 
   const retryContext = options.retryContext;
@@ -1251,6 +1258,8 @@ export async function runPipelineDag(
         stageId,
         rootDir: factoryCwd,
         attempt,
+        env: stageBinding.env,
+        bindingKind: stageBinding.kind,
         ...(sessionMode !== undefined
           ? {
               mode:
@@ -1301,6 +1310,7 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      stageEnv: stageBinding.env,
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),

@@ -8,6 +8,7 @@ import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
   rootsForStageWorker,
+  stageBindingEnvFromRun,
   withResolvedAuthPath,
 } from "./stageRoots.js";
 import {
@@ -26,6 +27,29 @@ import {
 } from "./stageWorkerProtocol.js";
 
 export type { StageWorkerInput, StageWorkerResult } from "./stageWorkerProtocol.js";
+
+function applyStageEnvToWorkerProcess(
+  env: Record<string, string>,
+  kind: "repository" | "checkout" | "unbound",
+): void {
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value;
+  }
+  if (kind !== "repository") {
+    delete process.env.STAGEFLOW_REPOSITORY;
+    delete process.env.STAGEFLOW_REF;
+    delete process.env.STAGEFLOW_BASE_SHA;
+    delete process.env.STAGEFLOW_RUN_BRANCH;
+  }
+  if (kind === "unbound" || !Object.hasOwn(env, "STAGEFLOW_CHECKOUT")) {
+    delete process.env.STAGEFLOW_CHECKOUT;
+  }
+  if (!Object.hasOwn(env, "GIT_CONFIG_COUNT")) {
+    delete process.env.GIT_CONFIG_COUNT;
+    delete process.env.GIT_CONFIG_KEY_0;
+    delete process.env.GIT_CONFIG_VALUE_0;
+  }
+}
 
 export async function runStageWorker(
   input: StageWorkerInput,
@@ -57,6 +81,20 @@ export async function runStageWorker(
   });
   const workspaceDir = store.getWorkspaceDir(input.runId);
   const checkoutRoot = meta.checkout_root;
+  const binding =
+    input.env !== undefined
+      ? {
+          env: input.env,
+          kind: input.bindingKind ?? "unbound",
+        }
+      : stageBindingEnvFromRun({
+          meta,
+          task,
+          runWorkspaceDir: workspaceDir,
+          hostEnv: process.env,
+        });
+  applyStageEnvToWorkerProcess(binding.env, binding.kind);
+  const stageEnv = binding.env;
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
   const attemptCtx =
@@ -92,6 +130,7 @@ export async function runStageWorker(
         roots,
         resumeToken: input.sessionFilePath,
         sessionMode: "waiting_resume",
+        stageEnv,
         onActivity: (event) => {
           void store.appendStageEvent(
             input.runId,
@@ -123,6 +162,7 @@ export async function runStageWorker(
         factoryCwd: input.rootDir,
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
+        stageEnv,
       });
       return outcome;
     }
@@ -162,6 +202,7 @@ export async function runStageWorker(
         ...(resumeToken !== undefined ? { resumeToken } : {}),
         sessionMode: mode,
         ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
+        stageEnv,
         onActivity: (event) => {
           void store.appendStageEvent(
             input.runId,
@@ -191,6 +232,7 @@ export async function runStageWorker(
         factoryCwd: input.rootDir,
         operatorCatalog: input.operatorCatalog,
         skipGates: input.skipGates,
+        stageEnv,
       });
     }
 
@@ -210,6 +252,7 @@ export async function runStageWorker(
       factoryCwd: input.rootDir,
       operatorCatalog: input.operatorCatalog,
       skipGates: input.skipGates,
+      stageEnv,
     });
   } finally {
     unbindAgentDir();
