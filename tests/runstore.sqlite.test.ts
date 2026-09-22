@@ -78,6 +78,58 @@ describe("sqlite run store", () => {
     expect(meta.ci_job_url).toBe("https://github.com/acme/repo/actions/runs/99");
   });
 
+  it("persists repository binding fields and preallocated runId", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-binding-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const runId = "2026-09-21T00-00-00-aabbcc";
+    const checkout = "/data/worktrees/" + runId;
+    const sha = "c".repeat(40);
+    const run = await store.createRun({
+      runId,
+      pipelineId: "docs-only",
+      taskYaml: "id: t\nrepository: acme/api\nref: main\n",
+      taskId: "t",
+      checkoutRoot: checkout,
+      repository: "acme/api",
+      ref: "main",
+      resolvedSha: sha,
+      runBranch: `stageflow/run-${runId}`,
+      gitAuthorName: "Stageflow",
+      gitAuthorEmail: "stageflow@localhost",
+    });
+    expect(run.runId).toBe(runId);
+
+    const meta = await store.readRunMeta(runId);
+    expect(meta.repository).toBe("acme/api");
+    expect(meta.ref).toBe("main");
+    expect(meta.resolved_sha).toBe(sha);
+    expect(meta.run_branch).toBe(`stageflow/run-${runId}`);
+    expect(meta.checkout_root).toBe(checkout);
+    expect(meta.git_author_name).toBe("Stageflow");
+    expect(meta.git_author_email).toBe("stageflow@localhost");
+
+    const detail = await store.readRun(runId);
+    expect(detail.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: sha,
+      run_branch: `stageflow/run-${runId}`,
+      checkout_root: checkout,
+    });
+
+    const listed = await store.listRuns();
+    const summary = listed.find((r) => r.run_id === runId);
+    expect(summary?.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: sha,
+    });
+    expect(summary?.binding).not.toHaveProperty("checkout_root");
+    expect(summary?.binding).not.toHaveProperty("run_branch");
+  });
+
   it("omits CI identity from readRunMeta when createRun does not set it", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-ci-omit-"));
     const store = createRunStore({ rootDir: root, kind: "sqlite" });

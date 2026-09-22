@@ -166,6 +166,7 @@ function eligibilityDetail(opts: {
     pipeline_id: "p",
     status: opts.runStatus,
     created_at: "2026-01-01T00:00:00.000Z",
+    binding: { kind: "unbound" },
     task_yaml: "",
     stages: opts.missingStage
       ? []
@@ -315,6 +316,7 @@ describe("assertStageRetryEligible", () => {
         pipeline_id: "diamond-fan-in-accepted",
         status: "running",
         created_at: "2026-01-01T00:00:00.000Z",
+        binding: { kind: "unbound" },
         task_yaml: "",
         stages: [
           {
@@ -335,6 +337,7 @@ describe("assertStageRetryEligible", () => {
           },
         ],
         pipeline_track: { nodes: [], edges: [] },
+        feedback_loops: [],
       },
       "research",
       {

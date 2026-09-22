@@ -75,6 +75,12 @@ type RunRow = {
   pipeline_path: string | null;
   task_path: string | null;
   project_root: string | null;
+  repository: string | null;
+  ref: string | null;
+  resolved_sha: string | null;
+  run_branch: string | null;
+  git_author_name: string | null;
+  git_author_email: string | null;
 };
 
 type StageRow = {
@@ -363,7 +369,7 @@ export class SqliteRunStore implements RunStore {
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
     await this.ready();
-    const runId = newRunId();
+    const runId = input.runId ?? newRunId();
     const workspaceDir = this.getWorkspaceDir(runId);
     await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
@@ -386,9 +392,9 @@ export class SqliteRunStore implements RunStore {
       this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email)`,
       )
       .run({
         run_id: runId,
@@ -408,6 +414,12 @@ export class SqliteRunStore implements RunStore {
         pipeline_path: pipelinePath,
         task_path: taskPath,
         project_root: projectRoot,
+        repository: input.repository ?? null,
+        ref: input.ref ?? null,
+        resolved_sha: input.resolvedSha ?? null,
+        run_branch: input.runBranch ?? null,
+        git_author_name: input.gitAuthorName ?? null,
+        git_author_email: input.gitAuthorEmail ?? null,
       });
 
       if (input.submission) {
@@ -907,7 +919,7 @@ export class SqliteRunStore implements RunStore {
       clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email
          FROM runs ${where} ORDER BY created_at DESC`,
       )
       .all(...params) as RunRow[];
@@ -1453,6 +1465,16 @@ export class SqliteRunStore implements RunStore {
       ...(row.pipeline_path != null ? { pipeline_path: row.pipeline_path } : {}),
       ...(row.task_path != null ? { task_path: row.task_path } : {}),
       ...(row.project_root != null ? { project_root: row.project_root } : {}),
+      ...(row.repository != null ? { repository: row.repository } : {}),
+      ...(row.ref != null ? { ref: row.ref } : {}),
+      ...(row.resolved_sha != null ? { resolved_sha: row.resolved_sha } : {}),
+      ...(row.run_branch != null ? { run_branch: row.run_branch } : {}),
+      ...(row.git_author_name != null
+        ? { git_author_name: row.git_author_name }
+        : {}),
+      ...(row.git_author_email != null
+        ? { git_author_email: row.git_author_email }
+        : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
     };
   }
@@ -1460,7 +1482,7 @@ export class SqliteRunStore implements RunStore {
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

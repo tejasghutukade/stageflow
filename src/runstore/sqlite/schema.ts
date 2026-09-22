@@ -72,7 +72,13 @@ CREATE TABLE IF NOT EXISTS runs (
   ci_job_url TEXT,
   pipeline_path TEXT,
   task_path TEXT,
-  project_root TEXT
+  project_root TEXT,
+  repository TEXT,
+  ref TEXT,
+  resolved_sha TEXT,
+  run_branch TEXT,
+  git_author_name TEXT,
+  git_author_email TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_submissions (

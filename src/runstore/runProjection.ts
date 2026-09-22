@@ -4,6 +4,8 @@ import type {
   CompactStage,
   FeedbackLoopHistory,
   FeedbackLoopRecord,
+  RunBindingCompact,
+  RunBindingDetail,
   RunDetail,
   RunMeta,
   RunPipelineDagSnapshot,
@@ -21,6 +23,48 @@ export type FeedbackProjectionInput = {
   feedback_loops?: FeedbackLoopHistory[];
   active_feedback_loop?: FeedbackLoopRecord;
 };
+
+export function projectRunBindingCompact(meta: RunMeta): RunBindingCompact {
+  if (meta.repository != null && meta.repository !== "") {
+    return {
+      kind: "repository",
+      repository: meta.repository,
+      ...(meta.ref !== undefined ? { ref: meta.ref } : {}),
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  if (meta.checkout_root != null && meta.checkout_root !== "") {
+    return {
+      kind: "checkout",
+      ...(meta.resolved_sha !== undefined
+        ? { resolved_sha: meta.resolved_sha }
+        : {}),
+    };
+  }
+  return { kind: "unbound" };
+}
+
+export function projectRunBindingDetail(meta: RunMeta): RunBindingDetail {
+  const compact = projectRunBindingCompact(meta);
+  if (compact.kind === "unbound") return compact;
+  if (compact.kind === "checkout") {
+    return {
+      ...compact,
+      ...(meta.checkout_root !== undefined
+        ? { checkout_root: meta.checkout_root }
+        : {}),
+    };
+  }
+  return {
+    ...compact,
+    ...(meta.run_branch !== undefined ? { run_branch: meta.run_branch } : {}),
+    ...(meta.checkout_root !== undefined
+      ? { checkout_root: meta.checkout_root }
+      : {}),
+  };
+}
 
 export function overlayPlannedStages(
   stageIds: string[],
@@ -171,6 +215,7 @@ export function projectRunSummary(
     status: resolveListedStatus(stages, meta, dag),
     created_at: meta.created_at,
     updated_at: meta.updated_at,
+    binding: projectRunBindingCompact(meta),
     stages: compactStages(stages),
     ...waiting,
     ...failedFieldsFromStages(stages, dag),
@@ -205,6 +250,7 @@ export function projectRunDetail(
   });
   return {
     ...summary,
+    binding: projectRunBindingDetail(dag ? { ...meta, pipeline_dag: dag } : meta),
     task_yaml,
     stages: ordered,
     pipeline_track,

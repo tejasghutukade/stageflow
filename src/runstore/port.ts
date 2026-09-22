@@ -68,6 +68,12 @@ export type RunMeta = {
   pipeline_path?: string;
   task_path?: string;
   project_root?: string;
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+  run_branch?: string;
+  git_author_name?: string;
+  git_author_email?: string;
 };
 
 export type CreatedRun = {
@@ -324,6 +330,18 @@ export type CompactStage = {
   cost_usd?: number;
 };
 
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
+};
+
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
@@ -334,6 +352,7 @@ export type RunSummary = {
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding: RunBindingCompact;
   stages: CompactStage[];
   /** Present when a stage is waiting_for_input (first such stage). */
   waiting_stage_id?: string;
@@ -353,7 +372,8 @@ export type RunSummary = {
   total_cost_usd?: number;
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
@@ -374,6 +394,7 @@ export type FeedbackLoopHistory = {
 
 export type CreateRunInput = {
   submission?: RunSubmission;
+  runId?: string;
   pipelineId: string;
   taskYaml: string;
   taskId?: string;
@@ -385,6 +406,12 @@ export type CreateRunInput = {
   pipelinePath?: string;
   taskPath?: string;
   projectRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
 };
 
 export type ListRunsFilter = {

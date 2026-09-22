@@ -15,6 +15,8 @@ import {
   applyPendingMigrations,
   CURRENT_SCHEMA_VERSION,
 } from "../src/runstore/sqlite/migrations/index.js";
+import { MIGRATION_001 } from "../src/runstore/sqlite/migrations/001-baseline.js";
+import { StoreSchemaError } from "../src/runstore/sqlite/storeSchemaError.js";
 
 type TableInfoRow = {
   name: string;
@@ -23,6 +25,45 @@ type TableInfoRow = {
   dflt_value: string | null;
   pk: number;
 };
+
+const BINDING_COLUMNS = [
+  "repository",
+  "ref",
+  "resolved_sha",
+  "run_branch",
+  "git_author_name",
+  "git_author_email",
+] as const;
+
+async function seedSchemaV1WithoutBinding(root: string): Promise<string> {
+  const storeRoot = storeRootFor(root);
+  await mkdir(storeRoot, { recursive: true });
+  const dbPath = path.join(storeRoot, "state.db");
+  const db = new Database(dbPath);
+  db.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`);
+  applyPendingMigrations(db, { migrations: [MIGRATION_001] });
+  expect(db.pragma("user_version", { simple: true })).toBe(1);
+  const cols = new Set(
+    (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
+      (c) => c.name,
+    ),
+  );
+  for (const name of BINDING_COLUMNS) {
+    expect(cols.has(name)).toBe(false);
+  }
+  db.close();
+  return dbPath;
+}
 
 const PRE_VERSION_TABLES = [
   "feedback_loops",
@@ -64,13 +105,14 @@ function columnSignature(rows: TableInfoRow[]): string {
 }
 
 describe("sqlite store migrations", () => {
-  it("fresh store has user_version 1 and one ledger row", async () => {
+  it("fresh store has user_version 2 and two ledger rows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-fresh-"));
     createRunStore({ rootDir: root, kind: "sqlite" });
     const dbPath = path.join(storeRootFor(root), "state.db");
     const db = new Database(dbPath);
     const userVersion = db.pragma("user_version", { simple: true });
-    expect(userVersion).toBe(1);
+    expect(userVersion).toBe(2);
+    expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
     const ledger = db
       .prepare(
         `SELECT version, name, applied_at, min_stageflow_version FROM schema_migrations ORDER BY version`,
@@ -81,9 +123,25 @@ describe("sqlite store migrations", () => {
       applied_at: string;
       min_stageflow_version: string;
     }>;
-    expect(ledger).toHaveLength(1);
-    expect(ledger[0]?.version).toBe(CURRENT_SCHEMA_VERSION);
-    expect(ledger[0]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger).toHaveLength(2);
+    expect(ledger[0]?.version).toBe(1);
+    expect(ledger[0]?.name).toBe("001_baseline");
+    expect(ledger[1]?.version).toBe(2);
+    expect(ledger[1]?.name).toBe("002_repository_binding");
+    expect(ledger[1]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    const cols = (
+      db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+    ).map((c) => c.name);
+    for (const name of [
+      "repository",
+      "ref",
+      "resolved_sha",
+      "run_branch",
+      "git_author_name",
+      "git_author_email",
+    ]) {
+      expect(cols).toContain(name);
+    }
     db.close();
   });
 
@@ -146,7 +204,9 @@ INSERT INTO verification_check_results
     ).resolves.toMatchObject({ verification_outcome: "failed" });
 
     const stampedDb = new Database(dbPath);
-    expect(stampedDb.pragma("user_version", { simple: true })).toBe(1);
+    expect(stampedDb.pragma("user_version", { simple: true })).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const stampedInfo = tableInfoByName(stampedDb);
     for (const table of PRE_VERSION_TABLES) {
       expect(columnSignature(stampedInfo.get(table) ?? [])).toBe(
@@ -302,5 +362,65 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       .get() as { verification_outcome: string };
     after.close();
     expect(row.verification_outcome).toBe("not_run");
+  });
+
+  it("migrates a v1 database to v2 and adds binding columns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v1-v2-"));
+    const dbPath = await seedSchemaV1WithoutBinding(root);
+
+    createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
+
+    const db = new Database(dbPath);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const ledger = db
+      .prepare(
+        `SELECT version, name FROM schema_migrations ORDER BY version`,
+      )
+      .all() as Array<{ version: number; name: string }>;
+    expect(ledger).toEqual([
+      { version: 1, name: "001_baseline" },
+      { version: 2, name: "002_repository_binding" },
+    ]);
+    const cols = new Set(
+      (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
+    );
+    for (const name of BINDING_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
+    db.close();
+  });
+
+  it("assert opener on a v1 database requires host migration", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v1-assert-"));
+    const dbPath = await seedSchemaV1WithoutBinding(root);
+
+    expect(() =>
+      createRunStore({ rootDir: root, kind: "sqlite", openerMode: "assert" }),
+    ).toThrow(StoreSchemaError);
+    try {
+      createRunStore({ rootDir: root, kind: "sqlite", openerMode: "assert" });
+    } catch (err) {
+      expect(err).toBeInstanceOf(StoreSchemaError);
+      expect((err as StoreSchemaError).code).toBe(
+        "store_schema_migration_required",
+      );
+    }
+
+    const after = new Database(dbPath);
+    expect(after.pragma("user_version", { simple: true })).toBe(1);
+    const cols = new Set(
+      (
+        after.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+      ).map((c) => c.name),
+    );
+    for (const name of BINDING_COLUMNS) {
+      expect(cols.has(name)).toBe(false);
+    }
+    after.close();
   });
 });

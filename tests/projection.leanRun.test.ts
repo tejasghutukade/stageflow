@@ -24,6 +24,7 @@ function detail(overrides: Partial<RunDetail> = {}): RunDetail {
     pipeline_id: "docs-only",
     status: "succeeded",
     created_at: "2026-01-01T00:00:00.000Z",
+    binding: { kind: "unbound" },
     task_yaml: "id: t\ngoal: g\n",
     stages: [stage({ stage_id: "clarify", status: "succeeded" })],
     pipeline_track: { nodes: [], edges: [] },
@@ -81,5 +82,31 @@ describe("projectRun lean cost and definition_id", () => {
     expect(projected.total_cost_usd).toBe(0);
     expect(projected.stages[0]?.cost_usd).toBe(0);
     expect(projected.stages[0]).not.toHaveProperty("definition_id");
+  });
+
+  it("includes binding for get_run / wait_run lean projection", () => {
+    const unbound = projectRun(detail());
+    expect(unbound.binding).toEqual({ kind: "unbound" });
+
+    const repo = projectRun(
+      detail({
+        binding: {
+          kind: "repository",
+          repository: "acme/api",
+          ref: "main",
+          resolved_sha: "b".repeat(40),
+          run_branch: "stageflow/run-1",
+          checkout_root: "/data/worktrees/run-1",
+        },
+      }),
+    );
+    expect(repo.binding).toEqual({
+      kind: "repository",
+      repository: "acme/api",
+      ref: "main",
+      resolved_sha: "b".repeat(40),
+      run_branch: "stageflow/run-1",
+      checkout_root: "/data/worktrees/run-1",
+    });
   });
 });
