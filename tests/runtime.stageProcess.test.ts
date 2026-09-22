@@ -69,6 +69,33 @@ describe("StageProcessLauncher", () => {
     expect(launcher.activeCount()).toBe(0);
   });
 
+  it("cancelRun escalates to SIGKILL when worker ignores SIGTERM", async () => {
+    if (process.platform === "win32") return;
+
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-escalate-"));
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      env: {
+        MOCK_IGNORE_SIGTERM: "1",
+        MOCK_DELAY: "60000",
+      },
+    });
+
+    const launchPromise = launcher.launch({
+      runId: "run-escalate",
+      stageId: "wedged",
+      rootDir,
+    });
+
+    await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
+      timeout: 2000,
+    });
+
+    await expect(launcher.cancelRun("run-escalate", 100)).resolves.toBeUndefined();
+    await launchPromise;
+    expect(launcher.activeCount()).toBe(0);
+  });
+
   it("prefixes stderr with stage id", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
     const launcher = new StageProcessLauncher({

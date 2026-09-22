@@ -7,6 +7,7 @@ import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
+import { signalProcessGroup } from "./stageProcessLauncher.js";
 
 /**
  * The result of executing a pipeline-owned command. Command execution is a
@@ -158,6 +159,7 @@ export type CompletionVerificationResult = {
 };
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+const COMMAND_KILL_ESCALATE_MS = 2000;
 
 function captureOutput(
   chunks: Buffer[],
@@ -181,12 +183,15 @@ export const nodeCommandExecutor: CommandExecutor = {
       const stderr: Buffer[] = [];
       let timedOut = false;
       let settled = false;
+      let exited = false;
       let timeout: NodeJS.Timeout | undefined;
+      let escalateTimer: NodeJS.Timeout | undefined;
 
       const finish = (result: CommandExecution) => {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
+        if (escalateTimer) clearTimeout(escalateTimer);
         resolve(result);
       };
 
@@ -195,6 +200,7 @@ export const nodeCommandExecutor: CommandExecutor = {
         child = spawn(input.command, {
           cwd: input.cwd,
           shell: true,
+          detached: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
@@ -213,6 +219,9 @@ export const nodeCommandExecutor: CommandExecutor = {
       });
       child.stderr?.on("data", (data: Buffer) => {
         stderrSize = captureOutput(stderr, Buffer.from(data), stderrSize);
+      });
+      child.once("exit", () => {
+        exited = true;
       });
       child.once("error", (error) => {
         finish({
@@ -234,7 +243,12 @@ export const nodeCommandExecutor: CommandExecutor = {
       if (input.timeout_ms !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
+          signalProcessGroup(child.pid, "SIGTERM");
+          escalateTimer = setTimeout(() => {
+            if (!exited) {
+              signalProcessGroup(child.pid, "SIGKILL");
+            }
+          }, COMMAND_KILL_ESCALATE_MS);
         }, input.timeout_ms);
       }
     });

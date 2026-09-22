@@ -85,6 +85,24 @@ function resultFromWorkerMessage(msg: StageWorkerResult): StageLaunchResult {
   return { type: "failed", reason: msg.reason };
 }
 
+export function signalProcessGroup(
+  pid: number | undefined,
+  signal: NodeJS.Signals,
+): void {
+  if (pid === undefined) return;
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
 export class StageProcessLauncher {
   private readonly maxActive: number;
   private readonly env: Record<string, string | undefined>;
@@ -135,17 +153,23 @@ export class StageProcessLauncher {
           new Promise<void>((resolve) => {
             const child = entry.child;
             let settled = false;
+            let exited = false;
+            let escalateTimer: NodeJS.Timeout | undefined;
             const finish = () => {
               if (settled) return;
               settled = true;
+              if (escalateTimer !== undefined) clearTimeout(escalateTimer);
               resolve();
             };
-            child.once("exit", finish);
-            child.kill("SIGTERM");
+            child.once("exit", () => {
+              exited = true;
+              finish();
+            });
+            signalProcessGroup(child.pid, "SIGTERM");
             if (killAfterMs > 0) {
-              setTimeout(() => {
-                if (!child.killed) {
-                  child.kill("SIGKILL");
+              escalateTimer = setTimeout(() => {
+                if (!exited) {
+                  signalProcessGroup(child.pid, "SIGKILL");
                 }
               }, killAfterMs);
             }
@@ -224,6 +248,7 @@ export class StageProcessLauncher {
       cwd: input.rootDir,
       env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
       stdio: ["pipe", "pipe", "pipe", "ipc"],
+      detached: true,
     });
 
     const key = activeKey(input.runId, input.stageId);

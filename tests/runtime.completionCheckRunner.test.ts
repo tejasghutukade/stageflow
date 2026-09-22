@@ -1,9 +1,10 @@
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile, readFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { mkdtemp } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
 import {
+  nodeCommandExecutor,
   runCompletionContract,
   type CheckoutCapability,
   type CommandExecutor,
@@ -227,5 +228,57 @@ describe("runCompletionContract", () => {
       artifactsDir,
     });
     expect(nested.checks[0]?.evidence).toMatchObject({ file_type: "symlink" });
+  });
+});
+
+describe.skipIf(process.platform === "win32")("nodeCommandExecutor process-group timeout", () => {
+  it("kills verify descendants when command exceeds timeout_ms", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-verify-timeout-"));
+    const pidFile = path.join(root, "grandchild.pid");
+    const fixture = fileURLToPath(
+      new URL("./fixtures/verifyHangWithGrandchild.mjs", import.meta.url),
+    );
+    const command = `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`;
+    const previous = process.env.VERIFY_GRANDCHILD_PID_FILE;
+    process.env.VERIFY_GRANDCHILD_PID_FILE = pidFile;
+
+    try {
+      const runPromise = nodeCommandExecutor.run({
+        command,
+        cwd: root,
+        timeout_ms: 200,
+      });
+
+      await vi.waitFor(
+        async () => {
+          const raw = await readFile(pidFile, "utf8");
+          expect(Number(raw)).toBeGreaterThan(0);
+        },
+        { timeout: 2000 },
+      );
+      const grandchildPid = Number(await readFile(pidFile, "utf8"));
+
+      const result = await runPromise;
+      expect(result.timed_out).toBe(true);
+
+      await vi.waitFor(
+        () => {
+          let alive = true;
+          try {
+            process.kill(grandchildPid, 0);
+          } catch {
+            alive = false;
+          }
+          expect(alive).toBe(false);
+        },
+        { timeout: 4000 },
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VERIFY_GRANDCHILD_PID_FILE;
+      } else {
+        process.env.VERIFY_GRANDCHILD_PID_FILE = previous;
+      }
+    }
   });
 });

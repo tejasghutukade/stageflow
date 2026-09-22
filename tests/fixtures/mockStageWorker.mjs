@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
 const stageId = (() => {
@@ -35,12 +36,25 @@ if (process.env.MOCK_IPC) {
   }
 }
 
+if (process.env.MOCK_GRANDCHILD_PID_FILE) {
+  const grandchild = spawn(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1e9)"],
+    { stdio: "ignore", detached: false },
+  );
+  writeFileSync(process.env.MOCK_GRANDCHILD_PID_FILE, String(grandchild.pid));
+}
+
 const timer = setTimeout(() => process.exit(exitCode), delay);
 
-process.on("SIGTERM", () => {
-  clearTimeout(timer);
-  const code = process.env.MOCK_SIGTERM_EXIT
-    ? Number(process.env.MOCK_SIGTERM_EXIT)
-    : 1;
-  process.exit(code);
-});
+if (process.env.MOCK_IGNORE_SIGTERM) {
+  process.on("SIGTERM", () => {});
+} else {
+  process.on("SIGTERM", () => {
+    clearTimeout(timer);
+    const code = process.env.MOCK_SIGTERM_EXIT
+      ? Number(process.env.MOCK_SIGTERM_EXIT)
+      : 1;
+    process.exit(code);
+  });
+}
