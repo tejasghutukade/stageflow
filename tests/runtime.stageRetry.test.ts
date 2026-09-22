@@ -150,8 +150,7 @@ type FakeAgentBehavior =
   | { type: "never_emit" }
   | { type: "throw"; message: string };
 
-const STARTUP_RECONCILE_REASON =
-  "process_interrupted: no active worker (server restart)";
+const STARTUP_RECONCILE_REASON = "orphaned_no_worker";
 
 function eligibilityDetail(opts: {
   runStatus: RunStatus;
@@ -2194,7 +2193,7 @@ describe("runtime stage retry", () => {
     }
   });
 
-  it("R8: retryStage succeeds after reconcile on stuck running stage", async () => {
+  it("R8: reconcile marks stuck running stage interrupted (run stays running)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-reconcile-"));
     const store = createRunStore({ rootDir: root });
     const run = await seedLinearReconcilableRun(store);
@@ -2214,37 +2213,20 @@ describe("runtime stage retry", () => {
     ]);
 
     const afterReconcile = await store.readRun(run.runId);
-    expect(afterReconcile.status).toBe("failed");
+    expect(afterReconcile.status).toBe("running");
     expect(
       afterReconcile.stages.find((s) => s.stage_id === "design-doc")?.status,
-    ).toBe("failed");
+    ).toBe("interrupted");
 
-    const agent = scriptedFakeAgent([
-      { type: "emit", envelope: okEnvelope("design-ok-retry") },
-      { type: "emit", envelope: okEnvelope("plan-ok") },
-    ]);
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const retry = await manager.retryStage(run.runId, "design-doc");
-    expect(retry.ok).toBe(true);
-    if (!retry.ok) return;
-    expect(retry.runId).toBe(run.runId);
-    expect(retry.attemptIndex).toBe(2);
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(run.runId);
-      return meta.status === "succeeded";
-    });
-
-    const detail = await store.readRun(run.runId);
-    expect(
-      detail.stages.find((s) => s.stage_id === "design-doc")?.status,
-    ).toBe("succeeded");
-    expect(
-      detail.stages.find((s) => s.stage_id === "implementation-plan")?.status,
-    ).toBe("succeeded");
+    const retry = await reconcileManager.retryStage(run.runId, "design-doc");
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) {
+      expect(retry.status).toBe(409);
+      expect(retry.reason).toMatch(/not failed or succeeded/i);
+    }
   });
 
-  it("R9: parallel retry after reconcile preserves succeeded sibling", async () => {
+  it("R9: parallel reconcile interrupts orphan and preserves succeeded sibling", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-retry-reconcile-par-"));
     const store = createRunStore({ rootDir: root });
     const run = await seedParallelReconcilableRun(store);
@@ -2267,30 +2249,20 @@ describe("runtime stage retry", () => {
       run.runId,
       "design-doc",
     );
-
-    const agent = stageKeyedAgent({
-      "implementation-plan": [
-        { type: "emit", envelope: okEnvelope("impl-retry") },
-      ],
-      "join-doc": [{ type: "emit", envelope: okEnvelope("join") }],
-    });
-    const manager = new RunManager({ agent, store, cwd: fixtures });
-    const retry = await manager.retryStage(run.runId, "implementation-plan");
-    expect(retry.ok).toBe(true);
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(run.runId);
-      return meta.status === "succeeded";
-    });
+    const after = await store.readRun(run.runId);
+    expect(
+      after.stages.find((s) => s.stage_id === "implementation-plan")?.status,
+    ).toBe("interrupted");
+    expect(after.status).toBe("running");
+    expect(
+      after.stages.find((s) => s.stage_id === "design-doc")?.status,
+    ).toBe("succeeded");
 
     const designEventsAfter = await store.listStageEvents(
       run.runId,
       "design-doc",
     );
     expect(designEventsAfter).toEqual(designEventsBefore);
-    expect(agent.openCounts.get("design-doc")).toBeUndefined();
-    expect(agent.openCounts.get("implementation-plan")).toBe(1);
-    expect(agent.openCounts.get("join-doc")).toBe(1);
   });
 
   it("R8: reconcile unblocks resumeRun after parallel HITL answer", async () => {
@@ -2370,16 +2342,19 @@ describe("runtime stage retry", () => {
         "succeeded"
       );
     });
-    expect(agent.openCounts.get("join-doc")).toBeUndefined();
+
+    const mid = await store.readRun(run.runId);
+    expect(
+      mid.stages.find((s) => s.stage_id === "implementation-plan")?.status,
+    ).toBe("interrupted");
+    expect(mid.status).toBe("running");
 
     const retry = await bootManager.retryStage(run.runId, "implementation-plan");
-    expect(retry.ok).toBe(true);
-
-    await waitFor(async () => {
-      const meta = await store.readRunMeta(run.runId);
-      return meta.status === "succeeded";
-    });
-    expect(agent.openCounts.get("join-doc")).toBe(1);
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) {
+      expect(retry.status).toBe(409);
+      expect(retry.reason).toMatch(/not failed or succeeded/i);
+    }
   });
 
   it("retry downstream after upstream succeeded on attempt 2", async () => {

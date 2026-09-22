@@ -10,14 +10,15 @@ import {
 export const OPERATOR_CANCEL_REASON =
   "process_interrupted: operator cancelled run";
 
-export async function failStageAsInterrupted(options: {
+export async function markStageInterrupted(options: {
   store: RunStore;
   runId: string;
   stageId: string;
   reason: string;
+  status: "failed" | "interrupted";
   attemptCtx?: StageAttemptContext;
 }): Promise<void> {
-  const { store, runId, stageId, reason, attemptCtx } = options;
+  const { store, runId, stageId, reason, status, attemptCtx } = options;
 
   let attemptNum: number;
   let attemptOpt: { attempt: number } | undefined;
@@ -36,7 +37,10 @@ export async function failStageAsInterrupted(options: {
     }
   }
 
-  const event: StageLogEvent = { event: "failed", reason };
+  const event: StageLogEvent =
+    status === "interrupted"
+      ? { event: "interrupted", reason }
+      : { event: "failed", reason };
   await store.appendStageEvent(runId, stageId, event, attemptOpt);
 
   try {

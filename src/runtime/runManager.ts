@@ -88,7 +88,7 @@ import { reconstructAndContinue as resumeReconstructAndContinue } from "./resume
 import { resumeSessionFilePath } from "./stageAttemptContext.js";
 import { checkTaskEntryInput, resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
 import {
-  failStageAsInterrupted,
+  markStageInterrupted,
   OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
@@ -229,8 +229,7 @@ type SchedulingHalt = { halted: boolean };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
-const STARTUP_RECONCILE_REASON =
-  "process_interrupted: no active worker (server restart)";
+const STARTUP_RECONCILE_REASON = "orphaned_no_worker";
 const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
 const log = rootLogger.child({ component: "runtime" });
@@ -740,11 +739,12 @@ export class RunManager {
             continue;
           }
           try {
-            await failStageAsInterrupted({
+            await markStageInterrupted({
               store: this.options.store,
               runId,
               stageId: stage.stage_id,
               reason: OPERATOR_CANCEL_REASON,
+              status: "failed",
             });
             reconciled.push({
               runId,
@@ -776,11 +776,12 @@ export class RunManager {
         if (this.hasActiveWorker(runId, stage.stage_id)) continue;
 
         try {
-          await failStageAsInterrupted({
+          await markStageInterrupted({
             store: this.options.store,
             runId,
             stageId: stage.stage_id,
             reason: STARTUP_RECONCILE_REASON,
+            status: "interrupted",
           });
           reconciled.push({
             runId,
@@ -792,7 +793,7 @@ export class RunManager {
             .child({ run_id: runId, stage_id: stage.stage_id })
             .error(
               "reconcile.orphaned_stage",
-              `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
+              `reconcileOrphanedStages: interrupted orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
               { reason: STARTUP_RECONCILE_REASON },
             );
         } catch (err) {
@@ -922,11 +923,12 @@ export class RunManager {
       }
     }
 
-    await failStageAsInterrupted({
+    await markStageInterrupted({
       store: this.options.store,
       runId,
       stageId,
       reason: OPERATOR_ABANDON_REASON,
+      status: "failed",
     });
     if (
       this.retryCoordinator.isActive(runId) &&
@@ -1009,11 +1011,12 @@ export class RunManager {
         continue;
       }
       const wasWaiting = stage.status === "waiting_for_input";
-      await failStageAsInterrupted({
+      await markStageInterrupted({
         store: this.options.store,
         runId,
         stageId: stage.stage_id,
         reason: OPERATOR_CANCEL_REASON,
+        status: "failed",
       });
       if (wasWaiting) {
         this.hitl.clearLiveWait(runId, stage.stage_id);

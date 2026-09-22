@@ -1109,17 +1109,17 @@ describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
       {
         runId: runOrphan.runId,
         stageId: "clarify",
-        reason: "process_interrupted: no active worker (server restart)",
+        reason: "orphaned_no_worker",
       },
     ]);
     expect(manager.getActiveRunIds()).toContain(runWaiting.runId);
     expect(manager.getActiveRunIds()).not.toContain(runOrphan.runId);
 
     const orphanDetail = await store2.readRun(runOrphan.runId);
-    expect(orphanDetail.status).toBe("failed");
+    expect(orphanDetail.status).toBe("running");
     expect(
       orphanDetail.stages.find((s) => s.stage_id === "clarify")?.status,
-    ).toBe("failed");
+    ).toBe("interrupted");
 
     const stillWaiting = await store2.readRun(runWaiting.runId);
     expect(

@@ -31,6 +31,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -105,6 +106,7 @@ export type StageSnapshot = {
     | "pending"
     | "running"
     | "waiting_for_input"
+    | "interrupted"
     | "succeeded"
     | "failed"
     | "skipped";
@@ -616,6 +618,7 @@ export function stageStatusFromEvents(
   for (const ev of events) {
     if (ev.event === "started" || ev.event === "resumed") status = "running";
     if (ev.event === "waiting_for_input") status = "waiting_for_input";
+    if (ev.event === "interrupted") status = "interrupted";
     if (ev.event === "succeeded") status = "succeeded";
     if (ev.event === "failed") status = "failed";
     if (ev.event === "skipped") status = "skipped";
@@ -691,6 +694,7 @@ export function deriveStatusFromStages(
       (s) =>
         s.status === "running" ||
         s.status === "waiting_for_input" ||
+        s.status === "interrupted" ||
         s.status === "succeeded",
     )
   ) {

@@ -156,6 +156,8 @@ export function snapshotToScheduleState(
       return "active";
     case "waiting_for_input":
       return executionMode === "process" ? "waiting" : "active";
+    case "interrupted":
+      return "waiting";
     case "skipped":
       return "skipped";
     default:
