@@ -170,6 +170,25 @@ export type MaterializeOptions = {
   pinned?: { ref: string; resolvedSha: string };
 };
 
+export async function reclaimWorkspaceBinding(meta: RunMeta): Promise<void> {
+  if (derivedBindingKindFromMeta(meta) !== "repository") {
+    return;
+  }
+  const cachePath = bareCachePath(meta.repository!);
+  try {
+    await worktreeRemove(cachePath, meta.checkout_root!);
+  } catch {
+  }
+  try {
+    await worktreePrune(cachePath);
+  } catch {
+  }
+  try {
+    await deleteBranch(cachePath, meta.run_branch!);
+  } catch {
+  }
+}
+
 export async function materializeWorkspaceBinding(
   options: MaterializeOptions,
 ): Promise<{ materialized: MaterializedBinding; rollback: () => Promise<void> }> {
