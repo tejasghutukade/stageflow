@@ -71,6 +71,7 @@ import { resumeSessionFilePath } from "./stageAttemptContext.js";
 import { resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
 import {
   failStageAsInterrupted,
+  OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
@@ -428,6 +429,20 @@ export class RunManager {
     const runs = await this.options.store.listRuns();
 
     for (const summary of runs) {
+      let meta;
+      try {
+        meta = await this.options.store.readRunMeta(summary.run_id);
+      } catch (err) {
+        console.error(
+          `reconcileOrphanedStages: failed to read run meta ${summary.run_id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        continue;
+      }
+
+      if (meta.status === "queued") continue;
+
       let detail;
       try {
         detail = await this.options.store.readRun(summary.run_id);
@@ -441,9 +456,44 @@ export class RunManager {
       }
 
       const runId = summary.run_id;
+      const cancelled = meta.status === "cancelled";
       let runChanged = false;
 
       for (const stage of detail.stages) {
+        if (cancelled) {
+          if (
+            stage.status !== "pending" &&
+            stage.status !== "running" &&
+            stage.status !== "waiting_for_input"
+          ) {
+            continue;
+          }
+          try {
+            await failStageAsInterrupted({
+              store: this.options.store,
+              runId,
+              stageId: stage.stage_id,
+              reason: OPERATOR_CANCEL_REASON,
+            });
+            reconciled.push({
+              runId,
+              stageId: stage.stage_id,
+              reason: OPERATOR_CANCEL_REASON,
+            });
+            runChanged = true;
+            console.error(
+              `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${OPERATOR_CANCEL_REASON}`,
+            );
+          } catch (err) {
+            console.error(
+              `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+          continue;
+        }
+
         if (stage.status !== "running") continue;
         if (this.hasActiveWorker(runId, stage.stage_id)) continue;
 
@@ -472,7 +522,7 @@ export class RunManager {
         }
       }
 
-      if (runChanged) {
+      if (runChanged && !cancelled) {
         try {
           await syncRunStatusFromStages(this.options.store, runId);
         } catch (err) {

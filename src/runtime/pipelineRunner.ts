@@ -32,7 +32,7 @@ import { checkTaskEntryInput } from "./taskInput.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
-export type PipelineRunOutcome = "succeeded" | "failed" | "waiting";
+export type PipelineRunOutcome = "succeeded" | "failed" | "waiting" | "cancelled";
 
 export type PipelineRunResult = {
   ok: boolean;

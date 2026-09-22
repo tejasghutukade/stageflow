@@ -17,6 +17,7 @@ import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import {
   failStageAsInterrupted,
+  OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "../src/runtime/stageRecovery.js";
 
@@ -299,6 +300,33 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
     const detail = await store.readRun(run.runId);
     expect(detail.status).toBe("failed");
   });
+
+  it("syncRunStatusFromStages does not rewrite a cancelled run", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-cancelled-sync-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await failStageAsInterrupted({
+      store,
+      runId: run.runId,
+      stageId: "build",
+      reason: OPERATOR_CANCEL_REASON,
+    });
+    await store.updateRunStatus(run.runId, "cancelled");
+
+    await syncRunStatusFromStages(store, run.runId);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("cancelled");
+    const detail = await store.readRun(run.runId);
+    expect(detail.status).toBe("cancelled");
+  });
 });
 
 describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
@@ -334,6 +362,73 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     expect(detail.status).toBe("failed");
     expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
       "failed",
+    );
+  });
+
+  it("reconcileOrphanedStages on cancelled run terminalizes orphans without rewriting run status", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-cancelled-reconcile-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await store.updateRunStatus(run.runId, "cancelled");
+
+    const manager = new RunManager({
+      agent: reconcileAgent(),
+      store,
+      cwd: fixtures,
+    });
+    const result = await manager.reconcileOrphanedStages();
+
+    expect(result.reconciled).toEqual([
+      {
+        runId: run.runId,
+        stageId: "build",
+        reason: OPERATOR_CANCEL_REASON,
+      },
+    ]);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("cancelled");
+    const detail = await store.readRun(run.runId);
+    expect(detail.status).toBe("cancelled");
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.status).toBe("failed");
+    expect(
+      build?.events.filter((e) => e.event === "failed").at(-1)?.reason,
+    ).toBe(OPERATOR_CANCEL_REASON);
+  });
+
+  it("reconcileOrphanedStages skips queued runs entirely", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-queued-reconcile-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      status: "queued",
+    });
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+
+    const manager = new RunManager({
+      agent: reconcileAgent(),
+      store,
+      cwd: fixtures,
+    });
+    const result = await manager.reconcileOrphanedStages();
+    expect(result.reconciled).toEqual([]);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("queued");
+    const detail = await store.readRun(run.runId);
+    expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+      "running",
     );
   });
 

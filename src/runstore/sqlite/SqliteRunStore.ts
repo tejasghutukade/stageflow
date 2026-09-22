@@ -81,6 +81,11 @@ type RunRow = {
   run_branch: string | null;
   git_author_name: string | null;
   git_author_email: string | null;
+  cancel_reason: string | null;
+  finished_at: string | null;
+  slimmed_at: string | null;
+  disk_bytes: number | null;
+  disk_measured_at: string | null;
 };
 
 type StageRow = {
@@ -401,7 +406,7 @@ export class SqliteRunStore implements RunStore {
         pipeline_id: input.pipelineId,
         task_id: input.taskId ?? null,
         task_yaml: input.taskYaml,
-        status: "running",
+        status: input.status ?? "running",
         created_at: now,
         updated_at: now,
         checkout_root: input.checkoutRoot ?? null,
@@ -444,15 +449,31 @@ export class SqliteRunStore implements RunStore {
 
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {
     await this.ready();
-    const result = this.db
-      .prepare(
-        `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
-      )
-      .run({
-        run_id: runId,
-        status,
-        updated_at: new Date().toISOString(),
-      });
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at WHERE run_id = @run_id`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            updated_at: now,
+          });
     if (result.changes === 0) {
       throw new Error(`Run not found: ${runId}`);
     }
@@ -919,7 +940,7 @@ export class SqliteRunStore implements RunStore {
       clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at
          FROM runs ${where} ORDER BY created_at DESC`,
       )
       .all(...params) as RunRow[];
@@ -1475,6 +1496,13 @@ export class SqliteRunStore implements RunStore {
       ...(row.git_author_email != null
         ? { git_author_email: row.git_author_email }
         : {}),
+      ...(row.cancel_reason != null ? { cancel_reason: row.cancel_reason } : {}),
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {}),
+      ...(row.slimmed_at != null ? { slimmed_at: row.slimmed_at } : {}),
+      ...(row.disk_bytes != null ? { disk_bytes: row.disk_bytes } : {}),
+      ...(row.disk_measured_at != null
+        ? { disk_measured_at: row.disk_measured_at }
+        : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
     };
   }
@@ -1482,7 +1510,7 @@ export class SqliteRunStore implements RunStore {
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

@@ -175,6 +175,8 @@ function resolveListedStatus(
   meta: RunMeta,
   dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): RunStatus {
+  if (meta.status === "cancelled") return "cancelled";
+  if (meta.status === "queued") return "queued";
   if (stages.length === 0) return meta.status ?? "created";
   const derived = deriveStatusFromStages(stages, dag);
   if (meta.status === "succeeded" && derived === "running") {
@@ -223,6 +225,15 @@ export function projectRunSummary(
       ? { active_feedback_loop: feedback.active_feedback_loop }
       : {}),
     ...(cost !== undefined ? { total_cost_usd: cost } : {}),
+    ...(meta.cancel_reason !== undefined
+      ? { cancel_reason: meta.cancel_reason }
+      : {}),
+    ...(meta.finished_at !== undefined ? { finished_at: meta.finished_at } : {}),
+    ...(meta.slimmed_at !== undefined ? { slimmed_at: meta.slimmed_at } : {}),
+    ...(meta.disk_bytes !== undefined ? { disk_bytes: meta.disk_bytes } : {}),
+    ...(meta.disk_measured_at !== undefined
+      ? { disk_measured_at: meta.disk_measured_at }
+      : {}),
   };
 }
 

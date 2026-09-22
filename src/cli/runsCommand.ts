@@ -35,7 +35,7 @@ import {
 } from "../tools/askOperator.js";
 
 export const RUNS_USAGE = `Usage:
-  sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
+  sf runs list [--status created|queued|running|succeeded|failed|cancelled] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
   sf runs verify --run <runId> --stage <stageId> [--json]
   sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
@@ -60,9 +60,11 @@ const defaultIo: RunsCommandIo = {
 
 const RUN_STATUSES: readonly RunStatus[] = [
   "created",
+  "queued",
   "running",
   "succeeded",
   "failed",
+  "cancelled",
 ];
 
 const LIST_FLAGS = new Set([
@@ -438,7 +440,7 @@ export async function runRunsCommand(
       }
       if (parsed.status !== undefined && !isRunStatus(parsed.status)) {
         out.error(
-          "--status must be created, running, succeeded, or failed",
+          "--status must be created, queued, running, succeeded, failed, or cancelled",
         );
         return 1;
       }

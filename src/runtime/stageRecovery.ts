@@ -6,6 +6,9 @@ import {
   type StageAttemptContext,
 } from "./stageAttemptContext.js";
 
+export const OPERATOR_CANCEL_REASON =
+  "process_interrupted: operator cancelled run";
+
 export async function failStageAsInterrupted(options: {
   store: RunStore;
   runId: string;
@@ -50,6 +53,7 @@ export async function syncRunStatusFromStages(
   runId: string,
 ): Promise<void> {
   const meta = await store.readRunMeta(runId);
+  if (meta.status === "cancelled" || meta.status === "queued") return;
   const run = await store.readRun(runId);
   const derived = deriveStatusFromStages(run.stages, meta.pipeline_dag);
   if (meta.status === "succeeded" && derived !== "running") return;

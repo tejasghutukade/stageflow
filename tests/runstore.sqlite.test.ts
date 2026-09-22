@@ -787,4 +787,84 @@ CREATE TABLE stage_events (
       expect(listed.map((r) => r.run_id)).toEqual([keep.runId]);
     });
   });
+
+  it("createRun accepts optional status and defaults to running", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-status-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const running = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const queued = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      status: "queued",
+    });
+    expect((await store.readRunMeta(running.runId)).status).toBe("running");
+    expect((await store.readRunMeta(queued.runId)).status).toBe("queued");
+    const listedQueued = await store.listRuns({ status: "queued" });
+    expect(listedQueued.map((r) => r.run_id)).toEqual([queued.runId]);
+  });
+
+  it("sets finished_at once on first terminal transition", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-finished-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    expect((await store.readRunMeta(run.runId)).finished_at).toBeUndefined();
+
+    await store.updateRunStatus(run.runId, "succeeded");
+    const first = await store.readRunMeta(run.runId);
+    expect(first.finished_at).toBeDefined();
+    expect(first.status).toBe("succeeded");
+
+    await new Promise((r) => setTimeout(r, 5));
+    await store.updateRunStatus(run.runId, "failed");
+    const second = await store.readRunMeta(run.runId);
+    expect(second.status).toBe("failed");
+    expect(second.finished_at).toBe(first.finished_at);
+
+    const detail = await store.readRun(run.runId);
+    expect(detail.finished_at).toBe(first.finished_at);
+  });
+
+  it("threads lifecycle meta fields through readRun and listRuns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-lifecycle-meta-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const dbPath = path.join(storeRootFor(root), "state.db");
+    const db = new Database(dbPath);
+    db.prepare(
+      `UPDATE runs SET cancel_reason = ?, finished_at = ?, slimmed_at = ?, disk_bytes = ?, disk_measured_at = ? WHERE run_id = ?`,
+    ).run(
+      "operator request",
+      "2026-09-01T00:00:00.000Z",
+      "2026-09-02T00:00:00.000Z",
+      4096,
+      "2026-09-02T01:00:00.000Z",
+      run.runId,
+    );
+    db.close();
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.cancel_reason).toBe("operator request");
+    expect(meta.finished_at).toBe("2026-09-01T00:00:00.000Z");
+    expect(meta.slimmed_at).toBe("2026-09-02T00:00:00.000Z");
+    expect(meta.disk_bytes).toBe(4096);
+    expect(meta.disk_measured_at).toBe("2026-09-02T01:00:00.000Z");
+
+    const detail = await store.readRun(run.runId);
+    expect(detail.cancel_reason).toBe("operator request");
+    expect(detail.disk_bytes).toBe(4096);
+
+    const listed = await store.listRuns();
+    const row = listed.find((r) => r.run_id === run.runId);
+    expect(row?.cancel_reason).toBe("operator request");
+    expect(row?.disk_bytes).toBe(4096);
+  });
 });

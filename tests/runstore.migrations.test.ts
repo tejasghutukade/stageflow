@@ -16,6 +16,7 @@ import {
   CURRENT_SCHEMA_VERSION,
 } from "../src/runstore/sqlite/migrations/index.js";
 import { MIGRATION_001 } from "../src/runstore/sqlite/migrations/001-baseline.js";
+import { MIGRATION_002 } from "../src/runstore/sqlite/migrations/002-repository-binding.js";
 import { StoreSchemaError } from "../src/runstore/sqlite/storeSchemaError.js";
 
 type TableInfoRow = {
@@ -33,6 +34,14 @@ const BINDING_COLUMNS = [
   "run_branch",
   "git_author_name",
   "git_author_email",
+] as const;
+
+const LIFECYCLE_COLUMNS = [
+  "cancel_reason",
+  "finished_at",
+  "slimmed_at",
+  "disk_bytes",
+  "disk_measured_at",
 ] as const;
 
 async function seedSchemaV1WithoutBinding(root: string): Promise<string> {
@@ -105,13 +114,13 @@ function columnSignature(rows: TableInfoRow[]): string {
 }
 
 describe("sqlite store migrations", () => {
-  it("fresh store has user_version 2 and two ledger rows", async () => {
+  it("fresh store has user_version 3 and three ledger rows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-fresh-"));
     createRunStore({ rootDir: root, kind: "sqlite" });
     const dbPath = path.join(storeRootFor(root), "state.db");
     const db = new Database(dbPath);
     const userVersion = db.pragma("user_version", { simple: true });
-    expect(userVersion).toBe(2);
+    expect(userVersion).toBe(3);
     expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
     const ledger = db
       .prepare(
@@ -123,12 +132,14 @@ describe("sqlite store migrations", () => {
       applied_at: string;
       min_stageflow_version: string;
     }>;
-    expect(ledger).toHaveLength(2);
+    expect(ledger).toHaveLength(3);
     expect(ledger[0]?.version).toBe(1);
     expect(ledger[0]?.name).toBe("001_baseline");
     expect(ledger[1]?.version).toBe(2);
     expect(ledger[1]?.name).toBe("002_repository_binding");
-    expect(ledger[1]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger[2]?.version).toBe(3);
+    expect(ledger[2]?.name).toBe("003_run_lifecycle");
+    expect(ledger[2]?.min_stageflow_version).toBe(PACKAGE_VERSION);
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -139,9 +150,14 @@ describe("sqlite store migrations", () => {
       "run_branch",
       "git_author_name",
       "git_author_email",
+      ...LIFECYCLE_COLUMNS,
     ]) {
       expect(cols).toContain(name);
     }
+    const diskBytes = (
+      db.prepare(`PRAGMA table_info(runs)`).all() as TableInfoRow[]
+    ).find((c) => c.name === "disk_bytes");
+    expect(diskBytes?.type.toUpperCase()).toBe("INTEGER");
     db.close();
   });
 
@@ -364,14 +380,14 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     expect(row.verification_outcome).toBe("not_run");
   });
 
-  it("migrates a v1 database to v2 and adds binding columns", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v1-v2-"));
+  it("migrates a v1 database to v3 and adds binding plus lifecycle columns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v1-v3-"));
     const dbPath = await seedSchemaV1WithoutBinding(root);
 
     createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
 
     const db = new Database(dbPath);
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
     expect(db.pragma("user_version", { simple: true })).toBe(
       CURRENT_SCHEMA_VERSION,
     );
@@ -383,6 +399,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     expect(ledger).toEqual([
       { version: 1, name: "001_baseline" },
       { version: 2, name: "002_repository_binding" },
+      { version: 3, name: "003_run_lifecycle" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
@@ -392,7 +409,74 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     for (const name of BINDING_COLUMNS) {
       expect(cols.has(name)).toBe(true);
     }
+    for (const name of LIFECYCLE_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
+    const row = db
+      .prepare(`SELECT run_id FROM runs LIMIT 1`)
+      .get() as { run_id: string } | undefined;
+    expect(row).toBeUndefined();
     db.close();
+  });
+
+  it("migrates a v2 database to v3 without losing rows", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v2-v3-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const db = new Database(dbPath);
+    db.exec(`
+CREATE TABLE runs (
+  run_id TEXT PRIMARY KEY,
+  pipeline_id TEXT NOT NULL,
+  task_id TEXT,
+  task_yaml TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  repository TEXT,
+  ref TEXT,
+  resolved_sha TEXT,
+  run_branch TEXT,
+  git_author_name TEXT,
+  git_author_email TEXT
+);
+`);
+    applyPendingMigrations(db, {
+      migrations: [MIGRATION_001, MIGRATION_002],
+    });
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    db.prepare(
+      `INSERT INTO runs (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at)
+       VALUES ('keep-me', 'docs-only', 't', 'id: t\ngoal: g\n', 'running', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    for (const name of LIFECYCLE_COLUMNS) {
+      const cols = new Set(
+        (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
+          (c) => c.name,
+        ),
+      );
+      expect(cols.has(name)).toBe(false);
+    }
+    db.close();
+
+    createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
+
+    const after = new Database(dbPath);
+    expect(after.pragma("user_version", { simple: true })).toBe(3);
+    const kept = after
+      .prepare(`SELECT run_id, status FROM runs WHERE run_id = 'keep-me'`)
+      .get() as { run_id: string; status: string };
+    expect(kept).toEqual({ run_id: "keep-me", status: "running" });
+    const cols = new Set(
+      (
+        after.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
+      ).map((c) => c.name),
+    );
+    for (const name of LIFECYCLE_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
+    after.close();
   });
 
   it("assert opener on a v1 database requires host migration", async () => {

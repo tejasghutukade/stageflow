@@ -78,7 +78,12 @@ CREATE TABLE IF NOT EXISTS runs (
   resolved_sha TEXT,
   run_branch TEXT,
   git_author_name TEXT,
-  git_author_email TEXT
+  git_author_email TEXT,
+  cancel_reason TEXT,
+  finished_at TEXT,
+  slimmed_at TEXT,
+  disk_bytes INTEGER,
+  disk_measured_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_submissions (

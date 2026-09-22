@@ -78,6 +78,7 @@ function isRunTerminal(detail: RunDetail): boolean {
   return (
     detail.status === "succeeded" ||
     detail.status === "failed" ||
+    detail.status === "cancelled" ||
     (detail.status === "running" && detail.waiting_stage_id !== undefined)
   );
 }
@@ -105,15 +106,21 @@ export function runDetailToPipelineRunResult(detail: RunDetail): PipelineRunResu
       ? "succeeded"
       : detail.status === "failed"
         ? "failed"
-        : "waiting";
+        : detail.status === "cancelled"
+          ? "cancelled"
+          : "waiting";
+  const reason =
+    outcome === "cancelled"
+      ? (detail.cancel_reason ?? detail.failed_reason)
+      : outcome === "failed"
+        ? detail.failed_reason
+        : undefined;
   return {
     ok: outcome === "succeeded",
     outcome,
     runId: detail.run_id,
     runDir: computeRunDir(detail.run_id),
-    ...(outcome === "failed" && detail.failed_reason !== undefined
-      ? { reason: detail.failed_reason }
-      : {}),
+    ...(reason !== undefined ? { reason } : {}),
   };
 }
 

@@ -103,13 +103,23 @@ function baseRunCompletionPayload(
             runId: result.runId,
             runDir: result.runDir,
           }
-        : {
-            ok: false,
-            outcome: "failed",
-            runId: result.runId,
-            runDir: result.runDir,
-          };
-  if (result.outcome === "failed" && result.reason !== undefined) {
+        : result.outcome === "cancelled"
+          ? {
+              ok: false,
+              outcome: "cancelled",
+              runId: result.runId,
+              runDir: result.runDir,
+            }
+          : {
+              ok: false,
+              outcome: "failed",
+              runId: result.runId,
+              runDir: result.runDir,
+            };
+  if (
+    (result.outcome === "failed" || result.outcome === "cancelled") &&
+    result.reason !== undefined
+  ) {
     payload.reason = result.reason;
   }
   if (Array.isArray(result.findings) && result.findings.length > 0) {
@@ -177,6 +187,12 @@ function writeCompletionHuman(
       io.error(`Pipeline failed: ${result.reason}`);
       io.error(`Run folder: ${result.runDir}`);
       break;
+    case "cancelled":
+      io.error(
+        `Pipeline cancelled${result.reason ? `: ${result.reason}` : ""}`,
+      );
+      io.error(`Run folder: ${result.runDir}`);
+      break;
     case "succeeded":
       io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
       break;
@@ -193,6 +209,7 @@ function exitCodeForRunOutcome(outcome: PipelineRunResult["outcome"]): number {
     case "waiting":
       return 2;
     case "failed":
+    case "cancelled":
       return 1;
   }
 }

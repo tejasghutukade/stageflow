@@ -11,7 +11,13 @@ import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 import type { StageUsage } from "../types/usage.js";
 
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type RunPipelineDagSnapshot = ResolvedPipelineDag & {
   stage_ids: string[];
@@ -74,6 +80,11 @@ export type RunMeta = {
   run_branch?: string;
   git_author_name?: string;
   git_author_email?: string;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
 export type CreatedRun = {
@@ -370,6 +381,11 @@ export type RunSummary = {
   active_feedback_loop?: FeedbackLoopRecord;
   /** Sum of every stage's cost_usd; omitted when no stage reported usage. */
   total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
 export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
@@ -412,6 +428,7 @@ export type CreateRunInput = {
   runBranch?: string;
   gitAuthorName?: string;
   gitAuthorEmail?: string;
+  status?: RunStatus;
 };
 
 export type ListRunsFilter = {

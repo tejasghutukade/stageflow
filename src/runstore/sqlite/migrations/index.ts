@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { StoreSchemaError } from "../storeSchemaError.js";
 import { MIGRATION_001 } from "./001-baseline.js";
 import { MIGRATION_002 } from "./002-repository-binding.js";
+import { MIGRATION_003 } from "./003-run-lifecycle.js";
 
 export type SqliteMigration = {
   version: number;
@@ -10,7 +11,11 @@ export type SqliteMigration = {
   up: (db: Database.Database) => void;
 };
 
-const DEFAULT_MIGRATIONS: SqliteMigration[] = [MIGRATION_001, MIGRATION_002];
+const DEFAULT_MIGRATIONS: SqliteMigration[] = [
+  MIGRATION_001,
+  MIGRATION_002,
+  MIGRATION_003,
+];
 
 export const CURRENT_SCHEMA_VERSION =
   DEFAULT_MIGRATIONS[DEFAULT_MIGRATIONS.length - 1]!.version;

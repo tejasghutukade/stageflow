@@ -96,7 +96,14 @@ const startRunSchema = z
     message: "Exactly one of task_path or task is required",
   });
 
-const runStatusSchema = z.enum(["created", "running", "succeeded", "failed"]);
+const runStatusSchema = z.enum([
+  "created",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
 
 export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;

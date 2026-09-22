@@ -31,12 +31,14 @@ export function cssStatusToken(status: DisplayStatus): CssStatusToken | undefine
     case "waiting_for_input":
       return "waiting";
     case "created":
+    case "queued":
       return undefined;
     case "running":
       return "running";
     case "succeeded":
       return "succeeded";
     case "failed":
+    case "cancelled":
       return "failed";
     case "pending":
     case "skipped":
@@ -50,10 +52,12 @@ export function statusCopy(status: DisplayStatus): string {
       return "waiting on you";
     case "created":
       return "not started";
+    case "queued":
     case "pending":
     case "running":
     case "succeeded":
     case "failed":
+    case "cancelled":
     case "skipped":
       return status;
   }
@@ -107,6 +111,7 @@ export function statusDotVariant(
 ): "success" | "warning" | "error" | "accent" | "neutral" {
   switch (status) {
     case "created":
+    case "queued":
     case "pending":
     case "skipped":
       return "neutral";
@@ -117,6 +122,7 @@ export function statusDotVariant(
     case "succeeded":
       return "success";
     case "failed":
+    case "cancelled":
       return "error";
   }
 }

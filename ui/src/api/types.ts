@@ -1,4 +1,10 @@
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type StageLogEvent = {
   event: string;
@@ -210,6 +216,11 @@ export type RunSummary = {
   failed_reason?: string;
   active_feedback_loop?: FeedbackLoopRecord;
   total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
 export type StageEnvelopeView = {

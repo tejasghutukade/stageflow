@@ -29,14 +29,23 @@ function summary(
   };
 }
 
-const runStatuses = ["created", "running", "succeeded", "failed"] as const;
+const runStatuses = [
+  "created",
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
 const displayStatuses: DisplayStatus[] = [
   "created",
+  "queued",
   "pending",
   "running",
   "waiting_for_input",
   "succeeded",
   "failed",
+  "cancelled",
   "skipped",
 ];
 const stageStatuses: StageDisplayStatus[] = [
@@ -76,9 +85,11 @@ describe("cssStatusToken", () => {
   it("maps every display status, with created as an unpulsed gray default", () => {
     expect(cssStatusToken("waiting_for_input")).toBe("waiting");
     expect(cssStatusToken("created")).toBeUndefined();
+    expect(cssStatusToken("queued")).toBeUndefined();
     expect(cssStatusToken("running")).toBe("running");
     expect(cssStatusToken("succeeded")).toBe("succeeded");
     expect(cssStatusToken("failed")).toBe("failed");
+    expect(cssStatusToken("cancelled")).toBe("failed");
     expect(cssStatusToken("pending")).toBeUndefined();
     expect(cssStatusToken("skipped")).toBeUndefined();
   });
@@ -96,10 +107,12 @@ describe("statusCopy", () => {
   it("maps every display status, with waiting_for_input as waiting on you", () => {
     expect(statusCopy("waiting_for_input")).toBe("waiting on you");
     expect(statusCopy("created")).toBe("not started");
+    expect(statusCopy("queued")).toBe("queued");
     expect(statusCopy("pending")).toBe("pending");
     expect(statusCopy("running")).toBe("running");
     expect(statusCopy("succeeded")).toBe("succeeded");
     expect(statusCopy("failed")).toBe("failed");
+    expect(statusCopy("cancelled")).toBe("cancelled");
     expect(statusCopy("skipped")).toBe("skipped");
   });
 });
