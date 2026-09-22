@@ -152,7 +152,8 @@ export function signalProcessGroup(
     }
     process.kill(-pid, signal);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") {
       throw error;
     }
   }
