@@ -20,6 +20,8 @@ The URL is printed on boot. Point Cursor or another MCP client at this URL while
 
 Stage agents consuming author-declared MCP is a different surface. Operator-host MCP can list catalog models and list or probe git-root `.mcp.json` servers the same way Settings and HTTP do; inspect is not attach. YAML `mcp:` still allowlists what a stage receives. See [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp).
 
+**Breaking (Slot 6):** stage `.mcp.json` `${VAR}` interpolation resolves against the curated stage environment only — not Host ambient env. Declare tokens in `secrets:` (often `as: env`) or use `${VAR:-default}`. See [migration-stage-environment.md](migration-stage-environment.md).
+
 ## Sessions (how MCP works)
 
 1. Client `POST /mcp` with an `initialize` request (no session header).

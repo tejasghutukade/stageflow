@@ -68,7 +68,7 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, and `secrets` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), and [Stage secrets](#stage-secrets). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
 **Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
@@ -212,6 +212,8 @@ Canonical fixtures:
 | `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)) |
 
 Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
+
+`type: command` checks run as `bash -c <run>` with the stage's curated environment (not `/bin/sh`). Install `bash` on `PATH`. Pipefail is not added implicitly — authors may `set -eo pipefail` themselves.
 
 ```yaml
 verify:
@@ -727,6 +729,8 @@ Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA pro
 
 Pass project MCP servers to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
 
+Interpolation resolves against the **stage's curated environment** (not the Host ambient env). Default MCP connect timeout is **30s**. Missing catalog `command` binaries on `PATH` fail validate with a distinct error. See [migration-stage-environment.md](migration-stage-environment.md).
+
 ```yaml
 stages:
   - id: use-echo
@@ -753,10 +757,10 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Behavior | Detail |
 |----------|--------|
 | Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml` |
-| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
+| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Resolves against the curated stage env only. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
-| Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
-| Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
+| Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. |
+| Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. Connect default is 30s. |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
 | Settings inspect | Operator console Settings lists git-root `.mcp.json` names and Check connect without a run. Inspect is not attach. |
 
@@ -778,6 +782,25 @@ MCP elicitation is unsupported — a passed server cannot ask the operator a que
 Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
+### Stage environment and secrets {#stage-secrets}
+
+Stages receive a **constructed** environment (exact-name allowlist + computed vars + declared grants) — never a raw spread of the Host env. Full migration: [migration-stage-environment.md](migration-stage-environment.md).
+
+| Blocked by default | Always included | Declared per stage |
+|---|---|---|
+| Provider API keys, `GITHUB_TOKEN`/`GH_TOKEN` as raw env (unless `as: env`), control/read tokens (never grantable), cloud/`NPM_TOKEN`/`SSH_AUTH_SOCK` | `PATH`, locale/`TZ`/`TERM`/`TMPDIR`, proxy + CA vars, `STAGEFLOW_HOME`, `SF_STAGE_WORKER`, Slot 2 `STAGEFLOW_*` binding vars, cache vars under `$STAGEFLOW_HOME/cache` | `secrets:` names from the Host registry |
+
+```yaml
+stages:
+  - id: raise-pr
+    uses: ./raise-pr.yaml
+    secrets:
+      - GITHUB_TOKEN                 # GIT_ASKPASS + materialised token file
+      - { name: NPM_TOKEN, as: env } # raw env (WARN)
+```
+
+`verify` `command` checks run as `bash -c <command>` with the same curated env. Host stopgaps: `STAGEFLOW_STAGE_ENV_ALLOW` and deprecated `STAGEFLOW_STAGE_ENV_PASSTHROUGH=all`.
 
 ## External stage files
 
