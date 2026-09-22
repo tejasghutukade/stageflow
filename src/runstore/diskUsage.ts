@@ -174,6 +174,26 @@ export function parseDiskBytesThreshold(
   return n;
 }
 
+const DEFAULT_MIN_FREE_DISK_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * Resolve `STAGEFLOW_MIN_FREE_DISK_BYTES`: bytes or `%` of filesystem.
+ * Unset / empty / invalid → `max(2 GiB, 10% of filesystemTotalBytes)`.
+ */
+export function resolveMinFreeDiskFloor(
+  raw: string | undefined,
+  filesystemTotalBytes: number,
+): number {
+  const parsed = parseDiskBytesThreshold(raw, filesystemTotalBytes);
+  if (parsed !== undefined) return parsed;
+  const total =
+    Number.isFinite(filesystemTotalBytes) && filesystemTotalBytes > 0
+      ? filesystemTotalBytes
+      : 0;
+  const tenPercent = Math.floor(total * 0.1);
+  return Math.max(DEFAULT_MIN_FREE_DISK_BYTES, tenPercent);
+}
+
 /**
  * One named warning when free space is below `STAGEFLOW_DISK_WARN_BYTES`. Never throws.
  * @returns true when a warning line was emitted

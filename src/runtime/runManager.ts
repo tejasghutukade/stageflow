@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import { RunSubmissionExistsError, type RunSubmission, type RunSubmissionRecord } from "../runstore/submission.js";
-import { readFile, realpath } from "node:fs/promises";
+import { access, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
@@ -9,8 +10,11 @@ import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import {
   durableRootDiskBreakdown,
+  readFilesystemSize,
   refreshRunDiskUsage,
+  resolveMinFreeDiskFloor,
   type DiskBreakdown,
+  type FreeSpaceReader,
 } from "../runstore/diskUsage.js";
 import { newRunId } from "../runstore/paths.js";
 import { loadRunContext } from "./resumeReconstruct.js";
@@ -130,8 +134,13 @@ export type StartRunResult =
       activeRunIds?: string[];
       conflictingRunId?: string;
       conflictingCheckout?: string;
+      freeBytes?: number;
+      minFreeBytes?: number;
       stderr?: string;
     };
+
+export const PROJECT_ROOT_UNAVAILABLE_REASON = "project_root_unavailable";
+export const INSUFFICIENT_DISK_CANCEL_REASON = "insufficient_disk";
 
 export type CapacityHealth = {
   ok: true;
@@ -466,6 +475,10 @@ export class RunManager {
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
       a2aStore?: A2aStore;
+      knownWritableProjectRoots?: () =>
+        | Iterable<string>
+        | Promise<Iterable<string>>;
+      freeSpaceReader?: FreeSpaceReader;
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
@@ -2276,6 +2289,9 @@ export class RunManager {
       };
     }
 
+    const diskGate = await this.checkDiskFloorAdmission();
+    if (diskGate !== undefined) return diskGate;
+
     const admitted = this.tryAdmitOrEnqueue(checkoutKey);
     if (admitted.action === "reject") return admitted.failure;
 
@@ -2427,6 +2443,55 @@ export class RunManager {
     };
   }
 
+  private insufficientDiskFailure(
+    freeBytes: number,
+    minFreeBytes: number,
+  ): Extract<StartRunResult, { ok: false }> {
+    return {
+      ok: false,
+      reason: `Insufficient free disk: ${freeBytes} bytes free, floor ${minFreeBytes} bytes`,
+      status: 409,
+      code: "insufficient_disk",
+      freeBytes,
+      minFreeBytes,
+    };
+  }
+
+  private async checkDiskFloorAdmission(): Promise<
+    Extract<StartRunResult, { ok: false }> | undefined
+  > {
+    try {
+      const readFree =
+        this.options.freeSpaceReader ?? readFilesystemSize;
+      const size = await readFree(globalStageflowHome());
+      const minFreeBytes = resolveMinFreeDiskFloor(
+        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES,
+        size.totalBytes,
+      );
+      if (size.freeBytes < minFreeBytes) {
+        return this.insufficientDiskFailure(size.freeBytes, minFreeBytes);
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async isProjectRootAvailable(projectRoot: string): Promise<boolean> {
+    const provider = this.options.knownWritableProjectRoots;
+    if (provider !== undefined) {
+      const roots = [...(await provider())].map((r) => normalizeCatalogPath(r));
+      const normalized = normalizeCatalogPath(projectRoot);
+      return roots.includes(normalized);
+    }
+    try {
+      await access(projectRoot, constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private tryAdmitOrEnqueue(
     checkoutKey: string | undefined,
   ):
@@ -2556,6 +2621,17 @@ export class RunManager {
     }
     if (meta.status !== "queued") {
       this.pendingQueuedStarts.delete(runId);
+      return "cancelled";
+    }
+
+    if (!(await this.isProjectRootAvailable(next.projectRoot))) {
+      await this.cancelRun(runId, PROJECT_ROOT_UNAVAILABLE_REASON);
+      return "cancelled";
+    }
+
+    const diskGate = await this.checkDiskFloorAdmission();
+    if (diskGate !== undefined) {
+      await this.cancelRun(runId, INSUFFICIENT_DISK_CANCEL_REASON);
       return "cancelled";
     }
 

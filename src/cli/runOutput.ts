@@ -82,6 +82,10 @@ function formatRunStartFailedJson(
     reason: started.reason,
   };
   if (started.code !== undefined) payload.code = started.code;
+  if (started.freeBytes !== undefined) payload.freeBytes = started.freeBytes;
+  if (started.minFreeBytes !== undefined) {
+    payload.minFreeBytes = started.minFreeBytes;
+  }
   if (started.stderr !== undefined) payload.stderr = started.stderr;
   return stringify(payload);
 }
