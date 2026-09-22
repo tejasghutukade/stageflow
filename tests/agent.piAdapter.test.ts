@@ -14,6 +14,7 @@ import {
   PiAgentAdapter,
   reconstructStageSessionForAnswer,
   resolveStageToolNames,
+  STAGEFLOW_PATH_DENY_EXTENSION_NAME,
   StageSessionReconstructError,
 } from "../src/agent/piAdapter.js";
 import { registerProviderSupport } from "../src/agent/providerSupport.js";
@@ -276,7 +277,7 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
     return attachSpy.mock.results.at(-1)?.value;
   }
 
-  it("omitted resolvedMcpServers does not pass extensionFactories and keeps sealed tools", async () => {
+  it("omitted resolvedMcpServers skips MCP factory and keeps sealed tools", async () => {
     const runWs = await mkdtemp(path.join(tmpdir(), "sf-pi-mcp-omit-"));
     await new PiAgentAdapter().runStage(wiringInput(runWs));
 
@@ -286,7 +287,12 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       connecting: undefined,
     });
     expect(createMcpAdapter).not.toHaveBeenCalled();
-    expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
+    expect(lastLoaderOptions().extensionFactories).toEqual([
+      expect.objectContaining({
+        name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: expect.any(Function),
+      }),
+    ]);
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
     expect(lastLoaderExtensionPaths()).not.toContain(mcpInlinePath);
@@ -304,7 +310,12 @@ describe("prepareStageSessionWiring MCP snapshot", () => {
       connecting: undefined,
     });
     expect(createMcpAdapter).not.toHaveBeenCalled();
-    expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
+    expect(lastLoaderOptions().extensionFactories).toEqual([
+      expect.objectContaining({
+        name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+        factory: expect.any(Function),
+      }),
+    ]);
     expect(lastLoaderOptions()).not.toHaveProperty("eventBus");
     expect(lastSessionTools()).toEqual(expectedSealedTools);
   });

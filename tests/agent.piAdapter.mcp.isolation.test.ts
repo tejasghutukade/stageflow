@@ -11,6 +11,7 @@ import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import {
   createSealedResourceLoader,
   PiAgentAdapter,
+  STAGEFLOW_PATH_DENY_EXTENSION_NAME,
 } from "../src/agent/piAdapter.js";
 import type { StageRunInput } from "../src/agent/port.js";
 import {
@@ -567,7 +568,12 @@ describe("ambient MCP isolation", () => {
 
       expect(createMcpAdapter).not.toHaveBeenCalled();
       expect(lastLoaderOptions().noExtensions).toBe(true);
-      expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
+      expect(lastLoaderOptions().extensionFactories).toEqual([
+        expect.objectContaining({
+          name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+          factory: expect.any(Function),
+        }),
+      ]);
 
       const sessionOptions = piSdkMocks.createAgentSession.mock.calls.at(-1)?.[0] as
         | {
@@ -598,7 +604,12 @@ describe("ambient MCP isolation", () => {
 
       expect(createMcpAdapter).not.toHaveBeenCalled();
       expect(lastLoaderOptions().noExtensions).toBe(true);
-      expect(lastLoaderOptions()).not.toHaveProperty("extensionFactories");
+      expect(lastLoaderOptions().extensionFactories).toEqual([
+        expect.objectContaining({
+          name: STAGEFLOW_PATH_DENY_EXTENSION_NAME,
+          factory: expect.any(Function),
+        }),
+      ]);
       expect(await attachSpy.mock.results.at(-1)?.value).toEqual({
         extensionFactories: undefined,
         eventBus: undefined,
@@ -620,7 +631,9 @@ describe("ambient MCP isolation", () => {
       if (loader === undefined) {
         throw new Error("createAgentSession was not given a resourceLoader");
       }
-      expect(loader.getExtensions().extensions).toEqual([]);
+      expect(loader.getExtensions().extensions.map((ext) => ext.path)).toEqual([
+        `<inline:${STAGEFLOW_PATH_DENY_EXTENSION_NAME}>`,
+      ]);
       expect(registeredToolNames(loader)).toEqual([]);
       expectNoCanaryLeak({ home, cwd, agentDir, loader });
     }, { useStageAgentDir: true });
