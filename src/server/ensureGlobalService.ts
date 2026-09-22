@@ -3,7 +3,13 @@ import { openSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureGlobalHome } from "../project/globalHome.js";
+import {
+  assertBindAllowed,
+  BindRefusedError,
+  loadControlTokens,
+} from "./controlToken.js";
 import { DEFAULT_PORT } from "./createHttpHost.js";
+import { resolveListenHost } from "./listenHost.js";
 
 /**
  * The well-known port the global service listens on. Overridable via
@@ -103,7 +109,8 @@ export type EnsureGlobalServiceResult =
         | "port_occupied"
         | "spawn_failed"
         | "timed_out"
-        | "autostart_disabled";
+        | "autostart_disabled"
+        | "bind_refused";
       message: string;
     };
 
@@ -158,6 +165,20 @@ export async function ensureGlobalService(
       reason: "autostart_disabled",
       message: `No Stageflow Host is answering at ${url}. Autostart is disabled (STAGEFLOW_NO_AUTOSTART). Start the Host with \`sf mcp\`, or in Docker check that the container's entrypoint is running.`,
     };
+  }
+
+  try {
+    const bind = resolveListenHost({ env });
+    assertBindAllowed(bind, loadControlTokens(env));
+  } catch (err) {
+    if (err instanceof BindRefusedError) {
+      return {
+        ok: false,
+        reason: "bind_refused",
+        message: err.message,
+      };
+    }
+    throw err;
   }
 
   const cliEntry = options.cliEntry ?? process.argv[1] ?? "";

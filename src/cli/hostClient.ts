@@ -17,6 +17,7 @@ import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
 import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
+import { clientAuthorizationHeaders } from "../server/controlToken.js";
 import type { TaskFile } from "../types/task.js";
 
 async function postJson(
@@ -26,7 +27,10 @@ async function postJson(
 ): Promise<{ status: number; body: unknown }> {
   const res = await fetch(`${base}${urlPath}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...clientAuthorizationHeaders("POST"),
+    },
     body: JSON.stringify(body ?? {}),
   });
   return { status: res.status, body: await parseJsonBody(res) };
@@ -36,7 +40,9 @@ async function getJson(
   base: string,
   urlPath: string,
 ): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(`${base}${urlPath}`);
+  const res = await fetch(`${base}${urlPath}`, {
+    headers: { ...clientAuthorizationHeaders("GET") },
+  });
   return { status: res.status, body: await parseJsonBody(res) };
 }
 
@@ -351,6 +357,7 @@ export async function httpDeleteRun(
   const forceQs = options?.force ? "?force=true" : "";
   const res = await fetch(`${base}/api/runs/${enc(runId)}${forceQs}`, {
     method: "DELETE",
+    headers: { ...clientAuthorizationHeaders("DELETE") },
   });
   const body = await parseJsonBody(res);
   if (res.status === 200) {

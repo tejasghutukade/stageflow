@@ -196,6 +196,55 @@ describe("ensureGlobalService", () => {
       }
     });
   });
+
+  it("fails with bind_refused before spawn when STAGEFLOW_BIND is non-loopback without a drive token", async () => {
+    await withIsolatedHome(async () => {
+      let spawnCalls = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () => "unreachable",
+        spawnFn: (() => {
+          spawnCalls += 1;
+          throw new Error("should not spawn");
+        }) as unknown as typeof spawn,
+        env: { STAGEFLOW_BIND: "0.0.0.0" },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("bind_refused");
+        expect(result.message).toMatch(/Refusing to start/);
+        expect(result.message).toContain("0.0.0.0");
+      }
+      expect(spawnCalls).toBe(0);
+    });
+  });
+
+  it("still spawns when STAGEFLOW_BIND is non-loopback and drive token is set", async () => {
+    await withIsolatedHome(async () => {
+      const probeResults: ServiceProbeResult[] = ["unreachable", "up"];
+      let probeIndex = 0;
+      let spawnCalls = 0;
+      const result = await ensureGlobalService({
+        cliEntry,
+        probeHost: async () =>
+          probeResults[Math.min(probeIndex++, probeResults.length - 1)]!,
+        spawnFn: (() => {
+          spawnCalls += 1;
+          return { unref: () => undefined } as unknown as ReturnType<typeof spawn>;
+        }) as unknown as typeof spawn,
+        pollIntervalMs: 1,
+        timeoutMs: 1000,
+        env: {
+          STAGEFLOW_BIND: "0.0.0.0",
+          STAGEFLOW_CONTROL_TOKEN: "d".repeat(32),
+        },
+      });
+
+      expect(result).toEqual({ ok: true, alreadyRunning: false });
+      expect(spawnCalls).toBe(1);
+    });
+  });
 });
 
 describe("ensureGlobalService integration", () => {

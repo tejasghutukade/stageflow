@@ -6,10 +6,12 @@ import {
   assertBindAllowed,
   authenticateBearer,
   BindRefusedError,
+  clientAuthorizationHeaders,
   hasDriveToken,
   loadControlTokens,
   refuseBindMessage,
   requiredScopeFor,
+  resolveClientBearerToken,
 } from "../src/server/controlToken.js";
 
 const DRIVE = "d".repeat(32);
@@ -56,6 +58,30 @@ describe("authenticateBearer", () => {
     const tokens = loadControlTokens({ STAGEFLOW_READ_TOKEN: READ });
     expect(authenticateBearer(tokens, `Bearer ${READ}`)).toBe("read");
     expect(requiredScopeFor("POST", "/api/runs")).toBe("drive");
+  });
+});
+
+describe("resolveClientBearerToken", () => {
+  it("prefers drive for any method and falls back to read only for GET", () => {
+    expect(
+      resolveClientBearerToken("POST", { STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+    ).toBe(DRIVE);
+    expect(
+      resolveClientBearerToken("GET", {
+        STAGEFLOW_CONTROL_TOKEN: DRIVE,
+        STAGEFLOW_READ_TOKEN: READ,
+      }),
+    ).toBe(DRIVE);
+    expect(
+      resolveClientBearerToken("GET", { STAGEFLOW_READ_TOKEN: READ }),
+    ).toBe(READ);
+    expect(
+      resolveClientBearerToken("POST", { STAGEFLOW_READ_TOKEN: READ }),
+    ).toBeUndefined();
+    expect(
+      clientAuthorizationHeaders("DELETE", { STAGEFLOW_CONTROL_TOKEN: DRIVE }),
+    ).toEqual({ Authorization: `Bearer ${DRIVE}` });
+    expect(clientAuthorizationHeaders("GET", {})).toEqual({});
   });
 });
 

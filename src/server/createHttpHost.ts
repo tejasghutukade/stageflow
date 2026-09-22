@@ -102,7 +102,7 @@ export async function createHttpHost(
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const method = req.method ?? "GET";
-    const url = new URL(req.url ?? "/", `http://${host}:${port}`);
+    const url = new URL(req.url ?? "/", `http://${advertisedHost(host)}:${port}`);
     const pathname = url.pathname;
 
     if (pathname === "/api/a2a/status" && method === "GET") {

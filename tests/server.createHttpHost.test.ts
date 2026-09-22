@@ -314,6 +314,30 @@ describe("createHttpHost shared listen", () => {
     }
   });
 
+  it("serves requests when bound to IPv6 loopback without throwing on URL parse", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-host-ipv6-"));
+    const store = createRunStore({ rootDir: root });
+    const started = await startMcpServer({
+      agent: scriptedFakeAgent([]),
+      cwd: root,
+      rootDir: root,
+      store,
+      port: 0,
+      host: "::1",
+      mcpStateless: true,
+    });
+    try {
+      expect(started.host).toBe("::1");
+      expect(started.url).toMatch(/^http:\/\/\[::1\]:\d+$/);
+      const health = await fetch(`${started.url}/api/health`);
+      expect(health.status).toBe(200);
+      const runs = await fetch(`${started.url}/api/runs`);
+      expect(runs.status).toBe(200);
+    } finally {
+      await closeServer(started.server);
+    }
+  });
+
   it("runtime server error after listen does not throw uncaught", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-host-err-"));
     const store = createRunStore({ rootDir: root });

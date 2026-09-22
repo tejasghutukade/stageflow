@@ -33,6 +33,28 @@ describe("mcpEndpointUrl", () => {
     ).toBe("http://127.0.0.1:3847/mcp");
   });
 
+  it("normalizes browser ::1 and bracketed [::1] to 127.0.0.1", () => {
+    expect(
+      mcpEndpointUrl({ hostname: "::1", port: "3847", protocol: "http:" }),
+    ).toBe("http://127.0.0.1:3847/mcp");
+    expect(
+      mcpEndpointUrl({ hostname: "[::1]", port: "3847", protocol: "http:" }),
+    ).toBe("http://127.0.0.1:3847/mcp");
+  });
+
+  it("brackets non-loopback IPv6 hostnames in the MCP origin", () => {
+    expect(
+      mcpEndpointUrl({ hostname: "2001:db8::1", port: "3847", protocol: "http:" }),
+    ).toBe("http://[2001:db8::1]:3847/mcp");
+    expect(
+      mcpEndpointUrl({
+        hostname: "[2001:db8::1]",
+        port: "3847",
+        protocol: "http:",
+      }),
+    ).toBe("http://[2001:db8::1]:3847/mcp");
+  });
+
   it("derives MCP URL from non-loopback console origins", () => {
     expect(
       mcpEndpointUrl({ hostname: "build-box", port: "3847", protocol: "http:" }),

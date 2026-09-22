@@ -67,6 +67,41 @@ export function loadControlTokens(
   };
 }
 
+/** Plain bearer for CLI→host calls. Drive preferred; read only for GET/HEAD. */
+export function resolveClientBearerToken(
+  method: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const driveRaw = readTokenFromEnv(
+    env,
+    "STAGEFLOW_CONTROL_TOKEN",
+    "STAGEFLOW_CONTROL_TOKEN_FILE",
+  );
+  if (driveRaw !== undefined) {
+    return validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN");
+  }
+  if (method === "GET" || method === "HEAD") {
+    const readRaw = readTokenFromEnv(
+      env,
+      "STAGEFLOW_READ_TOKEN",
+      "STAGEFLOW_READ_TOKEN_FILE",
+    );
+    if (readRaw !== undefined) {
+      return validateToken(readRaw, "STAGEFLOW_READ_TOKEN");
+    }
+  }
+  return undefined;
+}
+
+export function clientAuthorizationHeaders(
+  method: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const token = resolveClientBearerToken(method, env);
+  if (token === undefined) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
 export function hasDriveToken(tokens: ControlTokens): boolean {
   return tokens.driveDigest !== undefined;
 }
