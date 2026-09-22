@@ -11,9 +11,12 @@ import {
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import type { StageflowHostBootstrap } from "./bootstrap.js";
 
 export const DEFAULT_PORT = 3847;
+
+const log = rootLogger.child({ component: "http" });
 
 export function json(
   res: ServerResponse,
@@ -82,9 +85,11 @@ export async function createHttpHost(
       try {
         await boot.mcpHandler.handle(req, res);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error("mcp.handler_error", message);
         if (!res.headersSent) {
           res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-          res.end(err instanceof Error ? err.message : String(err));
+          res.end(message);
         }
       }
       return;
@@ -119,12 +124,18 @@ export async function createHttpHost(
   const boundPort =
     address && typeof address !== "string" ? address.port : port;
   const url = `http://${host}:${boundPort}`;
+  const mcpUrl = `${url}/mcp`;
+  log.info("host.listening", `listening on ${url}`, {
+    host,
+    port: boundPort,
+    mcp_url: mcpUrl,
+  });
   return {
     server,
     port: boundPort,
     host,
     url,
-    mcpUrl: `${url}/mcp`,
+    mcpUrl,
     manager: boot.manager,
     store: boot.store,
     runChangeBus: boot.runChangeBus,

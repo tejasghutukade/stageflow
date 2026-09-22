@@ -65,6 +65,7 @@ import {
   type StageExecutionMode,
 } from "./stageConcurrency.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
@@ -232,6 +233,7 @@ const STARTUP_RECONCILE_REASON =
   "process_interrupted: no active worker (server restart)";
 const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
+const log = rootLogger.child({ component: "runtime" });
 
 function parseMaxConcurrent(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENT;
@@ -404,8 +406,10 @@ async function toCheckoutLeaseKey(absPath: string): Promise<string> {
     return await realpath(absPath);
   } catch {
     const fallback = path.resolve(absPath);
-    console.error(
+    log.error(
+      "checkout.realpath_failed",
       `invariant: checkout realpath failed for ${absPath}; using path.resolve fallback ${fallback}`,
+      { abs_path: absPath, fallback },
     );
     return fallback;
   }
@@ -632,11 +636,14 @@ export class RunManager {
           }
         }
       } catch (err) {
-        console.error(
-          `invariant: attach failed reading checkout_root for run ${runId}; tracking without checkout lease: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: runId })
+          .error(
+            "attach.checkout_root_failed",
+            `invariant: attach failed reading checkout_root for run ${runId}; tracking without checkout lease: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
       }
 
       const conflictHolder = this.findActiveCheckoutConflict(
@@ -691,11 +698,14 @@ export class RunManager {
       try {
         meta = await this.options.store.readRunMeta(summary.run_id);
       } catch (err) {
-        console.error(
-          `reconcileOrphanedStages: failed to read run meta ${summary.run_id}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: summary.run_id })
+          .error(
+            "reconcile.read_meta_failed",
+            `reconcileOrphanedStages: failed to read run meta ${summary.run_id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         continue;
       }
 
@@ -705,11 +715,14 @@ export class RunManager {
       try {
         detail = await this.options.store.readRun(summary.run_id);
       } catch (err) {
-        console.error(
-          `reconcileOrphanedStages: failed to read run ${summary.run_id}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: summary.run_id })
+          .error(
+            "reconcile.read_run_failed",
+            `reconcileOrphanedStages: failed to read run ${summary.run_id}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         continue;
       }
 
@@ -739,15 +752,22 @@ export class RunManager {
               reason: OPERATOR_CANCEL_REASON,
             });
             runChanged = true;
-            console.error(
-              `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${OPERATOR_CANCEL_REASON}`,
-            );
+            log
+              .child({ run_id: runId, stage_id: stage.stage_id })
+              .error(
+                "reconcile.orphaned_stage",
+                `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${OPERATOR_CANCEL_REASON}`,
+                { reason: OPERATOR_CANCEL_REASON },
+              );
           } catch (err) {
-            console.error(
-              `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-            );
+            log
+              .child({ run_id: runId, stage_id: stage.stage_id })
+              .error(
+                "reconcile.stage_failed",
+                `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
           }
           continue;
         }
@@ -768,15 +788,22 @@ export class RunManager {
             reason: STARTUP_RECONCILE_REASON,
           });
           runChanged = true;
-          console.error(
-            `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
-          );
+          log
+            .child({ run_id: runId, stage_id: stage.stage_id })
+            .error(
+              "reconcile.orphaned_stage",
+              `reconcileOrphanedStages: failed orphaned stage ${runId}/${stage.stage_id}: ${STARTUP_RECONCILE_REASON}`,
+              { reason: STARTUP_RECONCILE_REASON },
+            );
         } catch (err) {
-          console.error(
-            `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+          log
+            .child({ run_id: runId, stage_id: stage.stage_id })
+            .error(
+              "reconcile.stage_failed",
+              `reconcileOrphanedStages: failed to reconcile ${runId}/${stage.stage_id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
         }
       }
 
@@ -784,18 +811,23 @@ export class RunManager {
         try {
           await syncRunStatusFromStages(this.options.store, runId);
         } catch (err) {
-          console.error(
-            `reconcileOrphanedStages: failed to sync run status for ${runId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+          log
+            .child({ run_id: runId })
+            .error(
+              "reconcile.sync_status_failed",
+              `reconcileOrphanedStages: failed to sync run status for ${runId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
         }
       }
     }
 
     if (reconciled.length > 0) {
-      console.error(
+      log.error(
+        "reconcile.complete",
         `reconcileOrphanedStages: reconciled ${reconciled.length} orphaned stage(s)`,
+        { count: reconciled.length },
       );
     }
 
@@ -814,11 +846,14 @@ export class RunManager {
           resumed.push({ runId });
         }
       } catch (err) {
-        console.error(
-          `resumeStalledSchedules: failed to resume ${runId}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        log
+          .child({ run_id: runId })
+          .error(
+            "resume.stalled_failed",
+            `resumeStalledSchedules: failed to resume ${runId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
       }
     }
     return resumed;
@@ -1062,14 +1097,10 @@ export class RunManager {
       return { ok: false, reason: message, status: 500 };
     }
 
-    console.info(
-      JSON.stringify({
-        event: "delete_run",
-        runId,
-        force,
-        channel,
-      }),
-    );
+    log.child({ run_id: runId }).info("delete_run", "run deleted", {
+      force,
+      channel,
+    });
 
     return { ok: true, runId };
   }
@@ -1105,15 +1136,12 @@ export class RunManager {
       for (const runId of report.slimmed) {
         await this.refreshRunDiskBytes(runId).catch(() => undefined);
       }
-      console.info(
-        JSON.stringify({
-          event: "run_retention_sweep",
-          channel,
-          slimmed: report.slimmed,
-          purged: report.purged,
-          bareCachesEvicted: report.bareCachesEvicted,
-        }),
-      );
+      log.info("run_retention_sweep", "retention sweep executed", {
+        channel,
+        slimmed: report.slimmed,
+        purged: report.purged,
+        bareCachesEvicted: report.bareCachesEvicted,
+      });
     }
 
     return { ok: true, ...report };
@@ -2912,7 +2940,12 @@ export class RunManager {
 
     const tracked = await this.ensureResumeTracked(runId);
     if (!tracked.ok) {
-      console.error(`resumeStalledSchedules: ${tracked.reason}`);
+      log
+        .child({ run_id: runId })
+        .error(
+          "resume.track_failed",
+          `resumeStalledSchedules: ${tracked.reason}`,
+        );
       return false;
     }
 
@@ -2973,11 +3006,14 @@ export class RunManager {
         }
       }
     } catch (err) {
-      console.error(
-        `invariant: trackResume failed reading checkout_root for run ${runId}; continuing without checkout lease: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      log
+        .child({ run_id: runId })
+        .error(
+          "resume.checkout_root_failed",
+          `invariant: trackResume failed reading checkout_root for run ${runId}; continuing without checkout lease: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
     }
 
     const conflictHolder = this.findActiveCheckoutConflict(
@@ -3068,7 +3104,7 @@ export class RunManager {
     } catch {
       // ignore secondary failures — still fail-closed in memory
     }
-    console.error(reason);
+    log.child({ run_id: runId }).error("attach.quarantined", reason);
   }
 
   private untrackIfGeneration(runId: string, generation: number): void {
