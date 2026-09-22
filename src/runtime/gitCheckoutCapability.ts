@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { lstat, readFile, readlink } from "node:fs/promises";
 import path from "node:path";
+import { runGit as execGit } from "../git/exec.js";
 import type {
   CheckoutCapability,
   CheckoutChange,
@@ -10,24 +10,13 @@ import type {
 
 type TrackedPath = { path: string; tracked: boolean };
 
-function runGit(root: string, args: string[]): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    execFile(
-      "git",
-      ["-C", root, ...args],
-      { encoding: "buffer", maxBuffer: 16 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const detail = Buffer.isBuffer(stderr)
-            ? stderr.toString("utf8").trim()
-            : "";
-          reject(new Error(detail || error.message));
-          return;
-        }
-        resolve(stdout as Buffer);
-      },
-    );
+async function runGit(root: string, args: string[]): Promise<Buffer> {
+  const result = await execGit({
+    cwd: root,
+    args,
+    maxBuffer: 16 * 1024 * 1024,
   });
+  return Buffer.from(result.stdout, "utf8");
 }
 
 function nulPaths(output: Buffer): string[] {
