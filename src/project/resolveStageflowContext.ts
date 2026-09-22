@@ -8,7 +8,7 @@ import {
   manifestPathForProject,
 } from "../config/loadStageflowManifest.js";
 import { findProjectRoot } from "./findProjectRoot.js";
-import { ensureGlobalHome } from "./globalHome.js";
+import { globalStageflowHome } from "./globalHome.js";
 import type { ProjectContext } from "./resolveProjectContext.js";
 
 export type CatalogManifestStatus = "ok" | "missing" | "invalid" | "not_git";
@@ -33,7 +33,7 @@ export async function resolveStageflowContext(
 ): Promise<StageflowContext> {
   const resolvedInvocation = path.resolve(invocationCwd);
   const gitRoot = findProjectRoot(resolvedInvocation);
-  const globalHome = ensureGlobalHome();
+  const globalHome = globalStageflowHome();
 
   if (gitRoot === null) {
     return {

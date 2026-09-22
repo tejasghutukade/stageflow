@@ -1,5 +1,10 @@
 import { mkdirSync } from "node:fs";
+import path from "node:path";
 import type Database from "better-sqlite3";
+import {
+  assertStageflowHomeWritable,
+  globalStageflowHome,
+} from "../project/globalHome.js";
 import type { RunStore } from "./port.js";
 import { migrateLegacyStoreRoot, storeRootFor } from "./paths.js";
 import { SqliteRunStore } from "./sqlite/SqliteRunStore.js";
@@ -30,8 +35,16 @@ function resolveKind(kind?: string): "sqlite" {
  * for the one caller wiring a second, colocated store (A2A's tables) into the same `state.db`
  * file. Ordinary call sites use `createRunStore` below and never see this.
  */
+function usesGlobalStageflowHome(rootDir: string): boolean {
+  return path.resolve(rootDir) === globalStageflowHome();
+}
+
 export function createRunStoreWithConnection(config: RunStoreConfig): { store: RunStore; connection: Database.Database } {
   resolveKind(config.kind);
+  if (usesGlobalStageflowHome(config.rootDir)) {
+    assertStageflowHomeWritable();
+    mkdirSync(globalStageflowHome(), { recursive: true });
+  }
   migrateLegacyStoreRoot(config.rootDir);
   const storeRoot = storeRootFor(config.rootDir);
   mkdirSync(storeRoot, { recursive: true });
