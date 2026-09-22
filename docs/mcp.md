@@ -30,7 +30,30 @@ Stage agents consuming author-declared MCP is a different surface. Operator-host
 
 Sessions enable run **resource subscribe** and `notifications/resources/updated`. Without a GET listen stream, tools still work on the session; push updates will not be delivered.
 
-`createHttpHost` applies `localhostHostValidation` and `localhostOriginValidation` from `@modelcontextprotocol/node` on `/mcp`. Non-localhost `Origin` / `Host` is rejected. Point clients at `http://127.0.0.1:3847/mcp` (not a LAN hostname).
+`createHttpHost` applies a shared Host/Origin allow-list (see [Access control](#access-control)) on `/mcp` and every `/api/*` route. Absent `Origin` is allowed on ordinary routes; a present `Origin` must match the allow-list. Point clients at the advertised URL printed on boot (or the console Settings → MCP endpoint).
+
+### Access control
+
+| Env | Role |
+|-----|------|
+| `STAGEFLOW_ALLOWED_HOSTS` | Extra hostnames/IPs (optional `:port`). Unset → loopback only. Loopback always allowed. `*` rejected. |
+| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Bearer **drive** scope (implies read). Required when bind is non-loopback. |
+| `STAGEFLOW_READ_TOKEN` / `_FILE` | Bearer **read** scope only. |
+
+Send `Authorization: Bearer <token>` on protected requests.
+
+| Surface | Scope |
+|---------|-------|
+| `GET`/`HEAD` `/api/*` | `read` |
+| Mutating `/api/*` (`POST`/`PUT`/`PATCH`/`DELETE`) | `drive` |
+| `/mcp` (any method) | `drive` |
+| `GET /api/health` | Host/Origin only — **no bearer** (autostart probe) |
+| A2A (`/a2a*`, agent card) | Unchanged (own per-caller tokens) |
+| Static console files | Ungated |
+
+Missing/malformed credentials → `401` + `WWW-Authenticate: Bearer`. Valid token, wrong scope → `403`. Host/Origin failures → `403` before bearer checks.
+
+Non-loopback bind without a drive token refuses to start (exit `1`) with a stderr message naming the bind and how to set `STAGEFLOW_CONTROL_TOKEN`. Prefer `sf mcp` in containers with `STAGEFLOW_BIND=0.0.0.0`, `STAGEFLOW_CONTROL_TOKEN_FILE=…`, and `STAGEFLOW_ALLOWED_HOSTS` set to the public hostname. Until Slot 6, stage workers inherit `process.env` — treat the control token as Host-process secret hygiene.
 
 ### Stateless escape hatch (test/debug)
 
@@ -51,7 +74,7 @@ Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardow
 | `sf ui` | Console REST/static + `/mcp` | Opens by default |
 | `sf mcp` | Console REST (no static assets) + `/mcp` | No |
 
-`sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. On both hosts, mutating `POST` / `DELETE` `/api/*` routes (including cancel, delete, and gc) are gated to a loopback `Host` / `Origin` via `isMutatingApi`, while `GET /api/*` routes have no host, origin, or auth gate — bind the host only where you trust every local process. Until Slot 5, that loopback gate is the only protection for destructive verbs.
+`sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. Both hosts apply the [access control](#access-control) Host/Origin allow-list and optional bearer scopes to `/mcp` and `/api/*`. Loopback with no token keeps the historical unauthenticated local UX.
 
 Both use the same project git-root catalog and **global durable-root** run store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported. See [Data directory](data-directory.md).
 

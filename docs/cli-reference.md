@@ -596,31 +596,42 @@ See [CI / headless](ci.md) for `catalog.legacy_yaml` (not promoted by `--strict`
 Start the operator console and MCP endpoint (sessions are the MCP product default).
 
 ```bash
-sf ui [--port 3847] [--mcp-stateless]
+sf ui [--host <addr>] [--port 3847] [--no-open] [--mcp-stateless]
 ```
+
+| Flag / env | Description |
+|------------|-------------|
+| `--host` / `STAGEFLOW_BIND` | Listen address (IPv4/IPv6 literal, `0.0.0.0`, or `::`). Default `127.0.0.1`. Flag wins over env. Rejects hostnames. |
+| `--no-open` / `STAGEFLOW_NO_OPEN` | Skip opening a browser. Flag wins over env. Truthy env is any value except `""`, `0`, and `false`. |
+| `--port` | TCP port (default `3847`) |
+| `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` | Disable MCP sessions (test/debug) |
 
 Prints:
 
-- Operator console URL (default `http://127.0.0.1:3847`)
+- Operator console URL (default `http://127.0.0.1:3847`; wildcard binds advertise loopback)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
+
+Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
 
 On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal active stage process groups, mark remaining stages `interrupted`, checkpoint and close SQLite, then exit. Default grace is `STAGEFLOW_SHUTDOWN_GRACE_MS=8000` (pair with compose `stop_grace_period`). Host exit codes and related env vars: [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp).
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
+**Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. See [MCP — access control](mcp.md#access-control).
+
 Run **either** `sf ui` **or** `sf mcp` for a project — not both against the same store.
 
 ## `sf mcp`
 
-Start an MCP-only HTTP host (no operator console UI, no browser open).
+Start an MCP-only HTTP host (no operator console UI, no browser open). Preferred headless / container entrypoint.
 
 ```bash
-sf mcp [--port 3847] [--mcp-stateless]
+sf mcp [--host <addr>] [--port 3847] [--mcp-stateless]
 ```
 
-Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`, including the same SIGTERM/SIGINT drain and Host exit codes. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
+Same `--host` / `STAGEFLOW_BIND`, port, MCP session, and access-control rules as `sf ui` (`--no-open` is not accepted here). Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`, including the same SIGTERM/SIGINT drain and Host exit codes. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 
@@ -684,6 +695,13 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |
 | `STAGEFLOW_LEGACY_YAML` | Only if you still have pre-`io` catalogs: load adapter for legacy authoring keys (on by default). Set `0` to reject legacy authoring keys; [`sf migrate-yaml`](#sf-migrate-yaml) still reads legacy |
 | `STAGEFLOW_MCP_STATELESS` | Disable MCP sessions (test/debug); same as `--mcp-stateless` |
+| `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` (overridden by `--host`) |
+| `STAGEFLOW_NO_OPEN` | Skip browser open for `sf ui` (overridden by `--no-open`) |
+| `STAGEFLOW_ALLOWED_HOSTS` | Comma-separated Host/Origin allow-list (loopback always allowed); reject `*` |
+| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind |
+| `STAGEFLOW_READ_TOKEN` / `_FILE` | Read-scoped bearer token (GET/HEAD `/api/*` only) |
+| `STAGEFLOW_REQUEST_TIMEOUT_MS` | HTTP request receive timeout (default `60000`) |
+| `STAGEFLOW_MAX_CONNECTIONS` | `server.maxConnections` (default `256`) |
 | `STAGEFLOW_ACTIVITY_TEXT_LIMIT` | Transcript text truncation |
 | `STAGEFLOW_CURSOR_EXTENSION` | Path to Cursor Pi extension |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |
