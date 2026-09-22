@@ -21,6 +21,8 @@ Start a host with `sf ui` or `sf mcp` when the user wants MCP. Do not auto-start
 
 Use MCP tools over the Streamable HTTP endpoint at `{baseUrl}/mcp`. Tool names and payloads live in [docs/mcp.md](../../../docs/mcp.md). Typical talking-job tools: `list_pipelines`, `list_tasks`, `start_run`, `get_run`, `wait_run`, `list_waiting`, `answer_gate`, `decide_feedback_loop`, `get_envelope`, `read_artifact`, `validate`, `describe_pipeline`, `get_health`, `list_providers`, `list_models`, `list_project_mcp`, `probe_project_mcp`.
 
+`get_health` returns capacity fields plus an on-demand `disk` breakdown (`runs_bytes`, `worktrees_bytes`, `repos_bytes`, `state_db_bytes`, `a2a_artifacts_bytes`, `free_bytes`) for the durable root. When `slotsAvailable` is `0`, starts may still succeed as queued until `STAGEFLOW_MAX_QUEUED` is full — see `start_run` in the MCP docs.
+
 ## When the host is down
 
 Use the `sf` CLI. Command names and flags live in [docs/cli-reference.md](../../../docs/cli-reference.md). Typical talking-job commands: `sf run`, `sf runs waiting`, `sf runs answer`, `sf runs feedback-decide`, `sf runs wait`, `sf validate`, `sf envelope get`, `sf artifact read`, `sf providers`.

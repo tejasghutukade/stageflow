@@ -47,12 +47,14 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | Code | `outcome` | When |
 |------|-----------|------|
 | `0` | `succeeded` | Pipeline completed |
-| `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
+| `1` | `failed`, `cancelled`, or `busy` | Stage error, validation at start, operator/API cancel, concurrency or queue conflict |
 | `2` | `waiting` | Stage blocked on HITL |
 
 A listed successor skipped by Route `if` (or skip-cascade from a skipped parent) is `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A failed parent still fails the run: a [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending even if that parent's `on` lists `failed`. Skipped siblings do not block a Join that has a succeeded parent.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md). The CI guest uses `sf run --json` / `--skip-gates` only — it does not wait or answer with `sf runs`. Outside CI, humans and agents can continue a parked run with [`sf runs`](cli-reference.md#sf-runs).
+
+Blocking `sf run` treats `cancelled` as terminal (exit `1`) the same way as `failed` — a cancel during the poll returns promptly instead of hanging.
 
 ### JSON stdout
 
@@ -70,6 +72,8 @@ One document per invocation with `--json`:
 ```
 
 When start-run pairing produces warnings (for example `pipeline.model_applies`), the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). Warnings do not fail the run (`ok` / `outcome` / exit stay as today). Omitted `task.input` is treated as `{}` against each entry `io.input.schema`; a mismatch fails start-run as validate-shaped JSON (`task.invalid_shape`).
+
+When concurrency slots are full but the admission queue still has room, start succeeds and the Host may admit the run as `queued`. Blocking `sf run` prints `queued at position N` on stderr, then waits until the run leaves the queue and reaches a terminal outcome. MCP `start_run` returns `{ "runId", "queued": true, "queuePosition" }` for that case — still a success, just slower to start.
 
 **Waiting:**
 
@@ -94,6 +98,20 @@ When start-run pairing produces warnings (for example `pipeline.model_applies`),
 }
 ```
 
+**Cancelled** (run created, then cancelled — exit `1`):
+
+```json
+{
+  "ok": false,
+  "outcome": "cancelled",
+  "runId": "…",
+  "runDir": "…",
+  "reason": "…"
+}
+```
+
+`reason` is the cancel text stored as `cancel_reason` when present. Cancel signals live stage workers, but **process-group kill is not fixed yet** — a wedged agent subprocess or its descendants may outlive the cancelled run.
+
 **Busy** (`outcome: "busy"`, no `runId`):
 
 ```json
@@ -108,7 +126,22 @@ When start-run pairing produces warnings (for example `pipeline.model_applies`),
 }
 ```
 
-`code` is `busy_capacity` or `busy_checkout`. Capacity includes `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`.
+`code` is `busy_capacity` or `busy_checkout`. **`busy_capacity` means the admission queue is full** (or concurrency is full when queuing cannot accept the run) — not merely “active slots are full,” which now queues instead. Capacity fields include `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`. `busy_checkout` never queues.
+
+**Insufficient disk** (`outcome: "failed"`, no `runId`, exit `1`):
+
+```json
+{
+  "ok": false,
+  "outcome": "failed",
+  "code": "insufficient_disk",
+  "reason": "…",
+  "freeBytes": 12000000,
+  "minFreeBytes": 50000000
+}
+```
+
+Distinct from `busy_capacity`. The run is not queued. The same floor is re-checked when a queued run would dequeue; a dequeue-time miss cancels that queued row with `cancel_reason: "insufficient_disk"`.
 
 **Start failed without a run** (`outcome: "failed"`, no `runId`):
 
@@ -263,7 +296,19 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 
 | Variable | Effect |
 |----------|--------|
-| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel runs (busy exit if full) |
+| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel **active** runs; when full, new starts enter the admission queue instead of failing immediately |
+| `STAGEFLOW_MAX_QUEUED` | Cap on persisted `queued` runs (default `32`). When this queue is also full, start returns `busy_capacity` |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-space floor for start and dequeue (integer bytes or `N%` of the durable-root filesystem). Below the floor → `insufficient_disk` (not queued) |
+| `STAGEFLOW_DISK_WARN_BYTES` | Boot warn threshold for free space (bytes or `N%`); one-shot log at Host start, not an admission gate |
+| `STAGEFLOW_GC_INTERVAL_MS` | Periodic retention sweep interval (default 1h); `0` disables. First sweep fires one interval after boot |
+| `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES` | Artifact size above which SLIM may reclaim (default 1 MiB) |
+| `STAGEFLOW_BARE_CACHE_TTL_MS` | Bare clone cache TTL before eviction eligibility (default 30d) |
+| `STAGEFLOW_SLIM_SUCCEEDED_MS` | SLIM window for `succeeded` runs (default 3d) |
+| `STAGEFLOW_PURGE_SUCCEEDED_MS` | PURGE window for `succeeded` runs (default 30d) |
+| `STAGEFLOW_SLIM_FAILED_MS` | SLIM window for `failed` runs (default 14d) |
+| `STAGEFLOW_PURGE_FAILED_MS` | PURGE window for `failed` runs (default 90d) |
+| `STAGEFLOW_SLIM_CANCELLED_MS` | SLIM window for `cancelled` runs (default 1d) |
+| `STAGEFLOW_PURGE_CANCELLED_MS` | PURGE window for `cancelled` runs (default 14d) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Parallel stages within one run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution (see [Skills in CI](#skills-in-ci)) |

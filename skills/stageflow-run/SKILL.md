@@ -58,10 +58,12 @@ Call only these Stageflow MCP tools: `list_pipelines`, `list_tasks`, `start_run`
 | result | next |
 |---|---|
 | `{ "runId" }` | [Wait](#wait) |
-| `busy_capacity` / `busy_checkout` | [Report](#report) the included fields. Stop. Do not retry. |
+| `{ "runId", "queued": true }` (optional `queuePosition`) | Same as `{ "runId" }` — queued is still success, just slower. [Wait](#wait) |
+| `busy_capacity` / `busy_checkout` | [Report](#report) the included fields. Stop. Do not retry. `busy_capacity` means the **admission queue is full** (active-slot exhaustion queues instead). `busy_checkout` never queues. |
+| `insufficient_disk` | [Report](#report) `freeBytes` / `minFreeBytes`. Stop. Do not retry. Distinct from busy — the run was not queued. |
 | other `isError` | [Report](#report) the payload. Stop. |
 
-**Done when** you have a `runId`, or a busy/error report is printed.
+**Done when** you have a `runId`, or a busy/disk/error report is printed.
 
 ### Wait
 
@@ -128,7 +130,9 @@ Parse the single JSON document.
 |---|---|
 | `0` | `succeeded` | [Report](#report) |
 | `1` | `failed` | [Report](#report) `reason` verbatim |
+| `1` | `cancelled` | [Report](#report) `reason` verbatim |
 | `1` | `busy` | [Report](#report) `busy_capacity` / `busy_checkout` and the included fields. Stop. |
+| `1` | `failed` with `code: "insufficient_disk"` | [Report](#report) `freeBytes` / `minFreeBytes`. Stop. |
 | `2` | `waiting` | [CLI wait](#cli-wait) with this `runId` / `runDir` |
 
 **Done when** the outcome is reported, or a waiting exit has handed `runId` to CLI wait.
@@ -187,14 +191,14 @@ Print one shape on every path:
 
 1. Current or last-known stage (MCP live snapshot, or "start/finish only" on a CLI-only stretch).
 2. Waiting prompt text verbatim when the run is parked.
-3. Outcome: `succeeded`, `failed`, `waiting`, or `busy`.
+3. Outcome: `succeeded`, `failed`, `cancelled`, `waiting`, `busy`, or `insufficient_disk`.
 4. Run id.
 5. Run folder (`runDir` / `.stageflow/`).
 
-MCP `get_run` / `wait_run` and `sf runs wait` / `sf runs show` `--json` carry live stage state. `sf run --json` reports start and finish only — say that in chat when the CLI path ran without a later wait/show. A succeeded report names id and folder and does not keep waiting language. A failure names `reason` in this same shape.
+MCP `get_run` / `wait_run` and `sf runs wait` / `sf runs show` `--json` carry live stage state. `sf run --json` reports start and finish only — say that in chat when the CLI path ran without a later wait/show. A succeeded report names id and folder and does not keep waiting language. A failure names `reason` in this same shape. Stop-and-report codes from Start include `busy_capacity`, `busy_checkout`, and `insufficient_disk`.
 
 **Done when** that five-part report is printed.
 
 ## Non-goals
 
-This job starts, watches, and answers runs. It does not require `sf ui`. The operator console is not the answer path. It does not register or invent an MCP tool. It does not start `sf mcp`. It does not retry, resume, abandon, recover, or rerun stages.
+This job starts, watches, and answers runs. It does not require `sf ui`. The operator console is not the answer path. It does not register or invent an MCP tool. It does not start `sf mcp`. It does not retry, resume, abandon, recover, cancel, delete, gc, or rerun stages or runs.

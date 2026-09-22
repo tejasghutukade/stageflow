@@ -18,6 +18,17 @@ export type RunDisplayStatus = RunStatus | "waiting_for_input";
 export type StageDisplayStatus = StageSnapshot["status"];
 export type DisplayStatus = RunDisplayStatus | StageDisplayStatus;
 
+export function cancelledDisplayCopy(cancelReason?: string): string {
+  if (cancelReason !== undefined && cancelReason.trim() !== "") {
+    return `cancelled: ${cancelReason}`;
+  }
+  return "cancelled";
+}
+
+export function isCancelledDisplay(status: DisplayStatus): boolean {
+  return status === "cancelled";
+}
+
 export type CssStatusToken = "waiting" | "running" | "succeeded" | "failed";
 export type RingStatus = "pending" | "running" | "waiting" | "succeeded" | "failed" | "skipped";
 

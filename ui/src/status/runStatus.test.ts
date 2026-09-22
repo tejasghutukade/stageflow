@@ -3,6 +3,7 @@ import type { RunSummary } from "../api";
 import { canRetry } from "../stageAction/eligibility";
 import {
   abandonedDisplayCopy,
+  cancelledDisplayCopy,
   cssStatusToken,
   isAbandonedDisplay,
   ringGlyph,
@@ -177,6 +178,14 @@ describe("stage statuses without a run-level equivalent", () => {
       expect(() => cssStatusToken(status)).not.toThrow();
       expect(() => statusCopy(status)).not.toThrow();
     }
+  });
+});
+
+describe("cancelledDisplayCopy", () => {
+  it("includes cancel_reason when present", () => {
+    expect(cancelledDisplayCopy("operator stop")).toBe("cancelled: operator stop");
+    expect(cancelledDisplayCopy("  ")).toBe("cancelled");
+    expect(cancelledDisplayCopy()).toBe("cancelled");
   });
 });
 

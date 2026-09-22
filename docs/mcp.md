@@ -51,7 +51,7 @@ Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardow
 | `sf ui` | Console REST/static + `/mcp` | Opens by default |
 | `sf mcp` | Console REST (no static assets) + `/mcp` | No |
 
-`sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. On both hosts, mutating `POST /api/*` routes are gated to a loopback `Host` / `Origin`, while `GET /api/*` routes have no host, origin, or auth gate — bind the host only where you trust every local process.
+`sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. On both hosts, mutating `POST` / `DELETE` `/api/*` routes (including cancel, delete, and gc) are gated to a loopback `Host` / `Origin` via `isMutatingApi`, while `GET /api/*` routes have no host, origin, or auth gate — bind the host only where you trust every local process. Until Slot 5, that loopback gate is the only protection for destructive verbs.
 
 Both use the same project git-root catalog and **global durable-root** run store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported. See [Data directory](data-directory.md).
 
@@ -344,7 +344,7 @@ Use `list_waiting` / nested `get_run` fields (`waiting_kind`, `feedback_loop_id`
 
 ### `get_health`
 
-Server health and soft-max run capacity.
+Server health, soft-max run capacity, and on-demand durable-root disk breakdown.
 
 **Input:** `{}`
 
@@ -359,15 +359,25 @@ Server health and soft-max run capacity.
   "slotsAvailable": 3,
   "activeStageProcesses": 0,
   "maxActiveStageProcesses": null,
-  "version": "0.20.0"
+  "version": "0.20.0",
+  "disk": {
+    "runs_bytes": 0,
+    "worktrees_bytes": 0,
+    "repos_bytes": 0,
+    "state_db_bytes": 0,
+    "a2a_artifacts_bytes": 0,
+    "free_bytes": 0
+  }
 }
 ```
 
 `version` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
 
+`disk` is computed on demand: category byte totals under the durable root plus free space on that filesystem. When the walk fails, the Host still returns capacity fields and may omit or zero the breakdown.
+
 Default `maxConcurrent` is 3 (override via `STAGEFLOW_MAX_CONCURRENT_RUNS` or console settings). `maxActiveStageProcesses` is `null` when unlimited.
 
-Start runs until `slotsAvailable` is `0`; then wait for a run to finish or raise `STAGEFLOW_MAX_CONCURRENT_RUNS`.
+When `slotsAvailable` is `0`, further starts are admitted to the **admission queue** (see `start_run`) until `STAGEFLOW_MAX_QUEUED` is also full.
 
 ### `start_run`
 
@@ -434,14 +444,15 @@ below.
 
 Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus `task_path` or `task` — no skip-gates, no CI identity flags, and no `--checkout` override (checkout comes from `task.checkout` only). HITL always parks.
 
-**Success output:** `{ "runId": "…" }`
+**Success output:** `{ "runId": "…" }` when a concurrency slot is free, or `{ "runId": "…", "queued": true, "queuePosition": N }` when slots are full but the admission queue still has room. Queued is still a success — poll with `wait_run` / `get_run` until the run leaves `queued` and reaches waiting or terminal.
 
 **Error output** (`isError: true`):
 
 | Reason | Code | Meaning |
 |--------|------|---------|
-| Capacity full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds` |
-| Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout` |
+| Admission queue full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds`. Fired when `STAGEFLOW_MAX_QUEUED` cannot accept another queued run (not merely when active slots are full) |
+| Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout`. Never queued |
+| Free disk below floor | `insufficient_disk` | Includes `freeBytes`, `minFreeBytes`. Distinct from `busy_capacity`; the run is not created or queued |
 
 Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
 
@@ -483,7 +494,7 @@ Long-poll until a run reaches a HITL waiting point and/or a terminal status, or 
 | `until` | Wakes when |
 |---------|------------|
 | `waiting` | Any stage is `waiting_for_input` / non-empty `waiting_stage_ids` (run `status` stays `"running"` during HITL). A terminal run also ends the wait. |
-| `terminal` | Run `status` is `succeeded` or `failed` |
+| `terminal` | Run `status` is `succeeded`, `failed`, or `cancelled` |
 | `any` | Waiting **or** terminal |
 
 Already-satisfied predicates return immediately with `reason: "already"` (not an error).
@@ -503,7 +514,7 @@ Already-satisfied predicates return immediately with `reason: "already"` (not an
 
 **Timeout is success:** when the budget elapses without a matching wake, the tool returns `reason: "timeout"` with the latest snapshot and `isError: false`.
 
-**Abort ≠ cancel run:** cancelling the MCP request / aborting the handler signal ends only the wait (`isError` with `code: "aborted"`). The pipeline run continues. There is still no run-level cancel tool.
+**Abort ≠ cancel run:** cancelling the MCP request / aborting the handler signal ends only the wait (`isError` with `code: "aborted"`). The pipeline run continues. Use `cancel_run` to cancel the run itself.
 
 **Optional progress:** if the client supplies `_meta.progressToken` on `tools/call`, the server may emit sparse `notifications/progress` during the poll loop. Progress is never required for correctness. Many clients default tool timeouts to ~60s; only clients that honor progress and `resetTimeoutOnProgress` benefit. Cursor behavior is unverified — pass a shorter `timeout_ms` when unsure.
 
@@ -681,13 +692,43 @@ Fails with `409` if the stage is not a timeout failure or the session file is mi
 
 ### `abandon_stage`
 
-Abandon a **running** stage (marks it failed/interrupted). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`.
+Abandon a **running** stage (marks it failed/interrupted). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`. Prefer `cancel_run` to stop an entire run.
 
 **Input:** `{ "runId", "stageId" }`
 
 **Success:** `{ "ok": true, "runId", "stageId" }`
 
-There is **no** run-level cancel/abort MCP tool.
+### `cancel_run`
+
+Cancel a non-terminal run (`created` / `queued` / `running`). Marks the run `cancelled`, terminalizes pending/running/waiting stages, and releases the checkout lease. Required free-text `reason` is stored as `cancel_reason`.
+
+**Input:** `{ "runId": "…", "reason": "…" }`
+
+**Success:** `{ "ok": true, "runId": "…" }`
+
+Cancel **signals** live stage workers, but **process-group kill has not landed** — a wedged agent subprocess or its descendants may outlive the cancelled run.
+
+Until Slot 5 authentication, this mutating tool (and the matching `POST /api/runs/:runId/cancel` REST route) relies on the Host's existing `isMutatingApi` loopback `Host` / `Origin` gate and local bind assumptions — not a bearer token.
+
+### `delete_run`
+
+Hard-delete a terminal run (store rows, workspace, worktree, run branch, and A2A tasks/artifacts). Irreversible. Active runs (`created` / `queued` / `running`) require `force: true`, which cancels first then deletes.
+
+**Input:** `{ "runId": "…", "force"?: boolean }`
+
+**Success:** `{ "ok": true, "runId": "…" }`
+
+Same Slot 5 note as `cancel_run`: until auth lands, destructive MCP/REST (`delete_run`, `DELETE /api/runs/:runId`) rely on `isMutatingApi` + local bind only.
+
+### `gc_runs`
+
+Run retention GC (SLIM, then PURGE, then bare-cache eviction). Default `execute: false` is dry-run (report candidates only). `execute: true` is irreversible bulk reclaim.
+
+**Input:** `{ "execute"?: boolean }`
+
+**Success:** `{ "slimmed": […], "purged": […], "bareCachesEvicted": […] }`
+
+Matching REST: `POST /api/runs/gc` with the same body. Same Slot 5 auth caveat as other destructive verbs. There is no operator-console GC button in this release — CLI/MCP are primary.
 
 ### `rerun`
 
@@ -697,7 +738,7 @@ Start a new run from a stored run’s `pipeline_path` plus task YAML (`RunManage
 
 **Success:** `{ "runId": "…" }` (new run id)
 
-Fails if catalog locators are missing (`400` / `404`). May return the same busy codes as `start_run` (`busy_capacity`, `busy_checkout`).
+Fails if catalog locators are missing (`400` / `404`). May return the same busy / disk codes as `start_run` (`busy_capacity`, `busy_checkout`, `insufficient_disk`), including a queued success shape when admitted to the queue.
 
 A run started from an inline pipeline (see `start_run`) has no `pipeline_path`
 to replay from, so `rerun` fails with this same "missing pipeline_path" error
@@ -722,7 +763,8 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 ## Limitations
 
-- No run-level cancel/abort tool (abandon is per running stage only; `wait_run` abort cancels only the wait)
+- Cancel signals workers but does not yet process-group-kill descendants (Slot 4); descendants may survive a cancelled run
+- Until Slot 5, destructive MCP/REST verbs (`cancel_run`, `delete_run`, `gc_runs`, and their HTTP routes) rely on `isMutatingApi` loopback gating and local bind — not application auth. Slot 5 must cover MCP tools as well as HTTP
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
 - No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
@@ -735,7 +777,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — project `.mcp.json`, Settings inspect, and stage `mcp` names (not this host)
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
-- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / cancel / delete / gc / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
 - [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`

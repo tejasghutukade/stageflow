@@ -36,7 +36,13 @@ import { TranscriptTurns } from "../components/TranscriptTurns";
 import { VerificationHistory } from "../components/VerificationHistory";
 import type { DetailView } from "../routes";
 import {
+  canCancelRun,
+  canDeleteRun,
+} from "../runLifecycle/runActions";
+import { useRunCancel, useRunDelete } from "../runLifecycle/useRunLifecycle";
+import {
   abandonedDisplayCopy,
+  cancelledDisplayCopy,
   cssStatusToken,
   isAbandonedDisplay,
   statusCopy,
@@ -244,6 +250,25 @@ export function RunDetailPage({
     clearError: clearAbandonError,
   } = useStageAbandon(runId, onStageActionSuccess);
 
+  const onDeleted = useCallback(async () => {
+    catalog.refresh();
+    onBack();
+  }, [catalog, onBack]);
+
+  const {
+    cancelling,
+    error: cancelError,
+    cancel,
+    clearError: clearCancelError,
+  } = useRunCancel(runId, onStageActionSuccess);
+
+  const {
+    deleting,
+    error: deleteError,
+    deleteRun: removeRun,
+    clearError: clearDeleteError,
+  } = useRunDelete(runId, run?.status, onDeleted);
+
   const actionBusy = {
     retryingStageIds,
     abandoningStageId,
@@ -422,6 +447,8 @@ export function RunDetailPage({
     clearRetryError();
     clearAbandonError();
     clearResumeError();
+    clearCancelError();
+    clearDeleteError();
     try {
       const result = await rerun(runId);
       onReran(result.runId);
@@ -651,9 +678,19 @@ export function RunDetailPage({
               </span>
             ) : null}
             {run ? (
-              <span className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}>
+              <span
+                className={`status${runToken && runToken !== "running" ? ` status--${runToken}` : ""}`}
+                title={
+                  run.status === "cancelled" && run.cancel_reason
+                    ? run.cancel_reason
+                    : undefined
+                }
+              >
                 <span className={`dot${runToken ? ` dot--${runToken}` : ""}`}></span>
-                {" "}{statusCopy(run.status)}
+                {" "}
+                {run.status === "cancelled"
+                  ? cancelledDisplayCopy(run.cancel_reason)
+                  : statusCopy(run.status)}
               </span>
             ) : null}
             {run && formatCostUsd(run.total_cost_usd) ? (
@@ -662,7 +699,33 @@ export function RunDetailPage({
               </span>
             ) : null}
             <span className="topbar__spacer"></span>
-            <button className="btn btn--primary" disabled={rerunning} onClick={() => void onRerunClick()}>
+            {run && canCancelRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearCancelError();
+                  cancel();
+                }}
+              >
+                {cancelling ? "Cancelling…" : "Cancel"}
+              </button>
+            ) : null}
+            {run && canDeleteRun(run.status) ? (
+              <button
+                type="button"
+                className="btn btn--sm btn--reject"
+                disabled={cancelling || deleting || rerunning}
+                onClick={() => {
+                  clearDeleteError();
+                  removeRun();
+                }}
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            ) : null}
+            <button className="btn btn--primary" disabled={rerunning || cancelling || deleting} onClick={() => void onRerunClick()}>
               {rerunning
                 ? run?.status === "created"
                   ? "Starting…"
@@ -688,6 +751,18 @@ export function RunDetailPage({
           {abandonError ? (
             <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
               {abandonError}
+            </div>
+          ) : null}
+
+          {cancelError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {cancelError}
+            </div>
+          ) : null}
+
+          {deleteError ? (
+            <div className="banner banner--error" style={{ padding: "var(--spacing-3) var(--spacing-5)" }}>
+              {deleteError}
             </div>
           ) : null}
 

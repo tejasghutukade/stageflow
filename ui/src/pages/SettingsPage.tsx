@@ -16,6 +16,15 @@ import {
   type NotifyPreference,
 } from "../useWaitingNotifications";
 
+function formatDiskBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
 export function SettingsPage({
   themeMode,
   onThemeChange,
@@ -128,10 +137,68 @@ export function SettingsPage({
         <div className="setting">
           <span>
             <strong>When slots are full</strong>
-            <p>Reject with busy_capacity. There is no queue.</p>
+            <p>
+              New starts enter the admission queue until{" "}
+              <span className="mono">STAGEFLOW_MAX_QUEUED</span> is full, then
+              reject with <span className="mono">busy_capacity</span>.
+            </p>
           </span>
-          <span className="muted">Reject with busy_capacity</span>
+          <span className="muted">Queue, then busy_capacity</span>
         </div>
+      </section>
+
+      <section className="card">
+        <div className="card__head"><h2>Disk</h2></div>
+        {healthError ? (
+          <p style={{ color: "var(--color-text-red)", fontSize: "var(--font-size-sm)", marginBottom: "var(--spacing-3)" }}>
+            Could not load disk: {healthError}
+          </p>
+        ) : null}
+        {healthLoading ? (
+          <p className="muted">—</p>
+        ) : health?.disk ? (
+          <>
+            <div className="setting">
+              <span>
+                <strong>Runs</strong>
+                <p>Cached workspaces under the durable root.</p>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.runs_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Worktrees</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.worktrees_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Repos caches</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.repos_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>State database</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.state_db_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>A2A artifacts</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.a2a_artifacts_bytes)}</span>
+            </div>
+            <div className="setting">
+              <span>
+                <strong>Free on volume</strong>
+              </span>
+              <span className="muted">{formatDiskBytes(health.disk.free_bytes)}</span>
+            </div>
+          </>
+        ) : (
+          <p className="muted">Disk breakdown unavailable.</p>
+        )}
       </section>
 
       <section className="card">

@@ -73,7 +73,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 | Code | Meaning |
 |------|---------|
 | `0` | Pipeline succeeded |
-| `1` | Failed (stage error, validation error, busy start, or `--skip-gates` on HITL) |
+| `1` | Failed (stage error, validation error, cancelled, busy start, insufficient disk, or `--skip-gates` on HITL) |
 | `2` | Pipeline waiting on operator input |
 
 **JSON outcomes** (`--json`):
@@ -82,10 +82,13 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 |-----------|------|---------|------|
 | `succeeded` | `true` | present | `0` |
 | `failed` | `false` | present (omit if start never created a run) | `1` |
+| `cancelled` | `false` | present | `1` |
 | `waiting` | `false` | present | `2` |
 | `busy` | `false` | omit | `1` |
 
-Busy codes: `busy_capacity` (concurrency limit), `busy_checkout` (same checkout leased).
+Busy codes: `busy_capacity` (admission queue full — active-slot exhaustion queues instead), `busy_checkout` (same checkout leased; never queued). Disk floor miss is `outcome: "failed"` with `code: "insufficient_disk"` (not busy). When slots are full but the queue has room, start succeeds; blocking `sf run` may print `queued at position N` on stderr before waiting for terminal. See [CI / headless](ci.md#json-stdout).
+
+Cancel signals stage workers but **does not yet process-group-kill descendants** — they may survive. Until Slot 5 auth, destructive Host verbs rely on `isMutatingApi` loopback gating and local bind only.
 
 Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `pipeline.model_applies`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. Omitted `task.input` is `{}` against entry `io.input.schema`; mismatch is `task.invalid_shape` and fails start-run. See [CI / headless](ci.md#json-stdout).
 
@@ -112,7 +115,7 @@ Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, 
 Inspect and control existing stored runs (in-progress, parked, or terminal). These verbs are not a 1:1 MCP tool list and they do not list pipelines or tasks. `sf run` stays the blocking start command.
 
 ```bash
-sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
+sf runs list [--status created|queued|running|succeeded|failed|cancelled] [--since <iso>] [--pipeline <id-or-path>] [--json]
 sf runs show --run <runId> [--from <sf-run.json>] [--json]
 sf runs verify --run <runId> --stage <stageId> [--json]
 sf runs recover --run <runId> --stage <stageId> [--guidance <text>] [--stop] [--json]
@@ -123,6 +126,9 @@ sf runs feedback-decide --run <runId> --stage <sourceStageId> [--loop <loopId>] 
 sf runs retry --run <runId> --stage <stageId> [--json]
 sf runs resume --run <runId> --stage <stageId> [--json]
 sf runs abandon --run <runId> --stage <stageId> [--json]
+sf runs cancel --run <runId> --reason <text> [--json]
+sf runs delete --run <runId> [--force] [--json]
+sf runs gc [--dry-run] [--json]
 sf runs rerun --run <runId> [--json]
 ```
 
@@ -139,6 +145,9 @@ sf runs rerun --run <runId> [--json]
 | `retry` | Retry a failed stage; process waits until waiting or terminal |
 | `resume` | Continue a timed-out failed attempt on the same session |
 | `abandon` | Mark a running stage abandoned |
+| `cancel` | Cancel a non-terminal run (`created` / `queued` / `running`) |
+| `delete` | Hard-delete a terminal run (`--force` cancels then deletes an active run) |
+| `gc` | Retention SLIM/PURGE + bare-cache eviction (`--dry-run` report-only) |
 | `rerun` | Start a new run from a stored run; process waits until waiting or terminal |
 
 `--from` is accepted on `show` and `wait` only (reads `runId` from a prior `sf run --json` file). `--answer` is `answer` only.
@@ -148,11 +157,13 @@ sf runs rerun --run <runId> [--json]
 | Kind | Verbs | Path |
 |------|-------|------|
 | Read | `list`, `show`, `verify`, `waiting`, `wait` | Open the global run store in assert mode (no schema changes in the CLI). If `state.db` is missing or behind this binary, start the Host first so it can migrate, then reopen |
-| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `rerun` | Sent over HTTP to the global service |
+| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `cancel`, `delete`, `gc`, `rerun` | Sent over HTTP to the global service |
 
 Read verbs that open the store themselves (`list`, `show`, `verify`, `waiting`, `wait`) and the related `sf artifact` / `sf envelope` / `sf export-run` commands do not apply migrations in the CLI process. When the database is missing or its schema version is behind, they start the Host the same way mutating verbs do, then open again in assert mode. Autostart may append to `$STAGEFLOW_HOME/service.log`.
 
 Mutating verbs require the global service and do not write the store themselves. They probe `GET http://127.0.0.1:3847/api/health` (1500 ms) and, when nothing answers, spawn a detached `sf mcp` on that port and poll until it is healthy (default 10 s, `STAGEFLOW_AUTOSTART_TIMEOUT_MS`). Exit `1` when the port is held by a non-Stageflow process, the spawn fails, or the wait times out. `sf run` starts runs the same way.
+
+Until Slot 5 authentication, destructive mutate verbs (`cancel`, `delete`, `gc` and their REST routes) rely on the Host's `isMutatingApi` loopback `Host` / `Origin` gate and local bind assumptions — not a bearer token. Slot 5 must cover MCP tools as well as HTTP.
 
 ### Parked runs
 
@@ -177,19 +188,22 @@ A HITL park keeps store status `running`. `--status waiting` is not a valid `lis
 
 Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `waiting` for the next state. Do not reuse `sf run` exit `2` for a completed `wait` that woke on waiting.
 
-**Retry / resume / rerun / abandon:**
+**Retry / resume / rerun / abandon / cancel / delete / gc:**
 
 | Verb | `--json` shape | Exit |
 |------|----------------|------|
-| `retry`, `rerun` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy, `2` waiting |
+| `retry`, `rerun` | `sf run` completion JSON (`ok`, `outcome`, `runId`, …) | `0` succeeded, `1` failed/busy/cancelled, `2` waiting |
 | `resume` | `{ "ok", "runId", "stageId", "attemptIndex" }` | `0` success, `1` error |
 | `abandon` | `{ "ok", "runId", "stageId" }` | `0` success, `1` error |
+| `cancel` | `{ "ok", "runId" }` | `0` success, `1` error |
+| `delete` | `{ "ok", "runId" }` | `0` success, `1` error |
+| `gc` | `{ "slimmed", "purged", "bareCachesEvicted" }` | `0` success, `1` error |
 
 ### `sf runs list`
 
 | Flag | Description |
 |------|-------------|
-| `--status` | `created` \| `running` \| `succeeded` \| `failed` |
+| `--status` | `created` \| `queued` \| `running` \| `succeeded` \| `failed` \| `cancelled` |
 | `--since` | ISO timestamp; keep runs with `created_at >= since` |
 | `--pipeline` | Match `pipeline_id` or `pipeline_path` |
 | `--json` | Pretty-printed `{ "runs": [ … ] }` |
@@ -305,6 +319,53 @@ Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback
 ### `sf runs retry` / `resume` / `abandon` / `rerun`
 
 Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
+
+### `sf runs cancel`
+
+Cancel a non-terminal run. Required `--reason` is stored as `cancel_reason`.
+
+```bash
+sf runs cancel --run <runId> --reason <text> [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--reason` | Free-text cancel reason (required) |
+| `--json` | `{ "ok": true, "runId" }` |
+
+Signals live stage workers, but **process-group kill has not landed** — descendants may survive. Same mutate / Slot 5 auth notes as other destructive Host verbs.
+
+### `sf runs delete`
+
+Hard-delete a terminal run (store + workspace + worktree + run branch + A2A). Irreversible.
+
+```bash
+sf runs delete --run <runId> [--force] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run` | Run id (required) |
+| `--force` | Cancel first when the run is still `created` / `queued` / `running`, then delete |
+| `--json` | `{ "ok": true, "runId" }` |
+
+Without `--force`, an active run returns an error. Same Slot 5 auth caveat.
+
+### `sf runs gc`
+
+Run retention GC (SLIM, then PURGE, then bare-cache eviction).
+
+```bash
+sf runs gc [--dry-run] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--dry-run` | Report candidates only (default without this flag is execute) |
+| `--json` | `{ "slimmed", "purged", "bareCachesEvicted" }` |
+
+`--dry-run` is report-only; omitting it mutates. Matching MCP tool is `gc_runs` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
 
 ## `sf envelope get`
 
@@ -613,7 +674,9 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | Variable | Purpose |
 |----------|---------|
 | `SF_STORE` | Must be `sqlite` (default) |
-| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft max parallel runs |
+| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft max parallel **active** runs (full slots queue via `STAGEFLOW_MAX_QUEUED`; see [CI concurrency env vars](ci.md#concurrency-env-vars)) |
+| `STAGEFLOW_MAX_QUEUED` | Admission queue depth; when full, start returns `busy_capacity` |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-disk admission floor (bytes or `N%`) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Stage concurrency per run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap (also in [CI / headless](ci.md)) |
 | `STAGEFLOW_STAGE_EXECUTION` | Stage worker mode: `process` (default) or `inprocess` (mainly tests) |

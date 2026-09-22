@@ -470,6 +470,27 @@ export function abandonStage(
   );
 }
 
+export function cancelRun(
+  runId: string,
+  reason: string,
+): Promise<{ ok: true; runId: string }> {
+  return api(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export function deleteRun(
+  runId: string,
+  options?: { force?: boolean },
+): Promise<{ ok: true; runId: string }> {
+  const force = options?.force === true;
+  const qs = force ? "?force=true" : "";
+  return api(`/api/runs/${encodeURIComponent(runId)}${qs}`, {
+    method: "DELETE",
+  });
+}
+
 export async function retryStageWithDetails(
   runId: string,
   stageId: string,
