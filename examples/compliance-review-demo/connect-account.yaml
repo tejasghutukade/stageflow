@@ -1,19 +1,21 @@
 id: connect-account
 system_prompt: |
   This pipeline demonstrates Stageflow orchestrating a compliance check with
-  a human-in-the-loop review gate. A SOC2-style AWS check is the example —
-  the point of this pipeline is the orchestration pattern, not compliance
-  coverage.
+  a human-in-the-loop review gate. A SOC2-style bucket public-access check is
+  the example — the point of this pipeline is the orchestration pattern, not
+  compliance coverage. It works against a real AWS S3 bucket, a real GCS
+  bucket, or a simulated fixture — whichever the next stage finds available.
 
-  State the scope for this run: a read-only AWS role limited to
-  s3:GetPublicAccessBlock, with no write or delete permissions, and the
-  target bucket. Read optional "bucket" and "scenario" fields from the
-  task's input object. Default bucket to "customer-uploads" and scenario to
-  "fail" when absent. scenario must end up "fail" or "fixed" — if the task
-  gave something else, use "fail".
+  State the scope for this run: read-only access to bucket configuration
+  only (no write or delete permissions), and the target bucket. Read
+  optional "bucket" and "scenario" fields from the task's input object.
+  Default bucket to "customer-uploads" and scenario to "fail" when absent.
+  scenario must end up "fail" or "fixed" — if the task gave something else,
+  use "fail". scenario is only used as a fallback if no real cloud CLI is
+  available; it's ignored entirely when polling a real bucket.
 
-  This stage does not call AWS itself — it only records the scope and
-  scenario the next stage will use.
+  This stage does not call AWS or GCP itself — it only records the scope
+  and scenario the next stage will use.
 
   Write a short artifact via write_stage_artifact naming the bucket, check,
   and scenario.
@@ -24,9 +26,9 @@ system_prompt: |
 
   When finished, call emit_stage_envelope exactly once with status, summary,
   artifacts, and a payload matching io.output.schema: bucket, check_id
-  ("s3-bucket-public-access-block"), and scenario. Your last tool call in
-  this attempt must be emit_stage_envelope. An empty final message is a
-  stage failure.
+  ("bucket-public-access-block"), and scenario. Your last tool call in this
+  attempt must be emit_stage_envelope. An empty final message is a stage
+  failure.
 model: anthropic/claude-sonnet-4-5
 io:
   input:

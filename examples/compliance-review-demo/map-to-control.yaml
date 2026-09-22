@@ -3,10 +3,11 @@ system_prompt: |
   Read verdict, check_id, resource, reviewed, auto_approved, and reviewer
   from the prior stage's payload.
 
-  Map check_id "s3-bucket-public-access-block" to SOC2 control
-  "CC6.1 — logical access is restricted". This demo hardcodes one mapping;
-  a real build would look this up from a maintained check-to-control table
-  (Prowler ships one for its AWS checks).
+  Map check_id "bucket-public-access-block" to SOC2 control
+  "CC6.1 — logical access is restricted", regardless of which cloud the
+  bucket lives in. This demo hardcodes one mapping; a real build would look
+  this up from a maintained check-to-control table (Prowler ships one for
+  its AWS checks; a GCP-equivalent would need its own).
 
   summary and payload are handed to the next stage verbatim. State outcomes
   and artifact pointers only. Do not repeat this stage's prohibitions in
