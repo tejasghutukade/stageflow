@@ -26,6 +26,7 @@ import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
+import { scheduleExitWithDrain } from "./runtime/stageWorkerProtocol.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
@@ -317,7 +318,7 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
     operatorCatalog: parsed.operatorCatalog,
     skipGates: parsed.skipGates,
   });
-  exitForOutcome(outcome);
+  return exitForOutcome(outcome);
 }
 
 function openBrowser(url: string): void {
@@ -505,9 +506,11 @@ function isDirectCliInvocation(): boolean {
 
 if (isDirectCliInvocation()) {
   main(process.argv)
-    .then((code) => process.exit(code))
+    .then((code) => {
+      scheduleExitWithDrain(code);
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      scheduleExitWithDrain(1);
     });
 }

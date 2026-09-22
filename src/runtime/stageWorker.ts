@@ -259,20 +259,37 @@ export async function runStageWorker(
   }
 }
 
-export function sendWorkerResult(result: StageWorkerResult): void {
-  if (typeof process.send === "function") {
-    process.send(result);
+export function sendWorkerResult(result: StageWorkerResult): Promise<void> {
+  if (typeof process.send !== "function") {
+    return Promise.resolve();
   }
+  return new Promise((resolve) => {
+    try {
+      const ok = process.send!(result, (err) => {
+        void err;
+        resolve();
+      });
+      if (ok === false) {
+        resolve();
+      }
+    } catch {
+      resolve();
+    }
+  });
 }
 
-export function exitForOutcome(outcome: RunStageOutcome): never {
-  const message = outcomeToWorkerResult(outcome);
-  sendWorkerResult(message);
+export function exitCodeForOutcome(outcome: RunStageOutcome): number {
   if (isRunStageWaiting(outcome)) {
-    process.exit(STAGE_WORKER_EXIT.WAITING);
+    return STAGE_WORKER_EXIT.WAITING;
   }
   if (outcome.ok) {
-    process.exit(STAGE_WORKER_EXIT.SUCCEEDED);
+    return STAGE_WORKER_EXIT.SUCCEEDED;
   }
-  process.exit(STAGE_WORKER_EXIT.FAILED);
+  return STAGE_WORKER_EXIT.FAILED;
+}
+
+export async function exitForOutcome(outcome: RunStageOutcome): Promise<number> {
+  const message = outcomeToWorkerResult(outcome);
+  await sendWorkerResult(message);
+  return exitCodeForOutcome(outcome);
 }

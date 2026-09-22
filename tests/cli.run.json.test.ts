@@ -1034,3 +1034,42 @@ describe("sf run STAGEFLOW_NO_AUTOSTART (U7)", () => {
     expect(parsed.reason.toLowerCase()).not.toMatch(/unset/);
   });
 });
+
+describe("sf run --json exit drain (U8)", { timeout: 15_000 }, () => {
+  it("piped stdout yields complete parseable JSON repeatedly", () => {
+    for (let i = 0; i < 5; i++) {
+      const result = spawnSync(process.execPath, [tsxCli, cli, "run", "--json"], {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { ...process.env },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout.trim().length).toBe(0);
+      expect(result.stderr).toMatch(/Missing --task and\/or --pipeline/);
+    }
+  });
+
+  it("piped --json validation failure emits complete parseable JSON", () => {
+    for (let i = 0; i < 3; i++) {
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cli, "run", "--json", "--task", sampleTask, "--pipeline", brokenPipeline],
+        {
+          cwd: fixtures,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env },
+        },
+      );
+      expect(result.status).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings?: unknown[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed).not.toHaveProperty("runId");
+      expect(Array.isArray(parsed.findings)).toBe(true);
+    }
+  });
+});

@@ -11,6 +11,16 @@ export const STAGE_WORKER_EXIT = {
   WAITING: 2,
 } as const;
 
+export const PROCESS_EXIT_FORCE_MS = 1_000;
+
+export function scheduleExitWithDrain(code: number): void {
+  process.exitCode = code;
+  const timer = setTimeout(() => {
+    process.exit(code);
+  }, PROCESS_EXIT_FORCE_MS);
+  timer.unref();
+}
+
 export type StageWorkerInput = {
   runId: string;
   stageId: string;
