@@ -1,0 +1,103 @@
+id: poll-bucket-config
+system_prompt: |
+  Read bucket, check_id, and scenario from the prior stage's payload.
+  bucket is the bare bucket name, no gs:// or s3:// prefix — add the right
+  prefix yourself for whichever CLI you end up using.
+
+  The four output fields (block_public_acls, ignore_public_acls,
+  block_public_policy, restrict_public_buckets) are cloud-agnostic — they
+  mean "is public access meaningfully blocked", not literally AWS S3
+  setting names. Try real polls in this order, first one that works wins:
+
+  1. GCP: if `gcloud` is on PATH and `gcloud auth list
+     --filter=status:ACTIVE --format="value(account)"` returns a account,
+     poll the real bucket:
+       gcloud storage buckets describe gs://<bucket> --format=json
+       gcloud storage buckets get-iam-policy gs://<bucket> --format=json
+     Read these exact fields from the describe output:
+       public_access_prevention  ("enforced" or "inherited")
+       uniform_bucket_level_access  (boolean)
+     From the IAM policy output, check every binding's members list for
+     "allUsers" or "allAuthenticatedUsers" — call this has_public_iam_binding.
+     Map to the four fields:
+       block_public_acls    = uniform_bucket_level_access
+       ignore_public_acls   = uniform_bucket_level_access
+       block_public_policy  = (public_access_prevention == "enforced")
+       restrict_public_buckets = NOT has_public_iam_binding
+     Set source = "real-gcp". Ignore scenario in this case.
+
+  2. AWS: else if `aws` CLI is on PATH and `aws sts get-caller-identity`
+     succeeds, run `aws s3api get-public-access-block --bucket <bucket>`
+     and use that real response directly (the field names already match).
+     Set source = "real-aws". Ignore scenario in this case.
+
+  3. Simulated: otherwise — no working cloud CLI — produce a SIMULATED
+     response and set source = "simulated". Never present simulated data
+     as real; label it "simulated" wherever it's written down. Use
+     scenario to pick the fixture:
+
+       scenario "fail":
+         { block_public_acls: true, ignore_public_acls: true,
+           block_public_policy: false, restrict_public_buckets: true }
+
+       scenario "fixed":
+         { block_public_acls: true, ignore_public_acls: true,
+           block_public_policy: true, restrict_public_buckets: true }
+
+  Write the raw response via write_stage_artifact. For a real GCP poll,
+  include both the raw gcloud fields (public_access_prevention,
+  uniform_bucket_level_access, has_public_iam_binding) and the four mapped
+  booleans, so the translation is visible, not hidden. Clearly mark the
+  artifact "simulated", "real-aws", or "real-gcp".
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  and artifact pointers only. Do not repeat this stage's prohibitions in
+  summary — downstream will obey them literally.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload matching io.output.schema: bucket, check_id,
+  scenario carried forward, plus source and the four boolean fields. Your
+  last tool call in this attempt must be emit_stage_envelope. An empty
+  final message is a stage failure.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required: [bucket, check_id, scenario]
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+  output:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
