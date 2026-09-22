@@ -56,6 +56,17 @@ import {
   type StageflowHostOptions,
 } from "./bootstrap.js";
 import {
+  assertAllowedHttpAccess,
+  resolveAllowedHosts,
+  type AllowedHosts,
+} from "./allowedHosts.js";
+import {
+  enforceBearerAuth,
+  loadControlTokens,
+  requiredScopeFor,
+  type ControlTokens,
+} from "./controlToken.js";
+import {
   createHttpHost,
   DEFAULT_PORT,
   json,
@@ -82,6 +93,8 @@ export type UiServerOptions = {
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -191,76 +204,6 @@ function isCredentialMutatingApi(method: string, pathname: string): boolean {
   );
 }
 
-/** Login/logout require a non-empty loopback Origin (stricter than other mutating APIs). */
-function assertCredentialMutatingOrigin(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const origin = req.headers.origin;
-  if (typeof origin !== "string" || origin.length === 0) {
-    json(res, 403, { error: "Origin required" });
-    return false;
-  }
-  try {
-    const originHost = new URL(origin).hostname;
-    if (!isLoopbackHostname(originHost)) {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  } catch {
-    json(res, 403, { error: "Forbidden origin" });
-    return false;
-  }
-  return true;
-}
-
-function hostnameFromHostHeader(hostHeader: string): string {
-  if (hostHeader.startsWith("[")) {
-    const end = hostHeader.indexOf("]");
-    return end === -1 ? hostHeader : hostHeader.slice(1, end);
-  }
-  const colon = hostHeader.lastIndexOf(":");
-  if (colon > 0 && /^\d+$/.test(hostHeader.slice(colon + 1))) {
-    return hostHeader.slice(0, colon);
-  }
-  return hostHeader;
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
-/** REST-friendly Host/Origin gate (plain JSON 403). Absent Origin is allowed. */
-function assertLoopbackHttpAccess(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const hostHeader = req.headers.host;
-  if (typeof hostHeader !== "string" || hostHeader.length === 0) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  if (!isLoopbackHostname(hostnameFromHostHeader(hostHeader))) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && origin.length > 0) {
-    try {
-      const originHost = new URL(origin).hostname;
-      if (!isLoopbackHostname(originHost)) {
-        json(res, 403, { error: "Forbidden origin" });
-        return false;
-      }
-    } catch {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  }
-  return true;
-}
-
 export function defaultUiDistDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   if (path.basename(path.dirname(here)) === "src") {
@@ -278,6 +221,8 @@ export type OperatorRouteDeps = {
   providerAuthContext: ProviderAuthContext | undefined;
   /** Omit for a headless service (e.g. `sf mcp`) — GETs outside the API surface just 404. */
   uiDistDir?: string;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
 };
 
 /**
@@ -291,15 +236,19 @@ export function createOperatorRoutes(
   deps: OperatorRouteDeps,
 ): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
   const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
+  const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method }) => {
-      if (isMutatingApi(method, pathname)) {
-        if (!assertLoopbackHttpAccess(req, res)) {
+      if (pathname.startsWith("/api/")) {
+        if (
+          !assertAllowedHttpAccess(allowedHosts, req, res, {
+            requireOrigin: isCredentialMutatingApi(method, pathname),
+          })
+        ) {
           return true;
         }
-        if (
-          isCredentialMutatingApi(method, pathname) &&
-          !assertCredentialMutatingOrigin(req, res)
-        ) {
+        const scope = requiredScopeFor(method, pathname);
+        if (scope !== null && !enforceBearerAuth(controlTokens, req, res, scope)) {
           return true;
         }
       }
@@ -954,6 +903,7 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/health") {
+          // Bearer-exempt for ensureGlobalService autostart probes; Host/Origin still gated. Slot 7 splits /livez.
           json(res, 200, await manager.getHealthWithDisk());
           return true;
         }
@@ -1054,11 +1004,15 @@ export async function startUiServer(
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
   const { manager, store, cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
+  const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = options.controlTokens ?? loadControlTokens();
 
   return createHttpHost({
     boot,
     host,
     port,
+    allowedHosts,
+    controlTokens,
     routes: createOperatorRoutes({
       manager,
       store,
@@ -1067,6 +1021,8 @@ export async function startUiServer(
       rootDir,
       providerAuthContext,
       uiDistDir,
+      allowedHosts,
+      controlTokens,
     }),
   });
 }

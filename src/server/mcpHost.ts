@@ -7,6 +7,10 @@ import {
   bootstrapStageflowHost,
   type StageflowHostOptions,
 } from "./bootstrap.js";
+import type { AllowedHosts } from "./allowedHosts.js";
+import { resolveAllowedHosts } from "./allowedHosts.js";
+import type { ControlTokens } from "./controlToken.js";
+import { loadControlTokens } from "./controlToken.js";
 import {
   createHttpHost,
   DEFAULT_PORT,
@@ -27,6 +31,10 @@ export type McpServerOptions = {
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
+  requestTimeoutMs?: number;
+  maxConnections?: number;
 };
 
 export async function startMcpServer(
@@ -37,15 +45,30 @@ export async function startMcpServer(
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
   const { manager, store, cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
+  const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = options.controlTokens ?? loadControlTokens();
 
   return createHttpHost({
     boot,
     host,
     port,
+    allowedHosts,
+    controlTokens,
+    requestTimeoutMs: options.requestTimeoutMs,
+    maxConnections: options.maxConnections,
     // Headless daemon: same REST API surface as `sf ui` (this is what lets
     // `sf run`/`sf runs *` talk to an auto-started `sf mcp` over HTTP), just
     // without serving the console's static UI files.
-    routes: createOperatorRoutes({ manager, store, cwd, agentDir, rootDir, providerAuthContext }),
+    routes: createOperatorRoutes({
+      manager,
+      store,
+      cwd,
+      agentDir,
+      rootDir,
+      providerAuthContext,
+      allowedHosts,
+      controlTokens,
+    }),
   });
 }
 

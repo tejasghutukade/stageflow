@@ -449,7 +449,7 @@ describe("MCP Tier 3 sf mcp host", () => {
         mcpStateless: true,
       });
     expect(mcpStateless).toBe(true);
-    expect(server.requestTimeout).toBe(0);
+    expect(server.requestTimeout).toBe(60_000);
     expect(runChangeBus).toBeTruthy();
     expect(manager).toBeTruthy();
     expect(hostStore).toBeTruthy();

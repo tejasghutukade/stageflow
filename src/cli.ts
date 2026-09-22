@@ -32,6 +32,12 @@ import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcpHost.js";
 import { installShutdownController } from "./server/shutdown.js";
+import { resolveListenHost } from "./server/listenHost.js";
+import {
+  assertBindAllowed,
+  BindRefusedError,
+  loadControlTokens,
+} from "./server/controlToken.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION } from "./package-meta.js";
 
@@ -55,8 +61,8 @@ const USAGE = `Usage:
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs rerun --run <runId> [--pinned] [--json]
-  sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]
-  sf mcp [--port ${DEFAULT_PORT}] [--mcp-stateless]
+  sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]
+  sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
@@ -107,6 +113,8 @@ function parseArgs(argv: string[]): {
   task?: string;
   pipeline?: string;
   port?: number;
+  host?: string;
+  noOpen?: boolean;
   checkout?: string;
   repository?: string;
   ref?: string;
@@ -154,6 +162,8 @@ function parseArgs(argv: string[]): {
   let task: string | undefined;
   let pipeline: string | undefined;
   let port: number | undefined;
+  let host: string | undefined;
+  let noOpen = false;
   let checkout: string | undefined;
   let repository: string | undefined;
   let ref: string | undefined;
@@ -187,6 +197,14 @@ function parseArgs(argv: string[]): {
       if (!Number.isFinite(port) || port <= 0) {
         throw new Error(`Invalid --port: ${raw}`);
       }
+    } else if (args[i] === "--host") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --host");
+      }
+      host = raw;
+    } else if (args[i] === "--no-open") {
+      noOpen = true;
     } else if (args[i] === "--mcp-stateless") {
       mcpStateless = true;
     }
@@ -197,6 +215,8 @@ function parseArgs(argv: string[]): {
     task,
     pipeline,
     port,
+    host,
+    noOpen,
     checkout,
     repository,
     ref,
@@ -323,13 +343,27 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
 
 function openBrowser(url: string): void {
   const platform = process.platform;
+  let child;
   if (platform === "darwin") {
-    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("open", [url], { detached: true, stdio: "ignore" });
   } else if (platform === "win32") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" });
   } else {
-    spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
   }
+  child.on("error", () => {});
+  child.unref();
+}
+
+function isNoOpenEnabled(
+  flag: boolean | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (flag) return true;
+  const raw = env.STAGEFLOW_NO_OPEN;
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false";
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -422,6 +456,9 @@ async function main(argv: string[]): Promise<number> {
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {
+      const listenHost = resolveListenHost({ flag: parsed.host });
+      const tokens = loadControlTokens();
+      assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
@@ -430,11 +467,15 @@ async function main(argv: string[]): Promise<number> {
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
+        host: listenHost,
         mcpStateless,
+        controlTokens: tokens,
       });
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
-      openBrowser(host.url);
+      if (!isNoOpenEnabled(parsed.noOpen)) {
+        openBrowser(host.url);
+      }
       const shutdown = installShutdownController({
         server: host.server,
         manager: host.manager,
@@ -445,6 +486,12 @@ async function main(argv: string[]): Promise<number> {
     }
 
     if (parsed.command === "mcp") {
+      if (parsed.noOpen) {
+        throw new Error("--no-open is only valid with sf ui");
+      }
+      const listenHost = resolveListenHost({ flag: parsed.host });
+      const tokens = loadControlTokens();
+      assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
@@ -453,7 +500,9 @@ async function main(argv: string[]): Promise<number> {
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
+        host: listenHost,
         mcpStateless,
+        controlTokens: tokens,
       });
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       const shutdown = installShutdownController({
@@ -479,6 +528,10 @@ async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 1;
   } catch (err) {
+    if (err instanceof BindRefusedError) {
+      console.error(err.message);
+      return err.exitCode;
+    }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
