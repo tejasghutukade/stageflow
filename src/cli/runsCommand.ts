@@ -25,6 +25,7 @@ import {
   httpDecideFeedbackLoop,
   httpDeleteRun,
   httpDeliverAnswer,
+  httpGcRuns,
   httpRecoverManualStageUntilStop,
   httpRerun,
   httpResumeTimedOutStage,
@@ -50,6 +51,7 @@ export const RUNS_USAGE = `Usage:
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs cancel --run <runId> --reason <text> [--json]
   sf runs delete --run <runId> [--force] [--json]
+  sf runs gc [--dry-run] [--json]
   sf runs rerun --run <runId> [--pinned] [--json]`;
 
 export type RunsCommandIo = {
@@ -123,6 +125,7 @@ const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const CANCEL_FLAGS = new Set(["--run", "--reason", "--json", "--help", "-h"]);
 const DELETE_FLAGS = new Set(["--run", "--force", "--json", "--help", "-h"]);
+const GC_FLAGS = new Set(["--dry-run", "--json", "--help", "-h"]);
 const RERUN_FLAGS = new Set(["--run", "--pinned", "--json", "--help", "-h"]);
 
 const VALUE_FLAGS = new Set([
@@ -158,6 +161,7 @@ type ParsedRunsArgs = {
   stop?: boolean;
   pinned?: boolean;
   force?: boolean;
+  dryRun?: boolean;
   loopId?: string;
   decision?: string;
   reason?: string;
@@ -191,6 +195,8 @@ function flagsFor(subcommand: string): Set<string> | undefined {
       return CANCEL_FLAGS;
     case "delete":
       return DELETE_FLAGS;
+    case "gc":
+      return GC_FLAGS;
     case "rerun":
       return RERUN_FLAGS;
     default:
@@ -227,6 +233,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let stop = false;
   let pinned = false;
   let force = false;
+  let dryRun = false;
   let loopId: string | undefined;
   let decision: string | undefined;
   let reason: string | undefined;
@@ -246,6 +253,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     } else if (arg === "--force") {
       if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
       force = true;
+    } else if (arg === "--dry-run") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      dryRun = true;
     } else if (VALUE_FLAGS.has(arg)) {
       if (!allowed.has(arg)) {
         throw new Error(`Unknown flag: ${arg}`);
@@ -291,6 +301,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     stop,
     pinned,
     force,
+    dryRun,
     loopId,
     decision,
     reason,
@@ -359,6 +370,7 @@ const MUTATING_SUBCOMMANDS = new Set([
   "abandon",
   "cancel",
   "delete",
+  "gc",
   "rerun",
 ]);
 
@@ -929,6 +941,41 @@ export async function runRunsCommand(
         });
       } else {
         out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "gc": {
+      const execute = parsed.dryRun !== true;
+      const result = await httpGcRuns(base, { execute });
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      const report = {
+        slimmed: result.slimmed,
+        purged: result.purged,
+        bareCachesEvicted: result.bareCachesEvicted,
+      };
+      if (parsed.json) {
+        printJson(out, report);
+      } else {
+        out.log(
+          [
+            `slimmed:\t${report.slimmed.length}`,
+            ...report.slimmed.map((id) => `\t${id}`),
+            `purged:\t${report.purged.length}`,
+            ...report.purged.map((id) => `\t${id}`),
+            `bareCachesEvicted:\t${report.bareCachesEvicted.length}`,
+            ...report.bareCachesEvicted.map((id) => `\t${id}`),
+          ].join("\n"),
+        );
       }
       return 0;
     }

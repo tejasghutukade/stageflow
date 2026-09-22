@@ -106,6 +106,7 @@ export async function createHttpHost(
   server.requestTimeout = 0;
 
   server.on("close", () => {
+    boot.stopGcInterval();
     void boot.mcpHandler.close();
   });
 

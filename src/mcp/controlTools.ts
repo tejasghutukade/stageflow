@@ -6,6 +6,7 @@ import type {
   AbandonStageResult,
   CancelRunResult,
   DeleteRunResult,
+  GcRunsResult,
 } from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
@@ -460,6 +461,35 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       return textResult({
         ok: true,
         runId: result.runId,
+      });
+    },
+  );
+
+  server.registerTool(
+    "gc_runs",
+    {
+      description:
+        "Run retention GC (SLIM then PURGE then bare-cache eviction). Default execute: false is dry-run (report candidates only). execute: true is irreversible bulk reclaim — slimmed/purged runIds and evicted bare caches are returned in the report.",
+      inputSchema: z.object({
+        execute: z.boolean().optional(),
+      }),
+    },
+    async ({ execute }) => {
+      const result = await manager.gcRuns({
+        execute: execute === true,
+        channel: "mcp",
+      });
+      if (!result.ok) {
+        const fail = result as Extract<GcRunsResult, { ok: false }>;
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      return textResult({
+        slimmed: result.slimmed,
+        purged: result.purged,
+        bareCachesEvicted: result.bareCachesEvicted,
       });
     },
   );

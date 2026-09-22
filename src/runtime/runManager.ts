@@ -81,6 +81,11 @@ import {
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
 import { deleteRunEverywhere } from "./runDeletion.js";
+import {
+  runRetentionSweep,
+  type RetentionSweepReport,
+  type RunRetentionSweepOptions,
+} from "./runRetentionSweep.js";
 import type { A2aStore } from "../a2a/store.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import {
@@ -168,6 +173,12 @@ export type DeleteRunChannel = "mcp" | "rest" | "cli";
 
 export type DeleteRunResult =
   | { ok: true; runId: string }
+  | { ok: false; reason: string; status?: number };
+
+export type GcRunsChannel = "mcp" | "rest" | "cli" | "periodic";
+
+export type GcRunsResult =
+  | ({ ok: true } & RetentionSweepReport)
   | { ok: false; reason: string; status?: number };
 
 export const FORCE_DELETE_CANCEL_REASON = "delete_run: force";
@@ -828,6 +839,51 @@ export class RunManager {
     );
 
     return { ok: true, runId };
+  }
+
+  async gcRuns(
+    options: {
+      execute?: boolean;
+      channel?: GcRunsChannel;
+    } & Pick<RunRetentionSweepOptions, "now" | "windows" | "env" | "artifactMaxBytes" | "bareCacheTtlMs"> = {},
+  ): Promise<GcRunsResult> {
+    const execute = options.execute === true;
+    const channel = options.channel ?? "rest";
+
+    let report: RetentionSweepReport;
+    try {
+      report = await runRetentionSweep(this.options.store, this.a2aStore, {
+        execute,
+        now: options.now,
+        windows: options.windows,
+        env: options.env,
+        artifactMaxBytes: options.artifactMaxBytes,
+        bareCacheTtlMs: options.bareCacheTtlMs,
+      });
+    } catch (err) {
+      return {
+        ok: false,
+        reason: err instanceof Error ? err.message : String(err),
+        status: 500,
+      };
+    }
+
+    if (execute) {
+      for (const runId of report.slimmed) {
+        await this.refreshRunDiskBytes(runId).catch(() => undefined);
+      }
+      console.info(
+        JSON.stringify({
+          event: "run_retention_sweep",
+          channel,
+          slimmed: report.slimmed,
+          purged: report.purged,
+          bareCachesEvicted: report.bareCachesEvicted,
+        }),
+      );
+    }
+
+    return { ok: true, ...report };
   }
 
   private async waitForActiveClear(

@@ -8,9 +8,11 @@ import type {
   CancelRunResult,
   DecideFeedbackLoopResult,
   DeleteRunResult,
+  GcRunsResult,
   StartRunResult,
   StopManualRecoveryResult,
 } from "../runtime/runManager.js";
+import type { RetentionSweepReport } from "../runtime/runRetentionSweep.js";
 import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
 import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
@@ -352,6 +354,25 @@ export async function httpDeleteRun(
     reason: extractError(body, res.status),
     status: res.status,
   };
+}
+
+export async function httpGcRuns(
+  base: string,
+  options?: { execute?: boolean },
+): Promise<GcRunsResult> {
+  const { status, body } = await postJson(base, "/api/runs/gc", {
+    execute: options?.execute === true,
+  });
+  if (status === 200) {
+    const parsed = body as RetentionSweepReport;
+    return {
+      ok: true,
+      slimmed: parsed.slimmed ?? [],
+      purged: parsed.purged ?? [],
+      bareCachesEvicted: parsed.bareCachesEvicted ?? [],
+    };
+  }
+  return { ok: false, reason: extractError(body, status), status };
 }
 
 export function resolveAbsolute(cwd: string, maybeRelative: string): string {

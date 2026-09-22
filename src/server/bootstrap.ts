@@ -27,6 +27,8 @@ import {
   type McpHttpHandler,
 } from "../mcp/server.js";
 
+export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
+
 export type StageflowHostOptions = {
   agent: AgentPort;
   cwd?: string;
@@ -38,6 +40,7 @@ export type StageflowHostOptions = {
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type StageflowHostBootstrap = {
@@ -52,6 +55,9 @@ export type StageflowHostBootstrap = {
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
   mcpHandler: McpHttpHandler;
+  /** Periodic retention GC handle when enabled; already `.unref()`'d. */
+  gcInterval?: NodeJS.Timeout;
+  stopGcInterval: () => void;
 };
 
 function sqliteConnectionFromStore(
@@ -68,9 +74,56 @@ function sqliteConnectionFromStore(
   return undefined;
 }
 
+/** Parse `STAGEFLOW_GC_INTERVAL_MS`; default 1h; `0` disables. */
+export function gcIntervalMsFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env.STAGEFLOW_GC_INTERVAL_MS;
+  if (raw === undefined || raw.trim() === "") return DEFAULT_GC_INTERVAL_MS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_GC_INTERVAL_MS;
+  return parsed;
+}
+
+/**
+ * Start the unattended retention sweep. First fire is one interval after start
+ * (`setInterval` semantics). Returns undefined when intervalMs is 0.
+ */
+export function startPeriodicRunGc(
+  manager: RunManager,
+  intervalMs: number,
+  options?: {
+    logError?: (message: string) => void;
+  },
+): NodeJS.Timeout | undefined {
+  if (intervalMs <= 0) return undefined;
+  const logError =
+    options?.logError ??
+    ((message: string) => {
+      console.error(message);
+    });
+  return setInterval(() => {
+    void manager
+      .gcRuns({ execute: true, channel: "periodic" })
+      .then((result) => {
+        if (!result.ok) {
+          logError(`periodic run GC failed: ${result.reason}`);
+        }
+      })
+      .catch((err) => {
+        logError(
+          `periodic run GC failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      });
+  }, intervalMs).unref();
+}
+
 export async function bootstrapStageflowHost(
   options: StageflowHostOptions,
 ): Promise<StageflowHostBootstrap> {
+  const env = options.env ?? process.env;
   const invocationCwd = options.cwd ?? process.cwd();
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
@@ -131,7 +184,11 @@ export async function bootstrapStageflowHost(
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
   await manager.resumeStalledSchedules();
-  await warnDurableRootDiskIfNeeded(ctx.globalHome);
+  await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
+  const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
+  const stopGcInterval = () => {
+    if (gcInterval !== undefined) clearInterval(gcInterval);
+  };
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });
@@ -167,5 +224,7 @@ export async function bootstrapStageflowHost(
     mcpStateless,
     providerAuthContext: options.providerAuthContext,
     mcpHandler,
+    ...(gcInterval !== undefined ? { gcInterval } : {}),
+    stopGcInterval,
   };
 }

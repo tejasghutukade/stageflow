@@ -36,6 +36,7 @@ import type {
   AbandonStageResult,
   CancelRunResult,
   DeleteRunResult,
+  GcRunsResult,
   RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -159,6 +160,7 @@ export function isMutatingApi(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
   return (
     pathname === "/api/runs" ||
+    pathname === "/api/runs/gc" ||
     pathname === "/api/settings" ||
     pathname === "/api/stages" ||
     pathname === "/api/pipelines" ||
@@ -787,6 +789,24 @@ export function createOperatorRoutes(
           json(res, 202, {
             ok: true,
             runId: result.runId,
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/runs/gc") {
+          const body = (await readJsonBody(req)) as { execute?: unknown };
+          const execute = body.execute === true;
+          const result = await manager.gcRuns({ execute, channel: "rest" });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<GcRunsResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
+            slimmed: result.slimmed,
+            purged: result.purged,
+            bareCachesEvicted: result.bareCachesEvicted,
           });
           return true;
         }
