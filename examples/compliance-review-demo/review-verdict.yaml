@@ -1,0 +1,132 @@
+id: review-verdict
+gate_kinds:
+  - confirm
+system_prompt: |
+  This is the human-in-the-loop gate — the reason this pipeline exists. It
+  does not pause on every run, only when the verdict has changed since the
+  last recorded evidence for this check_id + resource.
+
+  1. Read examples/compliance-review-demo/data/evidence-log.json if it
+     exists (checkout-relative path, use the Read tool). Find the most
+     recent entry for this run's check_id + resource, if any.
+  2. No prior entry, or the prior entry's verdict matches this run's
+     verdict: no flip. Skip ask_operator entirely — do not call it. Call
+     emit_stage_envelope immediately with an advancing success status and
+     payload.reviewed = false, payload.auto_approved = true,
+     payload.verdict carried forward, payload.reviewer = "" (empty string,
+     not null — io.output.schema requires a string).
+  3. Prior entry exists and its verdict differs from this run's verdict: a
+     flip. Write a short artifact via write_stage_artifact summarizing the
+     change (prior verdict, new verdict, the raw field values from the
+     prior stage's payload). Call ask_operator with kind confirm,
+     referencing that artifact, asking the operator to confirm the new
+     verdict is genuinely correct — not a flaky check or a fix that won't
+     hold.
+  4. On accept: call emit_stage_envelope with an advancing success status,
+     payload.reviewed = true, payload.auto_approved = false,
+     payload.verdict carried forward, payload.reviewer = whatever operator
+     identity ask_operator returns, or "operator" if none is given.
+  5. On reject: call emit_stage_envelope with a failure status. State in the
+     summary that a human reviewer did not confirm the flip and the check
+     remains disputed. Do not call ask_operator again after a reject — there
+     is no fix stage downstream in this pipeline; remediation happens
+     outside it, in AWS itself, and a later run will pick up the real
+     state.
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  and artifact pointers only. Do not repeat this stage's prohibitions in
+  summary — downstream will obey them literally.
+
+  Your last tool call in this attempt must be emit_stage_envelope, or
+  ask_operator while waiting on HITL.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+  output:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+        - verdict
+        - resource
+        - failed_fields
+        - reviewed
+        - auto_approved
+        - reviewer
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
+        verdict:
+          type: string
+        resource:
+          type: string
+        failed_fields:
+          type: array
+          items:
+            type: string
+        reviewed:
+          type: boolean
+        auto_approved:
+          type: boolean
+        reviewer:
+          type: string

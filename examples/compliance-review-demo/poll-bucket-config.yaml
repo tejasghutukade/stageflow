@@ -1,0 +1,76 @@
+id: poll-bucket-config
+system_prompt: |
+  Read bucket, check_id, and scenario from the prior stage's payload.
+
+  Try a real poll first: if the `aws` CLI is on PATH and
+  `aws sts get-caller-identity` succeeds, run
+  `aws s3api get-public-access-block --bucket <bucket>` and use that real
+  response. Set source = "real" and ignore scenario in this case.
+
+  Otherwise — no AWS CLI, no credentials, or the call fails — produce a
+  SIMULATED response and set source = "simulated". Never present simulated
+  data as real; label it "simulated" wherever it's written down. Use
+  scenario to pick the fixture:
+
+    scenario "fail":
+      { "BlockPublicAcls": true, "IgnorePublicAcls": true,
+        "BlockPublicPolicy": false, "RestrictPublicBuckets": true }
+
+    scenario "fixed":
+      { "BlockPublicAcls": true, "IgnorePublicAcls": true,
+        "BlockPublicPolicy": true, "RestrictPublicBuckets": true }
+
+  Write the raw response via write_stage_artifact, clearly marked as
+  "simulated" or "real".
+
+  summary and payload are handed to the next stage verbatim. State outcomes
+  and artifact pointers only. Do not repeat this stage's prohibitions in
+  summary — downstream will obey them literally.
+
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload matching io.output.schema: bucket, check_id,
+  scenario carried forward, plus source and the four boolean fields. Your
+  last tool call in this attempt must be emit_stage_envelope. An empty
+  final message is a stage failure.
+model: anthropic/claude-sonnet-4-5
+io:
+  input:
+    schema:
+      type: object
+      required: [bucket, check_id, scenario]
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+  output:
+    schema:
+      type: object
+      required:
+        - bucket
+        - check_id
+        - scenario
+        - source
+        - block_public_acls
+        - ignore_public_acls
+        - block_public_policy
+        - restrict_public_buckets
+      properties:
+        bucket:
+          type: string
+        check_id:
+          type: string
+        scenario:
+          type: string
+        source:
+          type: string
+        block_public_acls:
+          type: boolean
+        ignore_public_acls:
+          type: boolean
+        block_public_policy:
+          type: boolean
+        restrict_public_buckets:
+          type: boolean
