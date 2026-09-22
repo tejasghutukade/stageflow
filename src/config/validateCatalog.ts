@@ -20,6 +20,8 @@ import {
   loadMcpCatalog,
   mcpCatalogPath,
 } from "./resolveStageMcpServers.js";
+import { loadSecretRegistry } from "../runtime/stageSecrets.js";
+import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -58,6 +60,9 @@ export type ValidationFindingCode =
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
+  | "stage.invalid_secrets"
+  | "stage.unknown_secret"
+  | "stage.denied_secret"
   | "stage.invalid_agent"
   | "stage.invalid_io"
   | "stage.load_error"
@@ -415,6 +420,43 @@ function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
   return [...names];
 }
 
+function findingsForStageSecrets(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const registry = loadSecretRegistry(process.env);
+  const findings: ValidationFinding[] = [];
+  for (const stage of loaded.stages) {
+    for (const decl of stage.secrets ?? []) {
+      if (isForeverDeniedSecret(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `secret "${decl.name}" is permanently denied and cannot be granted`,
+            "stage.denied_secret",
+            stage.id,
+          ),
+        );
+        continue;
+      }
+      if (!registry.has(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `unknown secret "${decl.name}" is not in the Host secret registry`,
+            "stage.unknown_secret",
+            stage.id,
+          ),
+        );
+      }
+    }
+  }
+  return findings;
+}
+
 async function findingsForStageMcpCatalog(
   cwd: string,
   loaded: LoadedPipeline,
@@ -510,6 +552,7 @@ async function runPipelineValidation(
   }
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
+  findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {

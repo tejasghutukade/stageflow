@@ -1,5 +1,6 @@
 import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
+import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 
 export type PipelineConfig = {
   id: string;
@@ -190,6 +191,7 @@ export type NormalizedPipelineStageEntry = {
   entry?: boolean;
   skill?: string;
   mcp?: string[];
+  secrets?: StageSecretDecl[];
   clone_cap?: number;
   clone_mode?: CloneMode;
   body:

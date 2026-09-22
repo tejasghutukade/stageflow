@@ -1,4 +1,5 @@
 import type { PreEmitCheck } from "./preEmitCheck.js";
+import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 
 /** Typed emit/schema fields from `compileTargetContract`. Not catalog YAML keys. */
 export type CompiledStageEmitBody = {
@@ -44,6 +45,8 @@ export type StageConfig = {
   timeout_ms?: number;
   skill?: string;
   mcp?: string[];
+  /** Declared Host secret names this stage may receive (Slot 6). */
+  secrets?: StageSecretDecl[];
   /**
    * Selects the AgentPort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.

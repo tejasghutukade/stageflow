@@ -71,6 +71,18 @@ import type { StageHitlController } from "./stageHitl.js";
 import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { stageBindingEnvFromRun } from "./stageRoots.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
+import {
+  cleanupCredentialsDir,
+  loadSecretRegistry,
+  resolveStageSecrets,
+  SecretUnavailableError,
+} from "./stageSecrets.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  logger as rootLogger,
+} from "../logging/logger.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -1269,36 +1281,86 @@ export async function runPipelineDag(
       });
     }
 
+    const attemptDir = attemptWorkspaceDir(run.workspaceDir, stageId, attempt);
+    await mkdir(attemptDir, { recursive: true });
+    const attemptHome = path.join(attemptDir, "home");
+    await mkdir(attemptHome, { recursive: true });
+    let grants;
+    try {
+      const resolved = resolveStageSecrets({
+        decls: stage.secrets,
+        registry: loadSecretRegistry(process.env),
+        hostEnv: process.env,
+        attemptDir,
+      });
+      grants = resolved.grants;
+      for (const warning of resolved.warnings) {
+        rootLogger.warn("stage.secrets", warning, {
+          run_id: run.runId,
+          stage_id: stageId,
+        });
+      }
+      await writeFile(
+        path.join(attemptDir, "declared-secrets.json"),
+        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (err) {
+      const reason =
+        err instanceof SecretUnavailableError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await onStageFailure(stageId, reason);
+      return;
+    }
+
+    const cleanupAttemptCredentials = () => {
+      try {
+        cleanupCredentialsDir(attemptDir);
+      } catch {
+        // best-effort Host cleanup
+      }
+    };
+
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
+        cleanupAttemptCredentials();
         await onStageFailure(stageId, "stage process launcher is not configured");
         return;
       }
-      const launchResult = await launcher.launch({
-        runId: run.runId,
-        stageId,
-        rootDir: factoryCwd,
-        attempt,
-        env: stageBinding.env,
-        bindingKind: stageBinding.kind,
-        ...(sessionMode !== undefined
-          ? {
-              mode:
-                sessionMode === "feedback_resume"
-                  ? "feedback_resume"
-                  : sessionMode === "new_session"
-                    ? "new_session"
-                    : "run",
-            }
-          : {}),
-        ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
-        ...(prepared.operatorCatalog !== undefined
-          ? { operatorCatalog: prepared.operatorCatalog }
-          : {}),
-        ...(prepared.skipGates ? { skipGates: true } : {}),
-      });
-      if (launchResult.type === "succeeded") {
+      let launchResult;
+      try {
+        launchResult = await launcher.launch({
+          runId: run.runId,
+          stageId,
+          rootDir: factoryCwd,
+          attempt,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          grants,
+          attemptHome,
+          ...(sessionMode !== undefined
+            ? {
+                mode:
+                  sessionMode === "feedback_resume"
+                    ? "feedback_resume"
+                    : sessionMode === "new_session"
+                      ? "new_session"
+                      : "run",
+              }
+            : {}),
+          ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
+          ...(prepared.operatorCatalog !== undefined
+            ? { operatorCatalog: prepared.operatorCatalog }
+            : {}),
+          ...(prepared.skipGates ? { skipGates: true } : {}),
+        });
+      } finally {
+        cleanupAttemptCredentials();
+      }      if (launchResult.type === "succeeded") {
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           await onStageSuccess(stageId, envelope);
@@ -1336,11 +1398,16 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
-      stageEnv: stageBinding.env,
+      stageEnv: {
+        ...stageBinding.env,
+        ...grants.env,
+        HOME: attemptHome,
+      },
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),
     });
+    cleanupAttemptCredentials();
 
     if (isRunStageWaiting(result)) {
       await onStageFailure(stageId, WAIT_WITHOUT_WORKER_DISPATCH);

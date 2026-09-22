@@ -17,6 +17,7 @@ import {
 } from "./legacyYaml.js";
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
 import {
   classifyYamlDocument,
   compileTargetContract,
@@ -395,6 +396,12 @@ function parseStageFields(
   if (!mcpOutcome.ok) return mcpOutcome;
   if (mcpOutcome.value !== undefined) {
     stage.mcp = mcpOutcome.value;
+  }
+
+  const secretsOutcome = parseStageSecrets(raw.secrets, label, entryId);
+  if (!secretsOutcome.ok) return secretsOutcome;
+  if (secretsOutcome.value !== undefined) {
+    stage.secrets = secretsOutcome.value;
   }
 
   const agentField = parseAgentField(raw.agent);

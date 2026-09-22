@@ -327,6 +327,7 @@ async function buildLoadedPipelineFromMerge(
       ...stageOutcome.value,
       ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
       ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
+      ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
     };
     stages.push(stage);
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
