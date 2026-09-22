@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
@@ -3058,6 +3058,29 @@ describe("localhost HTTP API", () => {
 
   describe("provider auth HTTP shell", () => {
     const marker = "sk-test-secret-marker-HTTP-AE3-9f3c2b1a";
+    const previousHome = process.env.HOME;
+    const previousStageflowHome = process.env.STAGEFLOW_HOME;
+
+    beforeEach(async () => {
+      resetGlobalStageflowHomeForTests();
+      const home = await mkdtemp(path.join(tmpdir(), "sf-http-auth-home-"));
+      process.env.HOME = home;
+      process.env.STAGEFLOW_HOME = path.join(home, ".stageflow");
+    });
+
+    afterEach(() => {
+      resetGlobalStageflowHomeForTests();
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousStageflowHome === undefined) {
+        delete process.env.STAGEFLOW_HOME;
+      } else {
+        process.env.STAGEFLOW_HOME = previousStageflowHome;
+      }
+    });
 
     it("lists live providers without changing GET /api/models", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-list-"));
