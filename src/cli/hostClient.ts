@@ -5,6 +5,7 @@ import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type {
   AbandonStageResult,
+  CancelRunResult,
   DecideFeedbackLoopResult,
   StartRunResult,
   StopManualRecoveryResult,
@@ -310,6 +311,23 @@ export async function httpAbandonStage(
   if (status === 202) {
     const parsed = body as { runId: string; stageId: string };
     return { ok: true, runId: parsed.runId, stageId: parsed.stageId };
+  }
+  return { ok: false, reason: extractError(body, status), status };
+}
+
+export async function httpCancelRun(
+  base: string,
+  runId: string,
+  reason: string,
+): Promise<CancelRunResult> {
+  const { status, body } = await postJson(
+    base,
+    `/api/runs/${enc(runId)}/cancel`,
+    { reason },
+  );
+  if (status === 202) {
+    const parsed = body as { runId: string };
+    return { ok: true, runId: parsed.runId };
   }
   return { ok: false, reason: extractError(body, status), status };
 }

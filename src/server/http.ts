@@ -34,6 +34,7 @@ import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type {
   AbandonStageResult,
+  CancelRunResult,
   RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -165,6 +166,7 @@ function isMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
     /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
+    /^\/api\/runs\/[^/]+\/cancel$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
@@ -759,6 +761,28 @@ export function createOperatorRoutes(
             ok: true,
             runId: result.runId,
             stageId: result.stageId,
+          });
+          return true;
+        }
+
+        const cancelMatch = pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+        if (method === "POST" && cancelMatch) {
+          const body = (await readJsonBody(req)) as { reason?: unknown };
+          const runId = decodeURIComponent(cancelMatch[1] ?? "");
+          if (typeof body.reason !== "string" || body.reason.trim().length === 0) {
+            json(res, 400, { error: "Cancel reason is required" });
+            return true;
+          }
+          const result = await manager.cancelRun(runId, body.reason);
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<CancelRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 202, {
+            ok: true,
+            runId: result.runId,
           });
           return true;
         }

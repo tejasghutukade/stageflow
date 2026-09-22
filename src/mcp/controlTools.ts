@@ -2,7 +2,10 @@ import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import { findProjectRoot } from "../project/findProjectRoot.js";
-import type { AbandonStageResult } from "../runtime/runManager.js";
+import type {
+  AbandonStageResult,
+  CancelRunResult,
+} from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
@@ -382,7 +385,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "abandon_stage",
     {
       description:
-        "Abandon a running stage (marks it failed/interrupted). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. There is no run-level cancel tool.",
+        "Abandon a running stage (marks it failed/interrupted). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. Prefer cancel_run to stop an entire run.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
@@ -401,6 +404,32 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         ok: true,
         runId: result.runId,
         stageId: result.stageId,
+      });
+    },
+  );
+
+  server.registerTool(
+    "cancel_run",
+    {
+      description:
+        "Cancel a non-terminal run (marks it cancelled, terminalizes pending/running/waiting stages, releases the checkout lease). Signals live stage workers via StageProcessLauncher.cancelRun, but process-group kill is not fixed yet — a wedged agent subprocess or its descendants may outlive the cancelled run. Reason is required free-text and stored on the run as cancel_reason.",
+      inputSchema: z.object({
+        runId: z.string(),
+        reason: z.string().min(1),
+      }),
+    },
+    async ({ runId, reason }) => {
+      const result = await manager.cancelRun(runId, reason);
+      if (!result.ok) {
+        const fail = result as Extract<CancelRunResult, { ok: false }>;
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      return textResult({
+        ok: true,
+        runId: result.runId,
       });
     },
   );

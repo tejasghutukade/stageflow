@@ -314,6 +314,17 @@ export type ResumeRunOptions = {
   stageProcessLauncher?: StageProcessLauncher;
 };
 
+/** Refuses to overwrite a cancelled run (KTD7). */
+export async function writeTerminalRunStatus(
+  store: RunStore,
+  runId: string,
+  status: "succeeded" | "failed",
+): Promise<void> {
+  const meta = await store.readRunMeta(runId);
+  if (meta.status === "cancelled") return;
+  await store.updateRunStatus(runId, status);
+}
+
 export async function resumeRun(
   options: ResumeRunOptions,
 ): Promise<PipelineRunResult> {
@@ -355,7 +366,8 @@ export async function resumeRun(
 
   if (allTerminal) {
     const unhandledFailure = scheduleHasUnhandledFailure(dag, hydrated.states);
-    await prepared.store.updateRunStatus(
+    await writeTerminalRunStatus(
+      prepared.store,
       prepared.run.runId,
       unhandledFailure ? "failed" : "succeeded",
     );
@@ -1436,7 +1448,7 @@ export async function runPipelineDag(
   if (schedulingHalted) {
     markSkippedPending();
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      await writeTerminalRunStatus(store, run.runId, "failed");
     }
     return {
       ok: false,
@@ -1449,7 +1461,7 @@ export async function runPipelineDag(
 
   if (scheduleHasUnhandledFailure(dag, states) || !allTerminal()) {
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      await writeTerminalRunStatus(store, run.runId, "failed");
     }
     return {
       ok: false,
@@ -1460,7 +1472,7 @@ export async function runPipelineDag(
     };
   }
 
-  await store.updateRunStatus(run.runId, "succeeded");
+  await writeTerminalRunStatus(store, run.runId, "succeeded");
   return {
     ok: true,
     outcome: "succeeded",

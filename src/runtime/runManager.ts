@@ -151,6 +151,10 @@ export type AbandonStageResult =
   | { ok: true; runId: string; stageId: string }
   | { ok: false; reason: string; status?: number };
 
+export type CancelRunResult =
+  | { ok: true; runId: string }
+  | { ok: false; reason: string; status?: number };
+
 export type DecideFeedbackLoopResult =
   | {
       ok: true;
@@ -634,6 +638,70 @@ export class RunManager {
     }
 
     return { ok: true, runId, stageId };
+  }
+
+  async cancelRun(runId: string, reason: string): Promise<CancelRunResult> {
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    if (meta.status === "cancelled") {
+      return { ok: true, runId };
+    }
+
+    if (meta.status === "succeeded" || meta.status === "failed") {
+      return {
+        ok: false,
+        reason: `Run is ${meta.status} and cannot be cancelled`,
+        status: 409,
+      };
+    }
+
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length === 0) {
+      return {
+        ok: false,
+        reason: "Cancel reason is required",
+        status: 400,
+      };
+    }
+
+    await this.options.store.updateRunStatus(runId, "cancelled");
+    await this.options.store.setCancelReason(runId, trimmedReason);
+
+    if (this.stageProcessLauncher !== undefined) {
+      await this.stageProcessLauncher.cancelRun(runId);
+    }
+
+    const detail = await this.options.store.readRun(runId);
+    for (const stage of detail.stages) {
+      if (
+        stage.status !== "pending" &&
+        stage.status !== "running" &&
+        stage.status !== "waiting_for_input"
+      ) {
+        continue;
+      }
+      const wasWaiting = stage.status === "waiting_for_input";
+      await failStageAsInterrupted({
+        store: this.options.store,
+        runId,
+        stageId: stage.stage_id,
+        reason: OPERATOR_CANCEL_REASON,
+      });
+      if (wasWaiting) {
+        this.hitl.clearLiveWait(runId, stage.stage_id);
+      }
+    }
+
+    if (this.active.has(runId)) {
+      this.removeActiveEntry(runId, false);
+    }
+
+    return { ok: true, runId };
   }
 
   async startRunOnce(

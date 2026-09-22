@@ -449,6 +449,7 @@ export interface RunStore {
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
+  setCancelReason(runId: string, reason: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
   /** Opaque run workspace root for agents and artifact tools. */

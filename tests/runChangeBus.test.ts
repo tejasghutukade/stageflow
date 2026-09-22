@@ -17,6 +17,7 @@ import path from "node:path";
 const RUN_STORE_METHODS = [
   "createRun",
   "updateRunStatus",
+  "setCancelReason",
   "readRunMeta",
   "readTaskYaml",
   "getWorkspaceDir",

@@ -628,6 +628,35 @@ describe("sf run --json completion (U3)", () => {
     expect(cap.stderrText()).toBe("");
   });
 
+  it("cancelled run prints cancelled envelope and exits 1", async () => {
+    const cap = captureIo();
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        io: cap.io,
+        startRun: async () =>
+          startedOk({
+            ok: false,
+            outcome: "cancelled",
+            runId: "run-cancel",
+            runDir: "/tmp/runs/cancel",
+            reason: "operator stop",
+          }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as Record<string, unknown>;
+    expect(parsed).toEqual({
+      ok: false,
+      outcome: "cancelled",
+      runId: "run-cancel",
+      runDir: "/tmp/runs/cancel",
+      reason: "operator stop",
+    });
+    expect(cap.stdoutText()).not.toMatch(/Pipeline cancelled|Pipeline failed/);
+    expect(cap.stderrText()).toBe("");
+  });
+
   it("validation gate under --json prints validate-shaped JSON with no runId", async () => {
     const validation = await validateCatalog({
       scope: "pipeline",

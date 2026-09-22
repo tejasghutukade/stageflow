@@ -479,6 +479,22 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async setCancelReason(runId: string, reason: string): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET cancel_reason = @cancel_reason, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        cancel_reason: reason,
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
   async updatePipelineDag(
     runId: string,
     dag: RunPipelineDagSnapshot,
