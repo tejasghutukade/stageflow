@@ -244,6 +244,30 @@ describe("resolveStageMcpServers", () => {
     }
   });
 
+  it("unresolved_var names the stage when stageId is provided", async () => {
+    const root = await writeCatalog({
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: {},
+        stageId: "publish-github-release",
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("unresolved_var");
+      expect((err as StageMcpError).message).toContain(
+        'stage "publish-github-release"',
+      );
+    }
+  });
+
   it("uses ${VAR:-default} when the variable is unset (AE10)", async () => {
     const root = await writeCatalog({
       github: {

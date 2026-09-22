@@ -133,4 +133,34 @@ describe("resolveStageSecrets", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("file-kind secrets register contents into knownValues", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sec-file-"));
+    try {
+      const home = path.join(root, "home");
+      const secretsDir = path.join(home, "secrets");
+      mkdirSync(secretsDir, { recursive: true });
+      const source = path.join(secretsDir, "npm-token");
+      const contents = "npm-file-secret-value-xx";
+      writeFileSync(source, contents, { mode: 0o600 });
+      writeFileSync(
+        path.join(secretsDir, "file-credentials.json"),
+        JSON.stringify({
+          NPM_TOKEN: { source, pointerVar: "NPM_TOKEN_FILE" },
+        }),
+      );
+      const registry = loadSecretRegistry({}, home);
+      const result = resolveStageSecrets({
+        decls: [{ name: "NPM_TOKEN" }],
+        registry,
+        hostEnv: {},
+        attemptDir: root,
+        home,
+      });
+      expect(result.grants.env.NPM_TOKEN_FILE).toBeTruthy();
+      expect(result.knownValues).toEqual([{ name: "NPM_TOKEN", value: contents }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,7 +1,9 @@
 import { resolveAgentPort } from "../agent/resolveAgentPort.js";
 import { asAgentBackendId } from "../agent/agentBackend.js";
 import { loadStageflowManifestOutcome } from "../config/loadStageflowManifest.js";
+import { loadNamedSecretsFromAttemptDir } from "../logging/namedSecrets.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
 import { createRunStore } from "../runstore/createStore.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { loadRunContext } from "./resumeReconstruct.js";
@@ -51,6 +53,14 @@ function applyStageEnvToWorkerProcess(
   }
 }
 
+function curatedWorkerStageEnv(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 export async function runStageWorker(
   input: StageWorkerInput,
 ): Promise<RunStageOutcome> {
@@ -94,9 +104,12 @@ export async function runStageWorker(
           hostEnv: process.env,
         });
   applyStageEnvToWorkerProcess(binding.env, binding.kind);
-  const stageEnv = binding.env;
+  const stageEnv = curatedWorkerStageEnv();
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
+  loadNamedSecretsFromAttemptDir(
+    attemptWorkspaceDir(workspaceDir, input.stageId, attempt),
+  );
   const attemptCtx =
     input.attempt !== undefined ? attemptContext(input.attempt) : undefined;
   const eventOptions = { attempt };

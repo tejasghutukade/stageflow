@@ -1,4 +1,5 @@
-import { fork, type ChildProcess } from "node:child_process";
+import * as childProcess from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
@@ -63,11 +64,18 @@ type TrackedChild = ActiveStageProcess & {
   hostInitiatedKill: boolean;
 };
 
+type WaitQueueEntry = {
+  runId: string;
+  resolve: (cancelled: boolean) => void;
+};
+
 export type StageProcessLauncherOptions = {
   maxActiveStageProcesses?: number;
   env?: Record<string, string | undefined>;
   cliEntry?: string;
   logger?: Logger;
+  /** Test seam: override child_process.fork. */
+  forkFn?: typeof childProcess.fork;
 };
 
 function flushCappedPartial(
@@ -191,8 +199,10 @@ export class StageProcessLauncher {
   private readonly explicitChildExtras: Record<string, string> | undefined;
   private readonly cliEntry: string;
   private readonly logger: Logger;
+  private readonly forkFn: typeof childProcess.fork;
   private readonly active = new Map<string, TrackedChild>();
-  private readonly waitQueue: Array<() => void> = [];
+  private readonly waitQueue: WaitQueueEntry[] = [];
+  private readonly cancelledRuns = new Set<string>();
   private slotsHeld = 0;
   private readonly heapMb: number;
 
@@ -219,6 +229,7 @@ export class StageProcessLauncher {
       fileURLToPath(new URL("../cli.js", import.meta.url));
     this.logger =
       options.logger ?? rootLogger.child({ component: "runtime" });
+    this.forkFn = options.forkFn ?? childProcess.fork;
   }
 
   activeCount(): number {
@@ -241,15 +252,43 @@ export class StageProcessLauncher {
   }
 
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
-    await this.waitForCapacity();
-    return this.spawnAndWait(input);
+    const acquired = await this.waitForCapacity(input.runId);
+    if (!acquired) {
+      return { type: "failed", reason: "cancelled" };
+    }
+    let slotOwnedBySpawn = false;
+    try {
+      if (this.cancelledRuns.has(input.runId)) {
+        return { type: "failed", reason: "cancelled" };
+      }
+      const resultPromise = this.spawnAndWait(input);
+      slotOwnedBySpawn = true;
+      return await resultPromise;
+    } finally {
+      if (!slotOwnedBySpawn) {
+        this.releaseCapacity();
+      }
+    }
   }
 
   async cancelRun(runId: string, killAfterMs = 5000): Promise<void> {
+    this.cancelledRuns.add(runId);
+    const remaining: WaitQueueEntry[] = [];
+    for (const entry of this.waitQueue) {
+      if (entry.runId === runId) {
+        entry.resolve(true);
+      } else {
+        remaining.push(entry);
+      }
+    }
+    this.waitQueue.length = 0;
+    this.waitQueue.push(...remaining);
+
     const children = [...this.active.values()].filter(
       (entry) => entry.runId === runId,
     );
     if (children.length === 0) {
+      this.cancelledRuns.delete(runId);
       return;
     }
 
@@ -289,20 +328,27 @@ export class StageProcessLauncher {
           }),
       ),
     );
+    this.cancelledRuns.delete(runId);
   }
 
-  private async waitForCapacity(): Promise<void> {
+  private async waitForCapacity(runId: string): Promise<boolean> {
+    if (this.cancelledRuns.has(runId)) {
+      return false;
+    }
     if (!Number.isFinite(this.maxActive)) {
-      return;
+      return true;
     }
     if (this.slotsHeld < this.maxActive) {
       this.slotsHeld += 1;
-      return;
+      return true;
     }
-    await new Promise<void>((resolve) => {
-      this.waitQueue.push(resolve);
+    const cancelled = await new Promise<boolean>((resolve) => {
+      this.waitQueue.push({ runId, resolve });
     });
-    return this.waitForCapacity();
+    if (cancelled) {
+      return false;
+    }
+    return this.waitForCapacity(runId);
   }
 
   private releaseCapacity(): void {
@@ -312,7 +358,7 @@ export class StageProcessLauncher {
     this.slotsHeld -= 1;
     if (this.waitQueue.length > 0) {
       const next = this.waitQueue.shift();
-      next?.();
+      next?.resolve(false);
     }
   }
 
@@ -348,6 +394,11 @@ export class StageProcessLauncher {
       args.push("--skip-gates");
     }
 
+    if (this.cancelledRuns.has(input.runId)) {
+      this.releaseCapacity();
+      return Promise.resolve({ type: "failed", reason: "cancelled" });
+    }
+
     const hostEnv: NodeJS.ProcessEnv = { ...process.env, ...this.env };
     const built = buildStageEnvironment({
       hostEnv,
@@ -372,7 +423,7 @@ export class StageProcessLauncher {
       input.bindingKind ?? "unbound",
     );
 
-    const child = fork(this.cliEntry, args, {
+    const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,
       env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
       stdio: ["pipe", "pipe", "pipe", "ipc"],

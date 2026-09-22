@@ -163,4 +163,79 @@ describe("StageProcessLauncher", () => {
     await Promise.all([p1, p2]);
     expect(launcher.activeCount()).toBe(0);
   });
+
+  it("releases capacity when fork throws before child exit cleanup", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fork-throw-"));
+    const childProcess = await import("node:child_process");
+    let shouldThrow = true;
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 1,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "50" },
+      forkFn: ((...args: Parameters<typeof childProcess.fork>) => {
+        if (shouldThrow) {
+          throw new Error("fork failed");
+        }
+        return childProcess.fork(...args);
+      }) as typeof childProcess.fork,
+    });
+
+    await expect(
+      launcher.launch({ runId: "r-fork", stageId: "boom", rootDir }),
+    ).rejects.toThrow("fork failed");
+
+    shouldThrow = false;
+    const recovered = await launcher.launch({
+      runId: "r-fork",
+      stageId: "ok",
+      rootDir,
+    });
+    expect(recovered).toEqual({ type: "succeeded" });
+    expect(launcher.activeCount()).toBe(0);
+  });
+
+  it("cancelRun drains queued waiters so they do not fork", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-cancel-queue-"));
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 1,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "400" },
+    });
+
+    const holding = launcher.launch({
+      runId: "run-hold",
+      stageId: "holder",
+      rootDir,
+    });
+    await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
+      timeout: 2000,
+    });
+
+    const queued = launcher.launch({
+      runId: "run-queued",
+      stageId: "queued",
+      rootDir,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      launcher.getActiveStageProcesses().some((e) => e.stageId === "queued"),
+    ).toBe(false);
+
+    await launcher.cancelRun("run-queued", 50);
+    const queuedResult = await queued;
+    expect(queuedResult).toEqual({ type: "failed", reason: "cancelled" });
+    expect(
+      launcher.getActiveStageProcesses().some((e) => e.stageId === "queued"),
+    ).toBe(false);
+
+    await holding;
+    expect(launcher.activeCount()).toBe(0);
+
+    const after = await launcher.launch({
+      runId: "run-after",
+      stageId: "after",
+      rootDir,
+    });
+    expect(after).toEqual({ type: "succeeded" });
+  });
 });

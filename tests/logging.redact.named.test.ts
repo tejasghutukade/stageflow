@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
   clearNamedSecretsForTests,
+  getNamedSecrets,
+  loadNamedSecretsFromAttemptDir,
+  REDACTION_SECRETS_FILENAME,
   registerNamedSecrets,
 } from "../src/logging/namedSecrets.js";
 import { redactString, stripUrlUserinfo } from "../src/logging/redact.js";
@@ -33,5 +39,24 @@ describe("value-based redaction", () => {
     expect(stripUrlUserinfo("http://user:pass@proxy.example:8080")).toBe(
       "http://proxy.example:8080/",
     );
+  });
+
+  it("loadNamedSecretsFromAttemptDir registers worker sink secrets", async () => {
+    clearNamedSecretsForTests();
+    const attemptDir = await mkdtemp(path.join(tmpdir(), "sf-redact-load-"));
+    try {
+      const value = "worker-sink-secret-xx";
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        JSON.stringify([{ name: "WORKER_TOKEN", value }]),
+        { mode: 0o600 },
+      );
+      loadNamedSecretsFromAttemptDir(attemptDir);
+      expect(getNamedSecrets()).toEqual([{ name: "WORKER_TOKEN", value }]);
+      expect(redactSecrets(`leak ${value}`)).toContain("[redacted:WORKER_TOKEN]");
+    } finally {
+      clearNamedSecretsForTests();
+      await rm(attemptDir, { recursive: true, force: true });
+    }
   });
 });

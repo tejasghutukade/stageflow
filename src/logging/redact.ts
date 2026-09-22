@@ -18,7 +18,7 @@ export type RedactOptions = {
   namedSecrets?: readonly NamedSecret[];
 };
 
-function shouldRegisterValue(value: string): boolean {
+export function shouldRegisterValue(value: string): boolean {
   if (value.length < 8) return false;
   const lower = value.toLowerCase();
   if (COMMON_WORDS.has(lower)) return false;

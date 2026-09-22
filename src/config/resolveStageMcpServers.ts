@@ -226,13 +226,16 @@ function interpolateField(
   value: unknown,
   env: NodeJS.ProcessEnv,
   serverName: string,
+  stageId?: string,
 ): unknown {
   if ((key === "command" || key === "url" || key === "cwd") && typeof value === "string") {
-    return interpolateString(value, env, serverName);
+    return interpolateString(value, env, serverName, stageId);
   }
   if (key === "args" && Array.isArray(value)) {
     return value.map((item) =>
-      typeof item === "string" ? interpolateString(item, env, serverName) : item,
+      typeof item === "string"
+        ? interpolateString(item, env, serverName, stageId)
+        : item,
     );
   }
   if ((key === "env" || key === "headers") && isPlainObject(value)) {
@@ -240,7 +243,7 @@ function interpolateField(
     for (const [field, fieldValue] of Object.entries(value)) {
       copied[field] =
         typeof fieldValue === "string"
-          ? interpolateString(fieldValue, env, serverName)
+          ? interpolateString(fieldValue, env, serverName, stageId)
           : fieldValue;
     }
     return copied;
@@ -310,10 +313,11 @@ function interpolateServer(
   env: NodeJS.ProcessEnv,
   serverName: string,
   projectRoot: string,
+  stageId?: string,
 ): ResolvedMcpServerConfig {
   const resolved: ResolvedMcpServerConfig = {};
   for (const [key, value] of Object.entries(entry)) {
-    resolved[key] = interpolateField(key, value, env, serverName);
+    resolved[key] = interpolateField(key, value, env, serverName, stageId);
   }
   return stampSpawnRoot(resolved, projectRoot, serverName);
 }
@@ -322,6 +326,7 @@ export async function resolveStageMcpServers(options: {
   projectRoot: string;
   allowlist?: readonly string[];
   env: NodeJS.ProcessEnv;
+  stageId?: string;
 }): Promise<ResolvedMcpServers> {
   const allowlist = options.allowlist ?? [];
   if (allowlist.length === 0) {
@@ -336,6 +341,7 @@ export async function resolveStageMcpServers(options: {
       options.env,
       name,
       options.projectRoot,
+      options.stageId,
     );
   }
   return resolved;

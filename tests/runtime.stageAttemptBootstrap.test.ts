@@ -896,16 +896,17 @@ describe("openStageAttempt", () => {
         store,
         runId: run.runId,
         stage: { ...stage("clarify"), mcp: ["github"] },
+        stageId: "clarify",
         task,
         dag: rootDag("clarify"),
         workspaceDir: run.workspaceDir,
         factoryCwd,
       });
 
-      expect(result).toEqual({
-        ok: false,
-        reason: expect.stringContaining(envKey),
-      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain(envKey);
+      expect(result.reason).toContain('stage "clarify"');
       expect(opened).toHaveLength(0);
     } finally {
       if (previous === undefined) {
@@ -914,6 +915,40 @@ describe("openStageAttempt", () => {
         process.env[envKey] = previous;
       }
     }
+  });
+
+  it("interpolates MCP catalog vars from curated stageEnv grants", async () => {
+    const envKey = "STAGEFLOW_TEST_MCP_GRANT";
+    await writeMcpCatalog(factoryCwd, {
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: `Bearer \${${envKey}}` },
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-grant-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      stageEnv: { [envKey]: "grant-token-value-xx" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.resolvedMcpServers?.github).toMatchObject({
+      headers: { Authorization: "Bearer grant-token-value-xx" },
+    });
   });
 
   it("fails closed without openStage when the allowlisted server is unknown", async () => {

@@ -208,6 +208,13 @@ export function buildStageEnvironment(
       if (value === undefined) continue;
       if (AMBIENT_BLOCKED_ENV_NAMES.has(key)) continue;
       if (registered.has(key) && !declared.has(key)) continue;
+      if (
+        key.endsWith("_FILE") &&
+        registered.has(key.slice(0, -"_FILE".length)) &&
+        !declared.has(key.slice(0, -"_FILE".length))
+      ) {
+        continue;
+      }
       if (Object.hasOwn(env, key)) continue;
       env[key] = value;
     }

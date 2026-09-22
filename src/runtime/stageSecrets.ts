@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { shouldRegisterValue } from "../logging/redact.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   attemptCredentialsDir,
@@ -137,6 +138,10 @@ export function resolveStageSecrets(
       });
       credentialDirs.push(destDir);
       grantEnv[entry.pointerVar] = copied.destPath;
+      const contents = readFileSync(copied.destPath, "utf8");
+      if (shouldRegisterValue(contents)) {
+        knownValues.push({ name: decl.name, value: contents });
+      }
       continue;
     }
 

@@ -66,6 +66,24 @@ describe("buildStageEnvironment", () => {
     expect(env.MY_SECRET).toBeUndefined();
   });
 
+  it("PASSTHROUGH skips undeclared registered NAME_FILE siblings", () => {
+    const { env } = buildStageEnvironment({
+      hostEnv: {
+        ...baseHost,
+        [STAGE_ENV_PASSTHROUGH]: "all",
+        MY_SECRET: "registered-secret-value",
+        MY_SECRET_FILE: "/host/secrets/my-secret",
+      },
+      grants: {
+        env: {},
+        registeredSecretNames: ["MY_SECRET"],
+        declaredSecretNames: [],
+      },
+    });
+    expect(env.MY_SECRET).toBeUndefined();
+    expect(env.MY_SECRET_FILE).toBeUndefined();
+  });
+
   it("ALLOW adds named var; denylist still wins", () => {
     const { env } = buildStageEnvironment({
       hostEnv: {

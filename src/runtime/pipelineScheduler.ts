@@ -83,7 +83,7 @@ import path from "node:path";
 import {
   logger as rootLogger,
 } from "../logging/logger.js";
-import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -1296,6 +1296,11 @@ export async function runPipelineDag(
       });
       grants = resolved.grants;
       registerNamedSecrets(resolved.knownValues);
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify(resolved.knownValues)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
       for (const warning of resolved.warnings) {
         rootLogger.warn("stage.secrets", warning, {
           run_id: run.runId,

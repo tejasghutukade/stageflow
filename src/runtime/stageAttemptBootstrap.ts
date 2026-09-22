@@ -114,6 +114,7 @@ async function resolveAttemptMcpServers(
   factoryCwd: string | undefined,
   artifactsDir: string,
   stageEnv?: Record<string, string>,
+  stageId?: string,
 ): Promise<ResolvedMcpServers | undefined> {
   const names = allowlist ?? [];
   if (names.length === 0) return undefined;
@@ -131,6 +132,7 @@ async function resolveAttemptMcpServers(
       ...(stageEnv ?? {}),
       [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
     },
+    ...(stageId !== undefined ? { stageId } : {}),
   });
   return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
@@ -152,6 +154,7 @@ async function openStageWithOperatorCatalog(
       factoryCwd,
       artifactsDir,
       stageEnv,
+      input.stageId,
     );
   } catch (err) {
     if (err instanceof StageMcpError) {
