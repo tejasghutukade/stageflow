@@ -29,6 +29,27 @@ if (process.env.MOCK_STDERR) {
     process.stderr.write("\n");
   }
 }
+if (process.env.MOCK_STDOUT) {
+  process.stdout.write(process.env.MOCK_STDOUT);
+  if (
+    !process.env.MOCK_STDOUT_PARTIAL &&
+    !process.env.MOCK_STDOUT.endsWith("\n")
+  ) {
+    process.stdout.write("\n");
+  }
+}
+if (process.env.MOCK_STDOUT_BYTES) {
+  const bytes = Number(process.env.MOCK_STDOUT_BYTES);
+  if (Number.isFinite(bytes) && bytes > 0) {
+    const chunk = Buffer.alloc(Math.min(bytes, 64 * 1024), 0x61);
+    let remaining = bytes;
+    while (remaining > 0) {
+      const n = Math.min(remaining, chunk.length);
+      process.stdout.write(n === chunk.length ? chunk : chunk.subarray(0, n));
+      remaining -= n;
+    }
+  }
+}
 if (process.env.MOCK_IPC) {
   const msg = JSON.parse(process.env.MOCK_IPC);
   if (typeof process.send === "function") {

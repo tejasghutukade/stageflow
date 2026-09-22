@@ -1,5 +1,10 @@
 import { fork, type ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  logger as rootLogger,
+  type Logger,
+} from "../logging/logger.js";
 import {
   readMaxActiveStageProcesses,
 } from "./stageConcurrency.js";
@@ -47,7 +52,31 @@ export type StageProcessLauncherOptions = {
   maxActiveStageProcesses?: number;
   env?: Record<string, string | undefined>;
   cliEntry?: string;
+  logger?: Logger;
 };
+
+function attachStreamLineLogger(
+  stream: Readable | null,
+  log: Logger,
+  event: "stage.stdout" | "stage.stderr",
+): void {
+  if (!stream) return;
+  let buffer = "";
+  stream.on("data", (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      log.info(event, line);
+    }
+  });
+  stream.on("end", () => {
+    if (buffer.length > 0) {
+      log.info(event, buffer);
+      buffer = "";
+    }
+  });
+}
 
 function activeKey(runId: string, stageId: string): string {
   return `${runId}\0${stageId}`;
@@ -107,6 +136,7 @@ export class StageProcessLauncher {
   private readonly maxActive: number;
   private readonly env: Record<string, string | undefined>;
   private readonly cliEntry: string;
+  private readonly logger: Logger;
   private readonly active = new Map<string, TrackedChild>();
   private readonly waitQueue: Array<() => void> = [];
   private slotsHeld = 0;
@@ -120,6 +150,8 @@ export class StageProcessLauncher {
     this.cliEntry =
       options.cliEntry ??
       fileURLToPath(new URL("../cli.js", import.meta.url));
+    this.logger =
+      options.logger ?? rootLogger.child({ component: "runtime" });
   }
 
   activeCount(): number {
@@ -260,23 +292,13 @@ export class StageProcessLauncher {
     };
     this.active.set(key, tracked);
 
-    if (child.stderr) {
-      let stderrBuffer = "";
-      child.stderr.on("data", (chunk: Buffer | string) => {
-        stderrBuffer += chunk.toString();
-        const lines = stderrBuffer.split("\n");
-        stderrBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          process.stderr.write(`[stage:${input.stageId}] ${line}\n`);
-        }
-      });
-      child.stderr.on("end", () => {
-        if (stderrBuffer.length > 0) {
-          process.stderr.write(`[stage:${input.stageId}] ${stderrBuffer}\n`);
-          stderrBuffer = "";
-        }
-      });
-    }
+    const stageLog = this.logger.child({
+      run_id: input.runId,
+      stage_id: input.stageId,
+      ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
+    });
+    attachStreamLineLogger(child.stdout, stageLog, "stage.stdout");
+    attachStreamLineLogger(child.stderr, stageLog, "stage.stderr");
 
     return new Promise<StageLaunchResult>((resolve) => {
       let settled = false;

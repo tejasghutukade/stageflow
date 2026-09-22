@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLogger } from "../src/logging/logger.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 
 const mockWorker = fileURLToPath(
@@ -96,10 +97,17 @@ describe("StageProcessLauncher", () => {
     expect(launcher.activeCount()).toBe(0);
   });
 
-  it("prefixes stderr with stage id", async () => {
+  it("emits stderr as structured stage.stderr events", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
+    const lines: string[] = [];
     const launcher = new StageProcessLauncher({
       cliEntry: mockWorker,
+      logger: createLogger({
+        format: "json",
+        write: (line) => {
+          lines.push(line);
+        },
+      }),
       env: {
         MOCK_STDERR: "worker-error",
         MOCK_DELAY: "10",
@@ -107,19 +115,18 @@ describe("StageProcessLauncher", () => {
       },
     });
 
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true);
-
     await launcher.launch({ runId: "r1", stageId: "stderr-stage", rootDir });
 
-    expect(stderrSpy).toHaveBeenCalled();
-    const combined = stderrSpy.mock.calls
-      .map((call) => String(call[0]))
-      .join("");
-    expect(combined).toContain("[stage:stderr-stage] worker-error");
-
-    stderrSpy.mockRestore();
+    const stderr = lines
+      .map((line) => JSON.parse(line))
+      .filter((r) => r.event === "stage.stderr");
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toMatchObject({
+      event: "stage.stderr",
+      msg: "worker-error",
+      run_id: "r1",
+      stage_id: "stderr-stage",
+    });
   });
 
   it("holds two clone instance ids as distinct activeKeys", async () => {
