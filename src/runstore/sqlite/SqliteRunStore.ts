@@ -836,9 +836,14 @@ export class SqliteRunStore implements RunStore {
     const rows = this.db
       .prepare(
         `SELECT ${EXECUTION_SELECT_COLS}
-         FROM stage_executions
-         WHERE status = 'interrupted'
-         ORDER BY run_id ASC, stage_id ASC, attempt ASC`,
+         FROM stage_executions e
+         WHERE e.status = 'interrupted'
+           AND e.attempt = (
+             SELECT MAX(e2.attempt)
+             FROM stage_executions e2
+             WHERE e2.run_id = e.run_id AND e2.stage_id = e.stage_id
+           )
+         ORDER BY e.run_id ASC, e.stage_id ASC, e.attempt ASC`,
       )
       .all() as ExecutionRow[];
     return rows.map(executionFromRow);

@@ -9,7 +9,7 @@ if (!pidFile) {
 
 const grandchild = spawn(
   process.execPath,
-  ["-e", "setInterval(() => {}, 1e9)"],
+  ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1e9)"],
   { stdio: "ignore", detached: false },
 );
 writeFileSync(pidFile, String(grandchild.pid));

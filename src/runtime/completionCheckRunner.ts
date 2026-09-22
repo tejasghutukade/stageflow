@@ -183,7 +183,6 @@ export const nodeCommandExecutor: CommandExecutor = {
       const stderr: Buffer[] = [];
       let timedOut = false;
       let settled = false;
-      let exited = false;
       let timeout: NodeJS.Timeout | undefined;
       let escalateTimer: NodeJS.Timeout | undefined;
 
@@ -191,7 +190,9 @@ export const nodeCommandExecutor: CommandExecutor = {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
-        if (escalateTimer) clearTimeout(escalateTimer);
+        // When timed out, keep escalateTimer so SIGKILL still runs after the
+        // grace window even if the parent already exited cooperatively.
+        if (escalateTimer && !timedOut) clearTimeout(escalateTimer);
         resolve(result);
       };
 
@@ -221,7 +222,10 @@ export const nodeCommandExecutor: CommandExecutor = {
         stderrSize = captureOutput(stderr, Buffer.from(data), stderrSize);
       });
       child.once("exit", () => {
-        exited = true;
+        if (timedOut) {
+          // Parent may exit on SIGTERM while SIGTERM-proof grandchildren remain.
+          signalProcessGroup(child.pid, "SIGKILL");
+        }
       });
       child.once("error", (error) => {
         finish({
@@ -243,11 +247,11 @@ export const nodeCommandExecutor: CommandExecutor = {
       if (input.timeout_ms !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          signalProcessGroup(child.pid, "SIGTERM");
+          const pid = child.pid;
+          signalProcessGroup(pid, "SIGTERM");
           escalateTimer = setTimeout(() => {
-            if (!exited) {
-              signalProcessGroup(child.pid, "SIGKILL");
-            }
+            // Always escalate after the grace window regardless of exited.
+            signalProcessGroup(pid, "SIGKILL");
           }, COMMAND_KILL_ESCALATE_MS);
         }, input.timeout_ms);
       }

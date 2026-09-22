@@ -77,7 +77,7 @@ export type RetryStageResult =
       attemptIndex: number;
       done?: Promise<PipelineRunResult>;
     }
-  | { ok: false; reason: string; status?: number };
+  | { ok: false; reason: string; status?: number; code?: string };
 
 export type RetryTrackingPort = {
   ensureResumeTracked(runId: string): Promise<

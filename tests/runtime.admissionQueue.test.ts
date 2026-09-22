@@ -635,4 +635,43 @@ describe("runtime admission queue (U8)", () => {
       }
     }
   }, 20000);
+
+  it("stopAcceptingWork prevents drainAdmissionQueue from starting queued runs", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-adm-shutdown-"));
+    const store = createRunStore({ rootDir: root });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const manager = new RunManager({
+      agent: gatedAgent(gate),
+      store,
+      cwd: fixtures,
+      maxConcurrent: 1,
+    });
+
+    const first = await manager.startRun({
+      pipeline: pipelinePath("single"),
+      task: { id: "a", goal: "hold" },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const queued = await manager.startRun({
+      pipeline: pipelinePath("single"),
+      task: { id: "b", goal: "wait" },
+    });
+    expect(queued.ok).toBe(true);
+    if (!queued.ok) return;
+    expect(queued.queued).toBe(true);
+
+    manager.stopAcceptingWork();
+    release();
+    await first.done;
+
+    await new Promise((r) => setTimeout(r, 150));
+    const meta = await store.readRunMeta(queued.runId);
+    expect(meta.status).toBe("queued");
+    expect(manager.getActiveCount()).toBe(0);
+  });
 });

@@ -132,4 +132,47 @@ describe("StageProcessLauncher stream drain", () => {
     expect(stdoutMsgs).toEqual(["complete", "partial-tail"]);
     expect(stdoutMsgs.filter((msg) => msg === "partial-tail")).toHaveLength(1);
   });
+
+  it("caps newline-free stdout and emits truncated events", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stdout-nolf-"));
+    const maxLineBytes = 1024;
+    const floodBytes = 50 * 1024;
+    const lines: string[] = [];
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      logger: createLogger({
+        format: "json",
+        maxLineBytes,
+        write: (line) => {
+          lines.push(line);
+        },
+      }),
+      env: {
+        MOCK_STDOUT_BYTES: String(floodBytes),
+        MOCK_DELAY: "10",
+        MOCK_EXIT_CODE: "0",
+        STAGEFLOW_LOG_MAX_LINE_BYTES: String(maxLineBytes),
+      },
+    });
+
+    const result = await launcher.launch({
+      runId: "run-nolf",
+      stageId: "nolf",
+      rootDir,
+    });
+
+    expect(result).toEqual({ type: "succeeded" });
+
+    const stdout = lines
+      .map((line) => JSON.parse(line))
+      .filter((r) => r.event === "stage.stdout");
+
+    expect(stdout.length).toBeGreaterThan(1);
+    expect(stdout.some((r) => r.truncated === true)).toBe(true);
+    for (const record of stdout) {
+      expect(Buffer.byteLength(record.msg, "utf8")).toBeLessThanOrEqual(
+        maxLineBytes,
+      );
+    }
+  });
 });

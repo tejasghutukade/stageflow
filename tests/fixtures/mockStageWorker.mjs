@@ -60,7 +60,10 @@ if (process.env.MOCK_IPC) {
 if (process.env.MOCK_GRANDCHILD_PID_FILE) {
   const grandchild = spawn(
     process.execPath,
-    ["-e", "setInterval(() => {}, 1e9)"],
+    [
+      "-e",
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1e9)",
+    ],
     { stdio: "ignore", detached: false },
   );
   writeFileSync(process.env.MOCK_GRANDCHILD_PID_FILE, String(grandchild.pid));

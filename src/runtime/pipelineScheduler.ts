@@ -63,6 +63,7 @@ import {
 } from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import { runStage, isRunStageWaiting } from "./stageRunner.js";
@@ -315,7 +316,7 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
-  schedulingHalt?: { halted: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 /** Refuses to overwrite a cancelled run (KTD7). */
@@ -417,7 +418,7 @@ export type RunPipelineDagOptions = {
     ) => Promise<ResolveFeedbackLoopDecisionResult>;
   }) => Promise<void>;
   /** Live cancel flag — when set, launchStage/startStage stop. */
-  schedulingHalt?: { halted: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export type RetryRunOptions = {
@@ -429,7 +430,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
-  schedulingHalt?: { halted: boolean };
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export async function retryRun(
@@ -1311,6 +1312,10 @@ export async function runPipelineDag(
         states.set(stageId, "waiting");
         return;
       }
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
       await onStageFailure(stageId, launchResult.reason);
       return;
     }
@@ -1343,6 +1348,10 @@ export async function runPipelineDag(
     }
 
     if (!result.ok) {
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
       await onStageFailure(
         stageId,
         result.reason ?? "stage failed",
@@ -1463,11 +1472,15 @@ export async function runPipelineDag(
   if (schedulingHalted) {
     markSkippedPending();
     if (retryContext === undefined) {
-      await writeTerminalRunStatus(store, run.runId, "failed");
+      if (options.schedulingHalt?.hostShutdown) {
+        await syncRunStatusFromStages(store, run.runId);
+      } else {
+        await writeTerminalRunStatus(store, run.runId, "failed");
+      }
     }
     return {
       ok: false,
-      outcome: "failed",
+      outcome: options.schedulingHalt?.hostShutdown ? "waiting" : "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason,

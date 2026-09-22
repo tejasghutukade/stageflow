@@ -3,6 +3,7 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
   logger as rootLogger,
+  resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
 import {
@@ -55,10 +56,31 @@ export type StageProcessLauncherOptions = {
   logger?: Logger;
 };
 
+function flushCappedPartial(
+  log: Logger,
+  event: "stage.stdout" | "stage.stderr",
+  text: string,
+  maxLineBytes: number,
+): string {
+  let remaining = text;
+  while (Buffer.byteLength(remaining, "utf8") > maxLineBytes) {
+    const bytes = Buffer.from(remaining, "utf8");
+    const originalBytes = bytes.byteLength;
+    const piece = bytes.subarray(0, maxLineBytes).toString("utf8");
+    log.info(event, piece, {
+      truncated: true,
+      original_bytes: originalBytes,
+    });
+    remaining = bytes.subarray(maxLineBytes).toString("utf8");
+  }
+  return remaining;
+}
+
 function attachStreamLineLogger(
   stream: Readable | null,
   log: Logger,
   event: "stage.stdout" | "stage.stderr",
+  maxLineBytes: number,
 ): void {
   if (!stream) return;
   let buffer = "";
@@ -69,10 +91,14 @@ function attachStreamLineLogger(
     for (const line of lines) {
       log.info(event, line);
     }
+    buffer = flushCappedPartial(log, event, buffer, maxLineBytes);
   });
   stream.on("end", () => {
     if (buffer.length > 0) {
-      log.info(event, buffer);
+      buffer = flushCappedPartial(log, event, buffer, maxLineBytes);
+      if (buffer.length > 0) {
+        log.info(event, buffer);
+      }
       buffer = "";
     }
   });
@@ -190,6 +216,7 @@ export class StageProcessLauncher {
         (entry) =>
           new Promise<void>((resolve) => {
             const child = entry.child;
+            const pid = child.pid;
             let settled = false;
             let exited = false;
             let escalateTimer: NodeJS.Timeout | undefined;
@@ -201,13 +228,15 @@ export class StageProcessLauncher {
             };
             child.once("exit", () => {
               exited = true;
+              // Parent may exit on SIGTERM while SIGTERM-proof grandchildren remain.
+              signalProcessGroup(pid, "SIGKILL");
               finish();
             });
-            signalProcessGroup(child.pid, "SIGTERM");
+            signalProcessGroup(pid, "SIGTERM");
             if (killAfterMs > 0) {
               escalateTimer = setTimeout(() => {
                 if (!exited) {
-                  signalProcessGroup(child.pid, "SIGKILL");
+                  signalProcessGroup(pid, "SIGKILL");
                 }
               }, killAfterMs);
             }
@@ -303,8 +332,9 @@ export class StageProcessLauncher {
       stage_id: input.stageId,
       ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
     });
-    attachStreamLineLogger(child.stdout, stageLog, "stage.stdout");
-    attachStreamLineLogger(child.stderr, stageLog, "stage.stderr");
+    const maxLineBytes = resolveLogMaxLineBytes(this.env);
+    attachStreamLineLogger(child.stdout, stageLog, "stage.stdout", maxLineBytes);
+    attachStreamLineLogger(child.stderr, stageLog, "stage.stderr", maxLineBytes);
 
     return new Promise<StageLaunchResult>((resolve) => {
       let settled = false;

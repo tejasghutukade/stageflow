@@ -86,7 +86,42 @@ describe.skipIf(process.platform === "win32")("process-group kill", () => {
     });
   });
 
-  it("cooperative worker exits on SIGTERM without SIGKILL", async () => {
+  it("reaps SIGTERM-proof grandchild after cooperative parent exit", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-pg-gc-coop-"));
+    const pidFile = path.join(rootDir, "grandchild.pid");
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      env: {
+        MOCK_GRANDCHILD_PID_FILE: pidFile,
+        MOCK_DELAY: "60000",
+      },
+    });
+
+    const launchPromise = launcher.launch({
+      runId: "run-gc-coop",
+      stageId: "parent",
+      rootDir,
+    });
+
+    await vi.waitFor(
+      async () => {
+        const raw = await readFile(pidFile, "utf8");
+        expect(Number(raw)).toBeGreaterThan(0);
+      },
+      { timeout: 2000 },
+    );
+    const grandchildPid = Number(await readFile(pidFile, "utf8"));
+    expect(pidAlive(grandchildPid)).toBe(true);
+
+    await launcher.cancelRun("run-gc-coop", 150);
+    await launchPromise;
+
+    await vi.waitFor(() => expect(pidAlive(grandchildPid)).toBe(false), {
+      timeout: 2000,
+    });
+  });
+
+  it("cooperative worker exits on SIGTERM and SIGKILLs the process group", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-pg-coop-"));
     const launcher = new StageProcessLauncher({
       cliEntry: mockWorker,
@@ -116,7 +151,7 @@ describe.skipIf(process.platform === "win32")("process-group kill", () => {
     await launchPromise;
 
     killSpy.mockRestore();
-    expect(kills.some((k) => k.signal === "SIGKILL")).toBe(false);
+    expect(kills.some((k) => k.signal === "SIGKILL" && k.pid < 0)).toBe(true);
     expect(kills.some((k) => k.signal === "SIGTERM" && k.pid < 0)).toBe(true);
   });
 

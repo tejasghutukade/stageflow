@@ -205,9 +205,11 @@ export class ShutdownController {
       ? Date.now() + ESCALATION_CHECKPOINT_MS
       : hardDeadline;
 
+    let storeCloseFailed = false;
     try {
       await this.store.close();
     } catch (err) {
+      storeCloseFailed = true;
       this.log.error(
         "host.shutdown.store_close_failed",
         err instanceof Error ? err.message : String(err),
@@ -232,22 +234,23 @@ export class ShutdownController {
 
     this.uninstall();
 
+    const forced = stageResult.forced || storeCloseFailed;
     const exitCode = this.escalated
       ? HOST_EXIT.ESCALATED
-      : stageResult.forced
+      : forced
         ? HOST_EXIT.FORCED
         : HOST_EXIT.CLEAN;
 
     this.log.info("host.shutdown.drain_complete", "host drain complete", {
       exit_code: exitCode,
-      forced: stageResult.forced,
+      forced,
       escalated: this.escalated,
       elapsed_ms: Date.now() - startedAt,
     });
 
     return {
       exitCode,
-      forced: stageResult.forced,
+      forced,
       escalated: this.escalated,
     };
   }

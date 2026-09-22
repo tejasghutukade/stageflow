@@ -85,7 +85,7 @@ import {
 } from "./stageRoots.js";
 import { orchestrateAnswerResume } from "./answerResume.js";
 import { reconstructAndContinue as resumeReconstructAndContinue } from "./resumeReconstruct.js";
-import { resumeSessionFilePath } from "./stageAttemptContext.js";
+import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import { checkTaskEntryInput, resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
 import {
   markStageInterrupted,
@@ -225,7 +225,7 @@ type ActiveEntry = {
   done?: Promise<unknown>;
 };
 
-type SchedulingHalt = { halted: boolean };
+type SchedulingHalt = { halted: boolean; hostShutdown: boolean };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
@@ -564,6 +564,7 @@ export class RunManager {
     this.acceptingWork = false;
     for (const halt of this.schedulingHalts.values()) {
       halt.halted = true;
+      halt.hostShutdown = true;
     }
   }
 
@@ -577,11 +578,30 @@ export class RunManager {
   }): Promise<{ forced: boolean }> {
     for (const halt of this.schedulingHalts.values()) {
       halt.halted = true;
+      halt.hostShutdown = true;
     }
 
     const launcher = this.stageProcessLauncher;
     if (launcher === undefined || launcher.activeCount() === 0) {
       return { forced: false };
+    }
+
+    const previouslyActive = launcher.getActiveStageProcesses();
+    const seenRuns = new Set<string>();
+    for (const { runId, stageId } of previouslyActive) {
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId,
+        reason: "host_shutdown",
+        status: "interrupted",
+      });
+      seenRuns.add(runId);
+    }
+    for (const runId of seenRuns) {
+      await syncRunStatusFromStages(this.options.store, runId).catch(
+        () => undefined,
+      );
     }
 
     launcher.signalAllActive("SIGTERM");
@@ -597,23 +617,6 @@ export class RunManager {
     const remaining = launcher.getActiveStageProcesses();
     if (remaining.length === 0) {
       return { forced: false };
-    }
-
-    const seenRuns = new Set<string>();
-    for (const { runId, stageId } of remaining) {
-      await markStageInterrupted({
-        store: this.options.store,
-        runId,
-        stageId,
-        reason: "host_shutdown",
-        status: "interrupted",
-      });
-      seenRuns.add(runId);
-    }
-    for (const runId of seenRuns) {
-      await syncRunStatusFromStages(this.options.store, runId).catch(
-        () => undefined,
-      );
     }
 
     launcher.signalAllActive("SIGKILL");
@@ -944,6 +947,18 @@ export class RunManager {
       const runId = execution.run_id;
       const stageId = execution.stage_id;
       const attempt = execution.attempt;
+      const latest = await this.options.store.getLatestStageExecution(
+        runId,
+        stageId,
+      );
+      if (latest === null || latest.attempt !== attempt) {
+        skipped.push({
+          runId,
+          stageId,
+          reason: "interrupted attempt is not the latest",
+        });
+        continue;
+      }
       if (execution.auto_resume_count >= maxAutoResumes) {
         try {
           await markStageInterrupted({
@@ -952,6 +967,7 @@ export class RunManager {
             stageId,
             reason: AUTO_RESUME_CAPPED_REASON,
             status: "interrupted",
+            attemptCtx: attemptContext(attempt),
           });
           capped.push({ runId, stageId });
           log
@@ -1534,6 +1550,14 @@ export class RunManager {
     stageId: string,
     options?: { source?: "explicit" | "auto" },
   ): Promise<RetryStageResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const resumeKey = waitKey(runId, stageId);
     if (this.resumeInFlight.has(resumeKey) || this.retryInFlight.has(resumeKey)) {
       return {
@@ -1747,6 +1771,14 @@ export class RunManager {
       beforeAttemptStart?: (attempt: number) => Promise<void>;
     },
   ): Promise<RetryStageResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const retryKey = waitKey(runId, stageId);
     if (this.retryInFlight.has(retryKey)) {
       return {
@@ -2843,11 +2875,12 @@ export class RunManager {
   }
 
   private async drainAdmissionQueue(): Promise<void> {
+    if (!this.acceptingWork) return;
     if (this.admissionDrainInFlight) return;
     this.admissionDrainInFlight = true;
     try {
       const blockedRoots = new Set<string>();
-      while (this.active.size < this.maxConcurrent) {
+      while (this.acceptingWork && this.active.size < this.maxConcurrent) {
         const next = this.admissionQueue.dequeueNext(blockedRoots);
         if (next === undefined) break;
         const outcome = await this.startDequeuedAdmission(next);
@@ -2870,6 +2903,10 @@ export class RunManager {
     projectRoot: string;
     entry: AdmissionQueueEntry;
   }): Promise<"started" | "checkout_busy" | "capacity_busy" | "cancelled"> {
+    if (!this.acceptingWork) {
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      return "capacity_busy";
+    }
     const { runId } = next.entry;
     let meta;
     try {
@@ -3325,7 +3362,10 @@ export class RunManager {
   private ensureSchedulingHalt(runId: string): SchedulingHalt {
     let halt = this.schedulingHalts.get(runId);
     if (halt === undefined) {
-      halt = { halted: false };
+      halt = {
+        halted: !this.acceptingWork,
+        hostShutdown: !this.acceptingWork,
+      };
       this.schedulingHalts.set(runId, halt);
     }
     return halt;

@@ -152,6 +152,32 @@ describe("ShutdownController", () => {
     await store.close();
   });
 
+  it("stopAcceptingWork rejects resume/retry with shutting_down", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-shutdown-resume-gate-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const manager = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store,
+      cwd: root,
+      projectRoot: root,
+      executionMode: "inprocess",
+    });
+    manager.stopAcceptingWork();
+    const resume = await manager.resumeTimedOutStage("missing", "s");
+    expect(resume.ok).toBe(false);
+    if (!resume.ok) {
+      expect(resume.status).toBe(503);
+      expect(resume.code).toBe("shutting_down");
+    }
+    const retry = await manager.retryStage("missing", "s");
+    expect(retry.ok).toBe(false);
+    if (!retry.ok) {
+      expect(retry.status).toBe(503);
+      expect(retry.code).toBe("shutting_down");
+    }
+    await store.close();
+  });
+
   it("repeat beginDrain joins the same promise", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-shutdown-join-"));
     const store = createRunStore({ rootDir: root, kind: "sqlite" });
@@ -176,6 +202,39 @@ describe("ShutdownController", () => {
     const b = controller.beginDrain();
     expect(a).toBe(b);
     await expect(a).resolves.toMatchObject({ exitCode: HOST_EXIT.CLEAN });
+  });
+
+  it("store.close failure exits 5", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-shutdown-store-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const closeSpy = vi
+      .spyOn(store, "close")
+      .mockRejectedValueOnce(new Error("checkpoint failed"));
+    const manager = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store,
+      cwd: root,
+      projectRoot: root,
+      executionMode: "inprocess",
+    });
+    const server = await listen();
+    servers.push(server);
+    const controller = new ShutdownController({
+      server,
+      manager,
+      store,
+      graceMs: 300,
+      installSignals: false,
+    });
+    controllers.push(controller);
+
+    const outcome = await controller.beginDrain();
+    expect(outcome.exitCode).toBe(HOST_EXIT.FORCED);
+    expect(outcome.forced).toBe(true);
+    expect(outcome.escalated).toBe(false);
+
+    closeSpy.mockRestore();
+    await store.close();
   });
 
   it("second signal during drain exits 6", async () => {
@@ -297,6 +356,65 @@ describe.skipIf(process.platform === "win32")(
       } finally {
         await reopened.close();
       }
+    });
+
+    it("cooperative SIGTERM marks host_shutdown interrupted (not failed)", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "sf-shutdown-coop-"));
+      const store = createRunStore({ rootDir: root, kind: "sqlite" });
+      const run = await store.createRun({
+        pipelineId: "p",
+        taskYaml: "id: t\ngoal: g\n",
+        taskId: "t",
+      });
+      await store.appendStageEvent(run.runId, "coop", { event: "started" });
+      await store.createStageExecution(run.runId, "coop");
+      await store.updateRunStatus(run.runId, "running");
+
+      const launcher = new StageProcessLauncher({
+        cliEntry: mockWorker,
+        env: {
+          MOCK_DELAY: "60000",
+        },
+      });
+      const manager = new RunManager({
+        agent: scriptedFakeAgent([]),
+        store,
+        cwd: root,
+        projectRoot: root,
+        executionMode: "process",
+        stageProcessLauncher: launcher,
+      });
+
+      const launchPromise = launcher.launch({
+        runId: run.runId,
+        stageId: "coop",
+        rootDir: root,
+      });
+      await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
+        timeout: 2000,
+      });
+
+      manager.stopAcceptingWork();
+      const drain = await manager.drainActiveStages({
+        deadlineMs: Date.now() + 3000,
+      });
+      expect(drain.forced).toBe(false);
+      await launchPromise.catch(() => undefined);
+
+      const detail = await store.readRun(run.runId);
+      expect(detail.status).toBe("running");
+      const stage = detail.stages.find((s) => s.stage_id === "coop");
+      expect(stage?.status).toBe("interrupted");
+      const events = await store.listStageEvents(run.runId, "coop");
+      expect(
+        events.some(
+          (e) =>
+            e.event === "interrupted" &&
+            (e as { reason?: string }).reason === "host_shutdown",
+        ),
+      ).toBe(true);
+      expect(events.some((e) => e.event === "failed")).toBe(false);
+      await store.close();
     });
   },
 );

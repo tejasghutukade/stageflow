@@ -20,6 +20,7 @@ import {
   OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "../src/runtime/stageRecovery.js";
+import { attemptContext } from "../src/runtime/stageAttemptContext.js";
 import { deriveExecutionPatchFromEvent } from "../src/runstore/stageExecution.js";
 
 const fixtures = path.resolve(
@@ -486,6 +487,95 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
         delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
       } else {
         process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = previousAuto;
+      }
+    }
+  });
+
+  it("auto-resume ignores stale interrupted attempts and does not flip succeeded latest", async () => {
+    const previousAuto = process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    const previousMax = process.env.STAGEFLOW_MAX_AUTO_RESUMES;
+    process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = "1";
+    process.env.STAGEFLOW_MAX_AUTO_RESUMES = "0";
+    try {
+      const root = await mkdtemp(
+        path.join(tmpdir(), `sf-recovery-stale-auto-${kind}-`),
+      );
+      const store = createRunStore({ rootDir: root, kind });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      await store.createStageExecution(run.runId, "build");
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 1 },
+      );
+      await markStageInterrupted({
+        store,
+        runId: run.runId,
+        stageId: "build",
+        reason: STARTUP_RECONCILE_REASON,
+        status: "interrupted",
+        attemptCtx: attemptContext(1),
+      });
+      await store.updateStageExecution(run.runId, "build", 1, {
+        auto_resume_count: 3,
+      });
+
+      const attempt2 = await store.createStageExecution(run.runId, "build");
+      expect(attempt2.attempt).toBe(2);
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 2 },
+      );
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "succeeded" },
+        { attempt: 2 },
+      );
+      await store.updateStageExecution(run.runId, "build", 2, {
+        status: "succeeded",
+      });
+      await store.updateRunStatus(run.runId, "succeeded");
+
+      const listed = await store.listInterruptedStageExecutions();
+      expect(listed).toEqual([]);
+
+      const manager = new RunManager({
+        agent: reconcileAgent(),
+        store,
+        cwd: fixtures,
+      });
+      const auto = await manager.autoResumeInterruptedStages();
+      expect(auto.capped).toEqual([]);
+      expect(auto.resumed).toEqual([]);
+
+      const detail = await store.readRun(run.runId);
+      expect(detail.status).toBe("succeeded");
+      expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+        "succeeded",
+      );
+      const latest = await store.getLatestStageExecution(run.runId, "build");
+      expect(latest?.attempt).toBe(2);
+      expect(latest?.status).toBe("succeeded");
+      const events = await store.listStageEvents(run.runId, "build", 2);
+      expect(events.some((e) => e.event === "interrupted")).toBe(false);
+    } finally {
+      if (previousAuto === undefined) {
+        delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+      } else {
+        process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = previousAuto;
+      }
+      if (previousMax === undefined) {
+        delete process.env.STAGEFLOW_MAX_AUTO_RESUMES;
+      } else {
+        process.env.STAGEFLOW_MAX_AUTO_RESUMES = previousMax;
       }
     }
   });
