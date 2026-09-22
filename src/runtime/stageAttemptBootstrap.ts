@@ -128,7 +128,6 @@ async function resolveAttemptMcpServers(
     projectRoot: factoryCwd,
     allowlist: names,
     env: {
-      ...process.env,
       ...(stageEnv ?? {}),
       [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
     },

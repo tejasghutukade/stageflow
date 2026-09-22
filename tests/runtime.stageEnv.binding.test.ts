@@ -257,6 +257,60 @@ describe("stage binding env (U6)", () => {
     expect(dumped.GIT_TERMINAL_PROMPT).toBeNull();
   });
 
+  it("process child omits control token and provider keys from Host ambient", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-env-deny-"));
+    const dumpPath = path.join(rootDir, "child-env.json");
+    const prev = {
+      control: process.env.STAGEFLOW_CONTROL_TOKEN,
+      anthropic: process.env.ANTHROPIC_API_KEY,
+      custom: process.env.SF_TEST_CUSTOM_VAR,
+    };
+    process.env.STAGEFLOW_CONTROL_TOKEN =
+      "control-token-value-32chars-min!!";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-host-secret";
+    process.env.SF_TEST_CUSTOM_VAR = "should-not-pass";
+
+    try {
+      const launcher = new StageProcessLauncher({
+        cliEntry: mockWorker,
+        env: {
+          MOCK_DELAY: "20",
+          MOCK_EXIT_CODE: "0",
+          MOCK_DUMP_ENV: dumpPath,
+          MOCK_DUMP_KEYS: [
+            "STAGEFLOW_CONTROL_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "SF_TEST_CUSTOM_VAR",
+            "PATH",
+            "SF_STAGE_WORKER",
+          ].join(","),
+        },
+      });
+      const result = await launcher.launch({
+        runId: "r-deny",
+        stageId: "echo",
+        rootDir,
+      });
+      expect(result).toEqual({ type: "succeeded" });
+      const dumped = JSON.parse(await readFile(dumpPath, "utf8")) as Record<
+        string,
+        string | null
+      >;
+      expect(dumped.STAGEFLOW_CONTROL_TOKEN).toBeNull();
+      expect(dumped.ANTHROPIC_API_KEY).toBeNull();
+      expect(dumped.SF_TEST_CUSTOM_VAR).toBeNull();
+      expect(dumped.SF_STAGE_WORKER).toBe("1");
+      expect(dumped.PATH).toBeTruthy();
+    } finally {
+      if (prev.control === undefined) delete process.env.STAGEFLOW_CONTROL_TOKEN;
+      else process.env.STAGEFLOW_CONTROL_TOKEN = prev.control;
+      if (prev.anthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prev.anthropic;
+      if (prev.custom === undefined) delete process.env.SF_TEST_CUSTOM_VAR;
+      else process.env.SF_TEST_CUSTOM_VAR = prev.custom;
+    }
+  });
+
   it("inprocess bootstrap receives the same map as the forked path", async () => {
     const forkedMap = repositoryBindingEnv();
 

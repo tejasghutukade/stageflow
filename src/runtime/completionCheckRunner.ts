@@ -4,6 +4,7 @@ import type { Stats } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
+import { resolveBashPath } from "../preflight/bash.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
@@ -25,6 +26,7 @@ export type CommandExecutionInput = {
   command: string;
   cwd: string;
   timeout_ms?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type CommandExecutor = {
@@ -75,6 +77,8 @@ export type CompletionCheckRunnerInput = {
   artifactsDir: string;
   /** Base directory used for a command check without its own cwd. */
   commandWorkingDirectory?: string;
+  /** Curated env for command checks; omit to inherit the caller's process env. */
+  commandEnv?: NodeJS.ProcessEnv;
   commandExecutor?: CommandExecutor;
   gates?: GateDecisionProvider;
   /** Captured before the agent attempt began. */
@@ -198,9 +202,10 @@ export const nodeCommandExecutor: CommandExecutor = {
 
       let child;
       try {
-        child = spawn(input.command, {
+        const bash = resolveBashPath(input.env ?? process.env);
+        child = spawn(bash, ["-c", input.command], {
           cwd: input.cwd,
-          shell: true,
+          env: input.env,
           detached: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
@@ -294,7 +299,12 @@ async function runCommandCheck(
   const cwd = resolveCommandCwd(check, base);
   const executor = input.commandExecutor ?? nodeCommandExecutor;
   try {
-    const execution = await executor.run({ command: check.run, cwd, timeout_ms: check.timeout_ms });
+    const execution = await executor.run({
+      command: check.run,
+      cwd,
+      timeout_ms: check.timeout_ms,
+      ...(input.commandEnv !== undefined ? { env: input.commandEnv } : {}),
+    });
     const evidence: CommandCheckEvidence = {
       kind: "command",
       command: check.run,

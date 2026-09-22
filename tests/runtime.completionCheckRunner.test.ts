@@ -282,3 +282,16 @@ describe.skipIf(process.platform === "win32")("nodeCommandExecutor process-group
     }
   });
 });
+
+describe.skipIf(process.platform === "win32")("nodeCommandExecutor bash", () => {
+  it("runs bashisms via bash -c with curated env", async () => {
+    const result = await nodeCommandExecutor.run({
+      command: '[[ -n "$SF_VERIFY_MARK" ]] && echo ok',
+      cwd: process.cwd(),
+      env: { ...process.env, SF_VERIFY_MARK: "1" },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.exit_code).toBe(0);
+    expect(result.stdout.trim()).toBe("ok");
+  });
+});

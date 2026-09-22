@@ -6,9 +6,17 @@ import {
   resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import {
   readMaxActiveStageProcesses,
 } from "./stageConcurrency.js";
+import {
+  buildStageEnvironment,
+  isAmbientBlockedEnv,
+  isForeverDeniedSecret,
+  type ResolvedStageGrants,
+} from "./stageEnvironment.js";
+import { computeCacheEnvVars } from "./stageCacheEnv.js";
 import {
   SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
@@ -32,6 +40,8 @@ export type StageLaunchInput = {
   skipGates?: boolean;
   env?: Record<string, string>;
   bindingKind?: DerivedBindingKind;
+  grants?: ResolvedStageGrants;
+  attemptHome?: string;
 };
 
 export type StageLaunchResult =
@@ -162,6 +172,7 @@ export function signalProcessGroup(
 export class StageProcessLauncher {
   private readonly maxActive: number;
   private readonly env: Record<string, string | undefined>;
+  private readonly explicitChildExtras: Record<string, string> | undefined;
   private readonly cliEntry: string;
   private readonly logger: Logger;
   private readonly active = new Map<string, TrackedChild>();
@@ -170,6 +181,17 @@ export class StageProcessLauncher {
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
+    this.explicitChildExtras =
+      options.env !== undefined && options.env !== process.env
+        ? Object.fromEntries(
+            Object.entries(options.env).filter(
+              (entry): entry is [string, string] =>
+                entry[1] !== undefined &&
+                !isForeverDeniedSecret(entry[0]) &&
+                !isAmbientBlockedEnv(entry[0]),
+            ),
+          )
+        : undefined;
     this.maxActive = readMaxActiveStageProcesses(
       this.env,
       options.maxActiveStageProcesses,
@@ -303,14 +325,29 @@ export class StageProcessLauncher {
       args.push("--skip-gates");
     }
 
-    const childEnv =
-      input.env !== undefined
-        ? overlayStageBindingEnv(
-            { ...process.env, ...this.env },
-            input.env,
-            input.bindingKind ?? "unbound",
-          )
-        : { ...process.env, ...this.env };
+    const hostEnv: NodeJS.ProcessEnv = { ...process.env, ...this.env };
+    const built = buildStageEnvironment({
+      hostEnv,
+      cacheVars: computeCacheEnvVars(),
+      grants: input.grants,
+      attemptHome: input.attemptHome,
+      packageVersion: PACKAGE_VERSION,
+    });
+    for (const warning of built.warnings) {
+      this.logger.warn("stage.env.passthrough", warning, {
+        run_id: input.runId,
+        stage_id: input.stageId,
+      });
+    }
+    const withExtras =
+      this.explicitChildExtras !== undefined
+        ? { ...built.env, ...this.explicitChildExtras }
+        : built.env;
+    const childEnv = overlayStageBindingEnv(
+      withExtras,
+      input.env ?? {},
+      input.bindingKind ?? "unbound",
+    );
 
     const child = fork(this.cliEntry, args, {
       cwd: input.rootDir,
