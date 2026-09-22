@@ -258,7 +258,8 @@ describe("MCP/REST/CLI cancel_run lifecycle", () => {
       expect(abandon!.description).not.toMatch(/no run-level cancel/i);
       expect(abandon!.description).toMatch(/cancel_run/);
       expect(cancel?.description).toBeTruthy();
-      expect(cancel!.description).toMatch(/process-group kill is not fixed/i);
+      expect(cancel!.description).toMatch(/process-group kill/i);
+      expect(cancel!.description).not.toMatch(/process-group kill is not fixed/i);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

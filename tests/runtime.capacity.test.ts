@@ -3,6 +3,7 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { RunManager } from "../src/runtime/runManager.js";
 import {
@@ -36,16 +37,26 @@ describe("parseSlotCount", () => {
 
 describe("RunManager.setMaxConcurrent", () => {
   const previousHome = process.env.HOME;
+  const previousStageflowHome = process.env.STAGEFLOW_HOME;
 
   beforeEach(async () => {
-    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-cap-home-"));
+    resetGlobalStageflowHomeForTests();
+    const home = await mkdtemp(path.join(tmpdir(), "sf-cap-home-"));
+    process.env.HOME = home;
+    process.env.STAGEFLOW_HOME = path.join(home, ".stageflow");
   });
 
   afterEach(() => {
+    resetGlobalStageflowHomeForTests();
     if (previousHome === undefined) {
       delete process.env.HOME;
     } else {
       process.env.HOME = previousHome;
+    }
+    if (previousStageflowHome === undefined) {
+      delete process.env.STAGEFLOW_HOME;
+    } else {
+      process.env.STAGEFLOW_HOME = previousStageflowHome;
     }
   });
 
