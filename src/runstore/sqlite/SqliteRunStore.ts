@@ -367,6 +367,12 @@ export class SqliteRunStore implements RunStore {
     await this.migratePromise;
   }
 
+  async close(): Promise<void> {
+    await this.ready();
+    this.db.pragma("wal_checkpoint(TRUNCATE)");
+    this.db.close();
+  }
+
   /**
    * The connection this store owns, for the one caller allowed to share it: the composition root
    * wiring the A2A tables into the same `state.db` file. Not part of the `RunStore` interface.

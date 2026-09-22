@@ -450,6 +450,8 @@ export type ListRunsFilter = {
  * run id is all you have (catalog / rehydrate).
  */
 export interface RunStore {
+  /** Checkpoint WAL (when applicable) and release the store connection. */
+  close(): Promise<void>;
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;

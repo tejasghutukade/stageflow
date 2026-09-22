@@ -30,6 +30,7 @@ import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcpHost.js";
+import { installShutdownController } from "./server/shutdown.js";
 import { resolveMcpStateless } from "./mcp/server.js";
 import { PACKAGE_VERSION } from "./package-meta.js";
 
@@ -423,34 +424,44 @@ async function main(argv: string[]): Promise<number> {
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
-      const { url, mcpUrl } = await startUiServer({
+      const host = await startUiServer({
         agent: resolveAgentPort({ global: globalAgent }),
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
         mcpStateless,
       });
-      console.log(`Operator console: ${url}`);
-      console.log(`MCP endpoint: ${mcpUrl}`);
-      openBrowser(url);
-      await new Promise(() => undefined);
-      return 0;
+      console.log(`Operator console: ${host.url}`);
+      console.log(`MCP endpoint: ${host.mcpUrl}`);
+      openBrowser(host.url);
+      const shutdown = installShutdownController({
+        server: host.server,
+        manager: host.manager,
+        store: host.store,
+      });
+      const outcome = await shutdown.whenDrained();
+      return outcome.exitCode;
     }
 
     if (parsed.command === "mcp") {
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
-      const { mcpUrl } = await startMcpServer({
+      const host = await startMcpServer({
         agent: resolveAgentPort({ global: globalAgent }),
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
         mcpStateless,
       });
-      console.log(`MCP endpoint: ${mcpUrl}`);
-      await new Promise(() => undefined);
-      return 0;
+      console.log(`MCP endpoint: ${host.mcpUrl}`);
+      const shutdown = installShutdownController({
+        server: host.server,
+        manager: host.manager,
+        store: host.store,
+      });
+      const outcome = await shutdown.whenDrained();
+      return outcome.exitCode;
     }
 
     if (parsed.command === "internal") {

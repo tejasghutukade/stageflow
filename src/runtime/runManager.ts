@@ -491,6 +491,7 @@ export class RunManager {
   private readonly cwd: string;
   private readonly projectRoot: string;
   private readonly isGitProject: boolean;
+  private acceptingWork = true;
 
   constructor(
     private readonly options: {
@@ -557,6 +558,71 @@ export class RunManager {
 
   getActiveCount(): number {
     return this.active.size;
+  }
+
+  stopAcceptingWork(): void {
+    this.acceptingWork = false;
+    for (const halt of this.schedulingHalts.values()) {
+      halt.halted = true;
+    }
+  }
+
+  isAcceptingWork(): boolean {
+    return this.acceptingWork;
+  }
+
+  async drainActiveStages(options: {
+    deadlineMs: number;
+    isEscalated?: () => boolean;
+  }): Promise<{ forced: boolean }> {
+    for (const halt of this.schedulingHalts.values()) {
+      halt.halted = true;
+    }
+
+    const launcher = this.stageProcessLauncher;
+    if (launcher === undefined || launcher.activeCount() === 0) {
+      return { forced: false };
+    }
+
+    launcher.signalAllActive("SIGTERM");
+
+    while (
+      launcher.activeCount() > 0 &&
+      Date.now() < options.deadlineMs &&
+      !(options.isEscalated?.() ?? false)
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+
+    const remaining = launcher.getActiveStageProcesses();
+    if (remaining.length === 0) {
+      return { forced: false };
+    }
+
+    const seenRuns = new Set<string>();
+    for (const { runId, stageId } of remaining) {
+      await markStageInterrupted({
+        store: this.options.store,
+        runId,
+        stageId,
+        reason: "host_shutdown",
+        status: "interrupted",
+      });
+      seenRuns.add(runId);
+    }
+    for (const runId of seenRuns) {
+      await syncRunStatusFromStages(this.options.store, runId).catch(
+        () => undefined,
+      );
+    }
+
+    launcher.signalAllActive("SIGKILL");
+    const killWaitUntil = Date.now() + 500;
+    while (launcher.activeCount() > 0 && Date.now() < killWaitUntil) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
+
+    return { forced: true };
   }
 
   getActiveRunIds(): string[] {
@@ -1323,6 +1389,14 @@ export class RunManager {
     },
     submission?: RunSubmission,
   ): Promise<StartRunResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const cwd = this.options.cwd ?? process.cwd();
     // An inline pipeline has no filesystem anchor to derive a project root from.
     const derivedProjectRoot =
@@ -1382,6 +1456,14 @@ export class RunManager {
     runId: string,
     options?: { pinned?: boolean },
   ): Promise<StartRunResult> {
+    if (!this.acceptingWork) {
+      return {
+        ok: false,
+        reason: "Host is shutting down",
+        status: 503,
+        code: "shutting_down",
+      };
+    }
     const cwd = this.options.cwd ?? process.cwd();
 
     let pipeline: string;

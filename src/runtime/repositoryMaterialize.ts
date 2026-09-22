@@ -39,7 +39,8 @@ export type StartFailureCode =
   | "task.repository_invalid"
   | "task.invalid_shape"
   | "task.load_error"
-  | "start.token_rejected";
+  | "start.token_rejected"
+  | "shutting_down";
 
 export type MaterializedBinding = {
   runId: string;

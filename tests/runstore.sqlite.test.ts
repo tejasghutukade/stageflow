@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -866,5 +866,35 @@ CREATE TABLE stage_events (
     const row = listed.find((r) => r.run_id === run.runId);
     expect(row?.cancel_reason).toBe("operator request");
     expect(row?.disk_bytes).toBe(4096);
+  });
+
+  it("close checkpoints WAL and allows reopen", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sqlite-close-"));
+    const store = createRunStore({ rootDir: root, kind: "sqlite" });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    for (let i = 0; i < 40; i++) {
+      await store.appendStageEvent(run.runId, "clarify", {
+        event: "started",
+      });
+      await store.updateRunStatus(run.runId, i % 2 === 0 ? "running" : "created");
+    }
+    await store.close();
+
+    const walPath = path.join(storeRootFor(root), "state.db-wal");
+    try {
+      const wal = await stat(walPath);
+      expect(wal.size).toBeLessThan(64 * 1024);
+    } catch (err) {
+      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+
+    const reopened = createRunStore({ rootDir: root, kind: "sqlite" });
+    const detail = await reopened.readRun(run.runId);
+    expect(detail.run_id).toBe(run.runId);
+    await reopened.close();
   });
 });

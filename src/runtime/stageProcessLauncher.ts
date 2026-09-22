@@ -166,6 +166,12 @@ export class StageProcessLauncher {
     }));
   }
 
+  signalAllActive(signal: NodeJS.Signals): void {
+    for (const entry of this.active.values()) {
+      signalProcessGroup(entry.child.pid, signal);
+    }
+  }
+
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
     await this.waitForCapacity();
     return this.spawnAndWait(input);
