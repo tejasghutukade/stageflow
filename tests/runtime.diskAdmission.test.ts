@@ -514,4 +514,38 @@ describe("runtime disk-floor admission (U9)", () => {
     release();
     await holder.done;
   });
+
+  it("freeSpaceReader throw → disk_check_failed (fail closed)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-disk-throw-"));
+    const store = createRunStore({ rootDir: root });
+    const prev = process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+    process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = String(FLOOR);
+    try {
+      const manager = new RunManager({
+        agent: recordingAgent([]),
+        store,
+        cwd: fixtures,
+        freeSpaceReader: async () => {
+          throw new Error("statfs exploded");
+        },
+      });
+      const rejected = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "t", goal: "disk-throw" },
+      });
+      expect(rejected.ok).toBe(false);
+      if (rejected.ok) return;
+      expect(rejected.code).toBe("disk_check_failed");
+      expect(rejected.status).toBe(503);
+      expect(rejected.reason).toContain("statfs exploded");
+      const runs = await store.listRuns();
+      expect(runs).toHaveLength(0);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+      } else {
+        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = prev;
+      }
+    }
+  });
 });

@@ -4,7 +4,7 @@ import { projectRun } from "../projection/projectRun.js";
 import { waitRun, type WaitUntil } from "../mcp/waitRun.js";
 import { projectWaitingGates } from "../mcp/waitingGates.js";
 import { completeCliRun } from "./runCommand.js";
-import { reportCliRun, type CliRunReportIo } from "./runOutput.js";
+import { reportCliRun, writeQueuedAdmissionLine, type CliRunReportIo } from "./runOutput.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   createRunStore,
@@ -995,6 +995,7 @@ export async function runRunsCommand(
           { json: parsed.json, io: mutatingIo },
         );
       }
+      writeQueuedAdmissionLine(started, mutatingIo);
       return completeCliRun(started, mutatingIo, {
         json: parsed.json,
         store: getStore(),

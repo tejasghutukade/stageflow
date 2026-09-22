@@ -223,6 +223,22 @@ describe("STAGEFLOW_DISK_WARN_BYTES boot warning", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("measurement failure logs before returning false", async () => {
+    const home = await tempDir("sf-disk-warn-err-");
+    const log = vi.fn();
+    const warned = await warnDurableRootDiskIfNeeded(home, {
+      env: { STAGEFLOW_DISK_WARN_BYTES: "500" },
+      freeSpace: async () => {
+        throw new Error("statfs denied");
+      },
+      log,
+    });
+    expect(warned).toBe(false);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(String(log.mock.calls[0]?.[0])).toContain(DISK_WARN_LOG_PREFIX);
+    expect(String(log.mock.calls[0]?.[0])).toContain("statfs denied");
+  });
 });
 
 describe("listRuns never walks disk per row (KTD16)", () => {

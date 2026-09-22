@@ -449,6 +449,16 @@ export interface RunStore {
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
+  /**
+   * Conditional status update (CAS): sets `status` only when the row currently
+   * has `expectedStatus`. Returns false when the run exists but status differs;
+   * throws when the run is missing.
+   */
+  tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean>;
   /** Patch workspace-binding columns on an existing run (queued → materialize). */
   patchRunWorkspaceBinding(
     runId: string,

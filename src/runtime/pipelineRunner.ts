@@ -34,6 +34,23 @@ export { PipelineValidationError } from "./pipelineValidationError.js";
 
 export type PipelineRunOutcome = "succeeded" | "failed" | "waiting" | "cancelled";
 
+/** Thrown when queued→running CAS fails (e.g. cancel won the race). */
+export class QueuedRunActivationAborted extends Error {
+  readonly runId: string;
+  readonly currentStatus?: string;
+
+  constructor(runId: string, currentStatus?: string) {
+    super(
+      currentStatus === undefined
+        ? `Queued run ${runId} could not be activated`
+        : `Queued run ${runId} could not be activated (status=${currentStatus})`,
+    );
+    this.name = "QueuedRunActivationAborted";
+    this.runId = runId;
+    this.currentStatus = currentStatus;
+  }
+}
+
 export type PipelineRunResult = {
   ok: boolean;
   outcome: PipelineRunOutcome;
@@ -199,7 +216,20 @@ async function preparePipeline(options: {
         ? { runBranch: options.runBranch }
         : {}),
     });
-    await options.store.updateRunStatus(runId, "running");
+    const activated = await options.store.tryUpdateRunStatus(
+      runId,
+      "running",
+      "queued",
+    );
+    if (!activated) {
+      let currentStatus: string | undefined;
+      try {
+        currentStatus = (await options.store.readRunMeta(runId)).status;
+      } catch {
+        currentStatus = undefined;
+      }
+      throw new QueuedRunActivationAborted(runId, currentStatus);
+    }
     run = { runId, workspaceDir: options.store.getWorkspaceDir(runId) };
   } else {
     run = await options.store.createRun({
@@ -258,6 +288,7 @@ export type ExecuteStagesOptions = {
   startAtStageIndex?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean };
 };
 
 export async function executeStages(
@@ -284,6 +315,7 @@ export async function executeStages(
     startAtStageIndex: options?.startAtStageIndex,
     executionMode,
     stageProcessLauncher,
+    schedulingHalt: options?.schedulingHalt,
   });
   if (prepared.findings !== undefined && prepared.findings.length > 0) {
     return { ...result, findings: prepared.findings };
@@ -358,6 +390,7 @@ export async function startPipeline(options: {
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  schedulingHalt?: { halted: boolean };
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -391,6 +424,7 @@ export async function startPipeline(options: {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
     executionMode: prepared.executionMode,
     stageProcessLauncher: prepared.stageProcessLauncher,
+    schedulingHalt: options.schedulingHalt,
   }).catch(async (err) => {
     await prepared.store.updateRunStatus(prepared.run.runId, "failed").catch(() => undefined);
     return {

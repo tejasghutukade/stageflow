@@ -222,7 +222,13 @@ export async function warnDurableRootDiskIfNeeded(
       `${DISK_WARN_LOG_PREFIX}: durable root free space ${size.freeBytes} bytes is below threshold ${threshold} bytes (${raw.trim()}); run sf runs gc`,
     );
     return true;
-  } catch {
+  } catch (err) {
+    const log = options?.log ?? ((line: string) => console.warn(line));
+    log(
+      `${DISK_WARN_LOG_PREFIX}: free-space measurement failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
     return false;
   }
 }

@@ -38,6 +38,7 @@ import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
   PipelineValidationError,
+  QueuedRunActivationAborted,
   startPipeline,
   type PipelineRunResult,
 } from "./pipelineRunner.js";
@@ -222,6 +223,8 @@ type ActiveEntry = {
   generation: number;
   done?: Promise<unknown>;
 };
+
+type SchedulingHalt = { halted: boolean };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
@@ -411,6 +414,7 @@ async function toCheckoutLeaseKey(absPath: string): Promise<string> {
 export class RunManager {
   private readonly submissionsInFlight = new Map<string, { requestHash: string; result: Promise<StartRunOnceResult> }>();
   private readonly active = new Map<string, ActiveEntry>();
+  private readonly schedulingHalts = new Map<string, SchedulingHalt>();
   private readonly checkoutLeases = new Map<string, string>();
   private readonly provisionalIds = new Set<string>();
   private readonly admissionQueue = new AdmissionQueue();
@@ -479,6 +483,8 @@ export class RunManager {
         | Iterable<string>
         | Promise<Iterable<string>>;
       freeSpaceReader?: FreeSpaceReader;
+      /** Test-only: await before materialize when activating a queued run. */
+      onBeforeQueuedMaterialize?: (runId: string) => void | Promise<void>;
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
@@ -939,6 +945,11 @@ export class RunManager {
     await this.options.store.setCancelReason(runId, trimmedReason);
     await this.refreshRunDiskBytes(runId).catch(() => undefined);
 
+    const halt = this.schedulingHalts.get(runId);
+    if (halt !== undefined) {
+      halt.halted = true;
+    }
+
     this.admissionQueue.remove(runId);
     this.pendingQueuedStarts.delete(runId);
     this.resolveQueuedDone(runId, {
@@ -1014,18 +1025,21 @@ export class RunManager {
     }
 
     if (activeStatus && force) {
+      const settle = this.active.get(runId)?.done;
       const cancelled = await this.cancelRun(runId, FORCE_DELETE_CANCEL_REASON);
       if (!cancelled.ok && cancelled.status !== 404) {
         return cancelled;
       }
-      try {
-        await this.waitForActiveClear(runId);
-      } catch (err) {
-        return {
-          ok: false,
-          reason: err instanceof Error ? err.message : String(err),
-          status: 500,
-        };
+      if (settle !== undefined) {
+        try {
+          await this.waitForPromise(settle, 30_000);
+        } catch (err) {
+          return {
+            ok: false,
+            reason: err instanceof Error ? err.message : String(err),
+            status: 500,
+          };
+        }
       }
     }
 
@@ -1105,18 +1119,29 @@ export class RunManager {
     return { ok: true, ...report };
   }
 
-  private async waitForActiveClear(
-    runId: string,
-    timeoutMs = 30_000,
+  private async waitForPromise(
+    promise: Promise<unknown>,
+    timeoutMs: number,
   ): Promise<void> {
-    const deadline = Date.now() + timeoutMs;
-    while (this.active.has(runId)) {
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `Timed out waiting for run ${runId} to leave the active set`,
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        promise.then(
+          () => undefined,
+          () => undefined,
+        ),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(
+              new Error(
+                `Timed out waiting for run to settle after force cancel`,
+              ),
+            );
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -2016,6 +2041,7 @@ export class RunManager {
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
       });
       this.registerResumeUntrack(runId, done);
       const rest = await done;
@@ -2134,6 +2160,7 @@ export class RunManager {
         initialPrior,
         executionMode: this.executionMode,
         stageProcessLauncher: launcher,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
       });
       if (rest.outcome === "failed") {
         return { ok: false, reason: rest.reason };
@@ -2364,6 +2391,7 @@ export class RunManager {
         });
       rollback = linkRollback;
 
+      const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
         submission,
         agent: this.options.agent,
@@ -2389,6 +2417,7 @@ export class RunManager {
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
         skipGates,
+        schedulingHalt,
       });
       this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
@@ -2472,8 +2501,16 @@ export class RunManager {
         return this.insufficientDiskFailure(size.freeBytes, minFreeBytes);
       }
       return undefined;
-    } catch {
-      return undefined;
+    } catch (err) {
+      // Default floor is always active via resolveMinFreeDiskFloor — fail closed.
+      return {
+        ok: false,
+        reason: `Disk free-space check failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        status: 503,
+        code: "disk_check_failed",
+      };
     }
   }
 
@@ -2601,6 +2638,10 @@ export class RunManager {
           blockedRoots.add(next.projectRoot);
           continue;
         }
+        if (outcome === "capacity_busy") {
+          // Already requeued once inside startDequeuedAdmission.
+          break;
+        }
       }
     } finally {
       this.admissionDrainInFlight = false;
@@ -2610,7 +2651,7 @@ export class RunManager {
   private async startDequeuedAdmission(next: {
     projectRoot: string;
     entry: AdmissionQueueEntry;
-  }): Promise<"started" | "checkout_busy" | "cancelled"> {
+  }): Promise<"started" | "checkout_busy" | "capacity_busy" | "cancelled"> {
     const { runId } = next.entry;
     let meta;
     try {
@@ -2733,11 +2774,14 @@ export class RunManager {
         return "checkout_busy";
       }
       this.admissionQueue.requeueFront(next.projectRoot, next.entry);
-      return "checkout_busy";
+      return "capacity_busy";
     }
 
     let rollback: () => Promise<void> = async () => {};
     try {
+      if (this.options.onBeforeQueuedMaterialize !== undefined) {
+        await this.options.onBeforeQueuedMaterialize(runId);
+      }
       const { materialized, rollback: linkRollback } =
         await materializeWorkspaceBinding({
           runId,
@@ -2748,6 +2792,24 @@ export class RunManager {
         });
       rollback = linkRollback;
 
+      let metaAfterMaterialize;
+      try {
+        metaAfterMaterialize = await this.options.store.readRunMeta(runId);
+      } catch {
+        await rollback().catch(() => undefined);
+        this.clearReservation(reserved.provisionalId);
+        this.pendingQueuedStarts.delete(runId);
+        return "cancelled";
+      }
+      if (metaAfterMaterialize.status !== "queued") {
+        await rollback().catch(() => undefined);
+        this.clearReservation(reserved.provisionalId);
+        this.pendingQueuedStarts.delete(runId);
+        this.schedulingHalts.delete(runId);
+        return "cancelled";
+      }
+
+      const schedulingHalt = this.ensureSchedulingHalt(runId);
       const started = await startPipeline({
         submission,
         agent: this.options.agent,
@@ -2774,6 +2836,7 @@ export class RunManager {
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
         skipGates,
+        schedulingHalt,
       });
       this.pendingQueuedStarts.delete(runId);
       this.track(reserved.provisionalId, started.runId, started.done);
@@ -2783,6 +2846,10 @@ export class RunManager {
       await rollback().catch(() => undefined);
       this.clearReservation(reserved.provisionalId);
       this.pendingQueuedStarts.delete(runId);
+      this.schedulingHalts.delete(runId);
+      if (err instanceof QueuedRunActivationAborted) {
+        return "cancelled";
+      }
       const reason =
         err instanceof StartLinkError
           ? err.code
@@ -2870,6 +2937,7 @@ export class RunManager {
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
         initialSchedule: hydrated,
+        schedulingHalt: this.ensureSchedulingHalt(runId),
       }).finally(() => {
         void syncRunStatusFromStages(this.options.store, runId).catch(() => {});
       });
@@ -3013,6 +3081,7 @@ export class RunManager {
     const entry = this.active.get(id);
     if (!entry) return;
     this.active.delete(id);
+    this.schedulingHalts.delete(id);
     if (isProvisional) {
       this.provisionalIds.delete(id);
     }
@@ -3025,5 +3094,14 @@ export class RunManager {
     if (!isProvisional) {
       void this.drainAdmissionQueue();
     }
+  }
+
+  private ensureSchedulingHalt(runId: string): SchedulingHalt {
+    let halt = this.schedulingHalts.get(runId);
+    if (halt === undefined) {
+      halt = { halted: false };
+      this.schedulingHalts.set(runId, halt);
+    }
+    return halt;
   }
 }

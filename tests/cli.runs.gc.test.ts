@@ -276,4 +276,30 @@ describe("periodic GC timer", () => {
     expect(handle!.hasRef()).toBe(false);
     clearInterval(handle!);
   });
+
+  it("skips overlapping ticks while a sweep is in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const gcRuns = vi.fn(async () => {
+      await gate;
+      return {
+        ok: true as const,
+        slimmed: [],
+        purged: [],
+        bareCachesEvicted: [],
+      };
+    });
+    const manager = { gcRuns } as unknown as RunManager;
+    const handle = startPeriodicRunGc(manager, 20);
+    await new Promise((r) => setTimeout(r, 35));
+    expect(gcRuns).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(gcRuns).toHaveBeenCalledTimes(1);
+    release();
+    await new Promise((r) => setTimeout(r, 40));
+    expect(gcRuns.mock.calls.length).toBeGreaterThanOrEqual(2);
+    clearInterval(handle!);
+  });
 });

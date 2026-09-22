@@ -102,7 +102,10 @@ export function startPeriodicRunGc(
     ((message: string) => {
       console.error(message);
     });
+  let inFlight = false;
   return setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
     void manager
       .gcRuns({ execute: true, channel: "periodic" })
       .then((result) => {
@@ -116,6 +119,9 @@ export function startPeriodicRunGc(
             err instanceof Error ? err.message : String(err)
           }`,
         );
+      })
+      .finally(() => {
+        inFlight = false;
       });
   }, intervalMs).unref();
 }

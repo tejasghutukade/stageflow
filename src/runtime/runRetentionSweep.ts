@@ -168,7 +168,7 @@ async function slimOneRun(
   meta: RunMeta,
   now: Date,
   artifactMaxBytes: number,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await reclaimWorkspaceBinding(meta, { keepRunBranch: true });
   } catch (err) {
@@ -177,6 +177,7 @@ async function slimOneRun(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return false;
   }
 
   const workspaceDir = store.getWorkspaceDir(meta.run_id);
@@ -188,9 +189,11 @@ async function slimOneRun(
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    return false;
   }
 
   await store.setSlimmedAt(meta.run_id, now.toISOString());
+  return true;
 }
 
 async function listBareCachePaths(reposRoot: string): Promise<string[]> {
@@ -345,33 +348,43 @@ export async function runRetentionSweep(
 
   // Decide from durable meta (status/finished_at/slimmed_at), not listRuns'
   // derived status — stage rows can make a terminal run look "running".
+  const decisions: Array<{ runId: string; decision: "slim" | "purge" }> = [];
   for (const summary of runs) {
     const meta = await metaFor(summary.run_id);
     const decision = retentionDecision(meta, now, windows);
-    if (decision === "slim") {
-      slimmed.push(summary.run_id);
-      if (execute) {
-        await slimOneRun(store, meta, now, artifactMaxBytes);
-        metas.set(summary.run_id, {
-          ...meta,
-          slimmed_at: now.toISOString(),
-        });
-      }
+    if (decision === "slim" || decision === "purge") {
+      decisions.push({ runId: summary.run_id, decision });
     }
   }
 
-  for (const summary of runs) {
-    const meta = await metaFor(summary.run_id);
-    const decision = retentionDecision(meta, now, windows);
-    if (decision !== "purge") continue;
-    purged.push(summary.run_id);
+  const purgeCandidates = decisions.filter((d) => d.decision === "purge");
+  if (execute && a2aStore === undefined && purgeCandidates.length > 0) {
+    throw new Error(
+      "runRetentionSweep: a2aStore is required when execute is true and PURGE candidates exist",
+    );
+  }
+
+  for (const { runId, decision } of decisions) {
+    if (decision !== "slim") continue;
+    const meta = await metaFor(runId);
     if (execute) {
-      if (a2aStore === undefined) {
-        throw new Error(
-          "runRetentionSweep: a2aStore is required when execute is true and PURGE candidates exist",
-        );
-      }
-      await deleteRunEverywhere(store, a2aStore, summary.run_id);
+      const ok = await slimOneRun(store, meta, now, artifactMaxBytes);
+      if (!ok) continue;
+      slimmed.push(runId);
+      metas.set(runId, {
+        ...meta,
+        slimmed_at: now.toISOString(),
+      });
+    } else {
+      slimmed.push(runId);
+    }
+  }
+
+  for (const { runId, decision } of decisions) {
+    if (decision !== "purge") continue;
+    purged.push(runId);
+    if (execute) {
+      await deleteRunEverywhere(store, a2aStore!, runId);
     }
   }
 

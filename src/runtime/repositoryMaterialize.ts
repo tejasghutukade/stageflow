@@ -30,6 +30,7 @@ export type StartFailureCode =
   | "worktree_create_failed"
   | "git_missing"
   | "insufficient_disk"
+  | "disk_check_failed"
   | "pinned_sha_unavailable"
   | "invalid_run_branch"
   | "task.binding_conflict"

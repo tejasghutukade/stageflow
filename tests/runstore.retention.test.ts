@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
 import { A2aStore } from "../src/a2a/store.js";
 import {
@@ -714,5 +714,79 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     await runRetentionSweep(store, a2aStore, { now, execute: true });
     expect(existsSync(checkoutRoot)).toBe(false);
     expect(git(cachePath, ["branch", "--list", runBranch])).toContain(runBranch);
+  });
+
+  it("refuses execute when a2aStore missing and PURGE candidates exist (before SLIM)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-u6-no-a2a-"));
+    temps.push(root);
+    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
+    const now = new Date("2026-09-22T12:00:00.000Z");
+
+    const slimTarget = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.updateRunStatus(slimTarget.runId, "succeeded");
+    setFinishedAt(
+      connection,
+      slimTarget.runId,
+      new Date(now.getTime() - 4 * DAY_MS).toISOString(),
+    );
+    await seedAttemptTree(store.getWorkspaceDir(slimTarget.runId));
+
+    const purgeTarget = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t2\ngoal: g\n",
+    });
+    await store.updateRunStatus(purgeTarget.runId, "succeeded");
+    setFinishedAt(
+      connection,
+      purgeTarget.runId,
+      new Date(now.getTime() - 400 * DAY_MS).toISOString(),
+    );
+
+    await expect(
+      runRetentionSweep(store, undefined, { now, execute: true }),
+    ).rejects.toThrow(/a2aStore is required/);
+
+    const slimMeta = await store.readRunMeta(slimTarget.runId);
+    expect(slimMeta.slimmed_at).toBeUndefined();
+  });
+
+  it("failed artifact slim does not set slimmed_at", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-u6-slim-fail-"));
+    temps.push(root);
+    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
+    const a2aStore = new A2aStore(root, connection);
+    const now = new Date("2026-09-22T12:00:00.000Z");
+
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    await store.updateRunStatus(run.runId, "succeeded");
+    setFinishedAt(
+      connection,
+      run.runId,
+      new Date(now.getTime() - 4 * DAY_MS).toISOString(),
+    );
+    await seedAttemptTree(store.getWorkspaceDir(run.runId));
+
+    const materialize = await import("../src/runtime/repositoryMaterialize.js");
+    const spy = vi
+      .spyOn(materialize, "reclaimWorkspaceBinding")
+      .mockRejectedValue(new Error("reclaim boom"));
+
+    try {
+      const report = await runRetentionSweep(store, a2aStore, {
+        now,
+        execute: true,
+      });
+      expect(report.slimmed).toEqual([]);
+      const meta = await store.readRunMeta(run.runId);
+      expect(meta.slimmed_at).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

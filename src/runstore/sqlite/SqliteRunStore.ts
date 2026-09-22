@@ -479,6 +479,50 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const isTerminal =
+      status === "succeeded" || status === "failed" || status === "cancelled";
+    const result = isTerminal
+      ? this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at,
+              finished_at = COALESCE(finished_at, @finished_at)
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+            finished_at: now,
+          })
+      : this.db
+          .prepare(
+            `UPDATE runs SET status = @status, updated_at = @updated_at
+             WHERE run_id = @run_id AND status = @expected_status`,
+          )
+          .run({
+            run_id: runId,
+            status,
+            expected_status: expectedStatus,
+            updated_at: now,
+          });
+    if (result.changes > 0) return true;
+    const exists = this.db
+      .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+      .get(runId);
+    if (exists === undefined) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    return false;
+  }
+
   async patchRunWorkspaceBinding(
     runId: string,
     patch: {

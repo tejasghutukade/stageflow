@@ -86,6 +86,22 @@ export function wrapRunStoreWithChangeBus(
     bus.emit({ runId, kind: "status" });
   };
 
+  const tryUpdateRunStatus = async (
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean> => {
+    const updated = await store.tryUpdateRunStatus(
+      runId,
+      status,
+      expectedStatus,
+    );
+    if (updated) {
+      bus.emit({ runId, kind: "status" });
+    }
+    return updated;
+  };
+
   const appendStageEvent = async (
     runId: string,
     stageId: string,
@@ -105,6 +121,7 @@ export function wrapRunStoreWithChangeBus(
       if (prop === BUS_MARKER) return bus;
       if (prop === "createRun") return createRun;
       if (prop === "updateRunStatus") return updateRunStatus;
+      if (prop === "tryUpdateRunStatus") return tryUpdateRunStatus;
       if (prop === "appendStageEvent") return appendStageEvent;
       const cached = boundCache.get(prop);
       if (cached !== undefined) return cached;

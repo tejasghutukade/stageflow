@@ -456,4 +456,183 @@ describe("runtime admission queue (U8)", () => {
       openStage.mock.calls.some((call) => call[0]?.runId === queued.runId),
     ).toBe(false);
   });
+
+  it("cancel during dequeue materialize leaves cancelled, not running", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-adm-cancel-mat-"));
+    const store = createRunStore({ rootDir: root });
+    let releaseHold!: () => void;
+    const holdGate = new Promise<void>((resolve) => {
+      releaseHold = resolve;
+    });
+    let releaseMaterialize!: () => void;
+    let materializeEntered = false;
+    const materializeGate = new Promise<void>((resolve) => {
+      releaseMaterialize = resolve;
+    });
+
+    try {
+      const manager = new RunManager({
+        agent: gatedAgent(holdGate),
+        store,
+        cwd: fixtures,
+        maxConcurrent: 1,
+        onBeforeQueuedMaterialize: async () => {
+          materializeEntered = true;
+          await materializeGate;
+        },
+      });
+
+      const first = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "a", goal: "hold" },
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+
+      const queued = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "b", goal: "cancel-mid-dequeue" },
+      });
+      expect(queued.ok).toBe(true);
+      if (!queued.ok) return;
+      expect(queued.queued).toBe(true);
+
+      releaseHold();
+      await first.done;
+      await waitFor(async () => materializeEntered);
+
+      const cancelled = await manager.cancelRun(
+        queued.runId,
+        "cancel during materialize",
+      );
+      expect(cancelled).toEqual({ ok: true, runId: queued.runId });
+
+      releaseMaterialize();
+      await queued.done;
+      await new Promise((r) => setTimeout(r, 50));
+
+      const meta = await store.readRunMeta(queued.runId);
+      expect(meta.status).toBe("cancelled");
+      expect(meta.cancel_reason).toBe("cancel during materialize");
+    } finally {
+      releaseMaterialize();
+    }
+  }, 15000);
+  it("capacity race during dequeue requeues once (no double-requeue)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-adm-cap-race-"));
+    const store = createRunStore({ rootDir: root });
+    let releaseHold!: () => void;
+    const holdGate = new Promise<void>((resolve) => {
+      releaseHold = resolve;
+    });
+    let releaseFiller!: () => void;
+    const fillerGate = new Promise<void>((resolve) => {
+      releaseFiller = resolve;
+    });
+    let releaseDisk!: () => void;
+    let diskCheckEntered = false;
+    let diskBlockersRemaining = 0;
+    const diskGate = new Promise<void>((resolve) => {
+      releaseDisk = resolve;
+    });
+
+    const prevFloor = process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+    process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = "1000";
+
+    try {
+      const manager = new RunManager({
+        agent: {
+          openStage(input: StageRunInput) {
+            if (input.task.goal === "hold") {
+              return gatedAgent(holdGate).openStage(input);
+            }
+            if (input.task.goal === "fill-slot") {
+              return gatedAgent(fillerGate).openStage(input);
+            }
+            return recordingAgent([]).openStage(input);
+          },
+          async runStage(input: StageRunInput) {
+            if (input.task.goal === "hold") {
+              return gatedAgent(holdGate).runStage(input);
+            }
+            if (input.task.goal === "fill-slot") {
+              return gatedAgent(fillerGate).runStage(input);
+            }
+            return recordingAgent([]).runStage(input);
+          },
+        },
+        store,
+        cwd: fixtures,
+        maxConcurrent: 1,
+        freeSpaceReader: async () => {
+          if (diskBlockersRemaining > 0) {
+            diskBlockersRemaining -= 1;
+            diskCheckEntered = true;
+            await diskGate;
+          }
+          return { freeBytes: 1_000_000_000_000, totalBytes: 2_000_000_000_000 };
+        },
+      });
+
+      const first = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "a", goal: "hold" },
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) return;
+
+      const queued = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "b", goal: "dequeue-race" },
+      });
+      expect(queued.ok).toBe(true);
+      if (!queued.ok) return;
+      expect(queued.queued).toBe(true);
+
+      diskBlockersRemaining = 1;
+      releaseHold();
+      await first.done;
+      await waitFor(async () => diskCheckEntered);
+
+      const filler = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "c", goal: "fill-slot" },
+      });
+      expect(filler.ok).toBe(true);
+      if (!filler.ok) return;
+      expect(filler.queued).not.toBe(true);
+
+      releaseDisk();
+      await waitFor(async () => {
+        const meta = await store.readRunMeta(queued.runId);
+        return meta.status === "queued";
+      });
+
+      const probe = await manager.startRun({
+        pipeline: pipelinePath("single"),
+        task: { id: "d", goal: "probe-depth" },
+      });
+      expect(probe.ok).toBe(true);
+      if (!probe.ok) return;
+      expect(probe.queued).toBe(true);
+      // B requeued once + D → position 2. Double-requeue would make this 3.
+      expect(probe.queuePosition).toBe(2);
+
+      releaseFiller();
+      await filler.done;
+      await queued.done;
+      await probe.done;
+
+      const meta = await store.readRunMeta(queued.runId);
+      expect(meta.status).toBe("succeeded");
+    } finally {
+      releaseDisk();
+      releaseFiller();
+      if (prevFloor === undefined) {
+        delete process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+      } else {
+        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES = prevFloor;
+      }
+    }
+  }, 20000);
 });

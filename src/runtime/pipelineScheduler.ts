@@ -313,6 +313,7 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean };
 };
 
 /** Refuses to overwrite a cancelled run (KTD7). */
@@ -413,6 +414,8 @@ export type RunPipelineDagOptions = {
       decision: FeedbackLoopDecisionInput,
     ) => Promise<ResolveFeedbackLoopDecisionResult>;
   }) => Promise<void>;
+  /** Live cancel flag — when set, launchStage/startStage stop. */
+  schedulingHalt?: { halted: boolean };
 };
 
 export type RetryRunOptions = {
@@ -424,6 +427,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  schedulingHalt?: { halted: boolean };
 };
 
 export async function retryRun(
@@ -446,6 +450,7 @@ export async function retryRun(
     mutationQueue: options.mutationQueue,
     onLoopTick: options.onLoopTick,
     onRetryRootTerminal: options.onRetryRootTerminal,
+    schedulingHalt: options.schedulingHalt,
   });
 }
 
@@ -1398,10 +1403,16 @@ export async function runPipelineDag(
   };
 
   while (!allTerminal()) {
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
+    }
     drainRetryMutations();
     await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
+    }
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
     }
     if (!schedulingHalted) {
       const runnable = pickRunnable();
