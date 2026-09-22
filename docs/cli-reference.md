@@ -147,8 +147,10 @@ sf runs rerun --run <runId> [--json]
 
 | Kind | Verbs | Path |
 |------|-------|------|
-| Read | `list`, `show`, `verify`, `waiting`, `wait` | Open the global run store directly; no host needed |
+| Read | `list`, `show`, `verify`, `waiting`, `wait` | Open the global run store in assert mode (no schema changes in the CLI). If `state.db` is missing or behind this binary, start the Host first so it can migrate, then reopen |
 | Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `rerun` | Sent over HTTP to the global service |
+
+Read verbs that open the store themselves (`list`, `show`, `verify`, `waiting`, `wait`) and the related `sf artifact` / `sf envelope` / `sf export-run` commands do not apply migrations in the CLI process. When the database is missing or its schema version is behind, they start the Host the same way mutating verbs do, then open again in assert mode. Autostart may append to `$STAGEFLOW_HOME/service.log`.
 
 Mutating verbs require the global service and do not write the store themselves. They probe `GET http://127.0.0.1:3847/api/health` (1500 ms) and, when nothing answers, spawn a detached `sf mcp` on that port and poll until it is healthy (default 10 s, `STAGEFLOW_AUTOSTART_TIMEOUT_MS`). Exit `1` when the port is held by a non-Stageflow process, the spawn fails, or the wait times out. `sf run` starts runs the same way.
 

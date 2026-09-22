@@ -30,6 +30,8 @@ Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent director
 
 Credential choice is unchanged: a saved setting, otherwise a usable `~/.pi/agent/auth.json`, otherwise `agent/auth.json` under the durable root.
 
+Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is inside the durable root and outside that run's workspace (`stageflow_path_denied`). That is defence in depth, not a sandbox — `bash` is not path-restricted.
+
 ## Container image user and volumes
 
 The published image runs as **`1000:1000`**. Named volumes are the default mount for the durable root. The process never recursively changes ownership of the data root on boot — if the volume is not writable by that uid/gid, startup fails with a message that includes the live uid and a `chown` hint.

@@ -86,7 +86,10 @@ export async function createRunStoreAfterHostEnsure(
     }
   }
   try {
-    return { ok: true, store: createRunStore(config) };
+    return {
+      ok: true,
+      store: createRunStore({ ...config, openerMode: "assert" }),
+    };
   } catch (err) {
     if (err instanceof StoreSchemaError) {
       return { ok: false, message: err.message, code: err.code };
