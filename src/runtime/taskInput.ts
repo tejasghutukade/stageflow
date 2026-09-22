@@ -28,6 +28,12 @@ export function taskFileToYaml(task: TaskFile): string {
   if (task.context !== undefined) doc.context = task.context;
   if (task.constraints !== undefined) doc.constraints = task.constraints;
   if (task.checkout !== undefined) doc.checkout = task.checkout;
+  if (task.repository !== undefined) doc.repository = task.repository;
+  if (task.ref !== undefined) doc.ref = task.ref;
+  if (task.run_branch_template !== undefined) {
+    doc.run_branch_template = task.run_branch_template;
+  }
+  if (task.git_identity !== undefined) doc.git_identity = task.git_identity;
   if (task.input !== undefined) doc.input = task.input;
   return stringifyYaml(doc);
 }
