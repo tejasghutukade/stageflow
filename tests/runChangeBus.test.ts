@@ -15,9 +15,12 @@ import path from "node:path";
 
 /** Every RunStore method name — compile-fail if port adds a method we omit. */
 const RUN_STORE_METHODS = [
+  "getRunBySubmission",
   "createRun",
   "updateRunStatus",
   "setCancelReason",
+  "setRunDiskUsage",
+  "deleteRun",
   "readRunMeta",
   "readTaskYaml",
   "getWorkspaceDir",
@@ -36,8 +39,23 @@ const RUN_STORE_METHODS = [
   "appendStageEvent",
   "listStageEvents",
   "listRuns",
+  "listProjectRoots",
   "readRun",
   "updatePipelineDag",
+  "createFeedbackLoop",
+  "getFeedbackLoop",
+  "listFeedbackLoops",
+  "updateFeedbackLoop",
+  "createFeedbackReplay",
+  "getFeedbackReplay",
+  "listFeedbackReplays",
+  "updateFeedbackReplay",
+  "createFeedbackReplayStagePass",
+  "listFeedbackReplayStagePasses",
+  "updateFeedbackReplayStagePass",
+  "createForkGeneration",
+  "listForkGenerations",
+  "updateForkGeneration",
 ] as const satisfies readonly (keyof RunStore)[];
 
 type MissingRunStoreMethods = Exclude<
@@ -211,8 +229,12 @@ describe("RunChangeBus", () => {
     const listRuns = vi.fn(async () => []);
     const getWorkspaceDir = vi.fn(() => "/workspace");
     const underlying = {
+      getRunBySubmission: vi.fn(),
       createRun: vi.fn(),
       updateRunStatus: vi.fn(),
+      setCancelReason: vi.fn(),
+      setRunDiskUsage: vi.fn(),
+      deleteRun: vi.fn(),
       appendStageEvent: vi.fn(),
       readRunMeta: vi.fn(),
       readTaskYaml: vi.fn(),
@@ -231,8 +253,23 @@ describe("RunChangeBus", () => {
       readEnvelope: vi.fn(),
       listStageEvents: vi.fn(),
       listRuns,
+      listProjectRoots: vi.fn(),
       readRun,
       updatePipelineDag: vi.fn(),
+      createFeedbackLoop: vi.fn(),
+      getFeedbackLoop: vi.fn(),
+      listFeedbackLoops: vi.fn(),
+      updateFeedbackLoop: vi.fn(),
+      createFeedbackReplay: vi.fn(),
+      getFeedbackReplay: vi.fn(),
+      listFeedbackReplays: vi.fn(),
+      updateFeedbackReplay: vi.fn(),
+      createFeedbackReplayStagePass: vi.fn(),
+      listFeedbackReplayStagePasses: vi.fn(),
+      updateFeedbackReplayStagePass: vi.fn(),
+      createForkGeneration: vi.fn(),
+      listForkGenerations: vi.fn(),
+      updateForkGeneration: vi.fn(),
     } as unknown as RunStore;
 
     const wrapped = wrapRunStoreWithChangeBus(

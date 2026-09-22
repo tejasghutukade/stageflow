@@ -201,10 +201,11 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_health",
     {
       description:
-        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, version. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
+        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, activeStageProcesses, version, plus disk breakdown (disk.runs_bytes, worktrees_bytes, repos_bytes, state_db_bytes, a2a_artifacts_bytes, free_bytes) for the durable root. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
       inputSchema: z.object({}),
     },
-    async () => textResult({ ...manager.getHealth(), version: PACKAGE_VERSION }),
+    async () =>
+      textResult({ ...(await manager.getHealthWithDisk()), version: PACKAGE_VERSION }),
   );
 
   server.registerTool(

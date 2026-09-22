@@ -477,6 +477,16 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  activeStageProcesses?: number;
+  maxActiveStageProcesses?: number | null;
+  disk?: {
+    runs_bytes: number;
+    worktrees_bytes: number;
+    repos_bytes: number;
+    state_db_bytes: number;
+    a2a_artifacts_bytes: number;
+    free_bytes: number;
+  };
 };
 
 export type CredentialSource = "pi_home" | "sf_owned";

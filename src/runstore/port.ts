@@ -450,6 +450,12 @@ export interface RunStore {
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
   setCancelReason(runId: string, reason: string): Promise<void>;
+  /** Persist cached disk usage for `listRuns` (never measured inside listRuns). */
+  setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void>;
   /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
   deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;

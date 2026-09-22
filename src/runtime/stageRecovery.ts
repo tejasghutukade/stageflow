@@ -1,5 +1,6 @@
 import type { RunStore, StageLogEvent } from "../runstore/port.js";
 import { deriveStatusFromStages } from "../runstore/port.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import { deriveExecutionPatchFromEvent } from "../runstore/stageExecution.js";
 import {
   attemptContext,
@@ -59,5 +60,12 @@ export async function syncRunStatusFromStages(
   if (meta.status === "succeeded" && derived !== "running") return;
   if ((meta.status ?? "created") !== derived) {
     await store.updateRunStatus(runId, derived);
+    if (
+      derived === "succeeded" ||
+      derived === "failed" ||
+      derived === "cancelled"
+    ) {
+      await refreshRunDiskUsage(store, runId).catch(() => undefined);
+    }
   }
 }

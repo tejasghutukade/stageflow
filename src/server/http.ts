@@ -929,7 +929,7 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          json(res, 200, manager.getHealth());
+          json(res, 200, await manager.getHealthWithDisk());
           return true;
         }
 

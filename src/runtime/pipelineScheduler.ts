@@ -1,5 +1,6 @@
 import type { AgentPort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
@@ -323,6 +324,7 @@ export async function writeTerminalRunStatus(
   const meta = await store.readRunMeta(runId);
   if (meta.status === "cancelled") return;
   await store.updateRunStatus(runId, status);
+  await refreshRunDiskUsage(store, runId).catch(() => undefined);
 }
 
 export async function resumeRun(

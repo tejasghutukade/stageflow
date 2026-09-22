@@ -4,8 +4,14 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import {
+  durableRootDiskBreakdown,
+  refreshRunDiskUsage,
+  type DiskBreakdown,
+} from "../runstore/diskUsage.js";
 import { newRunId } from "../runstore/paths.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
@@ -118,6 +124,7 @@ export type CapacityHealth = {
   slotsAvailable: number;
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
+  disk?: DiskBreakdown;
 };
 
 export type StartRunOnceResult =
@@ -339,6 +346,32 @@ export class RunManager {
         ? maxActiveStageProcessesRaw
         : null,
     };
+  }
+
+  /** Capacity plus on-demand durable-root disk breakdown (KTD16). */
+  async getHealthWithDisk(): Promise<CapacityHealth> {
+    const base = this.getHealth();
+    try {
+      const disk = await durableRootDiskBreakdown(globalStageflowHome());
+      return { ...base, disk };
+    } catch {
+      return {
+        ...base,
+        disk: {
+          runs_bytes: 0,
+          worktrees_bytes: 0,
+          repos_bytes: 0,
+          state_db_bytes: 0,
+          a2a_artifacts_bytes: 0,
+          free_bytes: 0,
+        },
+      };
+    }
+  }
+
+  /** Refresh cached `disk_bytes` for one run after a terminal transition. */
+  async refreshRunDiskBytes(runId: string): Promise<void> {
+    await refreshRunDiskUsage(this.options.store, runId);
   }
 
   getHitlController(): StageHitlController {
@@ -684,6 +717,7 @@ export class RunManager {
 
     await this.options.store.updateRunStatus(runId, "cancelled");
     await this.options.store.setCancelReason(runId, trimmedReason);
+    await this.refreshRunDiskBytes(runId).catch(() => undefined);
 
     if (this.stageProcessLauncher !== undefined) {
       await this.stageProcessLauncher.cancelRun(runId);

@@ -495,6 +495,27 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET disk_bytes = @disk_bytes, disk_measured_at = @disk_measured_at
+         WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        disk_bytes: diskBytes,
+        disk_measured_at: measuredAt,
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
   async deleteRun(runId: string): Promise<void> {
     await this.ready();
     const deleteAll = this.db.transaction(() => {

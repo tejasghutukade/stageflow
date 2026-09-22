@@ -11,6 +11,7 @@ import { ensureGlobalHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
+import { warnDurableRootDiskIfNeeded } from "../runstore/diskUsage.js";
 import { RunManager } from "../runtime/runManager.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
@@ -130,6 +131,7 @@ export async function bootstrapStageflowHost(
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
   await manager.resumeStalledSchedules();
+  await warnDurableRootDiskIfNeeded(ctx.globalHome);
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });

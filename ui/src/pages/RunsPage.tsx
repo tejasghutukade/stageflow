@@ -21,6 +21,16 @@ const FILTER_LABEL: Record<StatusFilter, (c: RunsFilterCounts) => string> = {
   finished: (c) => `Finished ${c.finished}`,
 };
 
+function formatDiskBytes(bytes: number | undefined): string | null {
+  if (bytes === undefined) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
 export function RunsPage({
   onOpen,
   onNew,
@@ -75,6 +85,7 @@ export function RunsPage({
 
       {visible.map(run => {
         const token = cssStatusToken(runDisplayStatus(run));
+        const diskLabel = formatDiskBytes(run.disk_bytes);
         return (
           <a
             key={run.run_id}
@@ -93,6 +104,7 @@ export function RunsPage({
               </span>
             </span>
             <span className="rrow__right">
+              {diskLabel ? <span className="rrow__disk" title="Cached disk usage">{diskLabel}</span> : null}
               <CostBadge costUsd={run.total_cost_usd} />
               <span className={`status${token && token !== "running" ? ` status--${token}` : ""}`}>
                 <span className={`dot${token ? ` dot--${token}` : ""}`}></span> {relativeTime(run.updated_at ?? run.created_at)}
