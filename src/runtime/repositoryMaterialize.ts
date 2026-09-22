@@ -41,7 +41,8 @@ export type StartFailureCode =
   | "task.load_error"
   | "start.token_rejected"
   | "shutting_down"
-  | "autostart_disabled";
+  | "autostart_disabled"
+  | "claude_as_root";
 
 export type MaterializedBinding = {
   runId: string;

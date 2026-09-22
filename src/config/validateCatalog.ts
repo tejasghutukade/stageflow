@@ -22,6 +22,7 @@ import {
 } from "./resolveStageMcpServers.js";
 import { loadSecretRegistry } from "../runtime/stageSecrets.js";
 import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -80,6 +81,7 @@ export type ValidationFindingCode =
   | "catalog.empty_catalog"
   | "catalog.manifest_load_error"
   | "catalog.invalid_mcp"
+  | "catalog.mcp_command_missing"
   | "catalog.mixed_yaml_dialect"
   | "catalog.legacy_yaml";
 
@@ -503,7 +505,24 @@ async function findingsForStageMcpCatalog(
     throw err;
   }
 
-  return [];
+  const findings: ValidationFinding[] = [];
+  const serversForPath: Record<string, { command?: string }> = {};
+  for (const name of allowlist) {
+    const entry = catalog.servers[name] as { command?: string } | undefined;
+    if (entry) serversForPath[name] = entry;
+  }
+  for (const missing of findMissingMcpCommands(serversForPath, process.env)) {
+    findings.push(
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP server "${missing.serverName}" command "${missing.command}" was not found on PATH`,
+        "catalog.mcp_command_missing",
+        "error",
+      ),
+    );
+  }
+  return findings;
 }
 
 type PipelineValidationCoreResult =

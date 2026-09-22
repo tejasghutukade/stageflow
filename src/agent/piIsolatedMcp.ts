@@ -14,7 +14,7 @@ import { globalStageflowHome } from "../project/globalHome.js";
 export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
 const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
-const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 30_000;
 const STATUS_POLL_MS = 50;
 const PI_MCP_ADAPTER_SPEC: string = "pi-mcp-adapter";
 

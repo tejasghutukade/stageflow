@@ -194,6 +194,7 @@ function interpolateString(
   value: string,
   env: NodeJS.ProcessEnv,
   serverName: string,
+  stageId?: string,
 ): string {
   return value.replace(INTERPOLATION_TOKEN, (_match, inner: string) => {
     const withDefault = ENV_VAR_WITH_DEFAULT.exec(inner);
@@ -206,8 +207,10 @@ function interpolateString(
       if (found !== undefined) {
         return found;
       }
+      const stagePart =
+        stageId !== undefined ? ` (stage "${stageId}")` : "";
       throw new StageMcpError(
-        `Unresolved MCP catalog variable "${inner}"`,
+        `Unresolved MCP catalog variable "${inner}" for server "${serverName}"${stagePart}. Declare it in secrets: (use as: env for tokens needed in MCP env) or use \${${inner}:-default}.`,
         "unresolved_var",
       );
     }

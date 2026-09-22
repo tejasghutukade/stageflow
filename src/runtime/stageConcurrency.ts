@@ -1,3 +1,5 @@
+import { getContainerLimits } from "./containerLimits.js";
+
 export const UNLIMITED_CONCURRENCY = Number.POSITIVE_INFINITY;
 
 export const DEFAULT_MAX_ACTIVE_STAGES_PER_RUN = UNLIMITED_CONCURRENCY;
@@ -5,7 +7,8 @@ export const DEFAULT_MAX_ACTIVE_STAGES_PER_RUN = UNLIMITED_CONCURRENCY;
 export const MAX_ACTIVE_STAGES_PER_RUN_ENV =
   "STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN";
 
-export const DEFAULT_MAX_ACTIVE_STAGE_PROCESSES = UNLIMITED_CONCURRENCY;
+/** Fallback when cgroup is absent; finite so waitForCapacity is exercised. */
+export const DEFAULT_MAX_ACTIVE_STAGE_PROCESSES = 4;
 
 export const MAX_ACTIVE_STAGE_PROCESSES_ENV =
   "STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES";
@@ -60,7 +63,7 @@ export function readMaxActiveStageProcesses(
   }
   const raw = env[MAX_ACTIVE_STAGE_PROCESSES_ENV];
   if (raw === undefined || raw.trim() === "") {
-    return DEFAULT_MAX_ACTIVE_STAGE_PROCESSES;
+    return getContainerLimits().maxActiveStageProcesses;
   }
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 1) {

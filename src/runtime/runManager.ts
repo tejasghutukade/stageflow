@@ -66,6 +66,12 @@ import {
 } from "./stageConcurrency.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { logger as rootLogger } from "../logging/logger.js";
+import { STAGE_ENV_PASSTHROUGH } from "./stageEnvironment.js";
+import { proxyHealthFields } from "../net/proxy.js";
+import { getContainerLimits } from "./containerLimits.js";
+import { stageflowCacheRoot } from "./stageCacheEnv.js";
+import { assertClaudeNotRoot, ClaudeRootError } from "../preflight/claudeRoot.js";
+import { asAgentBackendId } from "../agent/agentBackend.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
   parseSlotCount,
@@ -153,6 +159,15 @@ export type CapacityHealth = {
   activeStageProcesses: number;
   maxActiveStageProcesses: number | null;
   disk?: DiskBreakdown;
+  stage_env_passthrough?: boolean;
+  proxy?: Record<string, unknown>;
+  container?: {
+    max_old_space_size_mb: number;
+    max_active_stage_processes: number;
+    memory_limit_bytes: number | null;
+    source: string;
+  };
+  cache?: { root: string };
 };
 
 export type StartRunOnceResult =
@@ -639,6 +654,7 @@ export class RunManager {
     const maxActiveStageProcessesRaw = readMaxActiveStageProcesses(process.env);
     const activeStageProcesses =
       this.stageProcessLauncher?.activeCount() ?? 0;
+    const limits = getContainerLimits();
     return {
       ok: true,
       activeRunIds,
@@ -649,6 +665,16 @@ export class RunManager {
       maxActiveStageProcesses: Number.isFinite(maxActiveStageProcessesRaw)
         ? maxActiveStageProcessesRaw
         : null,
+      stage_env_passthrough:
+        process.env[STAGE_ENV_PASSTHROUGH]?.trim() === "all",
+      proxy: proxyHealthFields(process.env),
+      container: {
+        max_old_space_size_mb: limits.maxOldSpaceSizeMb,
+        max_active_stage_processes: limits.maxActiveStageProcesses,
+        memory_limit_bytes: limits.memoryLimitBytes ?? null,
+        source: limits.source,
+      },
+      cache: { root: stageflowCacheRoot() },
     };
   }
 
@@ -667,6 +693,7 @@ export class RunManager {
           repos_bytes: 0,
           state_db_bytes: 0,
           a2a_artifacts_bytes: 0,
+          cache_bytes: 0,
           free_bytes: 0,
         },
       };
@@ -2557,6 +2584,20 @@ export class RunManager {
         typeof pipeline === "string"
           ? normalizeCatalogPath(loadResult.loaded.pipelinePath)
           : undefined;
+      try {
+        const pipelineAgent = asAgentBackendId(loadResult.loaded.pipeline.agent);
+        assertClaudeNotRoot({ backendId: pipelineAgent });
+        for (const stage of loadResult.loaded.stages) {
+          assertClaudeNotRoot({
+            backendId: asAgentBackendId(stage.agent) ?? pipelineAgent,
+          });
+        }
+      } catch (err) {
+        if (err instanceof ClaudeRootError) {
+          return { ok: false, reason: err.message, status: 400, code: err.code };
+        }
+        throw err;
+      }
     } catch (err) {
       if (err instanceof PipelineValidationError) throw err;
       return {
