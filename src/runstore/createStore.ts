@@ -75,7 +75,7 @@ export async function createRunStoreAfterHostEnsure(
   | {
       ok: false;
       message: string;
-      reason?: "port_occupied" | "spawn_failed" | "timed_out";
+      reason?: "port_occupied" | "spawn_failed" | "timed_out" | "autostart_disabled";
       code?: StoreSchemaErrorCode;
     }
 > {

@@ -212,7 +212,14 @@ function defaultStartRun(
   return async (input) => {
     const ensured = await ensureService();
     if (!ensured.ok) {
-      return { ok: false, reason: ensured.message, status: 503 };
+      return {
+        ok: false,
+        reason: ensured.message,
+        status: 503,
+        ...(ensured.reason === "autostart_disabled"
+          ? { code: "autostart_disabled" as const }
+          : {}),
+      };
     }
     return httpStartRun(base, {
       pipeline: resolveAbsolute(cwd, input.pipeline),

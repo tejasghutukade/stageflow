@@ -1001,3 +1001,36 @@ describe("sf run repository binding overrides (U7)", () => {
     expect(payload.code).toBe("task.binding_conflict");
   });
 });
+
+describe("sf run STAGEFLOW_NO_AUTOSTART (U7)", () => {
+  it("exits 1 with JSON code autostart_disabled when ensureService refuses", async () => {
+    const cap = captureIo();
+    const message =
+      "No Stageflow Host is answering at http://127.0.0.1:3847. Autostart is disabled (STAGEFLOW_NO_AUTOSTART). Start the Host with `sf mcp`, or in Docker check that the container's entrypoint is running.";
+    const code = await runRunCommand(
+      ["--json", "--task", sampleTask, "--pipeline", singlePipeline],
+      {
+        cwd: fixtures,
+        io: cap.io,
+        ensureService: async () => ({
+          ok: false,
+          reason: "autostart_disabled",
+          message,
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    const parsed = JSON.parse(cap.stdoutText()) as {
+      ok: boolean;
+      outcome: string;
+      code: string;
+      reason: string;
+    };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.outcome).toBe("failed");
+    expect(parsed.code).toBe("autostart_disabled");
+    expect(parsed.reason).toBe(message);
+    expect(parsed.reason).toContain("http://127.0.0.1:3847");
+    expect(parsed.reason.toLowerCase()).not.toMatch(/unset/);
+  });
+});

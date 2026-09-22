@@ -83,9 +83,29 @@ const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_TIMEOUT_MS =
   Number(process.env.STAGEFLOW_AUTOSTART_TIMEOUT_MS) || 10_000;
 
+export const STAGEFLOW_NO_AUTOSTART = "STAGEFLOW_NO_AUTOSTART";
+
+/** Truthy when set and not empty / `0` / `false` (case-insensitive). */
+export function isNoAutostartEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[STAGEFLOW_NO_AUTOSTART];
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false";
+}
+
 export type EnsureGlobalServiceResult =
   | { ok: true; alreadyRunning: boolean }
-  | { ok: false; reason: "port_occupied" | "spawn_failed" | "timed_out"; message: string };
+  | {
+      ok: false;
+      reason:
+        | "port_occupied"
+        | "spawn_failed"
+        | "timed_out"
+        | "autostart_disabled";
+      message: string;
+    };
 
 export interface EnsureGlobalServiceOptions {
   /** Path to the CLI entry script to spawn `<entry> mcp` against. Defaults to the running process's own entry (process.argv[1]). */
@@ -98,6 +118,7 @@ export interface EnsureGlobalServiceOptions {
   ) => ChildProcess;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -116,6 +137,7 @@ export async function ensureGlobalService(
   const spawnFn = options.spawnFn ?? spawnDefault;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const env = options.env ?? process.env;
 
   const initial = await probeHost();
   if (initial === "up") {
@@ -126,6 +148,15 @@ export async function ensureGlobalService(
       ok: false,
       reason: "port_occupied",
       message: `Port ${resolveServicePort()} is already in use by a process that isn't the Stageflow service (its health check didn't return valid health JSON). Free the port and try again.`,
+    };
+  }
+
+  if (isNoAutostartEnabled(env)) {
+    const url = hostBaseUrl();
+    return {
+      ok: false,
+      reason: "autostart_disabled",
+      message: `No Stageflow Host is answering at ${url}. Autostart is disabled (STAGEFLOW_NO_AUTOSTART). Start the Host with \`sf mcp\`, or in Docker check that the container's entrypoint is running.`,
     };
   }
 

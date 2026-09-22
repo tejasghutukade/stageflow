@@ -40,7 +40,8 @@ export type StartFailureCode =
   | "task.invalid_shape"
   | "task.load_error"
   | "start.token_rejected"
-  | "shutting_down";
+  | "shutting_down"
+  | "autostart_disabled";
 
 export type MaterializedBinding = {
   runId: string;
