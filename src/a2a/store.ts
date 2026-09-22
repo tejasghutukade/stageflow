@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot } from "../runstore/paths.js";
 import { MESSAGE_TOMBSTONE_RETENTION_MS, TERMINAL_RETENTION_MS } from "./limits.js";
 
 const SCHEMA_SQL = `
@@ -107,7 +107,7 @@ export class A2aStore {
    * non-SQLite `RunStore` in bootstrap).
    */
   constructor(rootDir: string, connection?: Database.Database) {
-    const storeRoot = storeRootFor(rootDir);
+    const storeRoot = resolveStoreRoot(rootDir);
     if (connection) {
       this.db = connection;
       this.ownsConnection = false;

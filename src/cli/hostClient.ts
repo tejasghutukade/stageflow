@@ -11,7 +11,7 @@ import type {
 } from "../runtime/runManager.js";
 import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
-import { runWorkspaceDir, storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
 
 async function postJson(
@@ -57,7 +57,7 @@ function enc(value: string): string {
 }
 
 export function computeRunDir(runId: string): string {
-  return runWorkspaceDir(storeRootFor(globalStageflowHome()), runId);
+  return runWorkspaceDir(resolveStoreRoot(globalStageflowHome()), runId);
 }
 
 export async function httpReadRun(base: string, runId: string): Promise<RunDetail> {

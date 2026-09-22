@@ -6,7 +6,12 @@ import {
   globalStageflowHome,
 } from "../project/globalHome.js";
 import type { RunStore } from "./port.js";
-import { migrateLegacyStoreRoot, storeRootFor } from "./paths.js";
+import {
+  flattenNestedGlobalStore,
+  isGlobalStageflowHome,
+  migrateLegacyStoreRoot,
+  resolveStoreRoot,
+} from "./paths.js";
 import { SqliteRunStore } from "./sqlite/SqliteRunStore.js";
 
 export type RunStoreKind = "sqlite";
@@ -35,18 +40,18 @@ function resolveKind(kind?: string): "sqlite" {
  * for the one caller wiring a second, colocated store (A2A's tables) into the same `state.db`
  * file. Ordinary call sites use `createRunStore` below and never see this.
  */
-function usesGlobalStageflowHome(rootDir: string): boolean {
-  return path.resolve(rootDir) === globalStageflowHome();
-}
-
 export function createRunStoreWithConnection(config: RunStoreConfig): { store: RunStore; connection: Database.Database } {
   resolveKind(config.kind);
-  if (usesGlobalStageflowHome(config.rootDir)) {
+  const globalHome = isGlobalStageflowHome(config.rootDir);
+  if (globalHome) {
     assertStageflowHomeWritable();
-    mkdirSync(globalStageflowHome(), { recursive: true });
+    const home = globalStageflowHome();
+    mkdirSync(home, { recursive: true });
+    flattenNestedGlobalStore(home);
+  } else {
+    migrateLegacyStoreRoot(config.rootDir);
   }
-  migrateLegacyStoreRoot(config.rootDir);
-  const storeRoot = storeRootFor(config.rootDir);
+  const storeRoot = resolveStoreRoot(config.rootDir);
   mkdirSync(storeRoot, { recursive: true });
   const store = new SqliteRunStore(storeRoot);
   return { store, connection: store.connection };
