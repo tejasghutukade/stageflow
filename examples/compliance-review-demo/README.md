@@ -1,55 +1,39 @@
 # compliance-review-demo
 
-A demo of Stageflow's human-in-the-loop orchestration. A SOC2-style bucket
-public-access check is the working example — the point is the *pattern*, not
-compliance coverage: automated checks that only interrupt a person when
-something actually needs their judgment. It runs against a real AWS S3
-bucket, a real GCS bucket, or a simulated fixture, whichever `poll-bucket-config`
-finds available.
+A demo of a Stageflow pipeline built for unattended, scheduled compliance
+checking. A SOC2-style bucket public-access check is the working example —
+the point is the *pattern*: connect, poll, check, map to a control, log
+evidence, publish a report, safe to run on a cron schedule with nobody
+watching. It runs against a real AWS S3 bucket, a real GCS bucket, or a
+simulated fixture, whichever `poll-bucket-config` finds available.
+
+Verified end to end against a real GCS bucket — see [Verified against real
+infra](#verified-against-real-infra) below for the actual run data.
 
 ## What this demonstrates
 
-- **A gate that skips itself.** `review-verdict.yaml` carries
-  `gate_kinds: [confirm]`, but it only calls `ask_operator` when this run's
-  verdict differs from the last one recorded for the same check — a
-  first-time failure or a repeat result is auto-approved with no human
-  involved. A flip (especially FAIL → PASS) pauses for a real yes/no.
+- **Never blocks, still tells the difference.** `review-verdict.yaml` reads
+  the checked-in evidence log and compares this run's verdict to the last
+  one recorded for the same check. A first-time failure or a repeat result
+  gets `reviewer: "auto"`. A flip (FAIL → PASS or back) gets
+  `reviewer: "unreviewed-flip"` instead — same non-blocking success either
+  way, so nothing about a schedule or a CI runner can get this stage stuck
+  waiting on a person. The distinction lives in the evidence, not in a gate.
 - **State that persists across runs.** `store-evidence.yaml` appends to a
-  checkout file (`data/evidence-log.json`) instead of a per-attempt
-  artifact, so `review-verdict` can compare "this run" against "last run"
-  days or weeks apart. `store-evidence.yaml` carries an after-phase `verify`
-  check (`type: checkout_changes`, `path_fields: [changed_files]`) so the
-  stage can't succeed without a real edit to that file.
-- **A reject with nowhere to loop back to.** If the operator rejects a
-  flip, `review-verdict` emits a failure instead of re-asking — there's no
-  address-feedback stage, because the "fix" happens in AWS itself, outside
-  the pipeline, not in another LLM stage.
+  checkout file (`data/evidence-log.json`, gitignored — see below) instead
+  of a per-attempt artifact, so `review-verdict` can compare "this run"
+  against "last run" days or weeks apart. `store-evidence.yaml` carries an
+  after-phase `verify` check (`type: checkout_changes`,
+  `path_fields: [changed_files]`) so the stage can't succeed without a real
+  edit to that file.
+- **One report stage, swappable target.** `publish-report.yaml` writes a
+  markdown timeline as a stage artifact today. Point that same stage at a
+  Confluence or Notion API instead and nothing upstream of it changes —
+  the other six stages don't know or care where the report ends up.
 
 Full design writeup (why this exists instead of just running Prowler in a
 GitHub Action, or self-hosting an existing open-source tool like Comp AI):
 see the project conversation this came from.
-
-## Two pipelines, one stage swapped
-
-| | `compliance-review-demo.pipeline.yaml` | `compliance-review-ci.pipeline.yaml` |
-|---|---|---|
-| Stage 4 | `review-verdict.yaml` | `review-verdict-ci.yaml` |
-| On a flip | pauses, calls `ask_operator` | never calls it — records the flip and keeps going |
-| `gate_kinds` | `[confirm]` | none |
-| `reviewer` on a flip | whoever answers the gate | `"ci-unreviewed-flip"` |
-| Can hang waiting on a person | yes, by design | never |
-
-Everything else — `connect-account`, `poll-bucket-config`,
-`run-compliance-check`, `map-to-control`, `store-evidence`,
-`publish-report` — is the literal same file, `uses:`-referenced from both
-pipelines. Only the review stage changes; the CI variant still writes the
-same evidence log, so a flip that happened unattended is visible in that
-log's `reviewer` field even though nobody was asked at the time.
-
-Use the interactive pipeline when a person should be in the loop. Use the
-CI pipeline in an unattended runner (GitHub Actions, a cron job) where
-there's no one to answer a gate — a run that hit a flip and needs a human's
-eyes lands in the evidence log, not in a stuck pipeline.
 
 ## Prerequisites
 
@@ -89,16 +73,53 @@ From the **repository git root**:
 
 ```bash
 sf validate --pipeline examples/compliance-review-demo/compliance-review-demo.pipeline.yaml --strict
-sf validate --pipeline examples/compliance-review-demo/compliance-review-ci.pipeline.yaml --strict
 ```
 
-To run the interactive pipeline, use the `stageflow-run` job to build a task
-with a payload like `{ "bucket": "customer-uploads", "scenario": "fail" }`,
-run it once, then run it again with `"scenario": "fixed"` — the second run
-is the one that should pause for review. Use `sf ui` to watch a run and
-answer the `review-verdict` gate when it pauses.
+Use the `stageflow-run` job to build a task with a payload like
+`{ "bucket": "customer-uploads", "scenario": "fail" }`, or point `sf run`
+at it directly:
 
-To run the CI pipeline the same way, point `sf run` at
-`compliance-review-ci.pipeline.yaml` instead — it takes the same task shape
-and never pauses, so it's safe to call from a non-interactive runner
-(`sf run --pipeline examples/compliance-review-demo/compliance-review-ci.pipeline.yaml --task <path> --json`).
+```bash
+sf run \
+  --pipeline examples/compliance-review-demo/compliance-review-demo.pipeline.yaml \
+  --task <path> \
+  --json
+```
+
+Never pauses, so it's safe to call from a non-interactive runner — a
+nightly GitHub Action, a Cloud Scheduler → Cloud Run job, an EventBridge
+Scheduler → Fargate task, or any cron.
+
+## Verified against real infra
+
+This pipeline has actually been run, twice, against a live GCS bucket, via
+a Stageflow MCP host on a different checkout than the pipeline files
+themselves (`task.checkout` pointed it at this worktree). Real, unrounded
+per-stage cost from that first run:
+
+| Stage | Cost (USD) |
+|---|---|
+| connect-account | $0.0213894 |
+| poll-bucket-config | $0.0505455 |
+| run-compliance-check | $0.0361527 |
+| review-verdict | $0.0325805 |
+| map-to-control | $0.0246600 |
+| store-evidence | $0.0451638 |
+| publish-report | $0.0480890 |
+| **Total** | **$0.2585808** |
+
+Run 1: bucket had `public_access_prevention: inherited`,
+`uniform_bucket_level_access: false` → verdict `FAIL`, `reviewer: "auto"`
+(first observation, nothing to flip against). The bucket was then actually
+hardened (`gcloud storage buckets update --uniform-bucket-level-access`,
+`--pap`) and reverted afterward. Run 2 against the hardened bucket: verdict
+`PASS`, `reviewer: "unreviewed-flip"` — logged as a flip worth a human's
+attention, without the run ever pausing to ask for one.
+
+## Data directory is gitignored
+
+`data/evidence-log.json` is runtime output written by `store-evidence`, not
+source, and in practice ends up referencing whatever real bucket and
+project someone tested against. It's gitignored on purpose — don't remove
+that `.gitignore` to "fix" an empty `data/` directory after a fresh clone;
+the file is created on first run.

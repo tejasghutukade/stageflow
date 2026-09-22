@@ -1,44 +1,34 @@
 id: review-verdict
-gate_kinds:
-  - confirm
 system_prompt: |
-  This is the human-in-the-loop gate — the reason this pipeline exists. It
-  does not pause on every run, only when the verdict has changed since the
-  last recorded evidence for this check_id + resource.
+  This stage never pauses for a human — it has to be safe to run unattended
+  on a schedule (cron, a nightly GitHub Action, Cloud Scheduler). It still
+  tells the difference between "nothing changed" and "this just flipped,"
+  it just never blocks on that difference.
 
   1. Read examples/compliance-review-demo/data/evidence-log.json if it
      exists (checkout-relative path, use the Read tool). Find the most
      recent entry for this run's check_id + resource, if any.
   2. No prior entry, or the prior entry's verdict matches this run's
-     verdict: no flip. Skip ask_operator entirely — do not call it. Call
-     emit_stage_envelope immediately with an advancing success status and
-     payload.reviewed = false, payload.auto_approved = true,
-     payload.verdict carried forward, payload.reviewer = "" (empty string,
-     not null — io.output.schema requires a string).
-  3. Prior entry exists and its verdict differs from this run's verdict: a
-     flip. Write a short artifact via write_stage_artifact summarizing the
-     change (prior verdict, new verdict, the raw field values from the
-     prior stage's payload). Call ask_operator with kind confirm,
-     referencing that artifact, asking the operator to confirm the new
-     verdict is genuinely correct — not a flaky check or a fix that won't
-     hold.
-  4. On accept: call emit_stage_envelope with an advancing success status,
-     payload.reviewed = true, payload.auto_approved = false,
-     payload.verdict carried forward, payload.reviewer = whatever operator
-     identity ask_operator returns, or "operator" if none is given.
-  5. On reject: call emit_stage_envelope with a failure status. State in the
-     summary that a human reviewer did not confirm the flip and the check
-     remains disputed. Do not call ask_operator again after a reject — there
-     is no fix stage downstream in this pipeline; remediation happens
-     outside it, in AWS itself, and a later run will pick up the real
-     state.
+     verdict: set reviewer = "auto".
+  3. Prior entry exists and its verdict differs from this run's verdict (a
+     flip): set reviewer = "unreviewed-flip" and write a short artifact via
+     write_stage_artifact noting the flip (prior verdict, new verdict, the
+     raw field values from the prior stage's payload), so a person can spot
+     it later in the evidence log or the published report — without the
+     run ever waiting on them.
+  4. In both cases set reviewed = false and auto_approved = true. Never
+     call ask_operator — this stage has no gate_kinds. Always emit an
+     advancing success status; a flip is information, not a failure.
 
   summary and payload are handed to the next stage verbatim. State outcomes
   and artifact pointers only. Do not repeat this stage's prohibitions in
   summary — downstream will obey them literally.
 
-  Your last tool call in this attempt must be emit_stage_envelope, or
-  ask_operator while waiting on HITL.
+  When finished, call emit_stage_envelope exactly once with status, summary,
+  artifacts, and a payload matching io.output.schema: everything carried
+  forward from the prior stage, plus reviewed, auto_approved, and reviewer
+  as described above. Your last tool call in this attempt must be
+  emit_stage_envelope. An empty final message is a stage failure.
 model: anthropic/claude-sonnet-4-5
 io:
   input:
