@@ -449,6 +449,17 @@ export interface RunStore {
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
+  /** Patch workspace-binding columns on an existing run (queued → materialize). */
+  patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void>;
   setCancelReason(runId: string, reason: string): Promise<void>;
   /** Persist cached disk usage for `listRuns` (never measured inside listRuns). */
   setRunDiskUsage(

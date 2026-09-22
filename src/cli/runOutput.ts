@@ -38,6 +38,16 @@ function isBusyCode(code: string | undefined): code is BusyCode {
   return code === "busy_capacity" || code === "busy_checkout";
 }
 
+/** Stderr line when start_run was admitted to the queue (origin transparency rule). */
+export function writeQueuedAdmissionLine(
+  started: Extract<StartRunResult, { ok: true }>,
+  io: Pick<CliRunReportIo, "error">,
+): void {
+  if (started.queued === true && started.queuePosition !== undefined) {
+    io.error(`queued at position ${started.queuePosition}`);
+  }
+}
+
 function formatRunBusyJson(
   started: Extract<StartRunResult, { ok: false }>,
 ): string {

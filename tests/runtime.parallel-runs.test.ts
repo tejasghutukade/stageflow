@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURES_ROOT, pipelinePath, catalogLocators, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -106,6 +106,20 @@ async function waitFor(
 }
 
 describe("parallel pipeline runs (U1)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("max=2: two unbound concurrent starts ok; third is busy_capacity", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-cap-"));
     const store = createRunStore({ rootDir: root });
@@ -371,6 +385,20 @@ describe("parallel pipeline runs (U1)", () => {
 });
 
 describe("parallel pipeline runs (U2 bound env)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("F8: HITL-waiting bound run allows peer bound stage on other checkout without env throw", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-f8-"));
     const checkoutA = await mkdtemp(path.join(tmpdir(), "sf-checkout-a-"));
@@ -562,6 +590,19 @@ async function seedIntraRunMultiWait(
 }
 
 describe("parallel pipeline runs (U4 attach + multi-wait)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
   it("attach two waiters: both active; answer one leaves other waiting; lease blocks same checkout", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-par-u4-attach-"));
     const checkoutA = await mkdtemp(path.join(tmpdir(), "sf-checkout-u4a-"));
@@ -1115,6 +1156,20 @@ function createCliEquivalentManager(opts: {
 }
 
 describe("CLI-equivalent startRun (S5)", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("AE-S5-1: startRun then await done honors busy_capacity; no createRun on reject", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-s5-cap-"));
     const store = createRunStore({ rootDir: root });

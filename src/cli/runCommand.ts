@@ -14,6 +14,7 @@ import {
 import { httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
 import {
   reportCliRun,
+  writeQueuedAdmissionLine,
   type CliRunReportIo,
 } from "./runOutput.js";
 import { resolveCiIdentity } from "./ciIdentity.js";
@@ -337,6 +338,7 @@ export async function runRunCommand(
         { json: parsed.json, io: out },
       );
     }
+    writeQueuedAdmissionLine(started, out);
     return completeCliRun(started, out, {
       json: parsed.json,
       includeStages: parsed.includeStages,

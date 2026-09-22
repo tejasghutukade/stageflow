@@ -20,11 +20,16 @@ import {
 } from "./resumeTimedOut.js";
 import { loadTaskFromYamlOutcome } from "../config/loadTask.js";
 import {
+  buildValidationResult,
+  loadPipelineValidated,
+} from "../config/validateCatalog.js";
+import {
   deriveStatusFromStages,
   findUnhandledFailedStage,
   type RunMeta,
   type RunStore,
 } from "../runstore/port.js";
+import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -69,12 +74,13 @@ import {
 } from "./stageHitl.js";
 import {
   resolveAndValidateCheckout,
+  resolveEffectiveGitIdentity,
   stageBindingEnvFromRun,
 } from "./stageRoots.js";
 import { orchestrateAnswerResume } from "./answerResume.js";
 import { reconstructAndContinue as resumeReconstructAndContinue } from "./resumeReconstruct.js";
 import { resumeSessionFilePath } from "./stageAttemptContext.js";
-import { resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
+import { checkTaskEntryInput, resolveStartTaskInput, type StartTaskInput } from "./taskInput.js";
 import {
   failStageAsInterrupted,
   OPERATOR_CANCEL_REASON,
@@ -107,7 +113,13 @@ export type BusyCode = "busy_capacity" | "busy_checkout";
 export type { StartFailureCode } from "./repositoryMaterialize.js";
 
 export type StartRunResult =
-  | { ok: true; runId: string; done: Promise<PipelineRunResult> }
+  | {
+      ok: true;
+      runId: string;
+      done: Promise<PipelineRunResult>;
+      queued?: boolean;
+      queuePosition?: number;
+    }
   | {
       ok: false;
       reason: string;
@@ -203,6 +215,7 @@ type ActiveEntry = {
 };
 
 const DEFAULT_MAX_CONCURRENT = 3;
+const DEFAULT_MAX_QUEUED = 32;
 const STARTUP_RECONCILE_REASON =
   "process_interrupted: no active worker (server restart)";
 const OPERATOR_ABANDON_REASON =
@@ -214,6 +227,165 @@ function parseMaxConcurrent(raw: string | undefined): number {
   if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_CONCURRENT;
   return n;
 }
+
+function parseMaxQueued(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_QUEUED;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_QUEUED;
+  return n;
+}
+
+type AdmissionQueueEntry = { runId: string; createdAt: string };
+
+/** Private FIFO-per-project_root + round-robin dequeue (KTD3). */
+class AdmissionQueue {
+  private readonly byRoot = new Map<string, AdmissionQueueEntry[]>();
+  private rrOrder: string[] = [];
+  private rrIndex = 0;
+
+  get size(): number {
+    let n = 0;
+    for (const list of this.byRoot.values()) n += list.length;
+    return n;
+  }
+
+  clear(): void {
+    this.byRoot.clear();
+    this.rrOrder = [];
+    this.rrIndex = 0;
+  }
+
+  enqueue(projectRoot: string, entry: AdmissionQueueEntry): number {
+    let list = this.byRoot.get(projectRoot);
+    if (list === undefined) {
+      list = [];
+      this.byRoot.set(projectRoot, list);
+      this.rrOrder.push(projectRoot);
+    }
+    list.push(entry);
+    return this.size;
+  }
+
+  requeueFront(projectRoot: string, entry: AdmissionQueueEntry): void {
+    let list = this.byRoot.get(projectRoot);
+    if (list === undefined) {
+      list = [];
+      this.byRoot.set(projectRoot, list);
+      this.rrOrder.push(projectRoot);
+    }
+    list.unshift(entry);
+  }
+
+  remove(runId: string): boolean {
+    for (const [root, list] of this.byRoot) {
+      const idx = list.findIndex((e) => e.runId === runId);
+      if (idx < 0) continue;
+      list.splice(idx, 1);
+      if (list.length === 0) {
+        this.byRoot.delete(root);
+        const orderIdx = this.rrOrder.indexOf(root);
+        if (orderIdx >= 0) {
+          this.rrOrder.splice(orderIdx, 1);
+          if (this.rrOrder.length === 0) {
+            this.rrIndex = 0;
+          } else if (orderIdx < this.rrIndex) {
+            this.rrIndex -= 1;
+          } else if (this.rrIndex >= this.rrOrder.length) {
+            this.rrIndex = 0;
+          }
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  positionOf(runId: string): number | undefined {
+    let position = 0;
+    const rootCount = this.rrOrder.length;
+    if (rootCount === 0) return undefined;
+    const heads = this.rrOrder.map((root) => ({
+      root,
+      list: this.byRoot.get(root) ?? [],
+      i: 0,
+    }));
+    let rr = this.rrIndex % rootCount;
+    let remaining = this.size;
+    while (remaining > 0) {
+      let advanced = false;
+      for (let step = 0; step < rootCount; step++) {
+        const slot = heads[(rr + step) % rootCount];
+        if (slot === undefined || slot.i >= slot.list.length) continue;
+        const entry = slot.list[slot.i];
+        slot.i += 1;
+        remaining -= 1;
+        position += 1;
+        advanced = true;
+        if (entry?.runId === runId) return position;
+        rr = (rr + step + 1) % rootCount;
+        break;
+      }
+      if (!advanced) break;
+    }
+    return undefined;
+  }
+
+  dequeueNext(
+    skipRoots?: ReadonlySet<string>,
+  ): { projectRoot: string; entry: AdmissionQueueEntry } | undefined {
+    if (this.rrOrder.length === 0) return undefined;
+    const start = this.rrIndex % this.rrOrder.length;
+    for (let step = 0; step < this.rrOrder.length; step++) {
+      const idx = (start + step) % this.rrOrder.length;
+      const root = this.rrOrder[idx];
+      if (root === undefined) continue;
+      if (skipRoots?.has(root)) continue;
+      const list = this.byRoot.get(root);
+      if (list === undefined || list.length === 0) continue;
+      const entry = list.shift();
+      if (entry === undefined) continue;
+      if (list.length === 0) {
+        this.byRoot.delete(root);
+        this.rrOrder.splice(idx, 1);
+        if (this.rrOrder.length === 0) {
+          this.rrIndex = 0;
+        } else {
+          this.rrIndex = idx % this.rrOrder.length;
+        }
+      } else {
+        this.rrIndex = (idx + 1) % this.rrOrder.length;
+      }
+      return { projectRoot: root, entry };
+    }
+    return undefined;
+  }
+}
+
+type PendingQueuedStart = {
+  taskYaml: string;
+  pipeline: string | InlinePipelineDefinition;
+  taskLabel: string;
+  cwd: string;
+  projectRoot: string;
+  checkoutOverride?: string;
+  skipGates?: boolean;
+  ciIdentity?: {
+    gitSha?: string;
+    ciPrUrl?: string;
+    ciJobUrl?: string;
+  };
+  taskPath?: string;
+  submission?: RunSubmission;
+  pinned?: { ref: string; resolvedSha: string };
+  pathCheckoutRoot?: string;
+  binding: WorkspaceBinding;
+  checkoutKey?: string;
+};
+
+type QueuedDoneDeferred = {
+  promise: Promise<PipelineRunResult>;
+  resolve: (result: PipelineRunResult) => void;
+};
 
 async function toCheckoutLeaseKey(absPath: string): Promise<string> {
   try {
@@ -232,12 +404,17 @@ export class RunManager {
   private readonly active = new Map<string, ActiveEntry>();
   private readonly checkoutLeases = new Map<string, string>();
   private readonly provisionalIds = new Set<string>();
+  private readonly admissionQueue = new AdmissionQueue();
+  private readonly pendingQueuedStarts = new Map<string, PendingQueuedStart>();
+  private readonly queuedDone = new Map<string, QueuedDoneDeferred>();
+  private admissionDrainInFlight = false;
   private readonly resumeInFlight = new Set<string>();
   private readonly retryInFlight = new Set<string>();
   private readonly retryStartOwner = new Map<string, string>();
   private readonly retryStartWaiters = new Map<string, Set<() => void>>();
   private trackingGeneration = 0;
   private maxConcurrent: number;
+  private readonly maxQueued: number;
   private readonly maxActiveStagesPerRun: number;
   private readonly executionMode: StageExecutionMode;
   private readonly stageProcessLauncher: StageProcessLauncher | undefined;
@@ -299,6 +476,7 @@ export class RunManager {
       options.maxConcurrent ??
       readMaxConcurrentFromGlobal() ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
+    this.maxQueued = parseMaxQueued(process.env.STAGEFLOW_MAX_QUEUED);
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
       options.maxActiveStagesPerRun,
@@ -627,6 +805,24 @@ export class RunManager {
     return resumed;
   }
 
+  /** Rebuild in-memory admission queue from persisted `queued` rows (R27). */
+  async reenqueuePersistedQueuedRuns(): Promise<void> {
+    const queued = await this.options.store.listRuns({ status: "queued" });
+    const ordered = [...queued].sort((a, b) =>
+      a.created_at.localeCompare(b.created_at),
+    );
+    this.admissionQueue.clear();
+    for (const row of ordered) {
+      const root = normalizeCatalogPath(row.project_root ?? this.projectRoot);
+      this.admissionQueue.enqueue(root, {
+        runId: row.run_id,
+        createdAt: row.created_at,
+      });
+      this.ensureQueuedDone(row.run_id);
+    }
+    await this.drainAdmissionQueue();
+  }
+
   async abandonStage(
     runId: string,
     stageId: string,
@@ -729,6 +925,16 @@ export class RunManager {
     await this.options.store.updateRunStatus(runId, "cancelled");
     await this.options.store.setCancelReason(runId, trimmedReason);
     await this.refreshRunDiskBytes(runId).catch(() => undefined);
+
+    this.admissionQueue.remove(runId);
+    this.pendingQueuedStarts.delete(runId);
+    this.resolveQueuedDone(runId, {
+      ok: false,
+      outcome: "cancelled",
+      runDir: this.options.store.getWorkspaceDir(runId),
+      runId,
+      reason: trimmedReason,
+    });
 
     if (this.stageProcessLauncher !== undefined) {
       await this.stageProcessLauncher.cancelRun(runId);
@@ -1987,14 +2193,20 @@ export class RunManager {
     submission?: RunSubmission,
     pinned?: { ref: string; resolvedSha: string },
   ): Promise<StartRunResult> {
+    const resolvedProjectRoot = normalizeCatalogPath(
+      projectRoot ?? this.projectRoot,
+    );
     let task: TaskFile;
     let checkoutKey: string | undefined;
     let pathCheckoutRoot: string | undefined;
     let binding: WorkspaceBinding;
+    let pipelineId: string;
+    let pipelineDag: ReturnType<typeof buildPipelineDagSnapshotFromLoaded>;
+    let pipelinePath: string | undefined;
     try {
-      const loaded = loadTaskFromYamlOutcome(taskYaml, taskLabel);
-      if (!loaded.ok) {
-        const issue = loaded.issues[0];
+      const loadedTask = loadTaskFromYamlOutcome(taskYaml, taskLabel);
+      if (!loadedTask.ok) {
+        const issue = loadedTask.issues[0];
         return {
           ok: false,
           reason: issue?.message ?? "Invalid task",
@@ -2004,7 +2216,7 @@ export class RunManager {
             : {}),
         };
       }
-      task = loaded.value;
+      task = loadedTask.value;
       const bindingOutcome = resolveWorkspaceBinding(task, { checkoutOverride });
       if (!bindingOutcome.ok) {
         const issue = bindingOutcome.issues[0];
@@ -2029,7 +2241,34 @@ export class RunManager {
             ? await toCheckoutLeaseKey(pathCheckoutRoot)
             : undefined;
       }
+
+      const loadResult = await loadPipelineValidated(pipeline, {
+        cwd,
+        projectRoot: resolvedProjectRoot,
+        validateStages: true,
+      });
+      if (!loadResult.ok) {
+        throw new PipelineValidationError(
+          buildValidationResult("pipeline", loadResult.findings, false),
+        );
+      }
+      const pairing = checkTaskEntryInput(task, loadResult.loaded, {
+        cwd,
+        taskPath,
+      });
+      if (pairing.some((finding) => finding.severity === "error")) {
+        throw new PipelineValidationError(
+          buildValidationResult("pipeline", pairing, false),
+        );
+      }
+      pipelineId = loadResult.loaded.pipeline.id;
+      pipelineDag = buildPipelineDagSnapshotFromLoaded(loadResult.loaded);
+      pipelinePath =
+        typeof pipeline === "string"
+          ? normalizeCatalogPath(loadResult.loaded.pipelinePath)
+          : undefined;
     } catch (err) {
+      if (err instanceof PipelineValidationError) throw err;
       return {
         ok: false,
         reason: err instanceof Error ? err.message : String(err),
@@ -2037,8 +2276,64 @@ export class RunManager {
       };
     }
 
-    const reserved = this.tryReserve(checkoutKey);
-    if (!reserved.ok) return reserved.failure;
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey);
+    if (admitted.action === "reject") return admitted.failure;
+
+    if (admitted.action === "enqueue") {
+      const runId = newRunId();
+      const gitIdentity = resolveEffectiveGitIdentity(
+        process.env,
+        task.git_identity,
+      );
+      const created = await this.options.store.createRun({
+        submission,
+        runId,
+        pipelineId,
+        taskYaml,
+        taskId: task.id,
+        pipelineDag,
+        pipelinePath,
+        taskPath: taskPath
+          ? normalizeCatalogPath(path.resolve(cwd, taskPath))
+          : undefined,
+        projectRoot: resolvedProjectRoot,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
+        gitAuthorName: gitIdentity.name,
+        gitAuthorEmail: gitIdentity.email,
+        status: "queued",
+      });
+      const meta = await this.options.store.readRunMeta(created.runId);
+      const queuePosition = this.admissionQueue.enqueue(resolvedProjectRoot, {
+        runId: created.runId,
+        createdAt: meta.created_at,
+      });
+      this.pendingQueuedStarts.set(created.runId, {
+        taskYaml,
+        pipeline,
+        taskLabel,
+        cwd,
+        projectRoot: resolvedProjectRoot,
+        checkoutOverride,
+        skipGates,
+        ciIdentity,
+        taskPath,
+        submission,
+        pinned,
+        pathCheckoutRoot,
+        binding,
+        checkoutKey,
+      });
+      const done = this.ensureQueuedDone(created.runId);
+      return {
+        ok: true,
+        runId: created.runId,
+        done,
+        queued: true,
+        queuePosition,
+      };
+    }
 
     const runId = newRunId();
     let rollback: () => Promise<void> = async () => {};
@@ -2061,7 +2356,7 @@ export class RunManager {
         taskPath,
         pipeline,
         cwd,
-        projectRoot: projectRoot ?? this.projectRoot,
+        projectRoot: resolvedProjectRoot,
         checkoutOverride,
         runId: materialized.runId,
         checkoutRoot: materialized.checkoutRoot,
@@ -2079,11 +2374,11 @@ export class RunManager {
         operatorCatalog: this.options.operatorCatalog,
         skipGates,
       });
-      this.track(reserved.provisionalId, started.runId, started.done);
+      this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
       await rollback().catch(() => undefined);
-      this.clearReservation(reserved.provisionalId);
+      this.clearReservation(admitted.provisionalId);
       if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {
         throw err;
       }
@@ -2114,7 +2409,11 @@ export class RunManager {
     const activeRunIds = this.getActiveRunIds();
     const reason =
       code === "busy_capacity"
-        ? `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
+        ? this.active.size >= this.maxConcurrent &&
+          this.admissionQueue.size >= this.maxQueued &&
+          this.maxQueued > 0
+          ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
+          : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
         : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
     return {
       ok: false,
@@ -2128,14 +2427,12 @@ export class RunManager {
     };
   }
 
-  private tryReserve(
+  private tryAdmitOrEnqueue(
     checkoutKey: string | undefined,
   ):
-    | { ok: true; provisionalId: string }
-    | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
-    if (this.active.size >= this.maxConcurrent) {
-      return { ok: false, failure: this.busyFailure("busy_capacity") };
-    }
+    | { action: "reserve"; provisionalId: string }
+    | { action: "enqueue" }
+    | { action: "reject"; failure: Extract<StartRunResult, { ok: false }> } {
     if (checkoutKey !== undefined) {
       const holder = this.checkoutLeases.get(checkoutKey);
       if (holder !== undefined) {
@@ -2143,7 +2440,7 @@ export class RunManager {
           ? undefined
           : holder;
         return {
-          ok: false,
+          action: "reject",
           failure: this.busyFailure("busy_checkout", {
             conflictingRunId,
             conflictingCheckout: checkoutKey,
@@ -2152,16 +2449,273 @@ export class RunManager {
       }
     }
 
-    const provisionalId = randomUUID();
-    this.provisionalIds.add(provisionalId);
-    this.active.set(provisionalId, {
-      checkoutKey,
-      generation: ++this.trackingGeneration,
-    });
-    if (checkoutKey !== undefined) {
-      this.checkoutLeases.set(checkoutKey, provisionalId);
+    if (this.active.size < this.maxConcurrent) {
+      const provisionalId = randomUUID();
+      this.provisionalIds.add(provisionalId);
+      this.active.set(provisionalId, {
+        checkoutKey,
+        generation: ++this.trackingGeneration,
+      });
+      if (checkoutKey !== undefined) {
+        this.checkoutLeases.set(checkoutKey, provisionalId);
+      }
+      return { action: "reserve", provisionalId };
     }
-    return { ok: true, provisionalId };
+
+    if (this.admissionQueue.size < this.maxQueued) {
+      return { action: "enqueue" };
+    }
+
+    return {
+      action: "reject",
+      failure: this.busyFailure("busy_capacity"),
+    };
+  }
+
+  private tryReserve(
+    checkoutKey: string | undefined,
+  ):
+    | { ok: true; provisionalId: string }
+    | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey);
+    if (admitted.action === "reserve") {
+      return { ok: true, provisionalId: admitted.provisionalId };
+    }
+    if (admitted.action === "enqueue") {
+      return { ok: false, failure: this.busyFailure("busy_capacity") };
+    }
+    return { ok: false, failure: admitted.failure };
+  }
+
+  private ensureQueuedDone(runId: string): Promise<PipelineRunResult> {
+    const existing = this.queuedDone.get(runId);
+    if (existing !== undefined) return existing.promise;
+    let resolve!: (result: PipelineRunResult) => void;
+    const promise = new Promise<PipelineRunResult>((res) => {
+      resolve = res;
+    });
+    this.queuedDone.set(runId, { promise, resolve });
+    return promise;
+  }
+
+  private resolveQueuedDone(runId: string, result: PipelineRunResult): void {
+    const deferred = this.queuedDone.get(runId);
+    if (deferred === undefined) return;
+    this.queuedDone.delete(runId);
+    deferred.resolve(result);
+  }
+
+  private attachQueuedDone(
+    runId: string,
+    done: Promise<PipelineRunResult>,
+  ): void {
+    void done.then(
+      (result) => this.resolveQueuedDone(runId, result),
+      (err) =>
+        this.resolveQueuedDone(runId, {
+          ok: false,
+          outcome: "failed",
+          runDir: this.options.store.getWorkspaceDir(runId),
+          runId,
+          reason: err instanceof Error ? err.message : String(err),
+        }),
+    );
+  }
+
+  private async drainAdmissionQueue(): Promise<void> {
+    if (this.admissionDrainInFlight) return;
+    this.admissionDrainInFlight = true;
+    try {
+      const blockedRoots = new Set<string>();
+      while (this.active.size < this.maxConcurrent) {
+        const next = this.admissionQueue.dequeueNext(blockedRoots);
+        if (next === undefined) break;
+        const outcome = await this.startDequeuedAdmission(next);
+        if (outcome === "checkout_busy") {
+          this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+          blockedRoots.add(next.projectRoot);
+          continue;
+        }
+      }
+    } finally {
+      this.admissionDrainInFlight = false;
+    }
+  }
+
+  private async startDequeuedAdmission(next: {
+    projectRoot: string;
+    entry: AdmissionQueueEntry;
+  }): Promise<"started" | "checkout_busy" | "cancelled"> {
+    const { runId } = next.entry;
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      this.pendingQueuedStarts.delete(runId);
+      return "cancelled";
+    }
+    if (meta.status !== "queued") {
+      this.pendingQueuedStarts.delete(runId);
+      return "cancelled";
+    }
+
+    const pending = this.pendingQueuedStarts.get(runId);
+    let taskYaml: string;
+    let task: TaskFile;
+    let binding: WorkspaceBinding;
+    let pathCheckoutRoot: string | undefined;
+    let checkoutKey: string | undefined;
+    let pipeline: string | InlinePipelineDefinition;
+    let cwd: string;
+    let projectRoot: string;
+    let checkoutOverride: string | undefined;
+    let skipGates: boolean | undefined;
+    let ciIdentity: PendingQueuedStart["ciIdentity"];
+    let taskPath: string | undefined;
+    let submission: RunSubmission | undefined;
+    let pinned: PendingQueuedStart["pinned"];
+
+    try {
+      if (pending !== undefined) {
+        taskYaml = pending.taskYaml;
+        binding = pending.binding;
+        pathCheckoutRoot = pending.pathCheckoutRoot;
+        checkoutKey = pending.checkoutKey;
+        pipeline = pending.pipeline;
+        cwd = pending.cwd;
+        projectRoot = pending.projectRoot;
+        checkoutOverride = pending.checkoutOverride;
+        skipGates = pending.skipGates;
+        ciIdentity = pending.ciIdentity;
+        taskPath = pending.taskPath;
+        submission = pending.submission;
+        pinned = pending.pinned;
+        const loadedTask = loadTaskFromYamlOutcome(taskYaml, pending.taskLabel);
+        if (!loadedTask.ok) {
+          await this.cancelRun(
+            runId,
+            loadedTask.issues[0]?.message ?? "Invalid task",
+          );
+          return "cancelled";
+        }
+        task = loadedTask.value;
+      } else {
+        taskYaml = await this.options.store.readTaskYaml(runId);
+        const loadedTask = loadTaskFromYamlOutcome(
+          taskYaml,
+          `run ${runId} task`,
+        );
+        if (!loadedTask.ok) {
+          await this.cancelRun(
+            runId,
+            loadedTask.issues[0]?.message ?? "Invalid task",
+          );
+          return "cancelled";
+        }
+        task = loadedTask.value;
+        const bindingOutcome = resolveWorkspaceBinding(task, {});
+        if (!bindingOutcome.ok) {
+          await this.cancelRun(
+            runId,
+            bindingOutcome.issues[0]?.message ?? "Invalid workspace binding",
+          );
+          return "cancelled";
+        }
+        binding = bindingOutcome.value;
+        cwd = meta.project_root ?? this.cwd;
+        projectRoot = normalizeCatalogPath(meta.project_root ?? this.projectRoot);
+        if (binding.kind === "checkout") {
+          pathCheckoutRoot = await resolveAndValidateCheckout(task, undefined, cwd);
+          checkoutKey =
+            pathCheckoutRoot !== undefined
+              ? await toCheckoutLeaseKey(pathCheckoutRoot)
+              : undefined;
+        }
+        if (!meta.pipeline_path) {
+          await this.cancelRun(runId, "pipeline_path unavailable after restart");
+          return "cancelled";
+        }
+        pipeline = normalizeCatalogPath(meta.pipeline_path);
+        taskPath = meta.task_path;
+        ciIdentity = {
+          gitSha: meta.git_sha,
+          ciPrUrl: meta.ci_pr_url,
+          ciJobUrl: meta.ci_job_url,
+        };
+      }
+    } catch (err) {
+      await this.cancelRun(
+        runId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return "cancelled";
+    }
+
+    const reserved = this.tryReserve(checkoutKey);
+    if (!reserved.ok) {
+      if (reserved.failure.code === "busy_checkout") {
+        return "checkout_busy";
+      }
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      return "checkout_busy";
+    }
+
+    let rollback: () => Promise<void> = async () => {};
+    try {
+      const { materialized, rollback: linkRollback } =
+        await materializeWorkspaceBinding({
+          runId,
+          task,
+          binding,
+          checkoutRoot: pathCheckoutRoot,
+          pinned,
+        });
+      rollback = linkRollback;
+
+      const started = await startPipeline({
+        submission,
+        agent: this.options.agent,
+        store: this.options.store,
+        taskYaml,
+        taskPath,
+        pipeline,
+        cwd,
+        projectRoot,
+        checkoutOverride,
+        runId: materialized.runId,
+        reuseExistingRun: true,
+        checkoutRoot: materialized.checkoutRoot,
+        repository: materialized.repository,
+        ref: materialized.ref,
+        resolvedSha: materialized.resolvedSha,
+        runBranch: materialized.runBranch,
+        gitSha: ciIdentity?.gitSha,
+        ciPrUrl: ciIdentity?.ciPrUrl,
+        ciJobUrl: ciIdentity?.ciJobUrl,
+        hitl: this.hitl,
+        maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+        executionMode: this.executionMode,
+        stageProcessLauncher: this.stageProcessLauncher,
+        operatorCatalog: this.options.operatorCatalog,
+        skipGates,
+      });
+      this.pendingQueuedStarts.delete(runId);
+      this.track(reserved.provisionalId, started.runId, started.done);
+      this.attachQueuedDone(started.runId, started.done);
+      return "started";
+    } catch (err) {
+      await rollback().catch(() => undefined);
+      this.clearReservation(reserved.provisionalId);
+      this.pendingQueuedStarts.delete(runId);
+      const reason =
+        err instanceof StartLinkError
+          ? err.code
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await this.cancelRun(runId, reason);
+      return "cancelled";
+    }
   }
 
   private clearReservation(provisionalId: string): void {
@@ -2391,6 +2945,9 @@ export class RunManager {
       this.checkoutLeases.get(entry.checkoutKey) === id
     ) {
       this.checkoutLeases.delete(entry.checkoutKey);
+    }
+    if (!isProvisional) {
+      void this.drainAdmissionQueue();
     }
   }
 }

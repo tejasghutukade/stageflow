@@ -184,6 +184,7 @@ export async function bootstrapStageflowHost(
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
   await manager.resumeStalledSchedules();
+  await manager.reenqueuePersistedQueuedRuns();
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });
   const gcInterval = startPeriodicRunGc(manager, gcIntervalMsFromEnv(env));
   const stopGcInterval = () => {

@@ -212,7 +212,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object (optional repository/ref binding). Optional checkout_override, skip_gates, git_sha, ci_pr_url, ci_job_url match REST. Returns { runId }. On conflict returns isError with code busy_capacity (soft max full) or busy_checkout (path-checkout lease only), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout. Token-shaped fields are rejected with start.token_rejected.",
+        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object (optional repository/ref binding). Optional checkout_override, skip_gates, git_sha, ci_pr_url, ci_job_url match REST. Returns { runId } or { runId, queued: true, queuePosition } when admitted to the queue. On conflict returns isError with code busy_capacity (admission queue full) or busy_checkout (path-checkout lease only; never queued), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout. Token-shaped fields are rejected with start.token_rejected.",
       inputSchema: startRunSchema,
     },
     async (args) => {
@@ -263,7 +263,12 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         const { ok: _ok, reason, ...rest } = result;
         return textResult({ error: reason, ...rest }, true);
       }
-      return textResult({ runId: result.runId });
+      return textResult({
+        runId: result.runId,
+        ...(result.queued === true
+          ? { queued: true, queuePosition: result.queuePosition }
+          : {}),
+      });
     },
   );
 

@@ -96,6 +96,11 @@ async function preparePipeline(options: {
   checkoutOverride?: string;
   /** Preallocated run id + binding fields from Host materialize (KTD1). */
   runId?: string;
+  /**
+   * When true with `runId`, activate an existing `queued` row instead of createRun
+   * (admission-queue dequeue path — KTD2).
+   */
+  reuseExistingRun?: boolean;
   checkoutRoot?: string;
   repository?: string;
   ref?: string;
@@ -175,27 +180,50 @@ async function preparePipeline(options: {
     task.git_identity,
   );
 
-  const run = await options.store.createRun({
-    submission: options.submission,
-    runId: options.runId,
-    pipelineId: loaded.pipeline.id,
-    taskYaml,
-    taskId: task.id,
-    checkoutRoot,
-    gitSha: options.gitSha,
-    ciPrUrl: options.ciPrUrl,
-    ciJobUrl: options.ciJobUrl,
-    pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
-    pipelinePath,
-    taskPath,
-    projectRoot,
-    repository: options.repository,
-    ref: options.ref,
-    resolvedSha: options.resolvedSha,
-    runBranch: options.runBranch,
-    gitAuthorName: gitIdentity.name,
-    gitAuthorEmail: gitIdentity.email,
-  });
+  let run: { runId: string; workspaceDir: string };
+  if (options.reuseExistingRun === true) {
+    const runId = options.runId;
+    if (runId === undefined || runId.trim() === "") {
+      throw new Error("reuseExistingRun requires a preallocated runId");
+    }
+    await options.store.patchRunWorkspaceBinding(runId, {
+      ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+      ...(options.repository !== undefined
+        ? { repository: options.repository }
+        : {}),
+      ...(options.ref !== undefined ? { ref: options.ref } : {}),
+      ...(options.resolvedSha !== undefined
+        ? { resolvedSha: options.resolvedSha }
+        : {}),
+      ...(options.runBranch !== undefined
+        ? { runBranch: options.runBranch }
+        : {}),
+    });
+    await options.store.updateRunStatus(runId, "running");
+    run = { runId, workspaceDir: options.store.getWorkspaceDir(runId) };
+  } else {
+    run = await options.store.createRun({
+      submission: options.submission,
+      runId: options.runId,
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      checkoutRoot,
+      gitSha: options.gitSha,
+      ciPrUrl: options.ciPrUrl,
+      ciJobUrl: options.ciJobUrl,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+      pipelinePath,
+      taskPath,
+      projectRoot,
+      repository: options.repository,
+      ref: options.ref,
+      resolvedSha: options.resolvedSha,
+      runBranch: options.runBranch,
+      gitAuthorName: gitIdentity.name,
+      gitAuthorEmail: gitIdentity.email,
+    });
+  }
   const executionMode = readStageExecutionMode(
     process.env,
     options.executionMode,
@@ -323,6 +351,7 @@ export async function startPipeline(options: {
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
+  reuseExistingRun?: boolean;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
@@ -343,6 +372,7 @@ export async function startPipeline(options: {
     projectRoot,
     checkoutOverride: options.checkoutOverride,
     runId: options.runId,
+    reuseExistingRun: options.reuseExistingRun,
     checkoutRoot: options.checkoutRoot,
     repository: options.repository,
     ref: options.ref,

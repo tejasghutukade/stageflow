@@ -552,7 +552,12 @@ export function createOperatorRoutes(
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
-          json(res, 202, { runId: result.runId });
+          json(res, 202, {
+            runId: result.runId,
+            ...(result.queued === true
+              ? { queued: true, queuePosition: result.queuePosition }
+              : {}),
+          });
           return true;
         }
 

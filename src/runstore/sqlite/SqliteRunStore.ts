@@ -479,6 +479,53 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void> {
+    await this.ready();
+    const sets: string[] = ["updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      run_id: runId,
+      updated_at: new Date().toISOString(),
+    };
+    if (patch.checkoutRoot !== undefined) {
+      sets.push("checkout_root = @checkout_root");
+      params.checkout_root = patch.checkoutRoot;
+    }
+    if (patch.repository !== undefined) {
+      sets.push("repository = @repository");
+      params.repository = patch.repository;
+    }
+    if (patch.ref !== undefined) {
+      sets.push("ref = @ref");
+      params.ref = patch.ref;
+    }
+    if (patch.resolvedSha !== undefined) {
+      sets.push("resolved_sha = @resolved_sha");
+      params.resolved_sha = patch.resolvedSha;
+    }
+    if (patch.runBranch !== undefined) {
+      sets.push("run_branch = @run_branch");
+      params.run_branch = patch.runBranch;
+    }
+    if (sets.length === 1) {
+      return;
+    }
+    const result = this.db
+      .prepare(`UPDATE runs SET ${sets.join(", ")} WHERE run_id = @run_id`)
+      .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
   async setCancelReason(runId: string, reason: string): Promise<void> {
     await this.ready();
     const result = this.db

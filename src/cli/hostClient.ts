@@ -171,10 +171,18 @@ export async function httpStartRun(
     if (validation !== undefined) throw new PipelineValidationError(validation);
   }
   if (status !== 202) return toStartFailure(status, body);
-  const runId = (body as { runId: string }).runId;
+  const parsed = body as {
+    runId: string;
+    queued?: boolean;
+    queuePosition?: number;
+  };
+  const runId = parsed.runId;
   return {
     ok: true,
     runId,
+    ...(parsed.queued === true
+      ? { queued: true, queuePosition: parsed.queuePosition }
+      : {}),
     done: pollRunUntilTerminal(base, runId).then(runDetailToPipelineRunResult),
   };
 }
