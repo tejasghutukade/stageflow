@@ -137,6 +137,8 @@ Open `sf ui`, go to **Today** (waiting count badge) or **Runs**, open the run, a
 
 Answers go to the **selected** stage instance id. Today shows the first waiter (`waiting_stage_id`) even when several clones wait — the same as dual named-sibling wait. Open the run and select the other clone to answer it. Waiting-card copy keeps the raw `waiting_stage_id`.
 
+An `interrupted` stage (Host shutdown or orphan reconcile) is **not** a HITL wait — there is no `ask_operator` prompt. Resume the same attempt with **Resume session** in the console, MCP [`resume_stage`](mcp.md#resume_stage), or `sf runs resume`. Do not use `answer_gate` / `sf runs answer`.
+
 See [Operator console — Clone tracks](operator-console.md#clone-tracks).
 
 ## MCP

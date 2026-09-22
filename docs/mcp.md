@@ -682,17 +682,17 @@ Waiting stages are not retryable (`409`, often `code: "hitl_not_retriable"`) —
 
 ### `resume_stage`
 
-Resume a stage that **timed out**, continuing the same attempt/session (same as HTTP `POST .../resume`). Does not start a new attempt — use `retry_stage` to start over.
+Resume an **interrupted** stage or a stage that **timed out**, continuing the same attempt/session (same as HTTP `POST .../resume`). Does not start a new attempt — use `retry_stage` to start over.
 
 **Input:** `{ "runId", "stageId" }`
 
-**Success:** `{ "runId", "stageId", "attemptIndex" }` (same attempt as the timed-out pass)
+**Success:** `{ "runId", "stageId", "attemptIndex" }` (same attempt as the interrupted or timed-out pass)
 
-Fails with `409` if the stage is not a timeout failure or the session file is missing.
+Fails with `409` if the stage is neither `interrupted` nor a timeout-shaped `failed`, or if the session file is missing (use `retry_stage` to start a new attempt).
 
 ### `abandon_stage`
 
-Abandon a **running** stage (marks it failed/interrupted). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`. Prefer `cancel_run` to stop an entire run.
+Abandon a **running** stage (marks it failed). Does **not** dismiss HITL waiting gates (`409` if waiting) — answer those with `answer_gate`. Prefer `cancel_run` to stop an entire run.
 
 **Input:** `{ "runId", "stageId" }`
 
@@ -706,7 +706,7 @@ Cancel a non-terminal run (`created` / `queued` / `running`). Marks the run `can
 
 **Success:** `{ "ok": true, "runId": "…" }`
 
-Cancel **signals** live stage workers, but **process-group kill has not landed** — a wedged agent subprocess or its descendants may outlive the cancelled run.
+Cancel signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included in the tree.
 
 Until Slot 5 authentication, this mutating tool (and the matching `POST /api/runs/:runId/cancel` REST route) relies on the Host's existing `isMutatingApi` loopback `Host` / `Origin` gate and local bind assumptions — not a bearer token.
 
@@ -763,7 +763,7 @@ Exact config shape depends on your MCP client version. Prefer session-capable St
 
 ## Limitations
 
-- Cancel signals workers but does not yet process-group-kill descendants (Slot 4); descendants may survive a cancelled run
+- Cancel signals workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included
 - Until Slot 5, destructive MCP/REST verbs (`cancel_run`, `delete_run`, `gc_runs`, and their HTTP routes) rely on `isMutatingApi` loopback gating and local bind — not application auth. Slot 5 must cover MCP tools as well as HTTP
 - `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)

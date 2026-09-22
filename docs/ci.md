@@ -110,7 +110,7 @@ When concurrency slots are full but the admission queue still has room, start su
 }
 ```
 
-`reason` is the cancel text stored as `cancel_reason` when present. Cancel signals live stage workers, but **process-group kill is not fixed yet** — a wedged agent subprocess or its descendants may outlive the cancelled run.
+`reason` is the cancel text stored as `cancel_reason` when present. Cancel signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included in the tree.
 
 **Busy** (`outcome: "busy"`, no `runId`):
 
@@ -313,6 +313,33 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution (see [Skills in CI](#skills-in-ci)) |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills |
+
+## Host lifecycle (sf ui / sf mcp)
+
+`sf run`'s exit codes `0` / `1` / `2` above are unchanged. The long-lived Host (`sf ui` / `sf mcp`) uses a separate exit table.
+
+### Host exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean shutdown. Signal received, drain completed within the grace period, stages finished or recorded `interrupted`, SQLite checkpointed and closed |
+| `1` | Unhandled crash; state may not be checkpointed |
+| `2` | Reserved — never used by the Host (`sf run` uses `2` for waiting) |
+| `3` | Refused to start: invalid configuration (bad bind, malformed env, unwritable `$STAGEFLOW_HOME`) |
+| `4` | Refused to start: on-disk store schema is newer than this binary |
+| `5` | Forced shutdown. Grace period expired; workers were SIGKILLed. `interrupted` records were attempted and may be incomplete |
+| `6` | Escalated shutdown. A second SIGTERM/SIGINT arrived during the drain |
+
+### Host env vars
+
+| Variable | Effect |
+|----------|--------|
+| `STAGEFLOW_SHUTDOWN_GRACE_MS` | SIGTERM/SIGINT drain budget in ms (default `8000`). Workers get grace − 2000 ms; the final 2 s are reserved for `interrupted` writes and WAL close. Pair with compose `stop_grace_period` — raising grace without raising `stop_grace_period` truncates the drain under `docker stop`'s default 10 s window |
+| `STAGEFLOW_LOG_FORMAT` | `json` or `pretty`. Default: `pretty` on a TTY, `json` otherwise (container / piped logs) |
+| `STAGEFLOW_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` (default `info`) |
+| `STAGEFLOW_NO_AUTOSTART` | When set (truthy, not `0`/`false`), CLI verbs that would spawn a detached Host refuse with `autostart_disabled` instead — required for container images where the entrypoint already runs the Host |
+| `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off). Reconciliation still writes `interrupted` unconditionally |
+| `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per stage attempt (default `3`). Past the cap the stage stays `interrupted` with reason `auto_resume_capped`; explicit `resume_stage` / `sf runs resume` still works and resets the counter |
 
 ## State in CI
 

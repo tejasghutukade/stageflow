@@ -48,4 +48,13 @@ describe("readinessDetail", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("omits duplicate interrupted copy when status is interrupted", () => {
+    expect(
+      readinessDetail({
+        readiness: "interrupted",
+        status: "interrupted",
+      }),
+    ).toBeUndefined();
+  });
 });

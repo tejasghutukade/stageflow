@@ -39,6 +39,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -291,6 +292,7 @@ export type StageSnapshot = {
     | "pending"
     | "running"
     | "waiting_for_input"
+    | "interrupted"
     | "succeeded"
     | "failed"
     | "skipped";

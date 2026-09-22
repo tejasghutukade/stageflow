@@ -88,7 +88,7 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 
 Busy codes: `busy_capacity` (admission queue full — active-slot exhaustion queues instead), `busy_checkout` (same checkout leased; never queued). Disk floor miss is `outcome: "failed"` with `code: "insufficient_disk"` (not busy). When slots are full but the queue has room, start succeeds; blocking `sf run` may print `queued at position N` on stderr before waiting for terminal. See [CI / headless](ci.md#json-stdout).
 
-Cancel signals stage workers but **does not yet process-group-kill descendants** — they may survive. Until Slot 5 auth, destructive Host verbs rely on `isMutatingApi` loopback gating and local bind only.
+Cancel signals stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included. Until Slot 5 auth, destructive Host verbs rely on `isMutatingApi` loopback gating and local bind only.
 
 Validation failure during `sf run --json` prints **validate-shaped** JSON (`ok`, `scope`, `checks`, `findings`…) with **no** `outcome` / `runId` (exit `1`). Start-run pairing warnings (for example `pipeline.model_applies`) appear as optional `findings[]` on the completion document (`file` remapped from `path`) and do not change `ok` / `outcome` / exit codes. Omitted `task.input` is `{}` against entry `io.input.schema`; mismatch is `task.invalid_shape` and fails start-run. See [CI / headless](ci.md#json-stdout).
 
@@ -318,7 +318,7 @@ Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback
 
 ### `sf runs retry` / `resume` / `abandon` / `rerun`
 
-Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
+Human/API parity for the remaining control verbs. Waiting stages are not retryable or abandonable. `resume` continues an **interrupted** stage or a **timed-out** failed attempt on the same session (does not start a new attempt). `retry` and `rerun` block in-process until waiting or terminal (same `0` / `1` / `2` as `sf run`). MCP `{ "runId" }` fire-and-forget is not the CLI contract.
 
 ### `sf runs cancel`
 
@@ -334,7 +334,7 @@ sf runs cancel --run <runId> --reason <text> [--json]
 | `--reason` | Free-text cancel reason (required) |
 | `--json` | `{ "ok": true, "runId" }` |
 
-Signals live stage workers, but **process-group kill has not landed** — descendants may survive. Same mutate / Slot 5 auth notes as other destructive Host verbs.
+Signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included. Same mutate / Slot 5 auth notes as other destructive Host verbs.
 
 ### `sf runs delete`
 
@@ -604,7 +604,9 @@ Prints:
 - Operator console URL (default `http://127.0.0.1:3847`)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted. Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+Opens the default browser. Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+
+On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal active stage process groups, mark remaining stages `interrupted`, checkpoint and close SQLite, then exit. Default grace is `STAGEFLOW_SHUTDOWN_GRACE_MS=8000` (pair with compose `stop_grace_period`). Host exit codes and related env vars: [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp).
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
@@ -618,7 +620,7 @@ Start an MCP-only HTTP host (no operator console UI, no browser open).
 sf mcp [--port 3847] [--mcp-stateless]
 ```
 
-Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
+Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`, including the same SIGTERM/SIGINT drain and Host exit codes. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 
@@ -687,6 +689,12 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution in CI |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills in CI |
 | `STAGEFLOW_A2A_CONFIG` | Explicit path to `a2a.yaml`, overriding auto-discovery at `<project-root>/a2a.yaml`. See [A2A](a2a.md) |
+| `STAGEFLOW_SHUTDOWN_GRACE_MS` | Host SIGTERM/SIGINT drain budget (default `8000`); pair with compose `stop_grace_period` — see [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp) |
+| `STAGEFLOW_LOG_FORMAT` | Host log format: `json` or `pretty` (TTY default pretty, else json) |
+| `STAGEFLOW_LOG_LEVEL` | Host log level: `debug` \| `info` \| `warn` \| `error` (default `info`) |
+| `STAGEFLOW_NO_AUTOSTART` | Disable detached Host autostart (container-safe); mutating CLI verbs fail with `autostart_disabled` |
+| `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off) |
+| `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per attempt (default `3`) |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 

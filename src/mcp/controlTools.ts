@@ -387,7 +387,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "abandon_stage",
     {
       description:
-        "Abandon a running stage (marks it failed/interrupted). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. Prefer cancel_run to stop an entire run.",
+        "Abandon a running stage (marks it failed). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. Prefer cancel_run to stop an entire run.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
@@ -414,7 +414,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "cancel_run",
     {
       description:
-        "Cancel a non-terminal run (marks it cancelled, terminalizes pending/running/waiting stages, releases the checkout lease). Signals live stage workers via StageProcessLauncher.cancelRun, but process-group kill is not fixed yet — a wedged agent subprocess or its descendants may outlive the cancelled run. Reason is required free-text and stored on the run as cancel_reason.",
+        "Cancel a non-terminal run (marks it cancelled, terminalizes pending/running/waiting stages, releases the checkout lease). Signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included. Reason is required free-text and stored on the run as cancel_reason.",
       inputSchema: z.object({
         runId: z.string(),
         reason: z.string().min(1),

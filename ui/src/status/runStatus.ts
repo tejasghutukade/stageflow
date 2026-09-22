@@ -40,6 +40,7 @@ export function runDisplayStatus(run: RunSummary): RunDisplayStatus {
 export function cssStatusToken(status: DisplayStatus): CssStatusToken | undefined {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
       return "waiting";
     case "created":
     case "queued":
@@ -66,6 +67,7 @@ export function statusCopy(status: DisplayStatus): string {
     case "queued":
     case "pending":
     case "running":
+    case "interrupted":
     case "succeeded":
     case "failed":
     case "cancelled":
@@ -82,6 +84,7 @@ export function waitingOnYouTitle(): string {
 export function ringStatus(status: StageDisplayStatus): RingStatus {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
       return "waiting";
     case "pending":
     case "running":
@@ -95,6 +98,7 @@ export function ringStatus(status: StageDisplayStatus): RingStatus {
 export function ringGlyph(status: StageDisplayStatus | RingStatus): string {
   switch (status) {
     case "waiting_for_input":
+    case "interrupted":
     case "waiting":
       return "?";
     case "pending":
@@ -129,6 +133,7 @@ export function statusDotVariant(
     case "running":
       return "accent";
     case "waiting_for_input":
+    case "interrupted":
       return "warning";
     case "succeeded":
       return "success";

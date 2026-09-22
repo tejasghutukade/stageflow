@@ -44,6 +44,7 @@ const displayStatuses: DisplayStatus[] = [
   "pending",
   "running",
   "waiting_for_input",
+  "interrupted",
   "succeeded",
   "failed",
   "cancelled",
@@ -53,6 +54,7 @@ const stageStatuses: StageDisplayStatus[] = [
   "pending",
   "running",
   "waiting_for_input",
+  "interrupted",
   "succeeded",
   "failed",
   "skipped",
@@ -85,6 +87,7 @@ describe("runDisplayStatus", () => {
 describe("cssStatusToken", () => {
   it("maps every display status, with created as an unpulsed gray default", () => {
     expect(cssStatusToken("waiting_for_input")).toBe("waiting");
+    expect(cssStatusToken("interrupted")).toBe("waiting");
     expect(cssStatusToken("created")).toBeUndefined();
     expect(cssStatusToken("queued")).toBeUndefined();
     expect(cssStatusToken("running")).toBe("running");
@@ -101,6 +104,7 @@ describe("statusIsPulsing", () => {
     expect(statusIsPulsing("created")).toBe(false);
     expect(statusIsPulsing("running")).toBe(true);
     expect(statusIsPulsing("waiting_for_input")).toBe(false);
+    expect(statusIsPulsing("interrupted")).toBe(false);
   });
 });
 
@@ -111,6 +115,7 @@ describe("statusCopy", () => {
     expect(statusCopy("queued")).toBe("queued");
     expect(statusCopy("pending")).toBe("pending");
     expect(statusCopy("running")).toBe("running");
+    expect(statusCopy("interrupted")).toBe("interrupted");
     expect(statusCopy("succeeded")).toBe("succeeded");
     expect(statusCopy("failed")).toBe("failed");
     expect(statusCopy("cancelled")).toBe("cancelled");
@@ -128,6 +133,7 @@ describe("waitingOnYouTitle", () => {
 describe("ringGlyph", () => {
   it("uses a question mark for a waiting stage", () => {
     expect(ringGlyph("waiting_for_input")).toBe("?");
+    expect(ringGlyph("interrupted")).toBe("?");
     expect(ringGlyph("waiting")).toBe("?");
   });
 
@@ -145,11 +151,23 @@ describe("ringStatus skipped", () => {
   });
 });
 
+describe("interrupted status presentation", () => {
+  it("reuses the waiting token family without pulsing or failing", () => {
+    expect(cssStatusToken("interrupted")).toBe("waiting");
+    expect(ringStatus("interrupted")).toBe("waiting");
+    expect(statusDotVariant("interrupted")).toBe("warning");
+    expect(statusIsPulsing("interrupted")).toBe(false);
+    expect(statusCopy("interrupted")).toBe("interrupted");
+    expect(trackSegmentToken("interrupted")).toBe("waiting");
+  });
+});
+
 describe("trackSegmentToken", () => {
   it("matches toSegStatus, including undefined for pending", () => {
     expect(trackSegmentToken("succeeded")).toBe("succeeded");
     expect(trackSegmentToken("running")).toBe("running");
     expect(trackSegmentToken("waiting_for_input")).toBe("waiting");
+    expect(trackSegmentToken("interrupted")).toBe("waiting");
     expect(trackSegmentToken("failed")).toBe("failed");
     expect(trackSegmentToken("pending")).toBeUndefined();
     expect(trackSegmentToken("skipped")).toBe("skipped");
@@ -160,14 +178,19 @@ describe("stage statuses without a run-level equivalent", () => {
   it("resolve pending and waiting_for_input without a default fallthrough", () => {
     expect(ringStatus("pending")).toBe("pending");
     expect(ringStatus("waiting_for_input")).toBe("waiting");
+    expect(ringStatus("interrupted")).toBe("waiting");
     expect(cssStatusToken("pending")).toBeUndefined();
     expect(cssStatusToken("waiting_for_input")).toBe("waiting");
+    expect(cssStatusToken("interrupted")).toBe("waiting");
     expect(trackSegmentToken("pending")).toBeUndefined();
     expect(trackSegmentToken("waiting_for_input")).toBe("waiting");
+    expect(trackSegmentToken("interrupted")).toBe("waiting");
     expect(statusCopy("pending")).toBe("pending");
     expect(statusCopy("waiting_for_input")).toBe("waiting on you");
+    expect(statusCopy("interrupted")).toBe("interrupted");
     expect(ringGlyph("pending")).toBe("");
     expect(ringGlyph("waiting_for_input")).toBe("?");
+    expect(ringGlyph("interrupted")).toBe("?");
 
     for (const status of stageStatuses) {
       expect(ringStatus(status)).toBeDefined();
@@ -177,6 +200,8 @@ describe("stage statuses without a run-level equivalent", () => {
     for (const status of displayStatuses) {
       expect(() => cssStatusToken(status)).not.toThrow();
       expect(() => statusCopy(status)).not.toThrow();
+      expect(() => statusDotVariant(status)).not.toThrow();
+      expect(() => statusIsPulsing(status)).not.toThrow();
     }
   });
 });
