@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Path-checkout lease (`busy_checkout`) applies only to path-bound runs. Repository-bound runs each get their own worktree and may run in parallel on the same repository; attach/resume no longer re-lease worktree paths.
+
 ## [0.24.0] - 2026-09-20
 
 ### Added

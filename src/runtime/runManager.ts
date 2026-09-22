@@ -6,6 +6,7 @@ import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { InlinePipelineDefinition } from "../types/pipeline.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import { newRunId } from "../runstore/paths.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
   assertTimedOutStageEligible,
@@ -78,8 +79,17 @@ import {
   readManualRecoveryState,
   type ManualRecoveryEligibility,
 } from "./manualRecoveryState.js";
+import { resolveWorkspaceBinding, type WorkspaceBinding } from "./workspaceBinding.js";
+import {
+  derivedBindingKindFromMeta,
+  materializeWorkspaceBinding,
+  StartLinkError,
+  type StartFailureCode,
+} from "./repositoryMaterialize.js";
 
 export type BusyCode = "busy_capacity" | "busy_checkout";
+
+export type { StartFailureCode } from "./repositoryMaterialize.js";
 
 export type StartRunResult =
   | { ok: true; runId: string; done: Promise<PipelineRunResult> }
@@ -87,12 +97,13 @@ export type StartRunResult =
       ok: false;
       reason: string;
       status?: number;
-      code?: BusyCode;
+      code?: StartFailureCode;
       activeCount?: number;
       maxConcurrent?: number;
       activeRunIds?: string[];
       conflictingRunId?: string;
       conflictingCheckout?: string;
+      stderr?: string;
     };
 
 export type CapacityHealth = {
@@ -352,10 +363,13 @@ export class RunManager {
       let durableCheckoutRoot: string | undefined;
       try {
         const meta = await this.options.store.readRunMeta(runId);
-        const checkoutRoot = meta.checkout_root;
-        if (checkoutRoot !== undefined && checkoutRoot !== "") {
-          durableCheckoutRoot = checkoutRoot;
-          checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+        const kind = derivedBindingKindFromMeta(meta);
+        if (kind === "checkout") {
+          const checkoutRoot = meta.checkout_root;
+          if (checkoutRoot !== undefined && checkoutRoot !== "") {
+            durableCheckoutRoot = checkoutRoot;
+            checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+          }
         }
       } catch (err) {
         console.error(
@@ -677,13 +691,19 @@ export class RunManager {
     );
   }
 
-  async rerun(runId: string): Promise<StartRunResult> {
+  async rerun(
+    runId: string,
+    options?: { pinned?: boolean },
+  ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
 
     let pipeline: string;
     let taskYaml: string;
     let rerunCwd = cwd;
     let rerunProjectRoot: string | undefined;
+    let pinned:
+      | { ref: string; resolvedSha: string }
+      | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
       if (!meta.pipeline_path) {
@@ -701,6 +721,22 @@ export class RunManager {
         ? normalizeCatalogPath(meta.project_root)
         : undefined;
       taskYaml = await this.options.store.readTaskYaml(runId);
+      if (options?.pinned) {
+        if (
+          meta.resolved_sha === undefined ||
+          meta.resolved_sha === "" ||
+          meta.ref === undefined ||
+          meta.ref === ""
+        ) {
+          return {
+            ok: false,
+            reason: `Run ${runId} has no resolved_sha/ref to pin`,
+            status: 400,
+            code: "pinned_sha_unavailable",
+          };
+        }
+        pinned = { ref: meta.ref, resolvedSha: meta.resolved_sha };
+      }
     } catch {
       return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
     }
@@ -714,6 +750,9 @@ export class RunManager {
       undefined,
       undefined,
       rerunProjectRoot,
+      undefined,
+      undefined,
+      pinned,
     );
   }
 
@@ -1623,19 +1662,34 @@ export class RunManager {
     projectRoot?: string,
     taskPath?: string,
     submission?: RunSubmission,
+    pinned?: { ref: string; resolvedSha: string },
   ): Promise<StartRunResult> {
+    let task: TaskFile;
     let checkoutKey: string | undefined;
+    let pathCheckoutRoot: string | undefined;
+    let binding: WorkspaceBinding;
     try {
-      const task = loadTaskFromYaml(taskYaml, taskLabel);
-      const checkoutRoot = await resolveAndValidateCheckout(
-        task,
-        checkoutOverride,
-        cwd,
-      );
-      checkoutKey =
-        checkoutRoot !== undefined
-          ? await toCheckoutLeaseKey(checkoutRoot)
-          : undefined;
+      task = loadTaskFromYaml(taskYaml, taskLabel);
+      const bindingOutcome = resolveWorkspaceBinding(task, { checkoutOverride });
+      if (!bindingOutcome.ok) {
+        return {
+          ok: false,
+          reason: bindingOutcome.issues[0]?.message ?? "Invalid workspace binding",
+          status: 400,
+        };
+      }
+      binding = bindingOutcome.value;
+      if (binding.kind === "checkout") {
+        pathCheckoutRoot = await resolveAndValidateCheckout(
+          task,
+          checkoutOverride,
+          cwd,
+        );
+        checkoutKey =
+          pathCheckoutRoot !== undefined
+            ? await toCheckoutLeaseKey(pathCheckoutRoot)
+            : undefined;
+      }
     } catch (err) {
       return {
         ok: false,
@@ -1647,7 +1701,19 @@ export class RunManager {
     const reserved = this.tryReserve(checkoutKey);
     if (!reserved.ok) return reserved.failure;
 
+    const runId = newRunId();
+    let rollback: () => Promise<void> = async () => {};
     try {
+      const { materialized, rollback: linkRollback } =
+        await materializeWorkspaceBinding({
+          runId,
+          task,
+          binding,
+          checkoutRoot: pathCheckoutRoot,
+          pinned,
+        });
+      rollback = linkRollback;
+
       const started = await startPipeline({
         submission,
         agent: this.options.agent,
@@ -1658,6 +1724,12 @@ export class RunManager {
         cwd,
         projectRoot: projectRoot ?? this.projectRoot,
         checkoutOverride,
+        runId: materialized.runId,
+        checkoutRoot: materialized.checkoutRoot,
+        repository: materialized.repository,
+        ref: materialized.ref,
+        resolvedSha: materialized.resolvedSha,
+        runBranch: materialized.runBranch,
         gitSha: ciIdentity?.gitSha,
         ciPrUrl: ciIdentity?.ciPrUrl,
         ciJobUrl: ciIdentity?.ciJobUrl,
@@ -1671,9 +1743,19 @@ export class RunManager {
       this.track(reserved.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
+      await rollback().catch(() => undefined);
       this.clearReservation(reserved.provisionalId);
       if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {
         throw err;
+      }
+      if (err instanceof StartLinkError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: err.status,
+          code: err.code,
+          ...(err.stderr !== undefined ? { stderr: err.stderr } : {}),
+        };
       }
       return {
         ok: false,
@@ -1845,10 +1927,13 @@ export class RunManager {
     let durableCheckoutRoot: string | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      const checkoutRoot = meta.checkout_root;
-      if (checkoutRoot !== undefined && checkoutRoot !== "") {
-        durableCheckoutRoot = checkoutRoot;
-        checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+      const kind = derivedBindingKindFromMeta(meta);
+      if (kind === "checkout") {
+        const checkoutRoot = meta.checkout_root;
+        if (checkoutRoot !== undefined && checkoutRoot !== "") {
+          durableCheckoutRoot = checkoutRoot;
+          checkoutKey = await toCheckoutLeaseKey(checkoutRoot);
+        }
       }
     } catch (err) {
       console.error(

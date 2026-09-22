@@ -72,6 +72,7 @@ function formatRunStartFailedJson(
     reason: started.reason,
   };
   if (started.code !== undefined) payload.code = started.code;
+  if (started.stderr !== undefined) payload.stderr = started.stderr;
   return stringify(payload);
 }
 

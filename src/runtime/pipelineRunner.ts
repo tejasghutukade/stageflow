@@ -91,6 +91,13 @@ async function preparePipeline(options: {
   cwd: string;
   projectRoot?: string;
   checkoutOverride?: string;
+  /** Preallocated run id + binding fields from Host materialize (KTD1). */
+  runId?: string;
+  checkoutRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
@@ -138,11 +145,16 @@ async function preparePipeline(options: {
     console.error(`${finding.code}: ${finding.message}`);
   }
 
-  const checkoutRoot = await resolveAndValidateCheckout(
-    task,
-    options.checkoutOverride,
-    options.cwd,
-  );
+  // Materialization is owned by RunManager (KTD1). When checkoutRoot is supplied,
+  // do not re-resolve or fetch here.
+  const checkoutRoot =
+    options.checkoutRoot !== undefined
+      ? options.checkoutRoot
+      : await resolveAndValidateCheckout(
+          task,
+          options.checkoutOverride,
+          options.cwd,
+        );
 
   const pipelinePath =
     typeof options.pipeline === "string"
@@ -157,6 +169,7 @@ async function preparePipeline(options: {
 
   const run = await options.store.createRun({
     submission: options.submission,
+    runId: options.runId,
     pipelineId: loaded.pipeline.id,
     taskYaml,
     taskId: task.id,
@@ -168,6 +181,10 @@ async function preparePipeline(options: {
     pipelinePath,
     taskPath,
     projectRoot,
+    repository: options.repository,
+    ref: options.ref,
+    resolvedSha: options.resolvedSha,
+    runBranch: options.runBranch,
   });
   const executionMode = readStageExecutionMode(
     process.env,
@@ -287,6 +304,12 @@ export async function startPipeline(options: {
   cwd?: string;
   projectRoot?: string;
   checkoutOverride?: string;
+  runId?: string;
+  checkoutRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
@@ -309,6 +332,12 @@ export async function startPipeline(options: {
     cwd,
     projectRoot,
     checkoutOverride: options.checkoutOverride,
+    runId: options.runId,
+    checkoutRoot: options.checkoutRoot,
+    repository: options.repository,
+    ref: options.ref,
+    resolvedSha: options.resolvedSha,
+    runBranch: options.runBranch,
     gitSha: options.gitSha,
     ciPrUrl: options.ciPrUrl,
     ciJobUrl: options.ciJobUrl,
