@@ -102,7 +102,7 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 `--pipeline` and `--task` require **filesystem paths** — there is no bare-id fallback.
 
-Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under **`<git-root>/.stageflow/`** regardless of which subdirectory you run from.
+Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
 
 ## 5. Operate via the console
 

@@ -1,0 +1,41 @@
+---
+layout: default
+title: Data Directory
+---
+
+# Data directory
+
+Stageflow keeps the SQLite run store, run workspaces, Host Pi agent files, and related state under one **durable root**. Override it with `STAGEFLOW_HOME`. When unset, the default is `~/.stageflow`.
+
+Per-project settings stay at `<git-root>/.stageflow/settings.json`. They are not the run store.
+
+See also [CLI reference — Storage locations](cli-reference.md#storage-locations) and [Providers](providers.md).
+
+## Layout
+
+| Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
+|------------------------------|-------------------|-------|
+| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode) |
+| `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
+| `agent/auth.json` | **keep** | Stageflow-owned provider credentials (`sf_owned`) |
+| `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |
+| `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
+| `a2a-artifacts/` | disposable | A2A artifact bytes |
+| `repos/` | disposable | Reserved name (bare-clone cache in a later slot) |
+| `worktrees/` | disposable | Reserved name (per-run worktrees in a later slot) |
+| `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
+| `service.log` | disposable | Detached Host autostart log (stays at the root) |
+
+Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent directory. Each stage attempt binds `PI_CODING_AGENT_DIR` to a per-attempt directory under that run's workspace (`runs/<runId>/stages/<stageId>/attempts/<n>/.pi-agent`).
+
+Credential choice is unchanged: a saved setting, otherwise a usable `~/.pi/agent/auth.json`, otherwise `agent/auth.json` under the durable root.
+
+## Container image user and volumes
+
+The published image runs as **`1000:1000`**. Named volumes are the default mount for the durable root. The process never recursively changes ownership of the data root on boot — if the volume is not writable by that uid/gid, startup fails with a message that includes the live uid and a `chown` hint.
+
+## Version support
+
+- **Patch versions** of Stageflow are interchangeable against the same database schema.
+- **Minor versions** are upgrade-only: a newer binary may migrate the store forward; an older binary that cannot read the on-disk schema version refuses to open it.
+- Rolling a **newer database** back to an older Stageflow binary means **restoring a backup**, not opening the newer file with the older image.

@@ -271,7 +271,7 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 
 ## State in CI
 
-Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
+Runs write under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/` on the runner). Set `STAGEFLOW_HOME` to a job-local path and cache or artifact that directory if you need post-job inspection; ephemeral runners can discard it. See [Data directory](data-directory.md).
 
 ## PR diagrams (Archify) {#pr-diagrams-archify}
 

@@ -8,7 +8,7 @@ title: Mcp
 Stageflow serves **Streamable HTTP** MCP with **stateful sessions as the product default**. Host it via either:
 
 - `sf ui` — operator console + MCP
-- `sf mcp` — MCP-only (no browser, no console assets)
+- `sf mcp` — headless: same console REST API + MCP, minus the static console assets (no browser)
 
 Default endpoint:
 
@@ -49,11 +49,13 @@ Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardow
 | Host | Serves | Browser |
 |------|--------|---------|
 | `sf ui` | Console REST/static + `/mcp` | Opens by default |
-| `sf mcp` | `/mcp` + minimal `GET /api/health` | No |
+| `sf mcp` | Console REST (no static assets) + `/mcp` | No |
 
-Both use the same git-root / `.stageflow/` store semantics and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported.
+`sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. On both hosts, mutating `POST /api/*` routes are gated to a loopback `Host` / `Origin`, while `GET /api/*` routes have no host, origin, or auth gate — bind the host only where you trust every local process.
 
-MCP tools resolve the **project git root** for catalog browse and the **`<git-root>/.stageflow/`** run store — the same semantics as CLI commands, not the shell cwd where you started the host.
+Both use the same project git-root catalog and **global durable-root** run store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported. See [Data directory](data-directory.md).
+
+MCP tools resolve the **project git root** for catalog browse and the **global durable root** for the run store — the same semantics as CLI commands, not the shell cwd where you started the host.
 
 Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
 

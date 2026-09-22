@@ -11,10 +11,12 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `<git-root>/.stageflow/` | Run store (SQLite) and per-run workspaces when inside a git repo |
-| `~/.stageflow/` | Global home — `sf_owned` auth (`agent/auth.json`), global settings |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json` |
+| `<git-root>/.stageflow/` | Per-project settings only (`settings.json`); not the run store |
 
-Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era `.stageflow/runs` tree may be imported; if `.stageflow` is missing and `.software-factory` exists, the next store open renames it.
+Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
+
+Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era nested `runs` tree may be imported; if a project `.stageflow` is missing and `.software-factory` exists, the next project-settings open renames it.
 
 ## Global
 
@@ -42,7 +44,7 @@ Creates (skipping files that already exist):
 | `pipelines/hello.pipeline.yaml` | Inline single-stage pipeline |
 | `tasks/hello.task.yaml` | Sample task |
 
-Also ensures `~/.stageflow/` exists for global config.
+Also ensures the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) exists for global config.
 
 ## `sf run`
 
@@ -143,12 +145,12 @@ sf runs rerun --run <runId> [--json]
 
 ### Read vs mutate
 
-| Kind | Verbs | Host up |
-|------|-------|---------|
-| Read | `list`, `show`, `verify`, `waiting`, `wait` | Allowed |
-| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `rerun` | Refused |
+| Kind | Verbs | Path |
+|------|-------|------|
+| Read | `list`, `show`, `verify`, `waiting`, `wait` | Open the global run store directly; no host needed |
+| Mutate | `answer`, `feedback-decide`, `retry`, `resume`, `recover`, `abandon`, `rerun` | Sent over HTTP to the global service |
 
-Mutating verbs probe `GET http://127.0.0.1:3847/api/health` (1500 ms). HTTP 200 with parseable JSON → exit `1` without opening a mutating writer. This is not a single-writer lock: a host on another port (`sf ui --port 4000`) and a live blocking `sf run` are undetected second writers. Reads still work while a host is up.
+Mutating verbs require the global service and do not write the store themselves. They probe `GET http://127.0.0.1:3847/api/health` (1500 ms) and, when nothing answers, spawn a detached `sf mcp` on that port and poll until it is healthy (default 10 s, `STAGEFLOW_AUTOSTART_TIMEOUT_MS`). Exit `1` when the port is held by a non-Stageflow process, the spawn fails, or the wait times out. `sf run` starts runs the same way.
 
 ### Parked runs
 
@@ -249,7 +251,7 @@ For `waiting_kind: "feedback_loop_decision"`, entries also carry `feedback_loop_
 
 `reason` is `waiting` \| `terminal` \| `timeout` \| `already`. Timeout is success (`ok: true`, exit `0`); the run is unchanged. Abort cancels only the wait, not the run.
 
-Host-down park-and-answer:
+Park-and-answer loop:
 
 ```
 sf runs waiting → sf runs answer → sf runs wait --until any
@@ -294,7 +296,7 @@ sf runs feedback-decide \
 | `--reason` | Optional text persisted on `feedback_loop_decided` for `extend`, `continue`, and `abandon` |
 | `--json` | `{ "ok": true, "effect": "extended"\|"continued"\|"abandoned", "loopId" }` |
 
-Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and `POST /api/runs/:runId/stages/:stageId/feedback-decision`. Host-down mutate rules apply (refused while `sf ui` / `sf mcp` health responds on the default port).
+Same semantics as MCP [`decide_feedback_loop`](mcp.md#decide_feedback_loop) and `POST /api/runs/:runId/stages/:stageId/feedback-decision`. Mutate rules apply (needs the global service on the default port; auto-started when absent).
 
 Inspect loop state with `sf runs show --json` (`active_feedback_loop`, `feedback_loops`) and `sf runs waiting` (`waiting_kind: "feedback_loop_decision"`).
 
@@ -539,7 +541,7 @@ Prints:
 - Operator console URL (default `http://127.0.0.1:3847`)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted. The run store resolves to `<git-root>/.stageflow/` even when started from a subdirectory.
+Opens the default browser. Process runs until interrupted. Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
@@ -553,7 +555,7 @@ Start an MCP-only HTTP host (no operator console UI, no browser open).
 sf mcp [--port 3847] [--mcp-stateless]
 ```
 
-Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves minimal `GET /api/health`. Same git-root / `.stageflow/` semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
+Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 

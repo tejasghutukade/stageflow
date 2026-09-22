@@ -9,7 +9,7 @@ The operator console is a local web UI started by `sf ui`. Default URL: **`http:
 
 It is the primary surface for triaging runs, connecting providers, answering HITL gates, and inspecting stage transcripts and envelopes. The same process also serves MCP at `/mcp`.
 
-The run store and catalog browse resolve to the **project git root** — starting `sf ui` from a subdirectory still uses `<git-root>/.stageflow/` and the repo's `stageflow.yaml` manifest.
+Catalog browse resolves to the **project git root** (and its `stageflow.yaml` manifest) even when you start `sf ui` from a subdirectory. The run store is the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
 
 ## Starting the console
 

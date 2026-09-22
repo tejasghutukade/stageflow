@@ -14,7 +14,7 @@ Provider management is via `sf providers` and the console **Settings → Provide
 | Mode | Where credentials live |
 |------|------------------------|
 | `pi_home` | Pi's standard auth file under your Pi home directory (`~/.pi/agent/auth.json`) |
-| `sf_owned` | Stageflow global auth at `~/.stageflow/agent/auth.json` |
+| `sf_owned` | Stageflow global auth at `$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`) |
 
 Check current binding:
 
@@ -25,7 +25,7 @@ sf providers detect
 
 `detect` prints `piHomeUsable`, `credentialSource`, `provisional`, and `bindingSource`.
 
-If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/` settings can persist or override the source versus global `~/.stageflow`.
+If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/settings.json` can persist or override the source versus global `$STAGEFLOW_HOME/settings.json`.
 
 Set explicitly:
 
@@ -37,9 +37,9 @@ sf providers source set sf_owned
 **When to use which:**
 
 - **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
-- **`sf_owned`** — isolate Stageflow credentials in `~/.stageflow/` without touching Pi home
+- **`sf_owned`** — isolate Stageflow credentials under the durable root without touching Pi home
 
-Project run state and settings live under **`<git-root>/.stageflow/`** — separate from global auth.
+The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Per-project settings stay at `<git-root>/.stageflow/settings.json`. See [Data directory](data-directory.md).
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 

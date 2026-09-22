@@ -1,3 +1,4 @@
+import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
 import type { AgentPort } from "../agent/port.js";
@@ -5,10 +6,12 @@ import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
 import { createRunStoreWithConnection, type RunStoreKind } from "../runstore/createStore.js";
 import { resolveA2aConfigPath } from "../a2a/configDiscovery.js";
+import { ensureGlobalHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
 import { RunManager } from "../runtime/runManager.js";
+import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
   createRunChangeBus,
   getRunChangeBusFromWrappedStore,
@@ -55,6 +58,8 @@ export async function bootstrapStageflowHost(
   const invocationCwd = options.cwd ?? process.cwd();
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
+  ensureGlobalHome();
+  process.env[PI_CODING_AGENT_DIR_ENV] = path.join(ctx.globalHome, "agent");
   const agentDir = options.agentDir ?? getAgentDir();
   const rootDir = options.rootDir ?? ctx.projectRoot;
   const isGitProject =

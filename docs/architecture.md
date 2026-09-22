@@ -56,7 +56,7 @@ The envelope is the control-plane handoff; artifacts are the data-plane handoff.
 
 ## Persistence and recovery
 
-SQLite is the active `RunStore` adapter. State lives under `<git-root>/.stageflow/`, with per-run and per-attempt workspaces under `.stageflow/runs/`.
+SQLite is the active `RunStore` adapter. State lives under the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), with per-run and per-attempt workspaces under `runs/`. Per-project settings remain at `<git-root>/.stageflow/settings.json`. See [Data directory](data-directory.md).
 
 Stageflow persists:
 

@@ -19,8 +19,10 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
-  .stageflow/                 # runtime state at git root
+  .stageflow/                 # per-project settings only
 ```
+
+Run state (SQLite and workspaces) lives under the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), not under the git root. See [Data directory](data-directory.md).
 
 **Flat layout** — pipeline and task files may also live at the repo root (e.g. `hello.pipeline.yaml`, `my-task.task.yaml`) beside `stageflow.yaml`; validation and CLI accept any filesystem path. This repo uses a flat root for some pipelines under `tests/fixtures/`.
 
@@ -860,4 +862,4 @@ sf run \
   --task examples/hello-world/my-task.task.yaml
 ```
 
-Run state is stored under **`GIT_ROOT/.stageflow/`** regardless of which subdirectory you start `sf ui` from.
+Run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md). Catalog browse still uses the project git root regardless of which subdirectory you start `sf ui` from.
