@@ -24,7 +24,6 @@ import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
-import { createRunStore } from "./runstore/createStore.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
@@ -392,7 +391,6 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
-    const store = createRunStore({ rootDir: ctx.globalHome });
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {
@@ -401,7 +399,6 @@ async function main(argv: string[]): Promise<number> {
       });
       const { url, mcpUrl } = await startUiServer({
         agent: resolveAgentPort({ global: globalAgent }),
-        store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
@@ -420,7 +417,6 @@ async function main(argv: string[]): Promise<number> {
       });
       const { mcpUrl } = await startMcpServer({
         agent: resolveAgentPort({ global: globalAgent }),
-        store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,

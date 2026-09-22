@@ -6,7 +6,12 @@ import {
   type HandoffResult,
 } from "./handoffFormat.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStore } from "../runstore/createStore.js";
+import {
+  createRunStoreAfterHostEnsure,
+} from "../runstore/createStore.js";
+import {
+  ensureGlobalService,
+} from "../server/ensureGlobalService.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
 
@@ -306,7 +311,16 @@ export async function runEnvelopeCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: globalStageflowHome() });
+  const opened = await createRunStoreAfterHostEnsure(
+    { rootDir: globalStageflowHome() },
+    () => ensureGlobalService(),
+  );
+  if (!opened.ok) {
+    out.error(opened.message);
+    out.error(ENVELOPE_USAGE);
+    return 1;
+  }
+  const store = opened.store;
 
   let runContext: RunContext;
   try {

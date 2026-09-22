@@ -325,5 +325,8 @@ export function createA2aInvocations(
   connection?: Database.Database,
   rateLimiter?: RateLimiter,
 ): A2aInvocations {
+  if (!connection) {
+    throw new Error("A2A requires the Host SQLite connection");
+  }
   return new A2aInvocations(registry, manager, runStore, new A2aStore(rootDir, connection), rateLimiter);
 }

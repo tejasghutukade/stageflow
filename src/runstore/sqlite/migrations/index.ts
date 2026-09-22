@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { StoreSchemaError } from "../storeSchemaError.js";
 import { MIGRATION_001 } from "./001-baseline.js";
 
 export const CURRENT_SCHEMA_VERSION = MIGRATION_001.version;
@@ -19,6 +20,19 @@ export type SchemaMigrationRow = {
   min_stageflow_version: string;
 };
 
+function throwStoreSchemaTooNew(
+  db: Database.Database,
+  version: number,
+  maxKnown: number,
+): never {
+  const row = readSchemaMigrationRow(db, version);
+  const minVersion = row?.min_stageflow_version ?? "unknown";
+  throw new StoreSchemaError(
+    `store_schema_too_new: on_disk=${version} binary_max=${maxKnown} min_stageflow=${minVersion}`,
+    "store_schema_too_new",
+  );
+}
+
 export function readSchemaMigrationRow(
   db: Database.Database,
   version: number,
@@ -36,6 +50,24 @@ export function readSchemaMigrationRow(
     .get(version) as SchemaMigrationRow | undefined;
 }
 
+export function assertSchemaVersion(
+  db: Database.Database,
+  options?: { migrations?: SqliteMigration[] },
+): void {
+  const migrations = options?.migrations ?? DEFAULT_MIGRATIONS;
+  const version = db.pragma("user_version", { simple: true }) as number;
+  const maxKnown = migrations[migrations.length - 1]?.version ?? 0;
+  if (version > maxKnown) {
+    throwStoreSchemaTooNew(db, version, maxKnown);
+  }
+  if (version < maxKnown) {
+    throw new StoreSchemaError(
+      `store_schema_migration_required: on_disk=${version} binary_max=${maxKnown}`,
+      "store_schema_migration_required",
+    );
+  }
+}
+
 export function applyPendingMigrations(
   db: Database.Database,
   options?: { migrations?: SqliteMigration[] },
@@ -44,11 +76,7 @@ export function applyPendingMigrations(
   let version = db.pragma("user_version", { simple: true }) as number;
   const maxKnown = migrations[migrations.length - 1]?.version ?? 0;
   if (version > maxKnown) {
-    const row = readSchemaMigrationRow(db, version);
-    const minVersion = row?.min_stageflow_version ?? "unknown";
-    throw new Error(
-      `store_schema_too_new: on_disk=${version} binary_max=${maxKnown} min_stageflow=${minVersion}`,
-    );
+    throwStoreSchemaTooNew(db, version, maxKnown);
   }
   for (const migration of migrations) {
     if (migration.version <= version) continue;

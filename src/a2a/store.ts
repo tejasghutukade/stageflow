@@ -3,7 +3,6 @@ import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { resolveStoreRoot } from "../runstore/paths.js";
-import { applyPendingMigrations } from "../runstore/sqlite/migrations/index.js";
 import { MESSAGE_TOMBSTONE_RETENTION_MS, TERMINAL_RETENTION_MS } from "./limits.js";
 
 export type TaskState = "submitted" | "working" | "input-required" | "completed" | "failed";
@@ -55,25 +54,14 @@ export class A2aStore {
   private readonly ownsConnection: boolean;
 
   /**
-   * `connection`, when passed, is the SqliteRunStore's own connection to the same `state.db` file
-   * (see `createRunStoreWithConnection`) so the two stores share one transaction domain. Falls
-   * back to opening its own connection when no shared one is available (e.g. a caller-supplied
-   * non-SQLite `RunStore` in bootstrap).
+   * Uses the SqliteRunStore connection to the same `state.db` file so the two stores share one
+   * transaction domain. The Host must open the run store in migrate mode before constructing
+   * A2aStore.
    */
-  constructor(rootDir: string, connection?: Database.Database) {
-    const storeRoot = resolveStoreRoot(rootDir);
-    if (connection) {
-      this.db = connection;
-      this.ownsConnection = false;
-    } else {
-      this.db = new Database(path.join(storeRoot, "state.db"));
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("busy_timeout = 5000");
-      this.db.pragma("foreign_keys = ON");
-      applyPendingMigrations(this.db);
-      this.ownsConnection = true;
-    }
-    this.artifactsRoot = path.join(storeRoot, "a2a-artifacts");
+  constructor(rootDir: string, connection: Database.Database) {
+    this.db = connection;
+    this.ownsConnection = false;
+    this.artifactsRoot = path.join(resolveStoreRoot(rootDir), "a2a-artifacts");
   }
 
   close(): void {

@@ -2,7 +2,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { projectRun } from "../projection/projectRun.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStore } from "../runstore/createStore.js";
+import {
+  createRunStoreAfterHostEnsure,
+} from "../runstore/createStore.js";
+import {
+  ensureGlobalService,
+} from "../server/ensureGlobalService.js";
 import type { RunStatus } from "../runstore/port.js";
 import { isInsideDir } from "../runstore/workspaceLayout.js";
 
@@ -155,7 +160,15 @@ export async function runExportRunCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: globalStageflowHome() });
+  const opened = await createRunStoreAfterHostEnsure(
+    { rootDir: globalStageflowHome() },
+    () => ensureGlobalService(),
+  );
+  if (!opened.ok) {
+    out.error(opened.message);
+    return 1;
+  }
+  const store = opened.store;
 
   try {
     const detail = await store.readRun(runId);

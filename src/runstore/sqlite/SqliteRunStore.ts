@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
@@ -49,7 +50,13 @@ import {
   stageDir,
 } from "../workspaceLayout.js";
 import { importDiskRunsIfEmpty } from "./migrateFromDisk.js";
-import { applyPendingMigrations } from "./migrations/index.js";
+import {
+  applyPendingMigrations,
+  assertSchemaVersion,
+} from "./migrations/index.js";
+import { StoreSchemaError } from "./storeSchemaError.js";
+
+type SqliteRunStoreOpenerMode = "assert" | "migrate";
 import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type RunRow = {
@@ -306,8 +313,29 @@ export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
   private migratePromise: Promise<void>;
 
-  constructor(private readonly storeRoot: string) {
+  constructor(
+    private readonly storeRoot: string,
+    options?: { openerMode?: SqliteRunStoreOpenerMode },
+  ) {
+    const openerMode =
+      options?.openerMode ??
+      (process.env.VITEST === "true" ? "migrate" : "assert");
     const dbPath = path.join(storeRoot, "state.db");
+    if (openerMode === "assert") {
+      if (!existsSync(dbPath)) {
+        throw new StoreSchemaError(
+          "store_schema_migration_required: database file is missing",
+          "store_schema_migration_required",
+        );
+      }
+      this.db = new Database(dbPath);
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
+      this.db.pragma("foreign_keys = ON");
+      assertSchemaVersion(this.db);
+      this.migratePromise = Promise.resolve();
+      return;
+    }
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);

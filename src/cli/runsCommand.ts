@@ -6,7 +6,11 @@ import { projectWaitingGates } from "../mcp/waitingGates.js";
 import { completeCliRun } from "./runCommand.js";
 import { reportCliRun, type CliRunReportIo } from "./runOutput.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStore } from "../runstore/createStore.js";
+import {
+  createRunStore,
+  createRunStoreAfterHostEnsure,
+  storeNeedsHostMigration,
+} from "../runstore/createStore.js";
 import type { ListRunsFilter, RunStatus, RunStore } from "../runstore/port.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import {
@@ -332,6 +336,14 @@ const MUTATING_SUBCOMMANDS = new Set([
   "rerun",
 ]);
 
+const READ_ONLY_SUBCOMMANDS = new Set([
+  "list",
+  "show",
+  "verify",
+  "waiting",
+  "wait",
+]);
+
 export async function runRunsCommand(
   args: string[],
   options: {
@@ -390,6 +402,23 @@ export async function runRunsCommand(
         out.error(ensured.message);
       }
       return 1;
+    }
+  }
+
+  if (
+    READ_ONLY_SUBCOMMANDS.has(parsed.subcommand) &&
+    resolvedStore === undefined
+  ) {
+    if (storeNeedsHostMigration(globalStageflowHome())) {
+      const ensured = await ensureService();
+      if (!ensured.ok) {
+        if (parsed.json) {
+          printJson(out, { error: ensured.message, reason: ensured.reason });
+        } else {
+          out.error(ensured.message);
+        }
+        return 1;
+      }
     }
   }
 

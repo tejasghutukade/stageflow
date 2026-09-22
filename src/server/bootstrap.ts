@@ -66,7 +66,11 @@ export async function bootstrapStageflowHost(
   if (options.store) {
     rawStore = options.store;
   } else {
-    const created = createRunStoreWithConnection({ rootDir: ctx.globalHome, kind: options.storeKind });
+    const created = createRunStoreWithConnection({
+      rootDir: ctx.globalHome,
+      kind: options.storeKind,
+      openerMode: "migrate",
+    });
     rawStore = created.store;
     sqliteConnection = created.connection;
   }
