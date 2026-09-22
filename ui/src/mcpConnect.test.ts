@@ -33,10 +33,13 @@ describe("mcpEndpointUrl", () => {
     ).toBe("http://127.0.0.1:3847/mcp");
   });
 
-  it("falls back to the default URL off loopback", () => {
+  it("derives MCP URL from non-loopback console origins", () => {
+    expect(
+      mcpEndpointUrl({ hostname: "build-box", port: "3847", protocol: "http:" }),
+    ).toBe("http://build-box:3847/mcp");
     expect(
       mcpEndpointUrl({ hostname: "example.local", port: "3847", protocol: "http:" }),
-    ).toBe(DEFAULT_MCP_URL);
+    ).toBe("http://example.local:3847/mcp");
   });
 });
 

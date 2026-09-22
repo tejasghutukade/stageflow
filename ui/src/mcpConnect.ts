@@ -11,11 +11,6 @@ export function mcpEndpointUrl(
   options: { viteDev?: boolean } = {},
 ): string {
   if (options.viteDev) return DEFAULT_MCP_URL;
-  const loopback =
-    location.hostname === "127.0.0.1" ||
-    location.hostname === "localhost" ||
-    location.hostname === "[::1]";
-  if (!loopback) return DEFAULT_MCP_URL;
   const host =
     location.hostname === "localhost" || location.hostname === "[::1]"
       ? "127.0.0.1"

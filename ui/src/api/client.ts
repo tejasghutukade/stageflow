@@ -30,12 +30,14 @@ import type {
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
 } from "./types";
+import { authorizationHeaders } from "./controlToken";
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authorizationHeaders(),
       ...(init?.headers ?? {}),
     },
   });
@@ -81,7 +83,7 @@ export async function createPipelineWithDetails(
   try {
     const res = await fetch("/api/pipelines", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
       body: JSON.stringify(input),
     });
     const body = (await res.json().catch(() => ({}))) as PipelineListing & {
@@ -110,7 +112,7 @@ export async function createStageWithDetails(
   try {
     const res = await fetch("/api/stages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
       body: JSON.stringify(input),
     });
     const body = (await res.json().catch(() => ({}))) as CreatedStageListing & {
@@ -181,7 +183,7 @@ export async function postProviderApiKey(
       `/api/providers/${encodeURIComponent(providerId)}/login`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify({ authType: "api_key", apiKey }),
       },
     );
@@ -215,7 +217,7 @@ export async function postProviderLogout(
       `/api/providers/${encodeURIComponent(providerId)}/logout`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify({}),
       },
     );
@@ -249,7 +251,7 @@ export async function postProviderOauthLogin(
       `/api/providers/${encodeURIComponent(providerId)}/login`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify({ authType: "oauth" }),
       },
     );
@@ -294,7 +296,7 @@ export async function postProviderLoginAnswer(
       `/api/providers/${encodeURIComponent(providerId)}/login/${encodeURIComponent(sessionId)}/answer`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify({ value }),
       },
     );
@@ -329,7 +331,7 @@ export async function postProviderLoginCancel(
       `/api/providers/${encodeURIComponent(providerId)}/login/${encodeURIComponent(sessionId)}/cancel`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify({}),
       },
     );
@@ -382,7 +384,7 @@ export async function startRunWithDetails(
   try {
     const res = await fetch("/api/runs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
       body: JSON.stringify({ task, pipeline }),
     });
     const body = (await res.json().catch(() => ({}))) as {
@@ -500,7 +502,7 @@ export async function retryStageWithDetails(
       `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/retry`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
       },
     );
     const body = (await res.json().catch(() => ({}))) as {
@@ -594,7 +596,7 @@ export async function postFeedbackDecisionWithDetails(
       `/api/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/feedback-decision`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authorizationHeaders() },
         body: JSON.stringify(body),
       },
     );
@@ -647,6 +649,7 @@ export async function fetchRunArtifact(
 ): Promise<string> {
   const res = await fetch(
     `/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(relativePath)}`,
+    { headers: { ...authorizationHeaders() } },
   );
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
