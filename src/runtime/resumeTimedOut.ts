@@ -37,14 +37,17 @@ export type ResumeTimedOutContext = {
   operatorCatalog?: OperatorCatalog;
 };
 
-export function assertTimedOutStageEligible(
+export function assertResumableStage(
   status: string,
   events: ReadonlyArray<{ event: string; reason?: string }>,
 ): { ok: true } | { ok: false; reason: string; status: 409 } {
+  if (status === "interrupted") {
+    return { ok: true };
+  }
   if (status !== "failed") {
     return {
       ok: false,
-      reason: `Stage is not timed out (status=${status})`,
+      reason: `Stage is not resumable (status=${status})`,
       status: 409,
     };
   }

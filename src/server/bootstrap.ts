@@ -189,6 +189,7 @@ export async function bootstrapStageflowHost(
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
+  await manager.autoResumeInterruptedStages();
   await manager.resumeStalledSchedules();
   await manager.reenqueuePersistedQueuedRuns();
   await warnDurableRootDiskIfNeeded(ctx.globalHome, { env });

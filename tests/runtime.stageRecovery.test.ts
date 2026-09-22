@@ -444,6 +444,52 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     expect(execution.finished_at).toBeUndefined();
   });
 
+  it("auto-resume env unset leaves reconciled interrupted stages alone", async () => {
+    const previousAuto = process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    try {
+      const root = await mkdtemp(
+        path.join(tmpdir(), `sf-recovery-auto-off-${kind}-`),
+      );
+      const store = createRunStore({ rootDir: root, kind });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      await store.createStageExecution(run.runId, "build");
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 1 },
+      );
+      await store.updateRunStatus(run.runId, "running");
+
+      const manager = new RunManager({
+        agent: reconcileAgent(),
+        store,
+        cwd: fixtures,
+      });
+      await manager.reconcileOrphanedStages();
+      const auto = await manager.autoResumeInterruptedStages();
+      expect(auto).toEqual({ resumed: [], capped: [], skipped: [] });
+
+      const detail = await store.readRun(run.runId);
+      expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+        "interrupted",
+      );
+      const execution = await store.getStageExecution(run.runId, "build", 1);
+      expect(execution.auto_resume_count).toBe(0);
+    } finally {
+      if (previousAuto === undefined) {
+        delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+      } else {
+        process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = previousAuto;
+      }
+    }
+  });
+
   it("reconcileOrphanedStages on cancelled run terminalizes orphans without rewriting run status", async () => {
     const root = await mkdtemp(
       path.join(tmpdir(), `sf-recovery-cancelled-reconcile-${kind}-`),

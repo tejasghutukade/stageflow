@@ -131,6 +131,7 @@ export type StageExecution = {
   envelope: StageEnvelope | null;
   cost_usd?: number;
   usage?: StageUsage;
+  auto_resume_count: number;
 };
 
 export type StageExecutionPatch = {
@@ -141,6 +142,7 @@ export type StageExecutionPatch = {
   envelope?: StageEnvelope | null;
   cost_usd?: number;
   usage?: StageUsage;
+  auto_resume_count?: number;
 };
 
 /** The durable disposition of completion verification for one stage attempt. */
@@ -505,6 +507,8 @@ export interface RunStore {
     stageId: string,
     attempt: number,
   ): Promise<StageExecution>;
+  /** Latest attempt rows whose status is `interrupted` (targeted scan; not listRuns). */
+  listInterruptedStageExecutions(): Promise<StageExecution[]>;
   updateStageExecution(
     runId: string,
     stageId: string,

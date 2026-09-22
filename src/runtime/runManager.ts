@@ -19,7 +19,7 @@ import {
 import { newRunId } from "../runstore/paths.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
-  assertTimedOutStageEligible,
+  assertResumableStage,
   reconstructTimedOutAndContinue,
 } from "./resumeTimedOut.js";
 import { loadTaskFromYamlOutcome } from "../config/loadTask.js";
@@ -229,7 +229,12 @@ type SchedulingHalt = { halted: boolean };
 
 const DEFAULT_MAX_CONCURRENT = 3;
 const DEFAULT_MAX_QUEUED = 32;
+const DEFAULT_MAX_AUTO_RESUMES = 3;
 const STARTUP_RECONCILE_REASON = "orphaned_no_worker";
+const AUTO_RESUME_CAPPED_REASON = "auto_resume_capped";
+export const STAGEFLOW_AUTO_RESUME_INTERRUPTED =
+  "STAGEFLOW_AUTO_RESUME_INTERRUPTED";
+export const STAGEFLOW_MAX_AUTO_RESUMES = "STAGEFLOW_MAX_AUTO_RESUMES";
 const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
 const log = rootLogger.child({ component: "runtime" });
@@ -245,6 +250,25 @@ function parseMaxQueued(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_QUEUED;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_QUEUED;
+  return n;
+}
+
+export function isAutoResumeInterruptedEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = env[STAGEFLOW_AUTO_RESUME_INTERRUPTED];
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false";
+}
+
+export function parseMaxAutoResumes(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[STAGEFLOW_MAX_AUTO_RESUMES];
+  if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_AUTO_RESUMES;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_AUTO_RESUMES;
   return n;
 }
 
@@ -835,6 +859,78 @@ export class RunManager {
     return { reconciled };
   }
 
+  async autoResumeInterruptedStages(): Promise<{
+    resumed: Array<{ runId: string; stageId: string }>;
+    capped: Array<{ runId: string; stageId: string }>;
+    skipped: Array<{ runId: string; stageId: string; reason: string }>;
+  }> {
+    const resumed: Array<{ runId: string; stageId: string }> = [];
+    const capped: Array<{ runId: string; stageId: string }> = [];
+    const skipped: Array<{ runId: string; stageId: string; reason: string }> =
+      [];
+    if (!isAutoResumeInterruptedEnabled()) {
+      return { resumed, capped, skipped };
+    }
+    const maxAutoResumes = parseMaxAutoResumes();
+    const interrupted =
+      await this.options.store.listInterruptedStageExecutions();
+    for (const execution of interrupted) {
+      const runId = execution.run_id;
+      const stageId = execution.stage_id;
+      const attempt = execution.attempt;
+      if (execution.auto_resume_count >= maxAutoResumes) {
+        try {
+          await markStageInterrupted({
+            store: this.options.store,
+            runId,
+            stageId,
+            reason: AUTO_RESUME_CAPPED_REASON,
+            status: "interrupted",
+          });
+          capped.push({ runId, stageId });
+          log
+            .child({ run_id: runId, stage_id: stageId, attempt })
+            .info(
+              "auto_resume.capped",
+              `autoResumeInterruptedStages: capped ${runId}/${stageId} at ${execution.auto_resume_count}`,
+              { auto_resume_count: execution.auto_resume_count },
+            );
+        } catch (err) {
+          skipped.push({
+            runId,
+            stageId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+        continue;
+      }
+      try {
+        await this.options.store.updateStageExecution(runId, stageId, attempt, {
+          auto_resume_count: execution.auto_resume_count + 1,
+        });
+        const result = await this.resumeTimedOutStage(runId, stageId, {
+          source: "auto",
+        });
+        if (result.ok) {
+          resumed.push({ runId, stageId });
+        } else {
+          skipped.push({
+            runId,
+            stageId,
+            reason: result.reason ?? "auto resume failed",
+          });
+        }
+      } catch (err) {
+        skipped.push({
+          runId,
+          stageId,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return { resumed, capped, skipped };
+  }
+
   async resumeStalledSchedules(): Promise<Array<{ runId: string }>> {
     const resumed: Array<{ runId: string }> = [];
     const runs = await this.options.store.listRuns();
@@ -1354,6 +1450,7 @@ export class RunManager {
   async resumeTimedOutStage(
     runId: string,
     stageId: string,
+    options?: { source?: "explicit" | "auto" },
   ): Promise<RetryStageResult> {
     const resumeKey = waitKey(runId, stageId);
     if (this.resumeInFlight.has(resumeKey) || this.retryInFlight.has(resumeKey)) {
@@ -1378,7 +1475,7 @@ export class RunManager {
       this.resumeInFlight.delete(resumeKey);
       return { ok: false, reason: `Stage not found: ${stageId}`, status: 404 };
     }
-    const eligibility = assertTimedOutStageEligible(
+    const eligibility = assertResumableStage(
       stageSnap.status,
       stageSnap.events,
     );
@@ -1392,6 +1489,14 @@ export class RunManager {
       stageId,
     );
     const attemptIndex = latest?.attempt ?? 1;
+    if ((options?.source ?? "explicit") === "explicit" && latest !== null) {
+      await this.options.store.updateStageExecution(
+        runId,
+        stageId,
+        attemptIndex,
+        { auto_resume_count: 0 },
+      );
+    }
     const wasActive = this.active.has(runId);
     const tracked = await this.ensureResumeTracked(runId);
     if (!tracked.ok) {

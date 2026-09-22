@@ -3,6 +3,7 @@ import { StoreSchemaError } from "../storeSchemaError.js";
 import { MIGRATION_001 } from "./001-baseline.js";
 import { MIGRATION_002 } from "./002-repository-binding.js";
 import { MIGRATION_003 } from "./003-run-lifecycle.js";
+import { MIGRATION_004 } from "./004-auto-resume-count.js";
 
 export type SqliteMigration = {
   version: number;
@@ -15,6 +16,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_001,
   MIGRATION_002,
   MIGRATION_003,
+  MIGRATION_004,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -361,7 +361,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "resume_stage",
     {
       description:
-        "Resume a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
+        "Resume an interrupted stage or a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),

@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   envelope_json TEXT,
   cost_usd REAL,
   usage_json TEXT,
+  auto_resume_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (run_id, stage_id, attempt),
   FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
@@ -285,12 +286,27 @@ CREATE TABLE IF NOT EXISTS stage_executions (
   started_at TEXT,
   finished_at TEXT,
   envelope_json TEXT,
+  auto_resume_count INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (run_id, stage_id, attempt),
   FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
 CREATE INDEX IF NOT EXISTS idx_stage_executions_run_stage
   ON stage_executions (run_id, stage_id, attempt);
 `);
+}
+
+export function ensureStageExecutionAutoResumeCountColumn(
+  db: Database.Database,
+): void {
+  const cols = db
+    .prepare(`PRAGMA table_info(stage_executions)`)
+    .all() as { name: string }[];
+  if (cols.length === 0) return;
+  if (!cols.some((c) => c.name === "auto_resume_count")) {
+    db.exec(
+      `ALTER TABLE stage_executions ADD COLUMN auto_resume_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
 }
 
 export function ensureStageExecutionVerificationOutcomeColumn(db: Database.Database): void {
@@ -432,6 +448,7 @@ export function applyBaselineSchema(db: Database.Database): void {
   ensureStageExecutionsTable(db);
   ensureStageExecutionVerificationOutcomeColumn(db);
   ensureStageExecutionCostColumns(db);
+  ensureStageExecutionAutoResumeCountColumn(db);
   ensureStageEventsAttemptColumn(db);
   ensureVerificationCheckResultsTable(db);
   ensureFeedbackReplayStagePassEnvelopeColumn(db);

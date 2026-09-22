@@ -115,7 +115,11 @@ type ExecutionRow = {
   envelope_json: string | null;
   cost_usd: number | null;
   usage_json: string | null;
+  auto_resume_count: number | null;
 };
+
+const EXECUTION_SELECT_COLS =
+  `run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json, auto_resume_count`;
 
 type VerificationCheckResultRow = {
   run_id: string;
@@ -214,7 +218,10 @@ function executionFromRow(row: ExecutionRow): StageExecution {
       ? (JSON.parse(row.envelope_json) as StageExecution["envelope"])
       : null,
     ...(row.cost_usd != null ? { cost_usd: row.cost_usd } : {}),
-    ...(row.usage_json != null ? { usage: JSON.parse(row.usage_json) as StageUsage } : {}),
+    ...(row.usage_json != null
+      ? { usage: JSON.parse(row.usage_json) as StageUsage }
+      : {}),
+    auto_resume_count: row.auto_resume_count ?? 0,
   };
 }
 
@@ -744,7 +751,7 @@ export class SqliteRunStore implements RunStore {
         });
       const row = this.db
         .prepare(
-          `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+          `SELECT ${EXECUTION_SELECT_COLS}
            FROM stage_executions
            WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
         )
@@ -760,7 +767,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const rows = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt ASC`,
@@ -776,7 +783,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ?
          ORDER BY attempt DESC
@@ -805,7 +812,7 @@ export class SqliteRunStore implements RunStore {
     await this.ready();
     const row = this.db
       .prepare(
-        `SELECT run_id, stage_id, attempt, status, verification_outcome, started_at, finished_at, envelope_json, cost_usd, usage_json
+        `SELECT ${EXECUTION_SELECT_COLS}
          FROM stage_executions
          WHERE run_id = ? AND stage_id = ? AND attempt = ?`,
       )
@@ -816,6 +823,19 @@ export class SqliteRunStore implements RunStore {
       );
     }
     return executionFromRow(row);
+  }
+
+  async listInterruptedStageExecutions(): Promise<StageExecution[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT ${EXECUTION_SELECT_COLS}
+         FROM stage_executions
+         WHERE status = 'interrupted'
+         ORDER BY run_id ASC, stage_id ASC, attempt ASC`,
+      )
+      .all() as ExecutionRow[];
+    return rows.map(executionFromRow);
   }
 
   async updateStageExecution(
@@ -859,6 +879,10 @@ export class SqliteRunStore implements RunStore {
     if (patch.usage !== undefined) {
       sets.push("usage_json = @usage_json");
       params.usage_json = JSON.stringify(patch.usage);
+    }
+    if (patch.auto_resume_count !== undefined) {
+      sets.push("auto_resume_count = @auto_resume_count");
+      params.auto_resume_count = patch.auto_resume_count;
     }
     if (sets.length === 0) return;
     const result = this.db
