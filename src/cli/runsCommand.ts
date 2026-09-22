@@ -23,6 +23,7 @@ import {
   httpAbandonStage,
   httpCancelRun,
   httpDecideFeedbackLoop,
+  httpDeleteRun,
   httpDeliverAnswer,
   httpRecoverManualStageUntilStop,
   httpRerun,
@@ -48,6 +49,7 @@ export const RUNS_USAGE = `Usage:
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
   sf runs cancel --run <runId> --reason <text> [--json]
+  sf runs delete --run <runId> [--force] [--json]
   sf runs rerun --run <runId> [--pinned] [--json]`;
 
 export type RunsCommandIo = {
@@ -120,6 +122,7 @@ const FEEDBACK_DECIDE_FLAGS = new Set([
 const RETRY_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const ABANDON_FLAGS = new Set(["--run", "--stage", "--json", "--help", "-h"]);
 const CANCEL_FLAGS = new Set(["--run", "--reason", "--json", "--help", "-h"]);
+const DELETE_FLAGS = new Set(["--run", "--force", "--json", "--help", "-h"]);
 const RERUN_FLAGS = new Set(["--run", "--pinned", "--json", "--help", "-h"]);
 
 const VALUE_FLAGS = new Set([
@@ -154,6 +157,7 @@ type ParsedRunsArgs = {
   guidance?: string;
   stop?: boolean;
   pinned?: boolean;
+  force?: boolean;
   loopId?: string;
   decision?: string;
   reason?: string;
@@ -185,6 +189,8 @@ function flagsFor(subcommand: string): Set<string> | undefined {
       return ABANDON_FLAGS;
     case "cancel":
       return CANCEL_FLAGS;
+    case "delete":
+      return DELETE_FLAGS;
     case "rerun":
       return RERUN_FLAGS;
     default:
@@ -220,6 +226,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
   let guidance: string | undefined;
   let stop = false;
   let pinned = false;
+  let force = false;
   let loopId: string | undefined;
   let decision: string | undefined;
   let reason: string | undefined;
@@ -236,6 +243,9 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     } else if (arg === "--pinned") {
       if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
       pinned = true;
+    } else if (arg === "--force") {
+      if (!allowed.has(arg)) throw new Error(`Unknown flag: ${arg}`);
+      force = true;
     } else if (VALUE_FLAGS.has(arg)) {
       if (!allowed.has(arg)) {
         throw new Error(`Unknown flag: ${arg}`);
@@ -280,6 +290,7 @@ function parseRunsArgs(args: string[]): ParsedRunsArgs {
     guidance,
     stop,
     pinned,
+    force,
     loopId,
     decision,
     reason,
@@ -347,6 +358,7 @@ const MUTATING_SUBCOMMANDS = new Set([
   "recover",
   "abandon",
   "cancel",
+  "delete",
   "rerun",
 ]);
 
@@ -872,6 +884,34 @@ export async function runRunsCommand(
         return usageError(out, "Missing --run and/or --reason");
       }
       const result = await httpCancelRun(base, parsed.runId, parsed.reason);
+      if (!result.ok) {
+        const payload: Record<string, unknown> = { error: result.reason };
+        if (result.status !== undefined) payload.status = result.status;
+        if (parsed.json) {
+          printJson(out, payload);
+        } else {
+          out.error(result.reason);
+        }
+        return 1;
+      }
+      if (parsed.json) {
+        printJson(out, {
+          ok: true,
+          runId: result.runId,
+        });
+      } else {
+        out.log(result.runId);
+      }
+      return 0;
+    }
+
+    case "delete": {
+      if (!parsed.runId) {
+        return usageError(out, "Missing --run");
+      }
+      const result = await httpDeleteRun(base, parsed.runId, {
+        force: parsed.force === true,
+      });
       if (!result.ok) {
         const payload: Record<string, unknown> = { error: result.reason };
         if (result.status !== undefined) payload.status = result.status;

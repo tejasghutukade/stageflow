@@ -231,3 +231,123 @@ describe("MCP/REST/CLI cancel_run lifecycle", () => {
     }
   });
 });
+
+describe("MCP/REST/CLI delete_run lifecycle", () => {
+  it("MCP delete_run removes a terminal run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(planted.runId, "build", {
+        event: "started",
+      });
+      await store.updateRunStatus(planted.runId, "succeeded");
+
+      const deleted = await mcpCall(base, "delete_run", {
+        runId: planted.runId,
+      });
+      expect(deleted.isError).toBe(false);
+      expect(deleted.payload).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+      await expect(store.readRun(planted.runId)).rejects.toThrow(/Run not found/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("REST DELETE /api/runs/:runId returns 200 and force cancels then deletes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-rest-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const terminal = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(terminal.runId, "failed");
+      const res = await fetch(`${base}/api/runs/${terminal.runId}`, {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        ok: true,
+        runId: terminal.runId,
+      });
+      await expect(store.readRun(terminal.runId)).rejects.toThrow(/Run not found/);
+
+      const active = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.appendStageEvent(active.runId, "build", { event: "started" });
+      await store.updateRunStatus(active.runId, "running");
+
+      const conflict = await fetch(`${base}/api/runs/${active.runId}`, {
+        method: "DELETE",
+      });
+      expect(conflict.status).toBe(409);
+
+      const forced = await fetch(
+        `${base}/api/runs/${active.runId}?force=true`,
+        { method: "DELETE" },
+      );
+      expect(forced.status).toBe(200);
+      expect(await forced.json()).toEqual({
+        ok: true,
+        runId: active.runId,
+      });
+      await expect(store.readRun(active.runId)).rejects.toThrow(/Run not found/);
+
+      const missing = await fetch(`${base}/api/runs/no-such-run`, {
+        method: "DELETE",
+      });
+      expect(missing.status).toBe(404);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("CLI sf runs delete reaches the same deleteRun", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-cli-delete-"));
+    const { store, server, base } = await withServer(root);
+    try {
+      const planted = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+      await store.updateRunStatus(planted.runId, "succeeded");
+
+      const cap = captureIo();
+      const code = await runRunsCommand(
+        ["delete", "--run", planted.runId, "--json"],
+        {
+          cwd: fixtures,
+          hostBaseUrl: base,
+          ensureService: async () => ({
+            ok: true as const,
+            alreadyRunning: true as const,
+          }),
+          io: cap.io,
+        },
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(cap.stdout.join("\n"))).toEqual({
+        ok: true,
+        runId: planted.runId,
+      });
+      await expect(store.readRun(planted.runId)).rejects.toThrow(/Run not found/);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});

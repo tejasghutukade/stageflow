@@ -35,6 +35,7 @@ import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type {
   AbandonStageResult,
   CancelRunResult,
+  DeleteRunResult,
   RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -151,7 +152,10 @@ async function serveStatic(
   return true;
 }
 
-function isMutatingApi(method: string, pathname: string): boolean {
+export function isMutatingApi(method: string, pathname: string): boolean {
+  if (method === "DELETE") {
+    return /^\/api\/runs\/[^/]+$/.test(pathname);
+  }
   if (method !== "POST") return false;
   return (
     pathname === "/api/runs" ||
@@ -781,6 +785,28 @@ export function createOperatorRoutes(
             return true;
           }
           json(res, 202, {
+            ok: true,
+            runId: result.runId,
+          });
+          return true;
+        }
+
+        const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/);
+        if (method === "DELETE" && deleteMatch) {
+          const runId = decodeURIComponent(deleteMatch[1] ?? "");
+          const forceParam = url.searchParams.get("force");
+          const force = forceParam === "true" || forceParam === "1";
+          const result = await manager.deleteRun(runId, {
+            force,
+            channel: "rest",
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<DeleteRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
             ok: true,
             runId: result.runId,
           });

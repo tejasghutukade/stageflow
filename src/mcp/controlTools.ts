@@ -5,6 +5,7 @@ import { findProjectRoot } from "../project/findProjectRoot.js";
 import type {
   AbandonStageResult,
   CancelRunResult,
+  DeleteRunResult,
 } from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
@@ -422,6 +423,35 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       const result = await manager.cancelRun(runId, reason);
       if (!result.ok) {
         const fail = result as Extract<CancelRunResult, { ok: false }>;
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      return textResult({
+        ok: true,
+        runId: result.runId,
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_run",
+    {
+      description:
+        "Hard-delete a terminal run (store rows, workspace, worktree, run branch, and A2A tasks/artifacts). Active runs (created/queued/running) require force: true, which cancels first then deletes. Irreversible.",
+      inputSchema: z.object({
+        runId: z.string(),
+        force: z.boolean().optional(),
+      }),
+    },
+    async ({ runId, force }) => {
+      const result = await manager.deleteRun(runId, {
+        force,
+        channel: "mcp",
+      });
+      if (!result.ok) {
+        const fail = result as Extract<DeleteRunResult, { ok: false }>;
         return textResult(
           { error: fail.reason, status: fail.status },
           true,

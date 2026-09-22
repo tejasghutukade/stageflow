@@ -263,4 +263,22 @@ export class A2aStore {
     const removedMessages = this.db.prepare("DELETE FROM a2a_messages WHERE created_at < ?").run(messageCutoff).changes;
     return { removedTasks: expiredTasks.length, removedMessages };
   }
+
+  /** Deletes every A2A task (and frozen artifact files) bound to a Stageflow run. */
+  async deleteByRunId(runId: string): Promise<{ removedTasks: number }> {
+    const tasks = this.db
+      .prepare("SELECT task_id FROM a2a_tasks WHERE run_id = ?")
+      .all(runId) as Array<{ task_id: string }>;
+    for (const { task_id: taskId } of tasks) {
+      for (const artifact of this.listArtifacts(taskId)) {
+        await unlink(artifact.content_path).catch(() => undefined);
+      }
+      this.db.transaction(() => {
+        this.db.prepare("DELETE FROM a2a_artifacts WHERE task_id = ?").run(taskId);
+        this.db.prepare("DELETE FROM a2a_messages WHERE task_id = ?").run(taskId);
+        this.db.prepare("DELETE FROM a2a_tasks WHERE task_id = ?").run(taskId);
+      })();
+    }
+    return { removedTasks: tasks.length };
+  }
 }

@@ -74,6 +74,8 @@ import {
   OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "./stageRecovery.js";
+import { deleteRunEverywhere } from "./runDeletion.js";
+import type { A2aStore } from "../a2a/store.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import {
   blocksGenericRetry,
@@ -155,6 +157,14 @@ export type CancelRunResult =
   | { ok: true; runId: string }
   | { ok: false; reason: string; status?: number };
 
+export type DeleteRunChannel = "mcp" | "rest" | "cli";
+
+export type DeleteRunResult =
+  | { ok: true; runId: string }
+  | { ok: false; reason: string; status?: number };
+
+export const FORCE_DELETE_CANCEL_REASON = "delete_run: force";
+
 export type DecideFeedbackLoopResult =
   | {
       ok: true;
@@ -213,6 +223,7 @@ export class RunManager {
   private readonly maxActiveStagesPerRun: number;
   private readonly executionMode: StageExecutionMode;
   private readonly stageProcessLauncher: StageProcessLauncher | undefined;
+  private a2aStore: A2aStore | undefined;
   private readonly hitl: StageHitlController;
   private readonly attachedWaiting = new Set<string>();
   private readonly retryCoordinator = new RunRetryCoordinator();
@@ -259,11 +270,13 @@ export class RunManager {
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
+      a2aStore?: A2aStore;
     },
   ) {
     this.cwd = options.cwd ?? process.cwd();
     this.projectRoot = options.projectRoot ?? this.cwd;
     this.isGitProject = options.isGitProject ?? false;
+    this.a2aStore = options.a2aStore;
     this.maxConcurrent =
       options.maxConcurrent ??
       readMaxConcurrentFromGlobal() ??
@@ -702,6 +715,100 @@ export class RunManager {
     }
 
     return { ok: true, runId };
+  }
+
+  setA2aStore(store: A2aStore): void {
+    this.a2aStore = store;
+  }
+
+  async deleteRun(
+    runId: string,
+    options: { force?: boolean; channel: DeleteRunChannel } = {
+      channel: "rest",
+    },
+  ): Promise<DeleteRunResult> {
+    const force = options.force === true;
+    const channel = options.channel;
+
+    let meta;
+    try {
+      meta = await this.options.store.readRunMeta(runId);
+    } catch {
+      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+    }
+
+    const activeStatus =
+      meta.status === "created" ||
+      meta.status === "queued" ||
+      meta.status === "running";
+    if (activeStatus && !force) {
+      return {
+        ok: false,
+        reason: `Run is ${meta.status} and cannot be deleted without force`,
+        status: 409,
+      };
+    }
+
+    if (activeStatus && force) {
+      const cancelled = await this.cancelRun(runId, FORCE_DELETE_CANCEL_REASON);
+      if (!cancelled.ok && cancelled.status !== 404) {
+        return cancelled;
+      }
+      try {
+        await this.waitForActiveClear(runId);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: err instanceof Error ? err.message : String(err),
+          status: 500,
+        };
+      }
+    }
+
+    const a2aStore = this.a2aStore;
+    if (a2aStore === undefined) {
+      return {
+        ok: false,
+        reason: "A2A store is not available for delete_run",
+        status: 500,
+      };
+    }
+
+    try {
+      await deleteRunEverywhere(this.options.store, a2aStore, runId);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.startsWith("Run not found:")) {
+        return { ok: false, reason: message, status: 404 };
+      }
+      return { ok: false, reason: message, status: 500 };
+    }
+
+    console.info(
+      JSON.stringify({
+        event: "delete_run",
+        runId,
+        force,
+        channel,
+      }),
+    );
+
+    return { ok: true, runId };
+  }
+
+  private async waitForActiveClear(
+    runId: string,
+    timeoutMs = 30_000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.active.has(runId)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for run ${runId} to leave the active set`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   }
 
   async startRunOnce(

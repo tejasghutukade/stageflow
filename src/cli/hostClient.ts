@@ -7,6 +7,7 @@ import type {
   AbandonStageResult,
   CancelRunResult,
   DecideFeedbackLoopResult,
+  DeleteRunResult,
   StartRunResult,
   StopManualRecoveryResult,
 } from "../runtime/runManager.js";
@@ -330,6 +331,27 @@ export async function httpCancelRun(
     return { ok: true, runId: parsed.runId };
   }
   return { ok: false, reason: extractError(body, status), status };
+}
+
+export async function httpDeleteRun(
+  base: string,
+  runId: string,
+  options?: { force?: boolean },
+): Promise<DeleteRunResult> {
+  const forceQs = options?.force ? "?force=true" : "";
+  const res = await fetch(`${base}/api/runs/${enc(runId)}${forceQs}`, {
+    method: "DELETE",
+  });
+  const body = await parseJsonBody(res);
+  if (res.status === 200) {
+    const parsed = body as { runId: string };
+    return { ok: true, runId: parsed.runId };
+  }
+  return {
+    ok: false,
+    reason: extractError(body, res.status),
+    status: res.status,
+  };
 }
 
 export function resolveAbsolute(cwd: string, maybeRelative: string): string {

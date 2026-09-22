@@ -1,6 +1,7 @@
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { createA2aHost, type A2aHost } from "../a2a/server.js";
+import { A2aStore } from "../a2a/store.js";
 import type { AgentPort } from "../agent/port.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type Database from "better-sqlite3";
@@ -52,6 +53,20 @@ export type StageflowHostBootstrap = {
   mcpHandler: McpHttpHandler;
 };
 
+function sqliteConnectionFromStore(
+  store: RunStore,
+): Database.Database | undefined {
+  const connection = (store as { connection?: unknown }).connection;
+  if (
+    connection !== undefined &&
+    connection !== null &&
+    typeof (connection as { prepare?: unknown }).prepare === "function"
+  ) {
+    return connection as Database.Database;
+  }
+  return undefined;
+}
+
 export async function bootstrapStageflowHost(
   options: StageflowHostOptions,
 ): Promise<StageflowHostBootstrap> {
@@ -68,8 +83,12 @@ export async function bootstrapStageflowHost(
       : ctx.isGitProject;
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
+  const storeRootDir = options.store
+    ? (options.rootDir ?? ctx.globalHome)
+    : ctx.globalHome;
   if (options.store) {
     rawStore = options.store;
+    sqliteConnection = sqliteConnectionFromStore(rawStore);
   } else {
     const created = createRunStoreWithConnection({
       rootDir: ctx.globalHome,
@@ -79,6 +98,10 @@ export async function bootstrapStageflowHost(
     rawStore = created.store;
     sqliteConnection = created.connection;
   }
+  const a2aStore =
+    sqliteConnection !== undefined
+      ? new A2aStore(storeRootDir, sqliteConnection)
+      : undefined;
   const boundBus = isRunStoreWrapped(rawStore)
     ? getRunChangeBusFromWrappedStore(rawStore)
     : undefined;
@@ -102,6 +125,7 @@ export async function bootstrapStageflowHost(
     store,
     maxConcurrent: options.maxConcurrent,
     operatorCatalog: { cwd, agentDir },
+    a2aStore,
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
@@ -122,7 +146,13 @@ export async function bootstrapStageflowHost(
   );
   return {
     a2a: await createA2aHost(
-      { manager, runStore: store, rootDir: ctx.globalHome, connection: sqliteConnection },
+      {
+        manager,
+        runStore: store,
+        rootDir: storeRootDir,
+        connection: sqliteConnection,
+        a2aStore,
+      },
       resolveA2aConfigPath(rootDir),
     ),
     cwd,

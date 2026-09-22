@@ -335,9 +335,13 @@ export function createA2aInvocations(
   rootDir: string,
   connection?: Database.Database,
   rateLimiter?: RateLimiter,
+  a2aStore?: A2aStore,
 ): A2aInvocations {
-  if (!connection) {
+  const store =
+    a2aStore ??
+    (connection !== undefined ? new A2aStore(rootDir, connection) : undefined);
+  if (!store) {
     throw new Error("A2A requires the Host SQLite connection");
   }
-  return new A2aInvocations(registry, manager, runStore, new A2aStore(rootDir, connection), rateLimiter);
+  return new A2aInvocations(registry, manager, runStore, store, rateLimiter);
 }

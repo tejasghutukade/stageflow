@@ -495,6 +495,33 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async deleteRun(runId: string): Promise<void> {
+    await this.ready();
+    const deleteAll = this.db.transaction(() => {
+      const exists = this.db
+        .prepare(`SELECT 1 AS ok FROM runs WHERE run_id = ?`)
+        .get(runId) as { ok: number } | undefined;
+      if (exists === undefined) {
+        throw new Error(`Run not found: ${runId}`);
+      }
+      this.db.prepare(`DELETE FROM stage_events WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM verification_check_results WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM stage_executions WHERE run_id = ?`).run(runId);
+      this.db
+        .prepare(`DELETE FROM feedback_replay_stage_passes WHERE run_id = ?`)
+        .run(runId);
+      this.db.prepare(`DELETE FROM fork_generations WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_replays WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM feedback_loops WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM stages WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM run_submissions WHERE run_id = ?`).run(runId);
+      this.db.prepare(`DELETE FROM runs WHERE run_id = ?`).run(runId);
+    });
+    deleteAll();
+  }
+
   async updatePipelineDag(
     runId: string,
     dag: RunPipelineDagSnapshot,

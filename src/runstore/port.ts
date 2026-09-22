@@ -450,6 +450,8 @@ export interface RunStore {
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
   setCancelReason(runId: string, reason: string): Promise<void>;
+  /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
+  deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
   /** Opaque run workspace root for agents and artifact tools. */
