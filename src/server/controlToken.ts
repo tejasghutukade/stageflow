@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { isLoopbackHostname } from "./allowedHosts.js";
 
 export type ControlScope = "read" | "drive";
@@ -23,40 +23,11 @@ function validateToken(token: string, label: string): string {
   return token;
 }
 
-function readTokenFromEnv(
-  env: NodeJS.ProcessEnv,
-  plainKey: string,
-  fileKey: string,
-): string | undefined {
-  const plain = env[plainKey];
-  const filePath = env[fileKey];
-  const hasPlain = plain !== undefined && plain.length > 0;
-  const hasFile = filePath !== undefined && filePath.length > 0;
-  if (hasPlain && hasFile) {
-    throw new Error(
-      `Set only one of ${plainKey} or ${fileKey}, not both`,
-    );
-  }
-  if (hasFile) {
-    return readFileSync(filePath!, "utf8").replace(/\r?\n$/, "");
-  }
-  if (hasPlain) return plain;
-  return undefined;
-}
-
 export function loadControlTokens(
   env: NodeJS.ProcessEnv = process.env,
 ): ControlTokens {
-  const driveRaw = readTokenFromEnv(
-    env,
-    "STAGEFLOW_CONTROL_TOKEN",
-    "STAGEFLOW_CONTROL_TOKEN_FILE",
-  );
-  const readRaw = readTokenFromEnv(
-    env,
-    "STAGEFLOW_READ_TOKEN",
-    "STAGEFLOW_READ_TOKEN_FILE",
-  );
+  const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
+  const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
   return {
     driveDigest: driveRaw
       ? digest(validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN"))
@@ -72,20 +43,12 @@ export function resolveClientBearerToken(
   method: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const driveRaw = readTokenFromEnv(
-    env,
-    "STAGEFLOW_CONTROL_TOKEN",
-    "STAGEFLOW_CONTROL_TOKEN_FILE",
-  );
+  const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
   if (driveRaw !== undefined) {
     return validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN");
   }
   if (method === "GET" || method === "HEAD") {
-    const readRaw = readTokenFromEnv(
-      env,
-      "STAGEFLOW_READ_TOKEN",
-      "STAGEFLOW_READ_TOKEN_FILE",
-    );
+    const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
     if (readRaw !== undefined) {
       return validateToken(readRaw, "STAGEFLOW_READ_TOKEN");
     }

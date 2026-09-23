@@ -257,7 +257,11 @@ const log = rootLogger.child({ component: "runtime" });
 function parseMaxConcurrent(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === "") return DEFAULT_MAX_CONCURRENT;
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 1) return DEFAULT_MAX_CONCURRENT;
+  if (!Number.isFinite(n) || n < 1 || String(n) !== raw.trim()) {
+    throw new Error(
+      `Invalid value for STAGEFLOW_MAX_CONCURRENT_RUNS: ${JSON.stringify(raw)}`,
+    );
+  }
   return n;
 }
 
@@ -470,6 +474,7 @@ export class RunManager {
   private trackingGeneration = 0;
   private maxConcurrent: number;
   private readonly maxQueued: number;
+  private readonly maxConcurrentPerProject: number | undefined;
   private readonly maxActiveStagesPerRun: number;
   private readonly executionMode: StageExecutionMode;
   private readonly stageProcessLauncher: StageProcessLauncher | undefined;
@@ -518,6 +523,8 @@ export class RunManager {
       operatorCatalog?: OperatorCatalog;
       seams?: HitlSeams;
       maxConcurrent?: number;
+      maxQueued?: number;
+      maxConcurrentPerProject?: number;
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
@@ -538,7 +545,9 @@ export class RunManager {
       options.maxConcurrent ??
       readMaxConcurrentFromGlobal() ??
       parseMaxConcurrent(process.env.STAGEFLOW_MAX_CONCURRENT_RUNS);
-    this.maxQueued = parseMaxQueued(process.env.STAGEFLOW_MAX_QUEUED);
+    this.maxQueued =
+      options.maxQueued ?? parseMaxQueued(process.env.STAGEFLOW_MAX_QUEUED);
+    this.maxConcurrentPerProject = options.maxConcurrentPerProject;
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
       options.maxActiveStagesPerRun,

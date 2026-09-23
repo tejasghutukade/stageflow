@@ -26,6 +26,10 @@ import {
   resolveMcpStateless,
   type McpHttpHandler,
 } from "../mcp/server.js";
+import {
+  loadHostConfig,
+  type HostConfig,
+} from "../config/hostConfig.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -41,6 +45,9 @@ export type StageflowHostOptions = {
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
   env?: NodeJS.ProcessEnv;
+  hostConfig?: HostConfig;
+  /** Skip HostConfig load (tests that inject store/manager pieces only). */
+  skipHostConfig?: boolean;
 };
 
 export type StageflowHostBootstrap = {
@@ -55,6 +62,7 @@ export type StageflowHostBootstrap = {
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
   mcpHandler: McpHttpHandler;
+  hostConfig?: HostConfig;
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
@@ -134,6 +142,21 @@ export async function bootstrapStageflowHost(
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
   ensureGlobalHome();
+  const hostConfig =
+    options.hostConfig ??
+    (options.skipHostConfig
+      ? undefined
+      : loadHostConfig({
+          env,
+          homeDir: ctx.globalHome,
+          overrides:
+            options.maxConcurrent !== undefined
+              ? { maxConcurrentRuns: options.maxConcurrent }
+              : undefined,
+        }));
+  for (const warning of hostConfig?.warnings ?? []) {
+    console.warn(`stageflow: ${warning}`);
+  }
   process.env[PI_CODING_AGENT_DIR_ENV] = path.join(ctx.globalHome, "agent");
   const agentDir = options.agentDir ?? getAgentDir();
   const rootDir = options.rootDir ?? ctx.projectRoot;
@@ -183,7 +206,10 @@ export async function bootstrapStageflowHost(
     projectRoot: rootDir,
     isGitProject,
     store,
-    maxConcurrent: options.maxConcurrent,
+    maxConcurrent:
+      options.maxConcurrent ?? hostConfig?.maxConcurrentRuns,
+    maxQueued: hostConfig?.maxQueued,
+    maxConcurrentPerProject: hostConfig?.maxConcurrentRunsPerProject,
     operatorCatalog: { cwd, agentDir },
     a2aStore,
   });
@@ -232,6 +258,7 @@ export async function bootstrapStageflowHost(
     mcpStateless,
     providerAuthContext: options.providerAuthContext,
     mcpHandler,
+    ...(hostConfig !== undefined ? { hostConfig } : {}),
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
   };
