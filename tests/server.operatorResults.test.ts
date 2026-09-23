@@ -1,54 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
-  inferRetryStageErrorCode,
   mapRetryStageFailure,
   mapStartFailure,
   mapStoreLookupError,
 } from "../src/server/operatorResults.js";
 
-describe("inferRetryStageErrorCode", () => {
-  it("maps retry-in-progress reasons", () => {
-    expect(
-      inferRetryStageErrorCode("Retry already in progress for run r stage s"),
-    ).toBe("retry_in_progress");
-  });
-
-  it("maps waiting-for-input reasons", () => {
-    expect(
-      inferRetryStageErrorCode(
-        "Stage is waiting for input and cannot be retried",
-      ),
-    ).toBe("hitl_not_retriable");
-  });
-
-  it("maps orchestration and run-not-failed reasons", () => {
-    expect(
-      inferRetryStageErrorCode("Run r already has active orchestration"),
-    ).toBe("run_not_retryable");
-    expect(
-      inferRetryStageErrorCode("Run is not failed (status=running)"),
-    ).toBe("run_not_retryable");
-  });
-
-  it("maps stage-not-failed reasons", () => {
-    expect(
-      inferRetryStageErrorCode("Stage is not failed (status=succeeded)"),
-    ).toBe("stage_not_failed");
-  });
-
-  it("returns undefined for unknown reasons", () => {
-    expect(inferRetryStageErrorCode("something else went wrong")).toBe(
-      undefined,
-    );
-  });
-});
-
 describe("mapRetryStageFailure", () => {
-  it("includes code when inferred and omits ok/status", () => {
+  it("forwards site-produced code and omits ok/status", () => {
     const mapped = mapRetryStageFailure({
       ok: false,
       reason: "Stage is waiting for input and cannot be retried",
       status: 409,
+      code: "hitl_not_retriable",
     });
     expect(mapped).toEqual({
       error: "Stage is waiting for input and cannot be retried",
@@ -58,16 +21,36 @@ describe("mapRetryStageFailure", () => {
     expect(mapped).not.toHaveProperty("status");
   });
 
-  it("omits code when reason does not match", () => {
+  it("does not alter code when message text changes", () => {
+    const mapped = mapRetryStageFailure({
+      ok: false,
+      reason: "completely different wording for the same failure",
+      status: 409,
+      code: "hitl_not_retriable",
+    });
+    expect(mapped.code).toBe("hitl_not_retriable");
+  });
+
+  it("uses internal_error when site omitted code", () => {
     const mapped = mapRetryStageFailure({
       ok: false,
       reason: "Run missing not found",
       status: 404,
     });
-    expect(mapped).toEqual({ error: "Run missing not found" });
-    expect(mapped).not.toHaveProperty("code");
-    expect(mapped).not.toHaveProperty("ok");
-    expect(mapped).not.toHaveProperty("status");
+    expect(mapped).toEqual({
+      error: "Run missing not found",
+      code: "internal_error",
+    });
+  });
+
+  it("forwards busy_capacity unchanged", () => {
+    const mapped = mapRetryStageFailure({
+      ok: false,
+      reason: "Capacity full",
+      status: 409,
+      code: "busy_capacity",
+    });
+    expect(mapped.code).toBe("busy_capacity");
   });
 });
 
@@ -102,6 +85,23 @@ describe("mapStartFailure", () => {
     expect(mapped).not.toHaveProperty("ok");
     expect(mapped).not.toHaveProperty("status");
   });
+
+  it("keeps busy_checkout and aborted strings unchanged", () => {
+    expect(
+      mapStartFailure({
+        ok: false,
+        reason: "checkout leased",
+        code: "busy_checkout",
+      }).code,
+    ).toBe("busy_checkout");
+    expect(
+      mapStartFailure({
+        ok: false,
+        reason: "aborted",
+        code: "aborted",
+      }).code,
+    ).toBe("aborted");
+  });
 });
 
 describe("adapter packaging composition", () => {
@@ -110,6 +110,7 @@ describe("adapter packaging composition", () => {
       ok: false as const,
       reason: "Stage is not failed (status=succeeded)",
       status: 409,
+      code: "stage_not_failed",
     };
     const body = { ...mapRetryStageFailure(result), status: result.status };
     expect(body).toEqual({
@@ -124,6 +125,7 @@ describe("adapter packaging composition", () => {
       ok: false as const,
       reason: "Stage is not failed (status=succeeded)",
       status: 409,
+      code: "stage_not_failed",
     };
     const body = mapRetryStageFailure(result);
     expect(body).not.toHaveProperty("status");
@@ -132,21 +134,27 @@ describe("adapter packaging composition", () => {
 });
 
 describe("mapStoreLookupError", () => {
-  it("run policy maps not-found messages to 404", () => {
+  it("run policy maps structured Run not found prefix to 404 + code", () => {
     expect(mapStoreLookupError(new Error("Run not found: r1"), { policy: "run" })).toEqual({
       error: "Run not found: r1",
       status: 404,
       kind: "not_found",
-    });
-    expect(mapStoreLookupError(new Error("no such row"), { policy: "run" })).toEqual({
-      error: "no such row",
-      status: 404,
-      kind: "not_found",
+      code: "run_not_found",
     });
     expect(mapStoreLookupError(new Error("unknown run"), { policy: "run" })).toEqual({
       error: "unknown run",
       status: 404,
       kind: "not_found",
+      code: "run_not_found",
+    });
+  });
+
+  it("run policy does not regex prose for not-found", () => {
+    expect(mapStoreLookupError(new Error("no such row"), { policy: "run" })).toEqual({
+      error: "no such row",
+      status: 500,
+      kind: "error",
+      code: "internal_error",
     });
   });
 
@@ -155,6 +163,7 @@ describe("mapStoreLookupError", () => {
       error: "disk I/O failed",
       status: 500,
       kind: "error",
+      code: "internal_error",
     });
   });
 
@@ -165,6 +174,7 @@ describe("mapStoreLookupError", () => {
       error: "Run not found: r1",
       status: 404,
       kind: "not_found",
+      code: "artifact_not_found",
     });
     expect(
       mapStoreLookupError(new Error("Artifact not found: notes.md"), {
@@ -174,6 +184,7 @@ describe("mapStoreLookupError", () => {
       error: "Artifact not found: notes.md",
       status: 404,
       kind: "not_found",
+      code: "artifact_not_found",
     });
   });
 
@@ -184,6 +195,7 @@ describe("mapStoreLookupError", () => {
       error: "Artifact path denied",
       status: 400,
       kind: "denied",
+      code: "artifact_path_denied",
     });
   });
 
@@ -196,10 +208,11 @@ describe("mapStoreLookupError", () => {
       error: "Artifact is not valid UTF-8 text",
       status: 400,
       kind: "error",
+      code: "internal_error",
     });
   });
 
-  it("envelope policy includes envelope in the not-found match", () => {
+  it("envelope policy maps Envelope not found prefix", () => {
     expect(
       mapStoreLookupError(new Error("Envelope not found: r1/s1"), {
         policy: "envelope",
@@ -208,13 +221,15 @@ describe("mapStoreLookupError", () => {
       error: "Envelope not found: r1/s1",
       status: 404,
       kind: "not_found",
+      code: "envelope_not_found",
     });
     expect(
       mapStoreLookupError(new Error("missing envelope"), { policy: "envelope" }),
     ).toEqual({
       error: "missing envelope",
-      status: 404,
-      kind: "not_found",
+      status: 500,
+      kind: "error",
+      code: "internal_error",
     });
   });
 
@@ -225,6 +240,7 @@ describe("mapStoreLookupError", () => {
       error: "disk I/O failed",
       status: 500,
       kind: "error",
+      code: "internal_error",
     });
   });
 
@@ -233,6 +249,7 @@ describe("mapStoreLookupError", () => {
       error: "Run not found: r1",
       status: 404,
       kind: "not_found",
+      code: "run_not_found",
     });
   });
 
@@ -244,6 +261,7 @@ describe("mapStoreLookupError", () => {
       error: "Artifact path denied",
       status: 400,
       kind: "denied",
+      code: "artifact_path_denied",
     });
     const httpStatus = mapped.kind === "denied" ? 403 : mapped.status;
     expect(httpStatus).toBe(403);

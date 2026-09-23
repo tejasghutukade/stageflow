@@ -1812,6 +1812,7 @@ export class RunManager {
         ok: false,
         reason: `Retry already in progress for run ${runId} stage ${stageId}`,
         status: 409,
+        code: "retry_in_progress",
       };
     }
     this.retryInFlight.add(retryKey);
@@ -1825,6 +1826,7 @@ export class RunManager {
         ok: false,
         reason: "Stage uses manual recovery; use the manual recovery action instead of retry",
         status: 409,
+        code: "manual_recovery_required",
       };
     }
 
