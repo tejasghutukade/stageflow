@@ -323,7 +323,11 @@ export function parseMaxAutoResumes(
   return n;
 }
 
-type AdmissionQueueEntry = { runId: string; createdAt: string };
+type AdmissionQueueEntry = {
+  runId: string;
+  createdAt: string;
+  callerId?: string | null;
+};
 
 /** Private FIFO-per-project_root + round-robin dequeue (KTD3). */
 class AdmissionQueue {
@@ -420,6 +424,7 @@ class AdmissionQueue {
 
   dequeueNext(
     skipRoots?: ReadonlySet<string>,
+    skipCallers?: ReadonlySet<string>,
   ): { projectRoot: string; entry: AdmissionQueueEntry } | undefined {
     if (this.rrOrder.length === 0) return undefined;
     const start = this.rrIndex % this.rrOrder.length;
@@ -430,7 +435,16 @@ class AdmissionQueue {
       if (skipRoots?.has(root)) continue;
       const list = this.byRoot.get(root);
       if (list === undefined || list.length === 0) continue;
-      const entry = list.shift();
+      let pickIdx = 0;
+      if (skipCallers !== undefined && skipCallers.size > 0) {
+        pickIdx = list.findIndex((e) => {
+          const c = e.callerId;
+          if (c === undefined || c === null || c === "") return true;
+          return !skipCallers.has(c.toLowerCase());
+        });
+        if (pickIdx < 0) continue;
+      }
+      const [entry] = list.splice(pickIdx, 1);
       if (entry === undefined) continue;
       if (list.length === 0) {
         this.byRoot.delete(root);
@@ -1183,9 +1197,17 @@ export class RunManager {
     this.admissionQueue.clear();
     for (const row of ordered) {
       const root = normalizeCatalogPath(row.project_root ?? this.projectRoot);
+      let callerId: string | null = null;
+      try {
+        const meta = await this.options.store.readRunMeta(row.run_id);
+        callerId = meta.caller_id ?? null;
+      } catch {
+        /* leave null; drain stamps from meta on quota miss */
+      }
       this.admissionQueue.enqueue(root, {
         runId: row.run_id,
         createdAt: row.created_at,
+        callerId,
       });
       this.ensureQueuedDone(row.run_id);
     }
@@ -2891,6 +2913,7 @@ export class RunManager {
       const queuePosition = this.admissionQueue.enqueue(resolvedProjectRoot, {
         runId: created.runId,
         createdAt: meta.created_at,
+        callerId: callerId ?? meta.caller_id ?? null,
       });
       this.pendingQueuedStarts.set(created.runId, {
         taskYaml,
@@ -3275,7 +3298,7 @@ export class RunManager {
       const blockedRoots = new Set<string>();
       const blockedCallers = new Set<string>();
       while (this.acceptingWork && this.active.size < this.maxConcurrent) {
-        const next = this.admissionQueue.dequeueNext(blockedRoots);
+        const next = this.admissionQueue.dequeueNext(blockedRoots, blockedCallers);
         if (next === undefined) break;
         const outcome = await this.startDequeuedAdmission(next, blockedCallers);
         if (outcome === "checkout_busy") {
@@ -3365,6 +3388,7 @@ export class RunManager {
       callerId !== null &&
       blockedCallers.has(callerId.toLowerCase())
     ) {
+      next.entry.callerId = next.entry.callerId ?? callerId;
       this.admissionQueue.requeueFront(next.projectRoot, next.entry);
       return "caller_quota_busy";
     }
@@ -3475,6 +3499,7 @@ export class RunManager {
       if (reserved.failure.code === "busy_caller_quota") {
         if (callerId !== undefined && callerId !== null) {
           blockedCallers.add(callerId.toLowerCase());
+          next.entry.callerId = next.entry.callerId ?? callerId;
         }
         return "caller_quota_busy";
       }
