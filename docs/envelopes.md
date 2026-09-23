@@ -21,6 +21,7 @@ type StageEnvelope = {
   payload?: Record<string, unknown>;
   fork_choice?: string[];
   feedback_loop?: FeedbackLoopAction;
+  checklist_attestations?: Array<{ check_id: string; items: string[] }>;
   stage_id?: string;
   notes?: string;
 };
@@ -38,12 +39,15 @@ type FeedbackLoopAction =
 | `payload` | no | Structured data for downstream stages; required on success (`io.output.schema` is required on every stage body) |
 | `fork_choice` | no* | Immediate successor ids to run; required on success when the stage has a `fork` field |
 | `feedback_loop` | no† | Continue or send-back decision; required on success when the stage declares a `{ type: loop }` route entry |
+| `checklist_attestations` | no‡ | Array of `{ check_id, items }`; one entry per stage `verify` item of `type: checklist` the agent is attesting to |
 | `stage_id` | no | Optional stage id echo |
 | `notes` | no | Optional free-form notes |
 
 \* Required for fork stages on success (`fork_choice`). On failure, `fork_choice` is not required or validated. `clone_forks` is rejected on every envelope — see [Rejected clone fields](yaml-catalog.md#rejected-clone-fields).
 
 † Required on success for stages that declare a `{ type: loop }` route entry. Forbidden on failure and on stages that do not declare a `{ type: loop }` route entry. See [Feedback loops](#feedback-loops).
+
+‡ Optional structurally (the tool accepts it being absent), but a stage with an after-phase `type: checklist` verify item fails that check unless the matching attestation is present at emit time — see [Checklist attestations](#checklist-attestations).
 
 ## Emitting an envelope
 
@@ -130,7 +134,7 @@ Walkthroughs: [`examples/feedback-loop/`](../examples/feedback-loop/), [`example
 
 ### io schemas {#io-schemas}
 
-Every stage body must declare both `io.input.schema` and `io.output.schema`. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). Success `payload` is required and checked against `io.output.schema` using a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for predecessor success payloads on normal edges, and matching optional task `input` on entry stages (omitted `input` is `{}`; mismatch is an error). Sequential and fan-in edges: the child's `io.input` must be a structural subset of each parent's `io.output`; pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
+Every stage body must declare both `io.input.schema` and `io.output.schema`. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). Success `payload` is required and checked against `io.output.schema` using a JSON Schema subset (`src/envelope/payloadSchema.ts`). `io.input.schema` is the same subset, used for predecessor success payloads on normal edges, and matching optional task `input` on entry stages (omitted `input` is `{}`; mismatch is an error). Sequential and fan-in edges: the child's `io.input` must be a structural subset of each parent's `io.output`; pipeline load and `sf validate` report a mismatch as `pipeline.io_incompatible`. The root must be `type: object` and cannot be `nullable`. Supported node types: `object`, `string`, `number`, `integer`, `boolean`, `array`. Keywords: `properties`, `required`, `items`, `additionalProperties` (boolean only), `minItems`, `maxItems` (both non-negative integers), `enum` (string and integer), `minimum`, `maximum`. String nodes also accept `pattern` (a JavaScript RegExp string, unicode semantics), `minLength`, and `maxLength` (non-negative integers). Nested nodes may set `nullable: true`, compiling to a union of that type with `null`. Unknown keywords are ignored. Pipeline-file `schemas:` is the `$ref` root (`#/schemas/<name>`); see [YAML catalog — Pipeline schemas](yaml-catalog.md#pipeline-schemas).
 
 Fixture: [`tests/fixtures/stages/name-selection.yaml`](../tests/fixtures/stages/name-selection.yaml).
 
@@ -162,6 +166,33 @@ model: anthropic/claude-sonnet-4-5
 A failing emit-phase check rejects the emit (`isError: true`, no `terminate`) so the agent can retry in the same turn; it never fails the stage outright. Checks run in declaration order and stop at the first failure. Emit-phase `verify` is skipped entirely on `status: "failure"` emits, and omitted/empty `verify` is a no-op — existing stages are unaffected.
 
 **Not the same as after-phase `verify`.** After-phase items (`when` includes `after`) run **after** a candidate envelope has already been captured (via repair/manual recovery), and `gate`/`artifact` there are disk- and history-aware (after-phase `gate` accepts *any* accepted decision over the run so far; after-phase `artifact` does a real on-disk `lstat`/`sha256` check). See [Verified Stage Execution](verified-stage-execution.md). Emit and after may look at overlapping facts (defense in depth) as items on the same `verify` list.
+
+### Checklist attestations {#checklist-attestations}
+
+A stage body `verify` item with `type: checklist` (default `when: [after]` — see [YAML catalog — Verify](yaml-catalog.md#verify)) is scored against the success envelope's `checklist_attestations` field, not against free text in the agent's reply:
+
+```json
+{
+  "status": "success",
+  "summary": "Implemented the change and reviewed it against the plan.",
+  "artifacts": [],
+  "payload": { "changed_files": ["src/foo.ts"] },
+  "checklist_attestations": [
+    {
+      "check_id": "self-review",
+      "items": [
+        "Implementation matches the approved plan",
+        "Unrelated files were not changed"
+      ]
+    }
+  ]
+}
+```
+
+- One `checklist_attestations` entry per checklist check the agent is attesting to, keyed by `check_id` matching the `verify` item's `id`.
+- `items` is compared as a set against that check's declared `items` (order-independent, but every declared item must be present and no extra items). A missing check id, a missing item, or an extra item fails the check.
+- Omitting `checklist_attestations` entirely still passes emit-phase validation (the field is optional on the tool schema), but the after-phase `checklist` check then fails with every declared item reported missing.
+- This is an attestation, not independent verification — pair it with a `command` or `checkout_changes` check for anything consequential.
 
 ## Artifacts
 

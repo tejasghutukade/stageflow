@@ -11,8 +11,9 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `<git-root>/.stageflow/` | Run store (SQLite) and per-run workspaces when inside a git repo |
-| `~/.stageflow/` | Global home — `sf_owned` auth (`agent/auth.json`), global settings |
+| `~/.stageflow/.stageflow/` | Run store (SQLite) and per-run workspaces — global, shared across every project, since Stageflow became a single auto-starting service |
+| `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo |
+| `~/.stageflow/` | Global home — `sf_owned` auth (`agent/auth.json`), `service.log`, and global settings (used when invoked from the home directory itself) |
 
 Store backend: `SF_STORE=sqlite` only; `SF_STORE=disk` is rejected. If SQLite has no runs yet, a disk-era `.stageflow/runs` tree may be imported; if `.stageflow` is missing and `.software-factory` exists, the next store open renames it.
 
@@ -63,8 +64,10 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 | `--git-sha` | Record git SHA on the run (CI identity) |
 | `--ci-pr-url` | Record PR URL on the run |
 | `--ci-job-url` | Record CI job URL on the run |
-| `--operator-cwd` | Operator checkout root for skill resolution (default: process cwd) |
-| `--operator-agent-dir` | Pi agent directory for user/runner skills (default: Pi `getAgentDir()`) |
+| `--operator-cwd` | Accepted for compatibility but has **no effect** on `sf run` — see note below |
+| `--operator-agent-dir` | Accepted for compatibility but has **no effect** on `sf run` — see note below |
+
+`sf run` is an HTTP client of the shared global Stageflow service (started/reused across invocations, see [`sf ui`](#sf-ui) / [`sf mcp`](#sf-mcp)); it no longer constructs a per-invocation `RunManager`, so `--operator-cwd`/`--operator-agent-dir` can't be threaded through per call. Passing either flag prints a warning and is otherwise a no-op. Set `STAGEFLOW_OPERATOR_CWD` / `STAGEFLOW_OPERATOR_AGENT_DIR` in the environment **before that service first starts** instead — the operator catalog used for skill resolution is fixed once, at daemon start. See [CI: Skills in CI](ci.md#skills-in-ci).
 
 **Exit codes:**
 
@@ -593,11 +596,11 @@ Prints:
 - Operator console URL (default `http://127.0.0.1:3847`)
 - MCP endpoint URL (`…/mcp`)
 
-Opens the default browser. Process runs until interrupted. The run store resolves to `<git-root>/.stageflow/` even when started from a subdirectory.
+Opens the default browser. Process runs until interrupted. The run store is the global `~/.stageflow/.stageflow/` store, shared across every project, regardless of which directory `sf ui` is started from.
 
 `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` is a test/debug escape hatch that disables MCP sessions. See [MCP](mcp.md).
 
-Run **either** `sf ui` **or** `sf mcp` for a project — not both against the same store.
+Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
 ## `sf mcp`
 
@@ -607,7 +610,7 @@ Start an MCP-only HTTP host (no operator console UI, no browser open).
 sf mcp [--port 3847] [--mcp-stateless]
 ```
 
-Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves minimal `GET /api/health`. Same git-root / `.stageflow/` semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
+Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves minimal `GET /api/health`. Same global-store semantics as `sf ui`. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 

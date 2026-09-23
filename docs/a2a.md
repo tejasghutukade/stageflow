@@ -26,8 +26,10 @@ Register a caller without hand-editing YAML or hand-generating a token:
 sf a2a add-caller procurement-assistant
 # Generated a token for caller "procurement-assistant". Export it before starting the host
 # (or store it in your secrets manager):
-#   export PROCUREMENT_ASSISTANT_TOKEN=<64 hex chars>
+#   export PROCUREMENT_ASSISTANT_TOKEN=<48 hex chars>
 ```
+
+The `token_env` name defaults to the caller id uppercased with non-alphanumerics collapsed to `_` (`procurement-assistant` → `PROCUREMENT_ASSISTANT_TOKEN`) plus a `_TOKEN` suffix; pass `--token-env <NAME>` to override it. `--config <path>` overrides the auto-discovered `a2a.yaml` location for both `add-caller` and `validate`/`list`. The generated token is 24 random bytes hex-encoded (48 characters) — comfortably over the registry's 32-character minimum for a caller's bearer token.
 
 This only writes the caller's `id` and `token_env` name to `a2a.yaml` — never a secret value. Granting that caller access to a specific publication is still a separate, explicit edit to that publication's `allowed_callers`, on purpose: creating a caller identity and authorizing it to invoke something are different facts, and auto-granting access as a side effect would undercut "nothing is exposed unless a human wrote it down."
 

@@ -42,7 +42,7 @@ sf mcp --mcp-stateless
 STAGEFLOW_MCP_STATELESS=1 sf mcp
 ```
 
-Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardown (`sessionIdGenerator: undefined`). Tier 1 tools and Tier 2 `wait_run` work in both modes. Resource **subscribe/notify** requires session mode + GET SSE listen.
+Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardown (`sessionIdGenerator: undefined`). Every tool call — including the long-poll `wait_run` — works in both session and stateless modes, since each is still a single request/response. Resource **subscribe/notify** requires session mode + GET SSE listen.
 
 ## `sf mcp` vs `sf ui`
 
@@ -51,9 +51,9 @@ Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardow
 | `sf ui` | Console REST/static + `/mcp` | Opens by default |
 | `sf mcp` | `/mcp` + minimal `GET /api/health` | No |
 
-Both use the same git-root / `.stageflow/` store semantics and default port `3847`. Run **either** `sf ui` **or** `sf mcp` for a given project root — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported.
+Both bind the same default port `3847` on the shared global service. Run **either** `sf ui` **or** `sf mcp` at a time — not both (one writer process; the second bind on the same port fails). `sf run`/`sf run-stage`/mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet.
 
-MCP tools resolve the **project git root** for catalog browse and the **`<git-root>/.stageflow/`** run store — the same semantics as CLI commands, not the shell cwd where you started the host.
+MCP tools resolve the **project git root** for catalog browse (pipelines, tasks, skills, extensions), but the run store itself is **global** — `~/.stageflow/.stageflow/`, shared across every project on the machine — the same semantics as CLI commands, not the shell cwd where you started the host.
 
 Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
 
