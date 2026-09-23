@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { globalStageflowHome } from "../src/project/globalHome.js";
+import { backupsDir } from "../src/runstore/backup.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
 import { startMcpServer } from "../src/server/mcpHost.js";
@@ -79,6 +78,24 @@ describe("backup HTTP routes", () => {
           { headers: { Authorization: `Bearer ${DRIVE}` } },
         );
         expect(traversal.status).toBe(400);
+
+        const partialCase = await fetch(
+          `${started.url}/api/backup/${encodeURIComponent("snap.PARTIAL")}`,
+          { headers: { Authorization: `Bearer ${DRIVE}` } },
+        );
+        expect(partialCase.status).toBe(400);
+
+        const dir = backupsDir(home);
+        mkdirSync(dir, { recursive: true });
+        const partialPath = path.join(dir, "incomplete.tar.gz.partial");
+        writeFileSync(partialPath, "incomplete");
+        const linkName = "looks-ok.tar.gz";
+        symlinkSync(partialPath, path.join(dir, linkName));
+        const partialLink = await fetch(
+          `${started.url}/api/backup/${encodeURIComponent(linkName)}`,
+          { headers: { Authorization: `Bearer ${DRIVE}` } },
+        );
+        expect(partialLink.status).toBe(400);
       } finally {
         await closeServer(started.server);
       }

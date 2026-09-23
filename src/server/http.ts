@@ -423,13 +423,28 @@ export function createOperatorRoutes(
           res.writeHead(200, {
             "Content-Type": "application/x-ndjson; charset=utf-8",
           });
-          for await (const line of iterateExportNdjson({
-            store,
-            filter: Object.keys(filter).length > 0 ? filter : undefined,
-          })) {
-            res.write(line);
+          try {
+            for await (const line of iterateExportNdjson({
+              store,
+              filter: Object.keys(filter).length > 0 ? filter : undefined,
+            })) {
+              if (req.aborted || res.writableEnded || res.destroyed) {
+                break;
+              }
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) => res.once("drain", resolve));
+              }
+            }
+            if (!res.writableEnded && !res.destroyed) {
+              res.end();
+            }
+          } catch (err) {
+            if (res.headersSent) {
+              res.destroy(err instanceof Error ? err : new Error(String(err)));
+            } else {
+              throw err;
+            }
           }
-          res.end();
           return true;
         }
 
@@ -1286,30 +1301,36 @@ export async function startUiServer(
   const port = options.port ?? DEFAULT_PORT;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
-  const { manager, store, cwd, agentDir, rootDir } = boot;
+  const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
   let shutdown: ShutdownController | undefined;
+  const routes =
+    boot.serveBlocked !== undefined ||
+    boot.manager === undefined ||
+    boot.store === undefined
+      ? async () => false
+      : createOperatorRoutes({
+          manager: boot.manager,
+          store: boot.store,
+          cwd,
+          agentDir,
+          rootDir,
+          providerAuthContext,
+          uiDistDir,
+          allowedHosts,
+          controlTokens,
+          getShutdown: () => shutdown,
+        });
   const envelope = await createHttpHost({
     boot,
     host,
     port,
     allowedHosts,
     controlTokens,
-    routes: createOperatorRoutes({
-      manager,
-      store,
-      cwd,
-      agentDir,
-      rootDir,
-      providerAuthContext,
-      uiDistDir,
-      allowedHosts,
-      controlTokens,
-      getShutdown: () => shutdown,
-    }),
+    routes,
   });
   shutdown = installShutdownController({
     server: envelope.server,

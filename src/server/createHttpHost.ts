@@ -69,8 +69,8 @@ export type HttpHostEnvelope = {
   host: string;
   url: string;
   mcpUrl: string;
-  manager: RunManager;
-  store: RunStore;
+  manager?: RunManager;
+  store?: RunStore;
   runChangeBus: RunChangeBus;
   mcpStateless: boolean;
 };
@@ -121,9 +121,31 @@ export async function createHttpHost(
 
     if (pathname === "/api/a2a/status" && method === "GET") {
       if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (boot.serveBlocked !== undefined) {
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return;
+      }
       if (!enforceBearerAuth(controlTokens, req, res, "read")) return;
       json(res, 200, boot.a2a?.status ?? { state: "disabled" });
       return;
+    }
+    if (boot.serveBlocked !== undefined) {
+      const a2aOwned =
+        pathname === "/a2a" ||
+        pathname === "/.well-known/agent-card.json" ||
+        pathname.startsWith("/a2a/contracts/") ||
+        pathname.startsWith("/a2a/artifacts/");
+      if (a2aOwned) {
+        if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return;
+      }
     }
     if (await boot.a2a?.handle(req, res, pathname)) return;
 

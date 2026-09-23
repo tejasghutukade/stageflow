@@ -47,12 +47,28 @@ export async function startMcpServer(
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
-  const { manager, store, cwd, agentDir, rootDir } = boot;
+  const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
   let shutdown: ShutdownController | undefined;
+  const routes =
+    boot.serveBlocked !== undefined ||
+    boot.manager === undefined ||
+    boot.store === undefined
+      ? async () => false
+      : createOperatorRoutes({
+          manager: boot.manager,
+          store: boot.store,
+          cwd,
+          agentDir,
+          rootDir,
+          providerAuthContext,
+          allowedHosts,
+          controlTokens,
+          getShutdown: () => shutdown,
+        });
   const envelope = await createHttpHost({
     boot,
     host,
@@ -61,17 +77,7 @@ export async function startMcpServer(
     controlTokens,
     requestTimeoutMs: options.requestTimeoutMs,
     maxConnections: options.maxConnections,
-    routes: createOperatorRoutes({
-      manager,
-      store,
-      cwd,
-      agentDir,
-      rootDir,
-      providerAuthContext,
-      allowedHosts,
-      controlTokens,
-      getShutdown: () => shutdown,
-    }),
+    routes,
   });
   shutdown = installShutdownController({
     server: envelope.server,

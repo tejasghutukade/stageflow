@@ -71,8 +71,10 @@ export type StageflowHostBootstrap = {
   agentDir: string;
   rootDir: string;
   isGitProject: boolean;
-  store: RunStore;
-  manager: RunManager;
+  /** Absent when `serveBlocked` — store must not be opened after a failed restore. */
+  store?: RunStore;
+  /** Absent when `serveBlocked` — no RunManager lifecycle/resume. */
+  manager?: RunManager;
   runChangeBus: RunChangeBus;
   mcpStateless: boolean;
   providerAuthContext: ProviderAuthContext | undefined;
@@ -233,6 +235,31 @@ export async function bootstrapStageflowHost(
     }
   }
 
+  if (serveBlocked !== undefined) {
+    const runChangeBus = options.runChangeBus ?? createRunChangeBus();
+    const mcpStateless = resolveMcpStateless({
+      mcpStateless: options.mcpStateless,
+    });
+    return {
+      cwd,
+      agentDir,
+      rootDir,
+      isGitProject,
+      runChangeBus,
+      mcpStateless,
+      providerAuthContext: options.providerAuthContext,
+      mcpHandler: {
+        handle: async () => {},
+        close: async () => {},
+      },
+      stopGcInterval: () => {},
+      storeFilesystem,
+      serveBlocked,
+      ...(hostConfig !== undefined ? { hostConfig } : {}),
+      ...(providerBoot !== undefined ? { providerBoot } : {}),
+    };
+  }
+
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
   const storeRootDir = options.store
@@ -258,7 +285,7 @@ export async function bootstrapStageflowHost(
     }
   }
 
-  if (sqliteConnection !== undefined && serveBlocked === undefined) {
+  if (sqliteConnection !== undefined) {
     try {
       assertStoreQuickCheck(sqliteConnection);
     } catch (err) {
@@ -358,6 +385,5 @@ export async function bootstrapStageflowHost(
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
     storeFilesystem,
-    ...(serveBlocked !== undefined ? { serveBlocked } : {}),
   };
 }

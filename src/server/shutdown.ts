@@ -32,8 +32,8 @@ export type HostDrainResult = {
 
 export type ShutdownControllerOptions = {
   server: Server;
-  manager: RunManager;
-  store: RunStore;
+  manager?: RunManager;
+  store?: RunStore;
   graceMs?: number;
   env?: NodeJS.ProcessEnv;
   logger?: Logger;
@@ -61,8 +61,8 @@ export function workerBudgetMs(graceMs: number): number {
 
 export class ShutdownController {
   private readonly server: Server;
-  private readonly manager: RunManager;
-  private readonly store: RunStore;
+  private readonly manager: RunManager | undefined;
+  private readonly store: RunStore | undefined;
   private readonly graceMs: number;
   private readonly log: Logger;
   private readonly installSignals: boolean;
@@ -184,7 +184,46 @@ export class ShutdownController {
       worker_budget_ms: workerBudgetMs(this.graceMs),
     });
 
-    this.manager.stopAcceptingWork();
+    const manager = this.manager;
+    const store = this.store;
+    if (manager === undefined || store === undefined) {
+      try {
+        this.server.closeIdleConnections();
+      } catch {
+        // older Node or already closing
+      }
+      const serverClosed = new Promise<void>((resolve) => {
+        this.server.close(() => resolve());
+      });
+      await Promise.race([
+        serverClosed,
+        this.waitUntil(hardDeadline),
+      ]);
+      try {
+        this.server.closeAllConnections();
+      } catch {
+        // ignore
+      }
+      await Promise.race([
+        serverClosed,
+        this.waitUntil(Date.now() + 100),
+      ]);
+      this.uninstall();
+      const exitCode = this.escalated ? HOST_EXIT.ESCALATED : HOST_EXIT.CLEAN;
+      this.log.info("host.shutdown.drain_complete", "host drain complete", {
+        exit_code: exitCode,
+        forced: false,
+        escalated: this.escalated,
+        elapsed_ms: Date.now() - startedAt,
+      });
+      return {
+        exitCode,
+        forced: false,
+        escalated: this.escalated,
+      };
+    }
+
+    manager.stopAcceptingWork();
 
     try {
       this.server.closeIdleConnections();
@@ -196,7 +235,7 @@ export class ShutdownController {
       this.server.close(() => resolve());
     });
 
-    const stageResult = await this.manager.drainActiveStages({
+    const stageResult = await manager.drainActiveStages({
       deadlineMs: workerDeadline,
       isEscalated: () => this.escalated,
     });
@@ -207,7 +246,7 @@ export class ShutdownController {
 
     let storeCloseFailed = false;
     try {
-      await this.store.close();
+      await store.close();
     } catch (err) {
       storeCloseFailed = true;
       this.log.error(

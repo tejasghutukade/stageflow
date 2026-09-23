@@ -42,7 +42,7 @@ describe("createHttpHost shared listen", () => {
       expect(started.mcpUrl).toBe(`${started.url}/mcp`);
       expect(started.manager).toBeTruthy();
       expect(started.store).toBeTruthy();
-      expect(typeof started.store.readRun).toBe("function");
+      expect(typeof started.store!.readRun).toBe("function");
       expect(started.runChangeBus).toBeTruthy();
       expect(started.mcpStateless).toBe(true);
       expect(started.host).toBe("127.0.0.1");

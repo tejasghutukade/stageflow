@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtemp, mkdir } from "node:fs/promises";
@@ -12,7 +13,9 @@ import path from "node:path";
 import {
   BackupError,
   assertBackupOutPathAllowed,
+  backupsDir,
   createBackup,
+  resolveBackupDownloadPath,
   verifyDbSnapshot,
 } from "../src/runstore/backup.js";
 import { createRunStoreWithConnection } from "../src/runstore/createStore.js";
@@ -152,5 +155,30 @@ describe("createBackup", () => {
     expect(() =>
       assertBackupOutPathAllowed(`${home}/worktrees/x/out.tar.gz`, home),
     ).toThrow(BackupError);
+  });
+});
+
+describe("resolveBackupDownloadPath", () => {
+  it("rejects .PARTIAL by name (case-insensitive)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-backup-partial-name-"));
+    const home = storeRootFor(root);
+    await mkdir(backupsDir(home), { recursive: true });
+    await expect(
+      resolveBackupDownloadPath("snap.PARTIAL", home),
+    ).rejects.toMatchObject({ code: "backup_out_denied" });
+  });
+
+  it("rejects symlink whose real basename ends with .partial", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-backup-partial-link-"));
+    const home = storeRootFor(root);
+    const dir = backupsDir(home);
+    await mkdir(dir, { recursive: true });
+    const partial = path.join(dir, "incomplete.tar.gz.partial");
+    writeFileSync(partial, "incomplete");
+    const linkName = "looks-ok.tar.gz";
+    symlinkSync(partial, path.join(dir, linkName));
+    await expect(resolveBackupDownloadPath(linkName, home)).rejects.toMatchObject({
+      code: "backup_out_denied",
+    });
   });
 });

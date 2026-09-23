@@ -406,7 +406,7 @@ export async function resolveBackupDownloadPath(
     name.includes("/") ||
     name.includes("\\") ||
     path.isAbsolute(name) ||
-    name.endsWith(".partial")
+    name.toLowerCase().endsWith(".partial")
   ) {
     throw new BackupError(
       "backup_out_denied: invalid backup name",
@@ -426,6 +426,12 @@ export async function resolveBackupDownloadPath(
   if (containment.status === "outside") {
     throw new BackupError(
       "backup_out_denied: path escapes backups directory",
+      "backup_out_denied",
+    );
+  }
+  if (path.basename(containment.realPath).toLowerCase().endsWith(".partial")) {
+    throw new BackupError(
+      "backup_out_denied: invalid backup name",
       "backup_out_denied",
     );
   }

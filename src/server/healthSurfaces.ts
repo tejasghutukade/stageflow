@@ -39,6 +39,19 @@ export async function handleReadyz(
     });
     return;
   }
+  if (boot.store === undefined) {
+    json(res, 503, {
+      ready: false,
+      error: "store unavailable",
+      checks: {
+        store_openable: false,
+        home_writable: false,
+        migrations_complete: false,
+        git_present: false,
+      },
+    });
+    return;
+  }
   const result = await runReadyzChecks({
     store: boot.store,
     homeDir: globalStageflowHome(),
@@ -49,6 +62,9 @@ export async function handleReadyz(
 export async function buildRichHealthPayload(
   boot: StageflowHostBootstrap,
 ): Promise<Record<string, unknown>> {
+  if (boot.manager === undefined || boot.store === undefined) {
+    throw new Error("buildRichHealthPayload requires store and manager");
+  }
   const capacity = await boot.manager.getHealthWithDisk();
   const gitVersion = await probeGitVersion();
   const schema = readSchemaHealth(boot.store);

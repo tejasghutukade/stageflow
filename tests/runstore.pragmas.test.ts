@@ -142,7 +142,8 @@ describe("Host boot integrity", () => {
         skipHostConfig: true,
         cwd: home,
       });
-      const conn = (boot.store as { connection?: Database.Database }).connection;
+      const conn = (boot.store as { connection?: Database.Database } | undefined)
+        ?.connection;
       expect(conn).toBeDefined();
 
       const seen: string[] = [];
@@ -156,7 +157,7 @@ describe("Host boot integrity", () => {
       expect(seen.some((s) => /integrity_check/i.test(s))).toBe(false);
       expect(seen.some((s) => /quick_check/i.test(s))).toBe(true);
 
-      await boot.store.close();
+      await boot.store!.close();
       boot.stopGcInterval();
     });
   });
