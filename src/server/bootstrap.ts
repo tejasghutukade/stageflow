@@ -30,6 +30,7 @@ import {
   loadHostConfig,
   type HostConfig,
 } from "../config/hostConfig.js";
+import { bootProviderConfig } from "../agent/bootProviderConfig.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -63,6 +64,7 @@ export type StageflowHostBootstrap = {
   providerAuthContext: ProviderAuthContext | undefined;
   mcpHandler: McpHttpHandler;
   hostConfig?: HostConfig;
+  providerBoot?: Awaited<ReturnType<typeof bootProviderConfig>>;
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
@@ -157,6 +159,14 @@ export async function bootstrapStageflowHost(
   for (const warning of hostConfig?.warnings ?? []) {
     console.warn(`stageflow: ${warning}`);
   }
+  const providerBoot = options.skipHostConfig
+    ? undefined
+    : await bootProviderConfig({
+        cwd: invocationCwd,
+        env,
+        requireProviders: hostConfig?.requireProviders,
+        authContext: options.providerAuthContext,
+      });
   process.env[PI_CODING_AGENT_DIR_ENV] = path.join(ctx.globalHome, "agent");
   const agentDir = options.agentDir ?? getAgentDir();
   const rootDir = options.rootDir ?? ctx.projectRoot;
@@ -259,6 +269,7 @@ export async function bootstrapStageflowHost(
     providerAuthContext: options.providerAuthContext,
     mcpHandler,
     ...(hostConfig !== undefined ? { hostConfig } : {}),
+    ...(providerBoot !== undefined ? { providerBoot } : {}),
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
   };
