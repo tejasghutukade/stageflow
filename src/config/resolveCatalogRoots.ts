@@ -30,6 +30,9 @@ export async function resolveCatalogRoots(
 ): Promise<CatalogRoot[]> {
   const roots: CatalogRoot[] = [];
   const seenPaths = new Set<string>();
+  const seededRoots =
+    options.seededRoots ??
+    (await import("./seededCatalog.js")).defaultSeededRoots();
 
   const bootAbs = path.resolve(options.bootCwd);
   roots.push({
@@ -58,7 +61,7 @@ export async function resolveCatalogRoots(
     });
   }
 
-  for (const seeded of options.seededRoots ?? []) {
+  for (const seeded of seededRoots) {
     const abs = path.resolve(seeded.path);
     if (seenPaths.has(abs)) continue;
     seenPaths.add(abs);

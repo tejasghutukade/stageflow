@@ -506,6 +506,16 @@ Example:
 sf validate --strict --json
 ```
 
+## `sf doctor`
+
+```bash
+sf doctor [--json]
+```
+
+Operator preflight: git, bash, Node, `$STAGEFLOW_HOME` writability, and `.mcp.json` commands on PATH. Exits non-zero when any check is `fail`.
+
+**Never use `sf doctor` as a container `HEALTHCHECK`.** Use `GET /livez` for liveness; doctor is a human/CI preflight tool.
+
 ## `sf graph`
 
 Print a definition-time view of how a pipeline graph is wired, before any run. It does not require `sf ui`, does not start the operator console, and renders no HTML or mermaid — the default output is a plain, 80-column, box-drawing ASCII diagram built from the same resolved DAG that `sf validate` / `sf run` use.

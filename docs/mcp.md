@@ -123,9 +123,13 @@ start_run → resources/subscribe(stageflow://runs/{runId}) → on updated, get_
 
 ## Tools
 
+### `get_started`
+
+No-argument first-run orientation for remote harnesses. Returns host version, provider/toolchain hints, catalog roots with pipeline/task counts, and a three-call `next_steps` list (`list_pipelines` → `list_tasks` → `start_run`) using catalog-relative paths and symbolic seeded `project_root` ids when applicable.
+
 ### `list_pipelines`
 
-List manifest-declared pipeline paths from the project catalog.
+List manifest-declared pipeline paths across every catalog root this Host knows (boot cwd, registered store roots, seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
 **Input:** `{}`
 
@@ -785,6 +789,25 @@ Add an MCP server entry pointing at the Streamable HTTP URL while `sf ui` or `sf
 ```
 
 Exact config shape depends on your MCP client version. Prefer session-capable Streamable HTTP clients. Use `--mcp-stateless` / `STAGEFLOW_MCP_STATELESS=1` only for test/debug clients that cannot send session headers. The host rejects non-localhost `Origin` / `Host`, so use `127.0.0.1` (or `localhost`) in the URL.
+
+## Error codes
+
+Network errors from `/mcp` and `/api/*` include a stable snake_case `code` alongside the human `error` message. Minimum codes:
+
+| Code | Meaning |
+|------|---------|
+| `unknown_project_root` | Filter or path targeted an unregistered root |
+| `absolute_path_not_allowed` | Absolute path from a network caller |
+| `path_outside_project_root` | `..` or realpath escape of the selected root |
+| `catalog_root_unreadable` | Root listed but not readable |
+| `config_invalid` / `config_unknown_key` | HostConfig validation |
+| `provider_not_configured` | Boot/provider credential failure |
+| `a2a_configuration_error` | A2A registry/config failed |
+| `untrusted_config_origin` | Workspace config refused |
+| `command_not_on_path` | Doctor / MCP command missing |
+| `not_ready` | `/readyz` failing check |
+| `busy_capacity` / `busy_checkout` / `aborted` | Unchanged admission codes |
+| `internal_error` | Uncoded internal failure |
 
 ## Limitations
 

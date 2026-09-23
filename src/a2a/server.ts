@@ -234,7 +234,11 @@ export type A2aRuntime = {
 const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 export type A2aHost = {
-  status: { state: "disabled" | "enabled" | "configuration_error"; configPath?: string };
+  status: {
+    state: "disabled" | "enabled" | "configuration_error";
+    configPath?: string;
+    error?: { code: string; message: string };
+  };
   handle(req: HttpIncomingMessage, res: ServerResponse, pathname: string): Promise<boolean>;
   /** Deletes expired terminal tasks/artifacts and message tombstones. A no-op when A2A is not enabled. */
   pruneExpired(now?: Date): Promise<{ removedTasks: number; removedMessages: number }>;
@@ -264,8 +268,11 @@ export async function createA2aHost(
         undefined,
         runtime.a2aStore,
       );
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       status.state = "configuration_error";
+      status.error = { code: "a2a_configuration_error", message };
+      console.error(`stageflow: A2A configuration error: ${message}`);
     }
   }
   const sweep = invocations

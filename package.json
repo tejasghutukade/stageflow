@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "skills",
+    "examples",
     "README.md",
     "LICENSE"
   ],

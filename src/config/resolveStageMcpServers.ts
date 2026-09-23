@@ -327,10 +327,29 @@ export async function resolveStageMcpServers(options: {
   allowlist?: readonly string[];
   env: NodeJS.ProcessEnv;
   stageId?: string;
+  bindingKind?: "repository" | "checkout" | "none";
+  trustWorkspaceConfig?: string[];
+  /** When true, .mcp.json is treated as workspace-sourced. */
+  workspaceSourced?: boolean;
 }): Promise<ResolvedMcpServers> {
   const allowlist = options.allowlist ?? [];
   if (allowlist.length === 0) {
     return {};
+  }
+  if (options.workspaceSourced === true) {
+    const { decideWorkspaceConfigTrust } = await import("./configOrigin.js");
+    const decision = decideWorkspaceConfigTrust({
+      bindingKind: options.bindingKind ?? "none",
+      projectRoot: options.projectRoot,
+      trustWorkspaceConfig: options.trustWorkspaceConfig,
+      source: "workspace",
+    });
+    if (!decision.allow) {
+      throw new StageMcpError(
+        decision.message ?? "untrusted_config_origin",
+        "invalid_config",
+      );
+    }
   }
   const catalog = await loadMcpCatalog(options.projectRoot);
   assertMcpAllowlistKnown(catalog.servers, allowlist);

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {

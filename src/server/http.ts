@@ -920,6 +920,24 @@ export function createOperatorRoutes(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          if (writeRoot !== undefined) {
+            const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
+            const match = roots.find((r) => r.project_root === writeRoot);
+            if (match?.read_only) {
+              json(res, 403, {
+                error: `Catalog root ${writeRoot} is read-only`,
+                code: "catalog_root_read_only",
+              });
+              return true;
+            }
+          }
           const parsed = parseCreatePipelineBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });

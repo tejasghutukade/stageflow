@@ -363,6 +363,7 @@ export type TaskListing = {
   path: string;
   id: string;
   goal: string;
+  project_root?: string;
 };
 
 export type PipelineStageListing = {
@@ -376,6 +377,7 @@ export type PipelineListing = {
   path: string;
   id: string;
   stages: PipelineStageListing[];
+  project_root?: string;
 };
 
 export type ValidStageListing = {

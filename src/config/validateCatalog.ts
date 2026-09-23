@@ -38,6 +38,7 @@ export type ValidationFindingCode =
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
   | "pipeline.invalid_completion"
+  | "catalog.path_case_mismatch"
   | "pipeline.invalid_recovery"
   | "pipeline.include_cycle"
   | "pipeline.include_invalid"
@@ -365,6 +366,39 @@ export function findingStageIdFilenameMismatch(
       stageId: declaredId,
     },
     "error",
+  );
+}
+
+/** Parent readdir case check — warn by default; error under --strict. */
+export async function findingPathCaseMismatch(
+  cwd: string,
+  referencedPath: string,
+): Promise<ValidationFinding | null> {
+  const { readdir } = await import("node:fs/promises");
+  const abs = path.isAbsolute(referencedPath)
+    ? referencedPath
+    : path.resolve(cwd, referencedPath);
+  const parent = path.dirname(abs);
+  const base = path.basename(abs);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return null;
+  }
+  const exact = entries.includes(base);
+  if (exact) return null;
+  const match = entries.find((e) => e.toLowerCase() === base.toLowerCase());
+  if (match === undefined) return null;
+  return baseFinding(
+    {
+      cwd,
+      absPath: abs,
+      message: `Path casing differs on disk: referenced "${base}" but found "${match}"`,
+      code: "catalog.path_case_mismatch",
+      category: "catalog",
+    },
+    "warning",
   );
 }
 
