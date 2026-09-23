@@ -78,14 +78,31 @@ export function resetProxyDispatcherForTests(): void {
   installed = false;
 }
 
+export function buildEgressHealth(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const httpSet = Boolean(env.HTTP_PROXY || env.http_proxy);
+  const httpsSet = Boolean(env.HTTPS_PROXY || env.https_proxy);
+  const noProxySet = Boolean(env.NO_PROXY || env.no_proxy);
+  const caSet = Boolean(
+    env.NODE_EXTRA_CA_CERTS || env.SSL_CERT_FILE || env.REQUESTS_CA_BUNDLE,
+  );
+  const proxyHost =
+    parseProxyHost(env.HTTPS_PROXY ?? env.https_proxy) ??
+    parseProxyHost(env.HTTP_PROXY ?? env.http_proxy) ??
+    null;
+  return {
+    http_proxy: httpSet ? "set" : "unset",
+    https_proxy: httpsSet ? "set" : "unset",
+    no_proxy: noProxySet ? "set" : "unset",
+    proxy_host: proxyHost,
+    extra_ca_certs: caSet ? "set" : "unset",
+    dispatcher_installed: installed,
+  };
+}
+
 export function proxyHealthFields(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
-  const result = {
-    dispatcher_installed: installed,
-    http_proxy_host: parseProxyHost(env.HTTP_PROXY ?? env.http_proxy) ?? null,
-    https_proxy_host: parseProxyHost(env.HTTPS_PROXY ?? env.https_proxy) ?? null,
-    no_proxy: effectiveNoProxy(env),
-  };
-  return result;
+  return buildEgressHealth(env);
 }

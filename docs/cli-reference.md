@@ -422,6 +422,49 @@ Writes the full `projectRun` projection (includes `pipeline_track` and waiting f
 
 **Exit codes:** `0` success, `1` error.
 
+## `sf backup`
+
+Consistent live snapshot of the durable store (`VACUUM INTO`), written under `$STAGEFLOW_HOME/backups/` by default. Default archives include provider credentials (mode `0600`) and must be treated as secrets. See [Docker and self-hosting](docker.md).
+
+```bash
+sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--out` | Destination path (refuses `$STAGEFLOW_HOME/worktrees/` and `runs/`) |
+| `--db-only` | Bare DB snapshot instead of tar.gz |
+| `--no-credentials` | Omit `agent/auth.json` |
+| `--include-a2a-artifacts` | Include A2A artifact bytes |
+| `--json` | Print metadata JSON |
+
+HTTP: `POST /api/backup`, `GET /api/backup/<name>` (both require **drive** scope).
+
+## `sf restore`
+
+Whole-store restore. Host must be down (probes `GET /livez`; never calls `ensureGlobalService`). Previous `state.db` is moved aside as `*.pre-restore-<ISO>`.
+
+```bash
+sf restore <file> [--force] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Allow major `stageflow_version` mismatch |
+| `--json` | Machine-readable result |
+
+HTTP: `POST /api/restore` with `{ "backup": "<name>" }` (drive) → `202` then drain; boot applies before opening the store.
+
+## `sf export`
+
+Whole-instance NDJSON export (header + one `projectRun` line per run, including non-terminal). Not a backup; restore does not accept exports.
+
+```bash
+sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]
+```
+
+HTTP: `GET /api/export` (**read** scope) with the same query filters.
+
 ## `sf artifact read`
 
 Read a run workspace artifact as UTF-8 text (same path rules as MCP `read_artifact`).
@@ -720,6 +763,10 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_SHUTDOWN_GRACE_MS` | Host SIGTERM/SIGINT drain budget (default `8000`); pair with compose `stop_grace_period` — see [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp) |
 | `STAGEFLOW_LOG_FORMAT` | Host log format: `json` or `pretty` (TTY default pretty, else json) |
 | `STAGEFLOW_LOG_LEVEL` | Host log level: `debug` \| `info` \| `warn` \| `error` (default `info`) |
+| `STAGEFLOW_LOG_MAX_LINE_BYTES` | Cap stdout log line size (default `8192`) |
+| `STAGEFLOW_BUILD_SHA` | Build commit SHA surfaced on health / `--version --json` (default `unknown`) |
+| `STAGEFLOW_SQLITE_SYNCHRONOUS` | SQLite `synchronous` pragma (default `FULL`) |
+| `STAGEFLOW_ALLOW_NETWORK_STORE` | Escape hatch to boot on NFS/CIFS (unsupported) |
 | `STAGEFLOW_NO_AUTOSTART` | Disable detached Host autostart (container-safe); mutating CLI verbs fail with `autostart_disabled` |
 | `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off) |
 | `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per attempt (default `3`) |
@@ -729,6 +776,7 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 ## See also
 
 - [Quick start](quickstart.md) — first run walkthrough
+- [Docker and self-hosting](docker.md) — backup/restore, volumes, provenance
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `pi_home` vs `sf_owned`
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait

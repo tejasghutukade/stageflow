@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { PACKAGE_VERSION } from "../package-meta.js";
+import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { redactHostConfig } from "../config/hostConfig.js";
 import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
@@ -11,6 +11,7 @@ import {
   readSchemaHealth,
   runReadyzChecks,
 } from "../diagnostics/checks.js";
+import { buildEgressHealth } from "../net/proxy.js";
 
 export function handleLivez(
   _req: IncomingMessage,
@@ -67,10 +68,12 @@ export async function buildRichHealthPayload(
       per_project: boot.manager.getPerProjectCapacity(),
     },
     version: PACKAGE_VERSION,
-    build_sha: process.env.STAGEFLOW_BUILD_SHA ?? null,
+    build_sha: BUILD_SHA,
     stageflow_home: globalStageflowHome(),
     schema,
     git_version: gitVersion ?? null,
+    store_filesystem: boot.storeFilesystem ?? null,
+    egress: buildEgressHealth(),
     catalog_roots: catalogRoots.map((r) => ({
       project_root: r.project_root,
       kind: r.kind,

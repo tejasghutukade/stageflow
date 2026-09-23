@@ -24,7 +24,11 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
 | `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start |
 | `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
+| `backups/` | disposable | `sf backup` archives (default output) |
+| `restore-pending/` | disposable | Staged API restore archives + marker |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
+
+For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
 
 Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent directory. Each stage attempt binds `PI_CODING_AGENT_DIR` to a per-attempt directory under that run's workspace (`runs/<runId>/stages/<stageId>/attempts/<n>/.pi-agent`).
 

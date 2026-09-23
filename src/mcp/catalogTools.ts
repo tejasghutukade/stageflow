@@ -14,7 +14,7 @@ import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
-import { PACKAGE_VERSION } from "../package-meta.js";
+import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
@@ -239,7 +239,11 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       inputSchema: z.object({}),
     },
     async () =>
-      textResult({ ...(await manager.getHealthWithDisk()), version: PACKAGE_VERSION }),
+      textResult({
+        ...(await manager.getHealthWithDisk()),
+        version: PACKAGE_VERSION,
+        build_sha: BUILD_SHA,
+      }),
   );
 
   server.registerTool(

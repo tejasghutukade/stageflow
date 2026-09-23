@@ -43,6 +43,7 @@ import {
   applyPendingRestoreAtBoot,
   type BootRestoreOutcome,
 } from "../runstore/restore.js";
+import { assertTmpdirUsable } from "../runstore/assertTmpdir.js";
 import { logger as rootLogger } from "../logging/logger.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
@@ -164,6 +165,7 @@ export async function bootstrapStageflowHost(
   const ctx = await resolveStageflowContext(invocationCwd);
   const cwd = ctx.invocationCwd;
   ensureGlobalHome();
+  assertTmpdirUsable(env);
   const hostConfig =
     options.hostConfig ??
     (options.skipHostConfig

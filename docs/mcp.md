@@ -34,6 +34,16 @@ Sessions enable run **resource subscribe** and `notifications/resources/updated`
 
 `createHttpHost` applies a shared Host/Origin allow-list (see [Access control](#access-control)) on `/mcp` and every `/api/*` route. Absent `Origin` is allowed on ordinary routes; a present `Origin` must match the allow-list. Point clients at the advertised URL printed on boot (or the console Settings → MCP endpoint).
 
+### Backup, export, and restore
+
+Slot 8 does **not** add MCP tools for backup/export/restore. While a Host is running, agents should use the HTTP API (drive token for backup/restore; read token for export):
+
+- `POST /api/backup` / `GET /api/backup/<name>` — drive scope (archives may contain credentials)
+- `GET /api/export` — read scope (NDJSON whole-instance export)
+- `POST /api/restore` — drive scope; stages a restore and drains the Host
+
+See [Docker and self-hosting](docker.md) and [CLI reference](cli-reference.md).
+
 ### Access control
 
 | Env | Role |

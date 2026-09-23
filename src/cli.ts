@@ -23,6 +23,10 @@ import {
   RESTORE_USAGE,
   runRestoreCommand,
 } from "./cli/restoreCommand.js";
+import {
+  EXPORT_ALL_USAGE,
+  runExportAllCommand,
+} from "./cli/exportAllCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -47,7 +51,7 @@ import {
   loadControlTokens,
 } from "./server/controlToken.js";
 import { resolveMcpStateless } from "./mcp/server.js";
-import { PACKAGE_VERSION } from "./package-meta.js";
+import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
 import { installProxyDispatcher } from "./net/proxy.js";
 import { warnMissingCaPaths } from "./preflight/tls.js";
 import { logger as cliLogger } from "./logging/logger.js";
@@ -64,6 +68,7 @@ const USAGE = `Usage:
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
   sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
   sf restore <file> [--force] [--json]
+  sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
   sf runs verify --run <runId> --stage <stageId> [--json]
@@ -120,6 +125,8 @@ ${BACKUP_USAGE}
 
 ${RESTORE_USAGE}
 
+${EXPORT_ALL_USAGE}
+
 ${RUNS_USAGE}
 
 ${PROVIDERS_USAGE}
@@ -129,6 +136,7 @@ ${SKILLS_USAGE}`;
 function parseArgs(argv: string[]): {
   help: boolean;
   version?: boolean;
+  versionJson?: boolean;
   command?: string;
   task?: string;
   pipeline?: string;
@@ -151,10 +159,12 @@ function parseArgs(argv: string[]): {
     return { help: true };
   }
   if (args[0] === "--version" || args[0] === "-V") {
-    if (args.length > 1) {
-      throw new Error(`Unexpected argument: ${args[1]}`);
+    const versionJson = args.includes("--json");
+    const rest = args.slice(1).filter((a) => a !== "--json");
+    if (rest.length > 0) {
+      throw new Error(`Unexpected argument: ${rest[0]}`);
     }
-    return { help: false, version: true };
+    return { help: false, version: true, versionJson };
   }
 
   const command = args[0];
@@ -172,6 +182,7 @@ function parseArgs(argv: string[]): {
     command === "export-run" ||
     command === "backup" ||
     command === "restore" ||
+    command === "export" ||
     command === "runs" ||
     command === "skills"
   ) {
@@ -409,7 +420,16 @@ async function main(argv: string[]): Promise<number> {
       return argv.slice(2).length === 0 ? 1 : 0;
     }
     if (parsed.version) {
-      console.log(PACKAGE_VERSION);
+      if (parsed.versionJson) {
+        console.log(
+          JSON.stringify({
+            version: PACKAGE_VERSION,
+            build_sha: BUILD_SHA,
+          }),
+        );
+      } else {
+        console.log(PACKAGE_VERSION);
+      }
       return 0;
     }
 
@@ -498,6 +518,12 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "restore") {
       return runRestoreCommand(argv.slice(3));
+    }
+
+    if (parsed.command === "export") {
+      return runExportAllCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
     }
 
     if (parsed.command === "runs") {

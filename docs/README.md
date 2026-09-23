@@ -34,6 +34,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | Doc | What you'll learn |
 |-----|-------------------|
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
+| [Docker and self-hosting](docker.md) | Backup/restore, local volume boundary, provenance, egress posture, compose reference |
 | [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
 | [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running |
 | [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC |

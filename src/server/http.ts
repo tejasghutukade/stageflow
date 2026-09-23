@@ -54,6 +54,7 @@ import {
   resolveBackupNameForRestore,
   stageRestoreForBoot,
 } from "../runstore/restore.js";
+import { iterateExportNdjson } from "../cli/exportAllCommand.js";
 import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -404,6 +405,31 @@ export function createOperatorRoutes(
             }
             throw err;
           }
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/export") {
+          const filter: {
+            status?: import("../runstore/port.js").RunStatus;
+            since?: string;
+            pipeline?: string;
+          } = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          if (status) filter.status = status as import("../runstore/port.js").RunStatus;
+          if (since) filter.since = since;
+          if (pipeline) filter.pipeline = pipeline;
+          res.writeHead(200, {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+          });
+          for await (const line of iterateExportNdjson({
+            store,
+            filter: Object.keys(filter).length > 0 ? filter : undefined,
+          })) {
+            res.write(line);
+          }
+          res.end();
           return true;
         }
 
