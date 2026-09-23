@@ -6,6 +6,12 @@ import {
   type PipelineListing,
   type TaskListing,
 } from "../config/browseCatalog.js";
+import {
+  listModelsMultiProject,
+  listPipelinesMultiProject,
+  listTasksMultiProject,
+} from "../config/multiProjectCatalog.js";
+import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
@@ -22,16 +28,6 @@ import {
   findTokenShapedField,
   tokenRejectedPayload,
 } from "../runtime/startPayload.js";
-
-/**
- * Every project a host serving a global store has ever recorded a run for,
- * plus this host's own launch directory (always included so a project with
- * zero runs yet still sees its own catalog).
- */
-async function catalogRootsFor(deps: McpToolDeps): Promise<string[]> {
-  const known = await deps.store.listProjectRoots();
-  return [...new Set([...known, deps.cwd])];
-}
 
 /** Resolve which project a given catalog path (pipeline/task) belongs to. */
 function projectRootForPath(deps: McpToolDeps, catalogPath: string): string {
@@ -112,23 +108,34 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_pipelines",
     {
       description:
-        "List manifest-declared pipeline paths across every project this host knows about (this host's own project plus any project a run has ever been recorded for). Each entry is tagged with project_root. A project with no runs yet won't appear until its first run exists.",
-      inputSchema: z.object({}),
+        "List manifest-declared pipeline paths across every project this host knows about (boot cwd, registered store roots, and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
+      inputSchema: z.object({
+        project_root: z.string().optional(),
+      }),
     },
-    async () => {
-      const roots = await catalogRootsFor(deps);
-      const pipelines: Array<PipelineListing & { project_root: string }> = [];
-      for (const root of roots) {
-        try {
-          const catalog = await browseCatalog(root);
-          for (const p of catalog.pipelines) {
-            pipelines.push({ ...p, project_root: root });
-          }
-        } catch {
-          // stale/unreadable project root recorded on an old run; skip it
-        }
+    async ({ project_root }) => {
+      const result = await listPipelinesMultiProject({
+        store,
+        bootCwd: cwd,
+        projectRootFilter: project_root,
+      });
+      if (
+        result.root_errors.some((e) => e.code === "unknown_project_root") &&
+        result.items.length === 0
+      ) {
+        return textResult(
+          {
+            error: result.root_errors[0]!.message,
+            code: "unknown_project_root",
+            root_errors: result.root_errors,
+          },
+          true,
+        );
       }
-      return textResult({ pipelines });
+      return textResult({
+        pipelines: result.items,
+        root_errors: result.root_errors,
+      });
     },
   );
 
@@ -136,23 +143,34 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_tasks",
     {
       description:
-        "List manifest-declared task paths across every project this host knows about (this host's own project plus any project a run has ever been recorded for). Each entry is tagged with project_root. A project with no runs yet won't appear until its first run exists.",
-      inputSchema: z.object({}),
+        "List manifest-declared task paths across every project this host knows about (boot cwd, registered store roots, and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
+      inputSchema: z.object({
+        project_root: z.string().optional(),
+      }),
     },
-    async () => {
-      const roots = await catalogRootsFor(deps);
-      const tasks: Array<TaskListing & { project_root: string }> = [];
-      for (const root of roots) {
-        try {
-          const catalog = await browseCatalog(root);
-          for (const t of catalog.tasks) {
-            tasks.push({ ...t, project_root: root });
-          }
-        } catch {
-          // stale/unreadable project root recorded on an old run; skip it
-        }
+    async ({ project_root }) => {
+      const result = await listTasksMultiProject({
+        store,
+        bootCwd: cwd,
+        projectRootFilter: project_root,
+      });
+      if (
+        result.root_errors.some((e) => e.code === "unknown_project_root") &&
+        result.items.length === 0
+      ) {
+        return textResult(
+          {
+            error: result.root_errors[0]!.message,
+            code: "unknown_project_root",
+            root_errors: result.root_errors,
+          },
+          true,
+        );
       }
-      return textResult({ tasks });
+      return textResult({
+        tasks: result.items,
+        root_errors: result.root_errors,
+      });
     },
   );
 
@@ -160,12 +178,35 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_models",
     {
       description:
-        "List catalog model ids from the project catalog (same source as GET /api/models)",
-      inputSchema: z.object({}),
+        "List catalog model ids across every project this host knows about (same multi-root source as GET /api/models). Optional project_root filter narrows.",
+      inputSchema: z.object({
+        project_root: z.string().optional(),
+      }),
     },
-    async () => {
-      const catalog = await browseCatalog(cwd);
-      return textResult({ models: catalog.models });
+    async ({ project_root }) => {
+      const result = await listModelsMultiProject({
+        store,
+        bootCwd: cwd,
+        projectRootFilter: project_root,
+      });
+      if (
+        result.root_errors.some((e) => e.code === "unknown_project_root") &&
+        result.items.length === 0
+      ) {
+        return textResult(
+          {
+            error: result.root_errors[0]!.message,
+            code: "unknown_project_root",
+            root_errors: result.root_errors,
+          },
+          true,
+        );
+      }
+      return textResult({
+        models: result.models,
+        entries: result.items,
+        root_errors: result.root_errors,
+      });
     },
   );
 
@@ -355,15 +396,22 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         else if (task !== undefined && task.trim()) scope = "task";
 
         if (scope === "full") {
-          const roots = await catalogRootsFor(deps);
+          const roots = await resolveCatalogRoots({
+            store: deps.store,
+            bootCwd: deps.cwd,
+          });
           const results: ValidationResult[] = [];
           for (const root of roots) {
             try {
               results.push(
-                await validateCatalog({ cwd: root, scope: "full", strict: strict ?? false }),
+                await validateCatalog({
+                  cwd: root.path,
+                  scope: "full",
+                  strict: strict ?? false,
+                }),
               );
             } catch {
-              // stale/unreadable project root recorded on an old run; skip it
+              // unreadable root; skip
             }
           }
           const merged: ValidationResult = {

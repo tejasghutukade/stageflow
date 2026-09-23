@@ -14,6 +14,11 @@ import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
+import {
+  listModelsMultiProject,
+  listPipelinesMultiProject,
+  listTasksMultiProject,
+} from "../config/multiProjectCatalog.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
@@ -789,14 +794,52 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/tasks") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { tasks: catalog.tasks });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listTasksMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            tasks: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
         if (method === "GET" && pathname === "/api/pipelines") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { pipelines: catalog.pipelines });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipelines: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
@@ -868,8 +911,28 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/models") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { models: catalog.models });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listModelsMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            models: result.models,
+            entries: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
