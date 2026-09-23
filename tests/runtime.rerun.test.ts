@@ -251,7 +251,7 @@ describe("run manager re-run", () => {
     }
   });
 
-  it("rerun does not copy CI identity onto the new run", async () => {
+  it("rerun replays CI identity from the source run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-ci-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([
@@ -291,9 +291,11 @@ describe("run manager re-run", () => {
     expect(result.runId).not.toBe(started.runId);
 
     const copy = await store.readRunMeta(result.runId);
-    expect(copy.git_sha).toBeUndefined();
-    expect(copy.ci_pr_url).toBeUndefined();
-    expect(copy.ci_job_url).toBeUndefined();
+    expect(copy.git_sha).toBe("deadbeef");
+    expect(copy.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(copy.ci_job_url).toBe(
+      "https://github.com/acme/repo/actions/runs/99",
+    );
 
     while (manager.getActiveCount() > 0) {
       await new Promise((r) => setTimeout(r, 20));

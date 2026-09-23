@@ -37,11 +37,16 @@ import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnaps
 import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
+  InlinePipelineTooLargeError,
   PipelineValidationError,
   QueuedRunActivationAborted,
   startPipeline,
   type PipelineRunResult,
 } from "./pipelineRunner.js";
+import {
+  INLINE_PIPELINE_TOO_LARGE,
+  pipelinePersistenceForStart,
+} from "./startPayload.js";
 import {
   hydrateScheduleFromStore,
   hydratedScheduleHasRunnableWork,
@@ -1554,23 +1559,46 @@ export class RunManager {
     }
     const cwd = this.options.cwd ?? process.cwd();
 
-    let pipeline: string;
+    let pipeline: string | InlinePipelineDefinition;
     let taskYaml: string;
     let rerunCwd = cwd;
     let rerunProjectRoot: string | undefined;
+    let skipGates: boolean | undefined;
+    let ciIdentity:
+      | { gitSha?: string; ciPrUrl?: string; ciJobUrl?: string }
+      | undefined;
     let pinned:
       | { ref: string; resolvedSha: string }
       | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
-      if (!meta.pipeline_path) {
+      if (meta.pipeline_source === "inline") {
+        const body = await this.options.store.readPipelineBody(runId);
+        if (body === null || body === "") {
+          return {
+            ok: false,
+            reason: `Run ${runId} is missing pipeline_body; re-run of an inline pipeline requires the stored body.`,
+            status: 400,
+          };
+        }
+        try {
+          pipeline = JSON.parse(body) as InlinePipelineDefinition;
+        } catch {
+          return {
+            ok: false,
+            reason: `Run ${runId} has invalid pipeline_body JSON`,
+            status: 400,
+          };
+        }
+      } else if (meta.pipeline_path) {
+        pipeline = normalizeCatalogPath(meta.pipeline_path);
+      } else {
         return {
           ok: false,
-          reason: `Run ${runId} is missing pipeline_path; re-run requires stored catalog locators.`,
+          reason: `Run ${runId} has neither pipeline_path nor pipeline_body; cannot re-run.`,
           status: 400,
         };
       }
-      pipeline = normalizeCatalogPath(meta.pipeline_path);
       rerunCwd = meta.project_root
         ? normalizeCatalogPath(meta.project_root)
         : cwd;
@@ -1578,6 +1606,12 @@ export class RunManager {
         ? normalizeCatalogPath(meta.project_root)
         : undefined;
       taskYaml = await this.options.store.readTaskYaml(runId);
+      skipGates = meta.skip_gates;
+      ciIdentity = {
+        ...(meta.git_sha !== undefined ? { gitSha: meta.git_sha } : {}),
+        ...(meta.ci_pr_url !== undefined ? { ciPrUrl: meta.ci_pr_url } : {}),
+        ...(meta.ci_job_url !== undefined ? { ciJobUrl: meta.ci_job_url } : {}),
+      };
       if (options?.pinned) {
         if (
           meta.resolved_sha === undefined ||
@@ -1604,8 +1638,8 @@ export class RunManager {
       `run ${runId} task`,
       rerunCwd,
       undefined,
-      undefined,
-      undefined,
+      skipGates,
+      ciIdentity,
       rerunProjectRoot,
       undefined,
       undefined,
@@ -2557,6 +2591,15 @@ export class RunManager {
     submission?: RunSubmission,
     pinned?: { ref: string; resolvedSha: string },
   ): Promise<StartRunResult> {
+    const persistence = pipelinePersistenceForStart(pipeline);
+    if (!persistence.ok) {
+      return {
+        ok: false,
+        reason: `Inline pipeline body is ${persistence.bytes} bytes; max is ${persistence.maxBytes}`,
+        status: 400,
+        code: INLINE_PIPELINE_TOO_LARGE,
+      };
+    }
     const resolvedProjectRoot = normalizeCatalogPath(
       projectRoot ?? this.projectRoot,
     );
@@ -2684,6 +2727,11 @@ export class RunManager {
         gitAuthorName: gitIdentity.name,
         gitAuthorEmail: gitIdentity.email,
         status: "queued",
+        pipelineSource: persistence.fields.pipelineSource,
+        ...(persistence.fields.pipelineBody !== undefined
+          ? { pipelineBody: persistence.fields.pipelineBody }
+          : {}),
+        skipGates,
       });
       const meta = await this.options.store.readRunMeta(created.runId);
       const queuePosition = this.admissionQueue.enqueue(resolvedProjectRoot, {
@@ -2762,6 +2810,14 @@ export class RunManager {
     } catch (err) {
       await rollback().catch(() => undefined);
       this.clearReservation(admitted.provisionalId);
+      if (err instanceof InlinePipelineTooLargeError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code,
+        };
+      }
       if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {
         throw err;
       }
@@ -3139,12 +3195,26 @@ export class RunManager {
               ? await toCheckoutLeaseKey(pathCheckoutRoot)
               : undefined;
         }
-        if (!meta.pipeline_path) {
+        if (meta.pipeline_source === "inline") {
+          const body = await this.options.store.readPipelineBody(runId);
+          if (body === null || body === "") {
+            await this.cancelRun(runId, "pipeline_body unavailable after restart");
+            return "cancelled";
+          }
+          try {
+            pipeline = JSON.parse(body) as InlinePipelineDefinition;
+          } catch {
+            await this.cancelRun(runId, "pipeline_body invalid after restart");
+            return "cancelled";
+          }
+        } else if (meta.pipeline_path) {
+          pipeline = normalizeCatalogPath(meta.pipeline_path);
+        } else {
           await this.cancelRun(runId, "pipeline_path unavailable after restart");
           return "cancelled";
         }
-        pipeline = normalizeCatalogPath(meta.pipeline_path);
         taskPath = meta.task_path;
+        skipGates = meta.skip_gates;
         ciIdentity = {
           gitSha: meta.git_sha,
           ciPrUrl: meta.ci_pr_url,

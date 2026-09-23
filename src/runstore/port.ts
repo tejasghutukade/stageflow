@@ -372,6 +372,7 @@ export type RunSummary = {
   pipeline_path?: string;
   task_path?: string;
   project_root?: string;
+  pipeline_source?: "inline" | "path";
   status: RunStatus;
   created_at: string;
   updated_at?: string;

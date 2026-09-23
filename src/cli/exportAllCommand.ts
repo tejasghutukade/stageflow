@@ -34,13 +34,15 @@ export type ExportHeader = {
   filter?: ListRunsFilter;
 };
 
+export type ExportPipelineSource =
+  | { kind: "path"; path: string; pipeline: null }
+  | { kind: "inline"; pipeline: unknown }
+  | { kind: "unavailable"; pipeline: null; note: string };
+
 export type ExportRunLine = {
   type: "projectRun";
   run: ReturnType<typeof projectRun> & {
-    pipeline_source: {
-      kind: "unavailable";
-      note: string;
-    };
+    pipeline_source: ExportPipelineSource;
   };
 };
 
@@ -57,15 +59,57 @@ export function buildExportHeader(
   };
 }
 
+export function resolveExportPipelineSource(options: {
+  pipelineSource?: "inline" | "path";
+  pipelinePath?: string;
+  pipelineBody?: string | null;
+}): ExportPipelineSource {
+  if (options.pipelineSource === "inline") {
+    if (options.pipelineBody != null && options.pipelineBody !== "") {
+      try {
+        return {
+          kind: "inline",
+          pipeline: JSON.parse(options.pipelineBody) as unknown,
+        };
+      } catch {
+        return {
+          kind: "unavailable",
+          pipeline: null,
+          note: "pipeline_body is not valid JSON",
+        };
+      }
+    }
+    return {
+      kind: "unavailable",
+      pipeline: null,
+      note: "inline pipeline body missing",
+    };
+  }
+  if (options.pipelineSource === "path" || options.pipelinePath) {
+    return {
+      kind: "path",
+      path: options.pipelinePath ?? "",
+      pipeline: null,
+    };
+  }
+  return {
+    kind: "unavailable",
+    pipeline: null,
+    note: "pipeline source not recorded",
+  };
+}
+
 export function projectRunForExport(
   detail: Parameters<typeof projectRun>[0],
+  pipelineBody?: string | null,
 ): ExportRunLine["run"] {
   return {
     ...projectRun(detail),
-    pipeline_source: {
-      kind: "unavailable",
-      note: "Inline pipeline body persistence lands in Slot 9",
-    },
+    pipeline_source: resolveExportPipelineSource({
+      pipelineSource: detail.pipeline_source,
+      pipelinePath: detail.pipeline_path,
+      pipelineBody,
+    }),
   };
 }
 
@@ -144,6 +188,7 @@ export async function* iterateExportNdjson(options: {
       Array<{ run_id: string }>
     >;
     readRun: (runId: string) => Promise<Parameters<typeof projectRun>[0]>;
+    readPipelineBody: (runId: string) => Promise<string | null>;
   };
   filter?: ListRunsFilter;
   now?: Date;
@@ -152,9 +197,10 @@ export async function* iterateExportNdjson(options: {
   const runs = await options.store.listRuns(options.filter);
   for (const summary of runs) {
     const detail = await options.store.readRun(summary.run_id);
+    const pipelineBody = await options.store.readPipelineBody(summary.run_id);
     const line: ExportRunLine = {
       type: "projectRun",
-      run: projectRunForExport(detail),
+      run: projectRunForExport(detail, pipelineBody),
     };
     yield `${JSON.stringify(line)}\n`;
   }

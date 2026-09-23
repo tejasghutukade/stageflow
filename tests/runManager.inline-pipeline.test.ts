@@ -75,6 +75,10 @@ describe("run manager inline pipeline", () => {
     const meta = await store.readRunMeta(result.runId);
     expect(meta.pipeline_path).toBeUndefined();
     expect(meta.pipeline_id).toBe("inline-run-demo");
+    expect(meta.pipeline_source).toBe("inline");
+    expect(await store.readPipelineBody(result.runId)).toBe(
+      JSON.stringify(pipeline),
+    );
   });
 
   it("falls back to the host's own project root — no crash trying to derive one from an object", async () => {
@@ -111,10 +115,13 @@ describe("run manager inline pipeline", () => {
     expect(meta.project_root).toBe(fixtures);
   });
 
-  it("rerun on an inline-pipeline run returns the existing missing-pipeline_path error", async () => {
+  it("rerun on an inline-pipeline run replays the stored body", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-inline-rerun-"));
     const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([successEnvelope("done")]);
+    const agent = scriptedFakeAgent([
+      successEnvelope("done"),
+      successEnvelope("rerun"),
+    ]);
     const manager = new RunManager({ agent, cwd: fixtures, store });
 
     const pipeline: InlinePipelineDefinition = {
@@ -141,9 +148,19 @@ describe("run manager inline pipeline", () => {
       return detail.status === "succeeded";
     });
 
+    const meta = await store.readRunMeta(result.runId);
+    expect(meta.pipeline_source).toBe("inline");
+    expect(await store.readPipelineBody(result.runId)).toBe(
+      JSON.stringify(pipeline),
+    );
+
     const rerunResult = await manager.rerun(result.runId);
-    expect(rerunResult.ok).toBe(false);
-    if (rerunResult.ok) return;
-    expect(rerunResult.reason).toMatch(/missing pipeline_path/);
+    expect(rerunResult.ok).toBe(true);
+    if (!rerunResult.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(rerunResult.runId);
+      return detail.status === "succeeded";
+    });
   });
 });

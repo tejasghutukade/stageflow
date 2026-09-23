@@ -1,7 +1,46 @@
+import type { InlinePipelineDefinition } from "../types/pipeline.js";
+
 /** Cap for inline pipeline body + skills start payload (1 MiB). */
 export const START_PAYLOAD_MAX_BYTES = 1_048_576;
 
 export const START_TOKEN_REJECTED = "start.token_rejected" as const;
+export const INLINE_PIPELINE_TOO_LARGE = "inline_pipeline_too_large" as const;
+
+export type PipelinePersistenceFields = {
+  pipelineSource: "inline" | "path";
+  pipelineBody?: string;
+};
+
+export type PipelinePersistenceResult =
+  | { ok: true; fields: PipelinePersistenceFields }
+  | {
+      ok: false;
+      code: typeof INLINE_PIPELINE_TOO_LARGE;
+      bytes: number;
+      maxBytes: number;
+    };
+
+export function pipelinePersistenceForStart(
+  pipeline: string | InlinePipelineDefinition,
+): PipelinePersistenceResult {
+  if (typeof pipeline === "string") {
+    return { ok: true, fields: { pipelineSource: "path" } };
+  }
+  const body = JSON.stringify(pipeline);
+  const bytes = Buffer.byteLength(body, "utf8");
+  if (bytes > START_PAYLOAD_MAX_BYTES) {
+    return {
+      ok: false,
+      code: INLINE_PIPELINE_TOO_LARGE,
+      bytes,
+      maxBytes: START_PAYLOAD_MAX_BYTES,
+    };
+  }
+  return {
+    ok: true,
+    fields: { pipelineSource: "inline", pipelineBody: body },
+  };
+}
 
 /** MCP prefers `checkout`; `checkout_override` remains a temporary alias. */
 export function pickCheckoutOverride(args: {

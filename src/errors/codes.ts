@@ -34,6 +34,7 @@ export const NETWORK_ERROR_CODES = [
   "disk_check_failed",
   "shutting_down",
   "start.token_rejected",
+  "inline_pipeline_too_large",
   "pinned_sha_unavailable",
   "store_integrity_failed",
   "store_unsupported_filesystem",

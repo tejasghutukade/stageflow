@@ -214,6 +214,9 @@ export function projectRunSummary(
     ...(meta.pipeline_path !== undefined ? { pipeline_path: meta.pipeline_path } : {}),
     ...(meta.task_path !== undefined ? { task_path: meta.task_path } : {}),
     ...(meta.project_root !== undefined ? { project_root: meta.project_root } : {}),
+    ...(meta.pipeline_source !== undefined
+      ? { pipeline_source: meta.pipeline_source }
+      : {}),
     status: resolveListedStatus(stages, meta, dag),
     created_at: meta.created_at,
     updated_at: meta.updated_at,

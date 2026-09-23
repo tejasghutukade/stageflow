@@ -29,10 +29,26 @@ import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { PipelineValidationError } from "./pipelineValidationError.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { checkTaskEntryInput } from "./taskInput.js";
+import { pipelinePersistenceForStart } from "./startPayload.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
 export type PipelineRunOutcome = "succeeded" | "failed" | "waiting" | "cancelled";
+
+export class InlinePipelineTooLargeError extends Error {
+  readonly code = "inline_pipeline_too_large" as const;
+  readonly bytes: number;
+  readonly maxBytes: number;
+
+  constructor(bytes: number, maxBytes: number) {
+    super(
+      `Inline pipeline body is ${bytes} bytes; max is ${maxBytes} (inline_pipeline_too_large)`,
+    );
+    this.name = "InlinePipelineTooLargeError";
+    this.bytes = bytes;
+    this.maxBytes = maxBytes;
+  }
+}
 
 /** Thrown when queued→running CAS fails (e.g. cancel won the race). */
 export class QueuedRunActivationAborted extends Error {
@@ -185,6 +201,13 @@ async function preparePipeline(options: {
     typeof options.pipeline === "string"
       ? normalizeCatalogPath(loaded.pipelinePath)
       : undefined;
+  const persistence = pipelinePersistenceForStart(options.pipeline);
+  if (!persistence.ok) {
+    throw new InlinePipelineTooLargeError(
+      persistence.bytes,
+      persistence.maxBytes,
+    );
+  }
   const taskPath = options.taskPath
     ? normalizeCatalogPath(path.resolve(options.cwd, options.taskPath))
     : undefined;
@@ -252,6 +275,11 @@ async function preparePipeline(options: {
       runBranch: options.runBranch,
       gitAuthorName: gitIdentity.name,
       gitAuthorEmail: gitIdentity.email,
+      pipelineSource: persistence.fields.pipelineSource,
+      ...(persistence.fields.pipelineBody !== undefined
+        ? { pipelineBody: persistence.fields.pipelineBody }
+        : {}),
+      skipGates: options.skipGates,
     });
   }
   const executionMode = readStageExecutionMode(

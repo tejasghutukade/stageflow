@@ -13,7 +13,7 @@ import { withIsolatedHome } from "./helpers/projectContext.js";
 import { globalStageflowHome } from "../src/project/globalHome.js";
 
 describe("export --all", () => {
-  it("emits header + projectRun lines including non-terminal with pipeline_source stub", async () => {
+  it("emits header + projectRun lines including non-terminal with pipeline_source", async () => {
     await withIsolatedHome(async () => {
       const home = globalStageflowHome();
       const store = createRunStore({ rootDir: home, openerMode: "migrate" });
@@ -53,16 +53,43 @@ describe("export --all", () => {
 });
 
 describe("projectRunForExport", () => {
-  it("adds pipeline_source stub", async () => {
+  it("fills inline pipeline body when persisted", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-export-proj-"));
+    const store = createRunStore({ rootDir: root, openerMode: "migrate" });
+    const pipeline = {
+      id: "inline-export",
+      stages: [{ id: "plan", system_prompt: "x" }],
+    };
+    const body = JSON.stringify(pipeline);
+    const created = await store.createRun({
+      pipelineId: "inline-export",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelineSource: "inline",
+      pipelineBody: body,
+    });
+    const detail = await store.readRun(created.runId);
+    const projected = projectRunForExport(detail, body);
+    expect(projected.pipeline_source).toEqual({
+      kind: "inline",
+      pipeline,
+    });
+    await store.close();
+  });
+
+  it("marks legacy runs without source as unavailable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-export-legacy-"));
     const store = createRunStore({ rootDir: root, openerMode: "migrate" });
     const created = await store.createRun({
       pipelineId: "p",
       taskYaml: "id: t\ngoal: g\n",
     });
     const detail = await store.readRun(created.runId);
-    const projected = projectRunForExport(detail);
-    expect(projected.pipeline_source.note).toMatch(/Slot 9/);
+    const projected = projectRunForExport(detail, null);
+    expect(projected.pipeline_source.kind).toBe("unavailable");
+    expect(projected.pipeline_source).toMatchObject({
+      pipeline: null,
+      note: "pipeline source not recorded",
+    });
     await store.close();
   });
 });

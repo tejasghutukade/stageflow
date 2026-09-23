@@ -40,6 +40,7 @@ export type StartFailureCode =
   | "task.invalid_shape"
   | "task.load_error"
   | "start.token_rejected"
+  | "inline_pipeline_too_large"
   | "shutting_down"
   | "autostart_disabled"
   | "claude_as_root";
