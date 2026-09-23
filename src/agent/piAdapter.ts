@@ -1314,6 +1314,13 @@ export async function reconstructStageSessionForAnswer(
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
 
     const liveSession = session;
     return {
@@ -1392,6 +1399,13 @@ async function bindStageSession(
     if (resolved.thinkingLevel) {
       session.setThinkingLevel(resolved.thinkingLevel);
     }
+    await input.onResolvedModel?.({
+      stageId: runtimeStageId(input),
+      model: resolved.model.id,
+      ...(resolved.thinkingLevel !== undefined
+        ? { thinkingLevel: resolved.thinkingLevel }
+        : {}),
+    });
   } catch (err) {
     await shutdownSession(session);
     return {

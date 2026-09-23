@@ -1,6 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { projectRun } from "../projection/projectRun.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   createRunStoreAfterHostEnsure,
@@ -9,6 +8,7 @@ import {
   ensureGlobalService,
 } from "../server/ensureGlobalService.js";
 import type { RunStatus } from "../runstore/port.js";
+import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
 import { isInsideDir } from "../runstore/workspaceLayout.js";
 
 export const EXPORT_RUN_USAGE = `Usage:
@@ -110,11 +110,20 @@ function resolveSafeOutPath(outPath: string, cwd: string): string {
   return resolved;
 }
 
-function assertRunComplete(status: RunStatus, runId: string): void {
-  if (status === "succeeded" || status === "failed") {
+const EXPORTABLE_STATUSES = new Set<RunStatus>([
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "queued",
+  "created",
+]);
+
+function assertRunExportable(status: RunStatus, runId: string): void {
+  if (EXPORTABLE_STATUSES.has(status)) {
     return;
   }
-  throw new Error(`run is not complete: ${runId} (status: ${status})`);
+  throw new Error(`run cannot be exported: ${runId} (status: ${status})`);
 }
 
 export async function runExportRunCommand(
@@ -172,8 +181,8 @@ export async function runExportRunCommand(
 
   try {
     const detail = await store.readRun(runId);
-    assertRunComplete(detail.status, runId);
-    const projection = projectRun(detail);
+    assertRunExportable(detail.status, runId);
+    const projection = buildRunExportPayload(detail);
     const json = JSON.stringify(projection, null, 2);
 
     if (parsed.outPath !== undefined) {

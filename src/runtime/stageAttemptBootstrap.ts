@@ -18,6 +18,7 @@ import {
 } from "../config/listSkills.js";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { defaultSeededRoots } from "../config/seededCatalog.js";
+import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { runSkillsDir } from "./runSkills.js";
 import {
@@ -38,6 +39,19 @@ import {
 import { resolveCloneEmitContext, resolveForkEmitContext } from "../config/resolveForkEmitContext.js";
 import { createAttemptQaTrailReader } from "../hitl/qaTrail.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../runstore/port.js";
+import {
+  collectMcpEnvNamedSecrets,
+  patchRunManifest,
+  redactMcpServers,
+  sha256Digest,
+  withSkillEntry,
+  withStageMcpServers,
+  withStageResolvedModel,
+} from "../runstore/runManifest.js";
+import {
+  getNamedSecrets,
+  registerNamedSecrets,
+} from "../logging/namedSecrets.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { ResolvedPipelineDag } from "../types/pipeline.js";
 import type { LoadedStageConfig, StageConfig } from "../types/stage.js";
@@ -341,6 +355,48 @@ async function openStageWithOperatorCatalog(
   if (origins.length > 0) {
     await resolveOptions.store.appendConfigOrigins(resolveOptions.runId, origins);
   }
+  const stageIdForManifest = input.stageId ?? input.stage.id;
+  if (resolvedMcpServers !== undefined) {
+    const mcpSecrets = collectMcpEnvNamedSecrets(resolvedMcpServers);
+    if (mcpSecrets.length > 0) {
+      registerNamedSecrets(mcpSecrets);
+    }
+    const originMap = new Map(
+      origins
+        .filter((o) => o.name.length > 0)
+        .map((o) => [o.name, o.origin] as const),
+    );
+    const mcpServers = redactMcpServers(
+      resolvedMcpServers,
+      [...getNamedSecrets(), ...mcpSecrets],
+      originMap,
+    );
+    await patchRunManifest(
+      resolveOptions.store,
+      resolveOptions.runId,
+      (m) => withStageMcpServers(m, stageIdForManifest, mcpServers),
+      [...getNamedSecrets(), ...mcpSecrets],
+    ).catch(() => null);
+  }
+  if (skill.skillOrigin !== undefined && skill.skillFilePath !== undefined) {
+    const skillName = input.stage.skill;
+    if (skillName !== undefined) {
+      let digest: string;
+      try {
+        digest = sha256Digest(readFileSync(skill.skillFilePath));
+      } catch {
+        digest = sha256Digest(skill.skillFilePath);
+      }
+      await patchRunManifest(resolveOptions.store, resolveOptions.runId, (m) =>
+        withSkillEntry(m, {
+          name: skillName,
+          origin: skill.skillOrigin!,
+          digest,
+          files: ["SKILL.md"],
+        }),
+      ).catch(() => null);
+    }
+  }
   try {
     const handle = agent.openStage({
       ...input,
@@ -355,6 +411,19 @@ async function openStageWithOperatorCatalog(
         ? { skillFilePath: skill.skillFilePath }
         : {}),
       ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
+      onResolvedModel: async (info) => {
+        await patchRunManifest(
+          resolveOptions.store,
+          resolveOptions.runId,
+          (m) =>
+            withStageResolvedModel(m, info.stageId, {
+              model: info.model,
+              ...(info.thinkingLevel !== undefined
+                ? { thinkingLevel: info.thinkingLevel }
+                : {}),
+            }),
+        ).catch(() => null);
+      },
     });
     return { ok: true, handle };
   } catch (err) {

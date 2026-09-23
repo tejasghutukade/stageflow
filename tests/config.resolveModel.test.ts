@@ -22,7 +22,10 @@ describe("resolveModelOutcome — precedence", () => {
     const outcome = resolveModelOutcome({ global: "anthropic/claude-sonnet-4-5" }, ctx);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value).toBe("anthropic/claude-sonnet-4-5");
+    expect(outcome.value).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      tier: "global",
+    });
   });
 
   it("pipeline overrides global", () => {
@@ -35,7 +38,7 @@ describe("resolveModelOutcome — precedence", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value).toBe("openai/gpt-4o");
+    expect(outcome.value).toEqual({ model: "openai/gpt-4o", tier: "pipeline" });
   });
 
   it("stage overrides pipeline and global", () => {
@@ -49,14 +52,20 @@ describe("resolveModelOutcome — precedence", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value).toBe("google/gemini-2.5-pro");
+    expect(outcome.value).toEqual({
+      model: "google/gemini-2.5-pro",
+      tier: "stage",
+    });
   });
 
   it("stage alone succeeds", () => {
     const outcome = resolveModelOutcome({ stage: "anthropic/claude-opus-4" }, ctx);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value).toBe("anthropic/claude-opus-4");
+    expect(outcome.value).toEqual({
+      model: "anthropic/claude-opus-4",
+      tier: "stage",
+    });
   });
 
   it("rejects empty and whitespace-only effective models", () => {
@@ -88,7 +97,10 @@ describe("resolveModelOutcome — precedence", () => {
     );
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value).toBe("anthropic/claude-sonnet-4-5");
+    expect(outcome.value).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      tier: "stage",
+    });
   });
 });
 

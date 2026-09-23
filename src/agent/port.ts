@@ -85,6 +85,12 @@ export type StageRunInput = {
   repairContext?: StageRepairContext;
   /** Live attempt-scoped QA trail; read at emit execute time, not bootstrap time. */
   readQaTrail?: () => QaExchange[] | Promise<QaExchange[]>;
+  /** Optional: record the provider-resolved model after resolveCliModel. */
+  onResolvedModel?: (info: {
+    stageId: string;
+    model: string;
+    thinkingLevel?: string;
+  }) => void | Promise<void>;
 };
 
 export function runtimeStageId(input: Pick<StageRunInput, "stage" | "stageId">): string {

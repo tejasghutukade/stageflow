@@ -6,7 +6,7 @@ import path from "node:path";
 import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import type { InlinePipelineDefinition } from "../types/pipeline.js";
+import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
 import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
 import {
   durableRootDiskBreakdown,
@@ -78,6 +78,15 @@ import {
 } from "./stageConcurrency.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { logger as rootLogger } from "../logging/logger.js";
+import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import { shouldRegisterValue } from "../logging/redact.js";
+import {
+  bindingFromFields,
+  buildInitialRunManifest,
+  collectDeclaredSecretValues,
+  finaliseStoredRunManifest,
+} from "../runstore/runManifest.js";
+import { getRequestAuth } from "../server/requestAuthContext.js";
 import { STAGE_ENV_PASSTHROUGH } from "./stageEnvironment.js";
 import { proxyHealthFields } from "../net/proxy.js";
 import { getContainerLimits } from "./containerLimits.js";
@@ -1285,6 +1294,9 @@ export class RunManager {
 
     await this.options.store.updateRunStatus(runId, "cancelled");
     await this.options.store.setCancelReason(runId, trimmedReason);
+    await finaliseStoredRunManifest(this.options.store, runId).catch(
+      () => undefined,
+    );
     await this.refreshRunDiskBytes(runId).catch(() => undefined);
 
     const halt = this.schedulingHalts.get(runId);
@@ -2682,6 +2694,9 @@ export class RunManager {
     let pipelineId: string;
     let pipelineDag: ReturnType<typeof buildPipelineDagSnapshotFromLoaded>;
     let pipelinePath: string | undefined;
+    let loadedPipeline!: LoadedPipeline;
+    let toolchainChecks: import("../preflight/toolchain.js").ToolchainCheck[] =
+      [];
     try {
       const loadedTask = loadTaskFromYamlOutcome(taskYaml, taskLabel);
       if (!loadedTask.ok) {
@@ -2731,6 +2746,7 @@ export class RunManager {
           buildValidationResult("pipeline", loadResult.findings, false),
         );
       }
+      loadedPipeline = loadResult.loaded;
       const pairing = checkTaskEntryInput(task, loadResult.loaded, {
         cwd,
         taskPath,
@@ -2776,6 +2792,7 @@ export class RunManager {
           code,
         };
       }
+      toolchainChecks = preflight.toolchain.checks;
     } catch (err) {
       if (err instanceof PipelineValidationError) throw err;
       if (err instanceof PipelinePreflightError) {
@@ -2809,6 +2826,36 @@ export class RunManager {
         process.env,
         task.git_identity,
       );
+      const createdAt = new Date().toISOString();
+      const auth = getRequestAuth();
+      const surface = auth?.surface ?? "cli";
+      const secretNames = loadedPipeline.stages.flatMap((s) =>
+        (s.secrets ?? []).map((d) => d.name),
+      );
+      const namedSecrets = collectDeclaredSecretValues(secretNames).filter(
+        (s) => shouldRegisterValue(s.value),
+      );
+      if (namedSecrets.length > 0) {
+        registerNamedSecrets(namedSecrets);
+      }
+      const runManifest = buildInitialRunManifest({
+        runId,
+        createdAt,
+        callerId: callerId ?? null,
+        surface,
+        binding: bindingFromFields({}),
+        pipelineSource: persistence.fields.pipelineSource,
+        pipelinePath,
+        pipelineBody: persistence.fields.pipelineBody ?? null,
+        taskYaml,
+        taskPath: taskPath
+          ? normalizeCatalogPath(path.resolve(cwd, taskPath))
+          : undefined,
+        skills: hasSkills ? validatedSkills : undefined,
+        stages: loadedPipeline.stages,
+        toolchain: toolchainChecks,
+        namedSecrets,
+      });
       const created = await this.options.store.createRun({
         submission,
         runId,
@@ -2834,6 +2881,7 @@ export class RunManager {
         ...(callerId !== undefined && callerId !== null
           ? { callerId }
           : {}),
+        runManifest,
         skipGates,
       });
       if (hasSkills) {

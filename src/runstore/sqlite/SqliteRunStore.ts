@@ -740,6 +740,25 @@ export class SqliteRunStore implements RunStore {
     return this.getRunRow(runId).pipeline_body;
   }
 
+  async updateRunManifest(runId: string, manifest: unknown): Promise<void> {
+    await this.ready();
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET run_manifest = @run_manifest, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        run_manifest:
+          manifest === null || manifest === undefined
+            ? null
+            : JSON.stringify(manifest),
+        updated_at: new Date().toISOString(),
+      });
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
   async ensureStageWorkspace(runId: string, stageId: string): Promise<void> {
     await this.ready();
     this.getRunRow(runId);

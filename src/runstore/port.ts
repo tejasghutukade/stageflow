@@ -409,6 +409,8 @@ export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
   /** Append-only feedback-loop and replay history, ordered by creation. */
   feedback_loops: FeedbackLoopHistory[];
   config_origins?: ConfigOriginRecord[];
+  caller_id?: string;
+  run_manifest?: unknown;
 };
 
 export type FeedbackLoopHistory = {
@@ -516,6 +518,11 @@ export interface RunStore {
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
   readPipelineBody(runId: string): Promise<string | null>;
+  /**
+   * Atomic replace of the `run_manifest` JSON blob (build → redact → write).
+   * Pass `null` to clear.
+   */
+  updateRunManifest(runId: string, manifest: unknown): Promise<void>;
   /** Opaque run workspace root for agents and artifact tools. */
   getWorkspaceDir(runId: string): string;
   ensureStageWorkspace(runId: string, stageId: string): Promise<void>;

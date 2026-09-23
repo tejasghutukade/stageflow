@@ -29,6 +29,8 @@ import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
 import { imageResult, textResult } from "./toolResults.js";
+import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
+import { redactRunManifestForRead } from "../runstore/runManifest.js";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { runSkillsDir } from "../runtime/runSkills.js";
 import { listSkillsWithOrigin } from "../config/listSkills.js";
@@ -574,7 +576,33 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId }) => {
       try {
         const detail = await store.readRun(runId);
-        return textResult(projectRunForMcp(detail));
+        return textResult({
+          ...projectRunForMcp(detail),
+          run_manifest: redactRunManifestForRead(detail.run_manifest),
+        });
+      } catch (err) {
+        const mapped = mapStoreLookupError(err, { policy: "run" });
+        return textResult(
+          { error: mapped.error, status: mapped.status },
+          true,
+        );
+      }
+    },
+  );
+
+  server.registerTool(
+    "export_run",
+    {
+      description:
+        "Export a single run as projectRun projection plus run_manifest. Works for running, cancelled, and terminal runs. Prefer over CLI sf export-run when the Host is reachable.",
+      inputSchema: z.object({
+        runId: z.string(),
+      }),
+    },
+    async ({ runId }) => {
+      try {
+        const detail = await store.readRun(runId);
+        return textResult(buildRunExportPayload(detail));
       } catch (err) {
         const mapped = mapStoreLookupError(err, { policy: "run" });
         return textResult(

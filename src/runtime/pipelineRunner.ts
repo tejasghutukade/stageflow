@@ -39,6 +39,18 @@ import {
   runPipelinePreflight,
 } from "../preflight/pipelinePreflight.js";
 import { networkError } from "../errors/codes.js";
+import { newRunId } from "../runstore/paths.js";
+import {
+  bindingFromFields,
+  buildInitialRunManifest,
+  collectDeclaredSecretValues,
+  finaliseStoredRunManifest,
+} from "../runstore/runManifest.js";
+import {
+  getRequestAuth,
+} from "../server/requestAuthContext.js";
+import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import { shouldRegisterValue } from "../logging/redact.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
@@ -297,9 +309,48 @@ async function preparePipeline(options: {
     }
     run = { runId, workspaceDir: options.store.getWorkspaceDir(runId) };
   } else {
+    const runId = options.runId ?? newRunId();
+    const createdAt = new Date().toISOString();
+    const auth = getRequestAuth();
+    const surface = auth?.surface ?? "cli";
+    const callerId =
+      options.callerId !== undefined && options.callerId !== null
+        ? options.callerId
+        : null;
+    const secretNames = loaded.stages.flatMap((s) =>
+      (s.secrets ?? []).map((d) => d.name),
+    );
+    const namedSecrets = collectDeclaredSecretValues(secretNames).filter((s) =>
+      shouldRegisterValue(s.value),
+    );
+    if (namedSecrets.length > 0) {
+      registerNamedSecrets(namedSecrets);
+    }
+    const runManifest = buildInitialRunManifest({
+      runId,
+      createdAt,
+      callerId,
+      surface,
+      binding: bindingFromFields({
+        repository: options.repository,
+        ref: options.ref,
+        resolvedSha: options.resolvedSha,
+        runBranch: options.runBranch,
+        checkoutRoot,
+      }),
+      pipelineSource: persistence.fields.pipelineSource,
+      pipelinePath,
+      pipelineBody: persistence.fields.pipelineBody ?? null,
+      taskYaml,
+      taskPath,
+      skills: options.skills,
+      stages: loaded.stages,
+      toolchain: preflight.toolchain.checks,
+      namedSecrets,
+    });
     run = await options.store.createRun({
       submission: options.submission,
-      runId: options.runId,
+      runId,
       pipelineId: loaded.pipeline.id,
       taskYaml,
       taskId: task.id,
@@ -321,9 +372,8 @@ async function preparePipeline(options: {
       ...(persistence.fields.pipelineBody !== undefined
         ? { pipelineBody: persistence.fields.pipelineBody }
         : {}),
-      ...(options.callerId !== undefined && options.callerId !== null
-        ? { callerId: options.callerId }
-        : {}),
+      ...(callerId !== null ? { callerId } : {}),
+      runManifest,
       skipGates: options.skipGates,
     });
   }
@@ -507,6 +557,9 @@ export async function startPipeline(options: {
     schedulingHalt: options.schedulingHalt,
   }).catch(async (err) => {
     await prepared.store.updateRunStatus(prepared.run.runId, "failed").catch(() => undefined);
+    await finaliseStoredRunManifest(prepared.store, prepared.run.runId).catch(
+      () => undefined,
+    );
     return {
       ok: false as const,
       outcome: "failed" as const,

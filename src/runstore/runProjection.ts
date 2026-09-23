@@ -272,5 +272,9 @@ export function projectRunDetail(
     ...(meta.config_origins !== undefined && meta.config_origins.length > 0
       ? { config_origins: meta.config_origins }
       : {}),
+    ...(meta.caller_id !== undefined ? { caller_id: meta.caller_id } : {}),
+    ...(meta.run_manifest !== undefined
+      ? { run_manifest: meta.run_manifest }
+      : {}),
   };
 }

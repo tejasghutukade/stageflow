@@ -84,6 +84,7 @@ import {
   logger as rootLogger,
 } from "../logging/logger.js";
 import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
+import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -341,6 +342,7 @@ export async function writeTerminalRunStatus(
   const meta = await store.readRunMeta(runId);
   if (meta.status === "cancelled") return;
   await store.updateRunStatus(runId, status);
+  await finaliseStoredRunManifest(store, runId).catch(() => undefined);
   await refreshRunDiskUsage(store, runId).catch(() => undefined);
 }
 

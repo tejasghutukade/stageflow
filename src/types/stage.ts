@@ -57,4 +57,8 @@ export type StageConfig = {
   agent?: string;
 };
 
-export type LoadedStageConfig = StageConfig & { model: string };
+export type LoadedStageConfig = StageConfig & {
+  model: string;
+  /** Which catalog tier supplied `model` (stage > pipeline > global). */
+  model_tier?: "stage" | "pipeline" | "global";
+};

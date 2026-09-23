@@ -55,6 +55,10 @@ import {
   stageRestoreForBoot,
 } from "../runstore/restore.js";
 import { iterateExportNdjson } from "../cli/exportAllCommand.js";
+import {
+  buildRunExportPayload,
+  runDetailWithRedactedManifest,
+} from "../runstore/exportRunPayload.js";
 import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -671,11 +675,25 @@ export function createOperatorRoutes(
           return true;
         }
 
+        const exportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/export$/);
+        if (method === "GET" && exportMatch) {
+          const runId = decodeURIComponent(exportMatch[1] ?? "");
+          try {
+            const detail = await store.readRun(runId);
+            json(res, 200, buildRunExportPayload(detail));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
         if (method === "GET" && pathname.startsWith("/api/runs/")) {
           const rest = pathname.slice("/api/runs/".length);
           if (rest && !rest.includes("/")) {
             try {
-              json(res, 200, await store.readRun(decodeURIComponent(rest)));
+              const detail = await store.readRun(decodeURIComponent(rest));
+              json(res, 200, runDetailWithRedactedManifest(detail));
             } catch (err) {
               const mapped = mapStoreLookupError(err, { policy: "run" });
               json(res, 404, { error: mapped.error });
