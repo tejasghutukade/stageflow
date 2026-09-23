@@ -10,13 +10,16 @@ import {
   bindingKindForOrigin,
   catalogOrSeededOrigin,
   decideWorkspaceConfigTrust,
-  skillOriginKind,
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
-import { resolveSkillByName } from "../config/listSkills.js";
+import {
+  resolveSkillByName,
+  type SkillOrigin,
+} from "../config/listSkills.js";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { defaultSeededRoots } from "../config/seededCatalog.js";
 import { mkdir } from "node:fs/promises";
+import { runSkillsDir } from "./runSkills.js";
 import {
   MCP_CATALOG_FILENAME,
   STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
@@ -126,9 +129,14 @@ async function resolveStageSkillForRun(
     checkoutRoot?: string;
     factoryCwd?: string;
     trustWorkspaceConfig: string[];
+    workspaceDir: string;
   },
 ): Promise<
-  | { ok: true; skillFilePath?: string; origin?: ConfigOriginRecord }
+  | {
+      ok: true;
+      skillFilePath?: string;
+      skillOrigin?: SkillOrigin;
+    }
   | { ok: false; reason: string }
 > {
   const name = stage.skill;
@@ -139,16 +147,15 @@ async function resolveStageSkillForRun(
   const resolved = await resolveSkillByName(name, {
     cwd: catalog.cwd ?? process.cwd(),
     agentDir: catalog.agentDir,
+    runSkillsDir: runSkillsDir(options.workspaceDir),
+    ...(options.checkoutRoot !== undefined
+      ? { checkoutRoot: options.checkoutRoot }
+      : {}),
   });
   if (!resolved) {
     return { ok: false, reason: `Skill "${name}" is not installed` };
   }
-  const originKind = skillOriginKind(
-    resolved.scope,
-    resolved.filePath,
-    options.checkoutRoot,
-  );
-  if (originKind === "workspace") {
+  if (resolved.origin === "checkout") {
     const decision = decideWorkspaceConfigTrust({
       bindingKind: bindingKindForOrigin(options.bindingKind),
       projectRoot: options.factoryCwd ?? options.checkoutRoot ?? "",
@@ -165,11 +172,7 @@ async function resolveStageSkillForRun(
   return {
     ok: true,
     skillFilePath: resolved.filePath,
-    origin: {
-      name,
-      origin: originKind,
-      path: resolved.filePath,
-    },
+    skillOrigin: resolved.origin,
   };
 }
 
@@ -289,6 +292,7 @@ async function openStageWithOperatorCatalog(
     runId: string;
     pipelinePath?: string;
     dag: ResolvedPipelineDag;
+    workspaceDir: string;
   },
 ): Promise<OpenStageWithOperatorCatalogResult> {
   const skill = await resolveStageSkillForRun(input.stage, catalog, {
@@ -296,11 +300,11 @@ async function openStageWithOperatorCatalog(
     checkoutRoot: resolveOptions.checkoutRoot,
     factoryCwd,
     trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
+    workspaceDir: resolveOptions.workspaceDir,
   });
   if (!skill.ok) return skill;
   let resolvedMcpServers: ResolvedMcpServers | undefined;
   const origins: ConfigOriginRecord[] = [];
-  if (skill.origin !== undefined) origins.push(skill.origin);
   try {
     const mcp = await resolveAttemptMcpServers(
       input.stage.mcp,
@@ -609,6 +613,7 @@ export async function openStageAttempt(
       runId: input.runId,
       pipelinePath: meta.pipeline_path,
       dag: input.dag,
+      workspaceDir: input.workspaceDir,
     },
   );
   if (!opened.ok) return opened;

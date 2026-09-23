@@ -64,6 +64,7 @@ function toolDepsFrom(deps: McpHttpDeps): McpToolDeps {
     manager: deps.manager,
     store: deps.store,
     cwd: deps.cwd,
+    ...(deps.agentDir !== undefined ? { agentDir: deps.agentDir } : {}),
     ...(deps.providerAuthContext !== undefined
       ? { providerAuthContext: deps.providerAuthContext }
       : {}),

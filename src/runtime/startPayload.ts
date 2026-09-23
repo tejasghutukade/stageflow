@@ -11,6 +11,13 @@ export type PipelinePersistenceFields = {
   pipelineBody?: string;
 };
 
+export function pipelineBodyBytes(
+  fields: PipelinePersistenceFields,
+): number {
+  if (fields.pipelineBody === undefined) return 0;
+  return Buffer.byteLength(fields.pipelineBody, "utf8");
+}
+
 export type PipelinePersistenceResult =
   | { ok: true; fields: PipelinePersistenceFields }
   | {

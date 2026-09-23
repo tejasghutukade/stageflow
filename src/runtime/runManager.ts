@@ -46,8 +46,14 @@ import {
 } from "./pipelineRunner.js";
 import {
   INLINE_PIPELINE_TOO_LARGE,
+  pipelineBodyBytes,
   pipelinePersistenceForStart,
 } from "./startPayload.js";
+import {
+  materializeRunSkills,
+  validateSkillsPayload,
+  type SkillsPayload,
+} from "./runSkills.js";
 import {
   hydrateScheduleFromStore,
   hydratedScheduleHasRunnableWork,
@@ -454,6 +460,7 @@ type PendingQueuedStart = {
   binding: WorkspaceBinding;
   checkoutKey?: string;
   callerId?: string | null;
+  skills?: SkillsPayload;
 };
 
 type QueuedDoneDeferred = {
@@ -1524,6 +1531,7 @@ export class RunManager {
       ciJobUrl?: string;
       /** Attribution from auth only — never from request body/query. */
       callerId?: string | null;
+      skills?: SkillsPayload;
     },
     submission?: RunSubmission,
   ): Promise<StartRunResult> {
@@ -1589,6 +1597,7 @@ export class RunManager {
       submission,
       undefined,
       input.callerId,
+      input.skills,
     );
   }
 
@@ -2639,6 +2648,7 @@ export class RunManager {
     submission?: RunSubmission,
     pinned?: { ref: string; resolvedSha: string },
     callerId?: string | null,
+    skills?: SkillsPayload,
   ): Promise<StartRunResult> {
     const persistence = pipelinePersistenceForStart(pipeline);
     if (!persistence.ok) {
@@ -2649,6 +2659,19 @@ export class RunManager {
         code: INLINE_PIPELINE_TOO_LARGE,
       };
     }
+    const skillsCheck = validateSkillsPayload(skills, {
+      pipelineBytes: pipelineBodyBytes(persistence.fields),
+    });
+    if (!skillsCheck.ok) {
+      return {
+        ok: false,
+        reason: skillsCheck.reason,
+        status: 400,
+        code: skillsCheck.code,
+      };
+    }
+    const validatedSkills = skillsCheck.skills;
+    const hasSkills = Object.keys(validatedSkills).length > 0;
     const resolvedProjectRoot = normalizeCatalogPath(
       projectRoot ?? this.projectRoot,
     );
@@ -2813,6 +2836,9 @@ export class RunManager {
           : {}),
         skipGates,
       });
+      if (hasSkills) {
+        await materializeRunSkills(created.workspaceDir, validatedSkills);
+      }
       const meta = await this.options.store.readRunMeta(created.runId);
       const queuePosition = this.admissionQueue.enqueue(resolvedProjectRoot, {
         runId: created.runId,
@@ -2834,6 +2860,7 @@ export class RunManager {
         binding,
         checkoutKey,
         callerId,
+        ...(hasSkills ? { skills: validatedSkills } : {}),
       });
       const done = this.ensureQueuedDone(created.runId);
       return {
@@ -2889,6 +2916,7 @@ export class RunManager {
         skipGates,
         schedulingHalt,
         callerId,
+        ...(hasSkills ? { skills: validatedSkills } : {}),
       });
       this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
@@ -3282,6 +3310,7 @@ export class RunManager {
     let pinned: PendingQueuedStart["pinned"];
     let callerId: string | null | undefined =
       pending?.callerId ?? meta.caller_id ?? null;
+    let skills: SkillsPayload | undefined = pending?.skills;
 
     if (
       callerId !== undefined &&
@@ -3464,6 +3493,7 @@ export class RunManager {
         operatorCatalog: this.options.operatorCatalog,
         skipGates,
         schedulingHalt,
+        ...(skills !== undefined ? { skills } : {}),
       });
       this.pendingQueuedStarts.delete(runId);
       this.track(reserved.provisionalId, started.runId, started.done);

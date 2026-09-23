@@ -29,6 +29,9 @@ import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
 import { imageResult, textResult } from "./toolResults.js";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { runSkillsDir } from "../runtime/runSkills.js";
+import { listSkillsWithOrigin } from "../config/listSkills.js";
 import {
   findTokenShapedField,
   pickCheckoutOverride,
@@ -108,6 +111,12 @@ const startRunSchema = z
     git_sha: z.string().optional(),
     ci_pr_url: z.string().optional(),
     ci_job_url: z.string().optional(),
+    skills: z
+      .record(z.string(), z.record(z.string(), z.string()))
+      .optional()
+      .describe(
+        "Run-scoped skills: name → { relativePath: utf-8 contents }. Requires SKILL.md per name; materialised under the run workspace skills dir (never the worktree)",
+      ),
   })
   .passthrough()
   .refine((data) => Boolean(data.task_path) !== Boolean(data.task), {
@@ -125,6 +134,48 @@ const runStatusSchema = z.enum([
 
 export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;
+  const agentDir = deps.agentDir ?? getAgentDir();
+
+  server.registerTool(
+    "list_skills",
+    {
+      description:
+        "List skills with name, description, and origin (run|checkout|host). Optional runId scopes to that run's resolution view (run-tier skills first, then checkout .pi/skills, then host).",
+      inputSchema: z.object({
+        runId: z.string().optional(),
+      }),
+    },
+    async ({ runId }) => {
+      try {
+        let runSkills: string | undefined;
+        let checkoutRoot: string | undefined;
+        if (runId !== undefined) {
+          const meta = await store.readRunMeta(runId);
+          runSkills = runSkillsDir(store.getWorkspaceDir(runId));
+          checkoutRoot = meta.checkout_root;
+        }
+        const catalog = await listSkillsWithOrigin({
+          cwd,
+          agentDir,
+          ...(runSkills !== undefined ? { runSkillsDir: runSkills } : {}),
+          ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+        });
+        return textResult({
+          skills: catalog.skills,
+          diagnostics: catalog.diagnostics,
+        });
+      } catch (err) {
+        if (runId !== undefined) {
+          const mapped = mapStoreLookupError(err, { policy: "run" });
+          return textResult(
+            { error: mapped.error, status: mapped.status },
+            true,
+          );
+        }
+        throw err;
+      }
+    },
+  );
 
   server.registerTool(
     "list_pipelines",
@@ -369,7 +420,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url. REST POST /api/runs accepts path pipelines only (no inline pipeline); skills start payload lands in a later unit. Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, catalog path-contract codes.",
+        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url, skills (name → { relativePath: utf-8 contents }; requires SKILL.md; materialised under runs/<runId>/skills/, never the worktree). REST POST /api/runs accepts path pipelines only (no inline pipeline). Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, skills_*, inline_pipeline_too_large, catalog path-contract codes.",
       inputSchema: startRunSchema,
     },
     async (args) => {
@@ -388,6 +439,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         git_sha,
         ci_pr_url,
         ci_job_url,
+        skills,
       } = args;
       if (typeof pipeline === "string" && !pipeline.trim()) {
         return textResult({ error: "pipeline is required" }, true);
@@ -448,6 +500,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
           ...(git_sha !== undefined ? { gitSha: git_sha } : {}),
           ...(ci_pr_url !== undefined ? { ciPrUrl: ci_pr_url } : {}),
           ...(ci_job_url !== undefined ? { ciJobUrl: ci_job_url } : {}),
+          ...(skills !== undefined ? { skills } : {}),
           callerId,
         });
       } catch (err) {

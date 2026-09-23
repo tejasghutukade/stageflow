@@ -359,6 +359,7 @@ export async function bootstrapStageflowHost(
       manager,
       store,
       cwd,
+      agentDir,
       runChangeBus,
       providerAuthContext: options.providerAuthContext,
       projectRoot: rootDir,

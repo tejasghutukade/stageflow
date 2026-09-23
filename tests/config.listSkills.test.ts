@@ -186,6 +186,7 @@ describe("resolveSkillByName", () => {
       baseDir: first!.baseDir,
       scope: first!.sourceInfo.scope,
       source: first!.sourceInfo.source,
+      origin: first!.sourceInfo.scope === "project" ? "checkout" : "host",
     });
   });
 

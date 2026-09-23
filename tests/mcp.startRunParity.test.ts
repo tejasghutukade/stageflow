@@ -232,10 +232,10 @@ describe("start_run surface parity (U2)", () => {
         "git_sha",
         "ci_pr_url",
         "ci_job_url",
+        "skills",
       ]) {
         expect(desc).toContain(name);
       }
-      expect(desc).toMatch(/skills/i);
     } finally {
       spy.mockRestore();
       await new Promise<void>((resolve, reject) => {

@@ -714,11 +714,33 @@ stages:
 
 | Behavior | Detail |
 |----------|--------|
-| Resolution | Looks up `.pi/skills/NAME/SKILL.md` under the operator checkout (`--operator-cwd` / `STAGEFLOW_OPERATOR_CWD`) and the Pi agent skills dir |
+| Resolution | Looks up the skill name in order (first match wins) — see precedence table below |
 | Startup | Stage fails before the agent session if the skill is not installed |
 | Agent prompt | Skill instructions are injected for the stage attempt |
 
-Install skills before `sf run` in CI:
+#### Skill precedence
+
+| Order | Origin | Location |
+|------:|--------|----------|
+| 1 | `run` | `$STAGEFLOW_HOME/runs/<runId>/skills/<name>/` — materialised from `start_run.skills` (MCP/REST); never written into the checkout/worktree |
+| 2 | `checkout` | `<checkoutRoot>/.pi/skills/<name>/` — gated by `trust_workspace_config` for repository bindings |
+| 3 | `host` | Pi agent skills dir (`agentDir/skills`) / operator image skills |
+
+Same name: run wins. Checkout-sourced skills still require trust for repository bindings; run-scoped skills bypass that gate. MCP `list_skills` (optional `runId`) reports `name`, `description`, and `origin`.
+
+Ship skills with the run (harness):
+
+```json
+{
+  "skills": {
+    "archify": {
+      "SKILL.md": "---\nname: archify\ndescription: …\n---\n"
+    }
+  }
+}
+```
+
+Install durable host skills before `sf run` in CI (operator/image path):
 
 ```bash
 sf skills install --from-zip https://example.com/skill.zip --skill-name archify

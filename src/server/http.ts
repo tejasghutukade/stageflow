@@ -700,6 +700,7 @@ export function createOperatorRoutes(
             gitSha?: string;
             ciPrUrl?: string;
             ciJobUrl?: string;
+            skills?: Record<string, Record<string, string>>;
           };
           if (
             typeof typed.pipeline !== "string" ||
@@ -780,6 +781,7 @@ export function createOperatorRoutes(
               ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),
               ...(typed.ciPrUrl !== undefined ? { ciPrUrl: typed.ciPrUrl } : {}),
               ...(typed.ciJobUrl !== undefined ? { ciJobUrl: typed.ciJobUrl } : {}),
+              ...(typed.skills !== undefined ? { skills: typed.skills } : {}),
               callerId,
             });
           } catch (err) {

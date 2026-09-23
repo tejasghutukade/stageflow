@@ -31,6 +31,10 @@ import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { checkTaskEntryInput } from "./taskInput.js";
 import { pipelinePersistenceForStart } from "./startPayload.js";
 import {
+  materializeRunSkills,
+  type SkillsPayload,
+} from "./runSkills.js";
+import {
   preflightFailureCode,
   runPipelinePreflight,
 } from "../preflight/pipelinePreflight.js";
@@ -174,6 +178,7 @@ async function preparePipeline(options: {
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   callerId?: string | null;
+  skills?: SkillsPayload;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
@@ -322,6 +327,9 @@ async function preparePipeline(options: {
       skipGates: options.skipGates,
     });
   }
+  if (options.skills !== undefined && Object.keys(options.skills).length > 0) {
+    await materializeRunSkills(run.workspaceDir, options.skills);
+  }
   const executionMode = readStageExecutionMode(
     process.env,
     options.executionMode,
@@ -460,6 +468,7 @@ export async function startPipeline(options: {
   skipGates?: boolean;
   schedulingHalt?: { halted: boolean };
   callerId?: string | null;
+  skills?: SkillsPayload;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -489,6 +498,7 @@ export async function startPipeline(options: {
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
     callerId: options.callerId,
+    ...(options.skills !== undefined ? { skills: options.skills } : {}),
   });
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,

@@ -177,6 +177,44 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.skillFilePath).toBe(filePath);
   });
 
+  it("resolves run-scoped skill under repository binding without trust_workspace_config", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-run-skill-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      repository: "https://github.com/example/repo.git",
+    });
+    const { materializeRunSkills } = await import("../src/runtime/runSkills.js");
+    const skillBody =
+      "---\nname: run-fixture\ndescription: Run-scoped fixture.\n---\n# Run\n";
+    await materializeRunSkills(run.workspaceDir, {
+      "run-fixture": { "SKILL.md": skillBody },
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify", "run-fixture"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      checkoutRoot: await mkdtemp(path.join(tmpdir(), "sf-boot-co-")),
+      bindingKind: "repository",
+      trustWorkspaceConfig: [],
+      operatorCatalog: { cwd: factoryCwd, agentDir: operatorAgentDir },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.skillFilePath).toContain(
+      path.join("skills", "run-fixture", "SKILL.md"),
+    );
+  });
+
   it("forwards stage.timeout_ms as timeoutMs to openStage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-timeout-"));
     const store = createRunStore({ rootDir: root });
