@@ -3,6 +3,14 @@ export const START_PAYLOAD_MAX_BYTES = 1_048_576;
 
 export const START_TOKEN_REJECTED = "start.token_rejected" as const;
 
+/** MCP prefers `checkout`; `checkout_override` remains a temporary alias. */
+export function pickCheckoutOverride(args: {
+  checkout?: string;
+  checkout_override?: string;
+}): string | undefined {
+  return args.checkout ?? args.checkout_override;
+}
+
 const TOKEN_SHAPED_KEY =
   /^(token|github_token|gh_token|access_token|personal_access_token|pat|clone_token|git_token|api_token|auth_token)$/i;
 

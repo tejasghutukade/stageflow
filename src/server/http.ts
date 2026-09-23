@@ -667,6 +667,7 @@ export function createOperatorRoutes(
           const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
           let pipelinePath = typed.pipeline.trim();
           let taskInput: string | TaskFile = typed.task;
+          let checkoutOverride: string | undefined;
           try {
             pipelinePath = resolveCatalogRelativePath({
               inputPath: pipelinePath,
@@ -682,6 +683,14 @@ export function createOperatorRoutes(
                 fieldName: "task",
               }).absolutePath;
             }
+            if (typed.checkoutOverride !== undefined) {
+              checkoutOverride = resolveCatalogRelativePath({
+                inputPath: typed.checkoutOverride,
+                projectRoot: typed.project_root,
+                roots,
+                fieldName: "checkout",
+              }).absolutePath;
+            }
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(res, 400, catalogPathErrorBody(err));
@@ -694,8 +703,8 @@ export function createOperatorRoutes(
             result = await manager.startRun({
               task: taskInput,
               pipeline: pipelinePath,
-              ...(typed.checkoutOverride !== undefined
-                ? { checkoutOverride: typed.checkoutOverride }
+              ...(checkoutOverride !== undefined
+                ? { checkoutOverride }
                 : {}),
               ...(typed.skipGates !== undefined ? { skipGates: typed.skipGates } : {}),
               ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),

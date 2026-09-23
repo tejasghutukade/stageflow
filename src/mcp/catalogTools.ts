@@ -24,6 +24,7 @@ import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js
 import { imageResult, textResult } from "./toolResults.js";
 import {
   findTokenShapedField,
+  pickCheckoutOverride,
   tokenRejectedPayload,
 } from "../runtime/startPayload.js";
 
@@ -74,7 +75,16 @@ const startRunSchema = z
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
     project_root: z.string().optional(),
-    checkout_override: z.string().optional(),
+    checkout: z
+      .string()
+      .optional()
+      .describe(
+        "Catalog-relative checkout path (maps to RunManager checkoutOverride); absolute paths are rejected with absolute_path_not_allowed",
+      ),
+    checkout_override: z
+      .string()
+      .optional()
+      .describe("Alias of checkout; prefer checkout"),
     skip_gates: z.boolean().optional(),
     git_sha: z.string().optional(),
     ci_pr_url: z.string().optional(),
@@ -250,7 +260,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "start_run",
     {
       description:
-        "Start a pipeline run using a filesystem pipeline path or an inline pipeline definition ({ id, stages: [...] }, each stage the same shape as a YAML stage body — no uses: refs), and either task_path (catalog task file) or an inline task object (optional repository/ref binding). Optional checkout_override, skip_gates, git_sha, ci_pr_url, ci_job_url match REST. Returns { runId } or { runId, queued: true, queuePosition } when admitted to the queue. On conflict returns isError with code busy_capacity (admission queue full) or busy_checkout (path-checkout lease only; never queued), plus activeCount/maxConcurrent/activeRunIds and optional conflictingRunId/conflictingCheckout. Below STAGEFLOW_MIN_FREE_DISK_BYTES returns isError with code insufficient_disk (distinct from busy_capacity) plus freeBytes and minFreeBytes — the run is not queued. Token-shaped fields are rejected with start.token_rejected.",
+        "Start a pipeline run. Accepted params: pipeline (catalog-relative path or inline { id, stages: [...] } — stages are YAML stage bodies, no uses: refs), task_path XOR task (inline task may include repository/ref or checkout; repository XOR checkout with code task.binding_conflict), project_root, checkout (catalog-relative; prefer this name; absolute → absolute_path_not_allowed), checkout_override (alias of checkout), skip_gates, git_sha, ci_pr_url, ci_job_url. REST POST /api/runs accepts path pipelines only (no inline pipeline); skills start payload lands in a later unit. Returns { runId } or { runId, queued: true, queuePosition }. Errors: busy_capacity, busy_checkout, insufficient_disk, start.token_rejected, catalog path-contract codes.",
       inputSchema: startRunSchema,
     },
     async (args) => {
@@ -263,6 +273,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         task_path,
         task,
         project_root,
+        checkout,
         checkout_override,
         skip_gates,
         git_sha,
@@ -282,6 +293,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       });
       let resolvedPipeline: typeof pipeline = pipeline;
       let resolvedTask: typeof taskInput = taskInput;
+      let resolvedCheckout: string | undefined;
       try {
         if (typeof pipeline === "string") {
           resolvedPipeline = resolveCatalogRelativePath({
@@ -299,6 +311,15 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
             fieldName: "task_path",
           }).absolutePath;
         }
+        const rawCheckout = pickCheckoutOverride({ checkout, checkout_override });
+        if (rawCheckout !== undefined) {
+          resolvedCheckout = resolveCatalogRelativePath({
+            inputPath: rawCheckout,
+            projectRoot: project_root,
+            roots,
+            fieldName: "checkout",
+          }).absolutePath;
+        }
       } catch (err) {
         if (err instanceof CatalogPathError) {
           return textResult(catalogPathErrorBody(err), true);
@@ -310,8 +331,8 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         result = await manager.startRun({
           pipeline: resolvedPipeline,
           task: resolvedTask,
-          ...(checkout_override !== undefined
-            ? { checkoutOverride: checkout_override }
+          ...(resolvedCheckout !== undefined
+            ? { checkoutOverride: resolvedCheckout }
             : {}),
           ...(skip_gates !== undefined ? { skipGates: skip_gates } : {}),
           ...(git_sha !== undefined ? { gitSha: git_sha } : {}),

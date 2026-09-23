@@ -499,7 +499,22 @@ inline, since the whole point is nothing saved to disk. A run started from
 an inline pipeline has no `pipeline_path` and cannot later be `rerun` — see
 below.
 
-Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus `task_path` or `task` — no skip-gates, no CI identity flags, and no `--checkout` override (checkout comes from `task.checkout` only). HITL always parks.
+Exactly one of `task_path` or `task` is required. Accepted start params:
+
+| Param | Notes |
+|-------|--------|
+| `pipeline` | Catalog-relative path **or** inline `{ id, stages: [...] }` (MCP only — see REST asymmetry below) |
+| `task_path` / `task` | Exactly one; inline `task` may carry `repository`/`ref` or `checkout` |
+| `project_root` | Optional catalog root selector |
+| `checkout` | Catalog-relative path-checkout; maps to REST `checkoutOverride`. Absolute paths → `absolute_path_not_allowed` (not bare ENOENT) |
+| `checkout_override` | Temporary alias of `checkout` |
+| `skip_gates` | Skip HITL gates for unattended starts |
+| `git_sha` / `ci_pr_url` / `ci_job_url` | CI provenance metadata |
+| `skills` | Not accepted yet — run-scoped skills land in a later unit; do not send them |
+
+`repository`/`ref` on the task XOR `checkout` / `checkout_override` (and REST `checkoutOverride`) share code `task.binding_conflict` with REST and the CLI.
+
+**REST asymmetry:** `POST /api/runs` accepts **path pipelines only** (`pipeline` must be a string). Inline pipeline definitions are MCP-only (mount-free harness path). REST still accepts `checkoutOverride`, `skipGates`, `gitSha`, `ciPrUrl`, `ciJobUrl`, and path or inline `task`.
 
 **Success output:** `{ "runId": "…" }` when a concurrency slot is free, or `{ "runId": "…", "queued": true, "queuePosition": N }` when slots are full but the admission queue still has room. Queued is still a success — poll with `wait_run` / `get_run` until the run leaves `queued` and reaches waiting or terminal.
 
@@ -510,8 +525,10 @@ Exactly one of `task_path` or `task` is required. Schema is only `pipeline` plus
 | Admission queue full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds`. Fired when `STAGEFLOW_MAX_QUEUED` cannot accept another queued run (not merely when active slots are full) |
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout`. Never queued |
 | Free disk below floor | `insufficient_disk` | Includes `freeBytes`, `minFreeBytes`. Distinct from `busy_capacity`; the run is not created or queued |
+| Absolute checkout/path | `absolute_path_not_allowed` | Network path contract; includes `registered_roots` |
+| Repository + checkout | `task.binding_conflict` | Same named code on MCP, REST, and CLI |
 
-Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
+Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `repository`, `ref`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
 
 ### `get_run`
 
@@ -841,7 +858,7 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 
 - Cancel signals workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included
 - Until Slot 5, destructive MCP/REST verbs (`cancel_run`, `delete_run`, `gc_runs`, and their HTTP routes) rely on `isMutatingApi` loopback gating and local bind — not application auth. Slot 5 must cover MCP tools as well as HTTP
-- `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
+- REST `POST /api/runs` is path-pipeline-only; inline pipelines are MCP-only (see `start_run` REST asymmetry)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
 - No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail

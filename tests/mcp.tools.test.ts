@@ -2665,7 +2665,7 @@ describe("MCP start_run repository binding (U7)", () => {
           repository: "acme/api",
           ref: "main",
         },
-        checkout_override: "/tmp/some-path",
+        checkout: "pipelines",
       });
       expect(conflict.isError).toBe(true);
       expect(conflict.payload.code).toBe("task.binding_conflict");
@@ -2691,7 +2691,7 @@ describe("MCP start_run repository binding (U7)", () => {
 
       const tools = await mcpListTools(url);
       const start = tools.find((t) => t.name === "start_run");
-      expect(start?.description).toMatch(/path-checkout lease|skip_gates|token/i);
+      expect(start?.description).toMatch(/checkout|skip_gates|ci_pr_url|task\.binding_conflict/i);
 
       const rerunSpy = vi.spyOn(RunManager.prototype, "rerun").mockResolvedValue({
         ok: false,
