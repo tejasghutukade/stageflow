@@ -16,6 +16,10 @@ import {
   runExportRunCommand,
 } from "./cli/exportRunCommand.js";
 import {
+  DEBUG_RUN_USAGE,
+  runDebugRunCommand,
+} from "./cli/debugRunCommand.js";
+import {
   BACKUP_USAGE,
   runBackupCommand,
 } from "./cli/backupCommand.js";
@@ -66,6 +70,7 @@ const USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
+  sf debug-run <runId> [--out <file>]
   sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
   sf restore <file> [--force] [--json]
   sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]
@@ -120,6 +125,8 @@ ${ARTIFACT_USAGE}
 ${ENVELOPE_USAGE}
 
 ${EXPORT_RUN_USAGE}
+
+${DEBUG_RUN_USAGE}
 
 ${BACKUP_USAGE}
 
@@ -180,6 +187,7 @@ function parseArgs(argv: string[]): {
     command === "artifact" ||
     command === "envelope" ||
     command === "export-run" ||
+    command === "debug-run" ||
     command === "backup" ||
     command === "restore" ||
     command === "export" ||
@@ -490,6 +498,13 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "export-run") {
       return runExportRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "debug-run") {
+      return runDebugRunCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });

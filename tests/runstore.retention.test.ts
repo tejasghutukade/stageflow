@@ -235,14 +235,21 @@ describe("retentionDecision (KD1 table-driven)", () => {
     {
       name: "failed past failed-SLIM → slim",
       status: "failed" as const,
-      ageMs: 15 * DAY_MS,
+      ageMs: 31 * DAY_MS,
       slimmed_at: undefined,
       expected: "slim" as const,
     },
     {
-      name: "cancelled past 1d SLIM → slim",
+      name: "cancelled before 30d SLIM → none",
       status: "cancelled" as const,
       ageMs: 2 * DAY_MS,
+      slimmed_at: undefined,
+      expected: "none" as const,
+    },
+    {
+      name: "cancelled past 30d SLIM → slim",
+      status: "cancelled" as const,
+      ageMs: 31 * DAY_MS,
       slimmed_at: undefined,
       expected: "slim" as const,
     },
@@ -258,6 +265,14 @@ describe("retentionDecision (KD1 table-driven)", () => {
     expect(
       retentionDecision({ status, finished_at, slimmed_at }, now, windows),
     ).toBe(expected);
+  });
+
+  it("defaults failed and cancelled SLIM to 30d; succeeded stays 3d", () => {
+    expect(DEFAULT_RETENTION_WINDOWS.failed.slimMs).toBe(30 * DAY_MS);
+    expect(DEFAULT_RETENTION_WINDOWS.cancelled.slimMs).toBe(30 * DAY_MS);
+    expect(DEFAULT_RETENTION_WINDOWS.succeeded.slimMs).toBe(3 * DAY_MS);
+    expect(DEFAULT_RETENTION_WINDOWS.failed.purgeMs).toBe(90 * DAY_MS);
+    expect(DEFAULT_RETENTION_WINDOWS.cancelled.purgeMs).toBe(90 * DAY_MS);
   });
 
   it("reads finished_at only — updated_at is irrelevant (KTD1)", () => {
@@ -622,7 +637,7 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     const { root: source, sha } = await createSourceRepo();
     setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
     const repository = "acme/u6-bare";
-    // failed: SLIM 14d / PURGE 90d — 10d-old stays unreclaimed so the worktree can stay live.
+    // failed: SLIM 30d / PURGE 90d — 10d-old stays unreclaimed so the worktree can stay live.
     const finishedAt = new Date(now.getTime() - 10 * DAY_MS).toISOString();
     const bareTtlMs = 7 * DAY_MS;
 

@@ -59,6 +59,7 @@ import {
   buildRunExportPayload,
   runDetailWithRedactedManifest,
 } from "../runstore/exportRunPayload.js";
+import { buildDebugBundle } from "../runstore/debugBundle.js";
 import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
@@ -681,6 +682,20 @@ export function createOperatorRoutes(
           try {
             const detail = await store.readRun(runId);
             json(res, 200, buildRunExportPayload(detail));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const debugBundleMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/debug-bundle$/,
+        );
+        if (method === "GET" && debugBundleMatch) {
+          const runId = decodeURIComponent(debugBundleMatch[1] ?? "");
+          try {
+            json(res, 200, await buildDebugBundle(store, runId));
           } catch (err) {
             const mapped = mapStoreLookupError(err, { policy: "run" });
             json(res, mapped.status, { error: mapped.error });

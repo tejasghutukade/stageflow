@@ -15,11 +15,11 @@ export type RetentionWindows = {
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** KD1 defaults: succeeded 3d/30d, cancelled 1d/14d, failed 14d/90d. */
+/** Defaults: succeeded 3d/30d; failed and cancelled 30d/90d (R30 / AE6). */
 export const DEFAULT_RETENTION_WINDOWS: RetentionWindows = {
   succeeded: { slimMs: 3 * DAY_MS, purgeMs: 30 * DAY_MS },
-  cancelled: { slimMs: 1 * DAY_MS, purgeMs: 14 * DAY_MS },
-  failed: { slimMs: 14 * DAY_MS, purgeMs: 90 * DAY_MS },
+  cancelled: { slimMs: 30 * DAY_MS, purgeMs: 90 * DAY_MS },
+  failed: { slimMs: 30 * DAY_MS, purgeMs: 90 * DAY_MS },
 };
 
 export const DEFAULT_BARE_CACHE_TTL_MS = 30 * DAY_MS;

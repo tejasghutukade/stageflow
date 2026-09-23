@@ -200,7 +200,25 @@ docker exec -it -w "$CHECKOUT" stageflow bash
 docker exec -it -w "$CHECKOUT" stageflow git status
 ```
 
-There is no MCP shell/`exec` tool — this is the supported escape hatch. Per-run `export_run` / debug-bundle over MCP/HTTP land in Slot 9; until then use `docker exec … sf export-run --run <runId>` or whole-instance `GET /api/export`.
+There is no MCP shell/`exec` tool — this is the supported escape hatch.
+
+### Post-mortem debug bundle {#debug-bundle}
+
+Failed and cancelled runs keep worktrees/logs for **30 days** by default before SLIM (succeeded stays **3 days**). Override with `STAGEFLOW_SLIM_FAILED_MS` / `STAGEFLOW_SLIM_CANCELLED_MS`.
+
+Pull a capped, Slot-6-redacted attachable bundle (export projection + manifest + stage events + verification evidence + `get_run_diff` + stream-log tails + redacted host config):
+
+```bash
+# Inside the container (or via docker exec):
+docker exec stageflow sf debug-run "$RUN_ID" --out /tmp/debug-$RUN_ID.json
+
+# Remote Host — same shape, read scope (parity with GET …/export):
+curl -fsS -H "Authorization: Bearer $STAGEFLOW_READ_TOKEN" \
+  "http://127.0.0.1:3847/api/runs/$RUN_ID/debug-bundle" \
+  -o "debug-$RUN_ID.json"
+```
+
+For a live shell on the binding path after you have the bundle, use the [worktree escape hatch](#worktree-escape-hatch) above.
 
 ## Continuous replication
 

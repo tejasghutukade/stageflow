@@ -305,10 +305,10 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 | `STAGEFLOW_BARE_CACHE_TTL_MS` | Bare clone cache TTL before eviction eligibility (default 30d) |
 | `STAGEFLOW_SLIM_SUCCEEDED_MS` | SLIM window for `succeeded` runs (default 3d) |
 | `STAGEFLOW_PURGE_SUCCEEDED_MS` | PURGE window for `succeeded` runs (default 30d) |
-| `STAGEFLOW_SLIM_FAILED_MS` | SLIM window for `failed` runs (default 14d) |
+| `STAGEFLOW_SLIM_FAILED_MS` | SLIM window for `failed` runs (default 30d) |
 | `STAGEFLOW_PURGE_FAILED_MS` | PURGE window for `failed` runs (default 90d) |
-| `STAGEFLOW_SLIM_CANCELLED_MS` | SLIM window for `cancelled` runs (default 1d) |
-| `STAGEFLOW_PURGE_CANCELLED_MS` | PURGE window for `cancelled` runs (default 14d) |
+| `STAGEFLOW_SLIM_CANCELLED_MS` | SLIM window for `cancelled` runs (default 30d) |
+| `STAGEFLOW_PURGE_CANCELLED_MS` | PURGE window for `cancelled` runs (default 90d) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Parallel stages within one run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution (see [Skills in CI](#skills-in-ci)) |
