@@ -140,6 +140,8 @@ export type StartRunResult =
       activeCount?: number;
       maxConcurrent?: number;
       activeRunIds?: string[];
+      scope?: "global" | "project";
+      project_root?: string;
       conflictingRunId?: string;
       conflictingCheckout?: string;
       freeBytes?: number;
@@ -236,6 +238,7 @@ export type StopManualRecoveryResult =
 type ActiveEntry = {
   checkoutKey?: string;
   durableCheckoutRoot?: string;
+  projectRoot?: string;
   generation: number;
   done?: Promise<unknown>;
 };
@@ -687,22 +690,18 @@ export class RunManager {
     };
   }
 
-  getPerProjectCapacity():
-    | {
-        maxConcurrent: number | undefined;
-        projects: Array<{
-          project_root: string;
-          activeCount: number;
-          maxConcurrent: number | undefined;
-        }>;
-      }
-    | undefined {
-    if (this.maxConcurrentPerProject === undefined) {
-      return { maxConcurrent: undefined, projects: [] };
-    }
+  getPerProjectCapacity(): {
+    maxConcurrent: number | undefined;
+    projects: Array<{
+      project_root: string;
+      activeCount: number;
+      maxConcurrent: number | undefined;
+    }>;
+  } {
     const byRoot = new Map<string, number>();
-    for (const runId of this.active.keys()) {
-      void runId;
+    for (const entry of this.active.values()) {
+      const root = entry.projectRoot ?? this.projectRoot;
+      byRoot.set(root, (byRoot.get(root) ?? 0) + 1);
     }
     return {
       maxConcurrent: this.maxConcurrentPerProject,
@@ -712,6 +711,16 @@ export class RunManager {
         maxConcurrent: this.maxConcurrentPerProject,
       })),
     };
+  }
+
+  private countActiveForProject(projectRoot: string): number {
+    const normalized = normalizeCatalogPath(projectRoot);
+    let n = 0;
+    for (const entry of this.active.values()) {
+      const root = normalizeCatalogPath(entry.projectRoot ?? this.projectRoot);
+      if (root === normalized) n += 1;
+    }
+    return n;
   }
 
   /** Capacity plus on-demand durable-root disk breakdown (KTD16). */
@@ -2648,7 +2657,7 @@ export class RunManager {
     const diskGate = await this.checkDiskFloorAdmission();
     if (diskGate !== undefined) return diskGate;
 
-    const admitted = this.tryAdmitOrEnqueue(checkoutKey);
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey, resolvedProjectRoot);
     if (admitted.action === "reject") return admitted.failure;
 
     if (admitted.action === "enqueue") {
@@ -2778,26 +2787,44 @@ export class RunManager {
     extras?: {
       conflictingRunId?: string;
       conflictingCheckout?: string;
+      scope?: "global" | "project";
+      project_root?: string;
+      activeCount?: number;
+      maxConcurrent?: number;
     },
   ): Extract<StartRunResult, { ok: false }> {
     const activeRunIds = this.getActiveRunIds();
+    const scope = extras?.scope ?? "global";
+    const activeCount = extras?.activeCount ?? this.active.size;
+    const maxConcurrent = extras?.maxConcurrent ?? this.maxConcurrent;
     const reason =
       code === "busy_capacity"
-        ? this.active.size >= this.maxConcurrent &&
-          this.admissionQueue.size >= this.maxQueued &&
-          this.maxQueued > 0
-          ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
-          : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
+        ? scope === "project"
+          ? `Project capacity full: ${activeCount}/${maxConcurrent} active runs for ${extras?.project_root ?? "project"}`
+          : this.active.size >= this.maxConcurrent &&
+              this.admissionQueue.size >= this.maxQueued &&
+              this.maxQueued > 0
+            ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
+            : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
         : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
     return {
       ok: false,
       reason,
       status: 409,
       code,
-      activeCount: this.active.size,
-      maxConcurrent: this.maxConcurrent,
+      activeCount,
+      maxConcurrent,
       activeRunIds,
-      ...extras,
+      scope,
+      ...(extras?.project_root !== undefined
+        ? { project_root: extras.project_root }
+        : {}),
+      ...(extras?.conflictingRunId !== undefined
+        ? { conflictingRunId: extras.conflictingRunId }
+        : {}),
+      ...(extras?.conflictingCheckout !== undefined
+        ? { conflictingCheckout: extras.conflictingCheckout }
+        : {}),
     };
   }
 
@@ -2860,6 +2887,7 @@ export class RunManager {
 
   private tryAdmitOrEnqueue(
     checkoutKey: string | undefined,
+    projectRoot: string = this.projectRoot,
   ):
     | { action: "reserve"; provisionalId: string }
     | { action: "enqueue" }
@@ -2880,11 +2908,28 @@ export class RunManager {
       }
     }
 
+    const normalizedRoot = normalizeCatalogPath(projectRoot);
+    if (this.maxConcurrentPerProject !== undefined) {
+      const projectActive = this.countActiveForProject(normalizedRoot);
+      if (projectActive >= this.maxConcurrentPerProject) {
+        return {
+          action: "reject",
+          failure: this.busyFailure("busy_capacity", {
+            scope: "project",
+            project_root: normalizedRoot,
+            activeCount: projectActive,
+            maxConcurrent: this.maxConcurrentPerProject,
+          }),
+        };
+      }
+    }
+
     if (this.active.size < this.maxConcurrent) {
       const provisionalId = randomUUID();
       this.provisionalIds.add(provisionalId);
       this.active.set(provisionalId, {
         checkoutKey,
+        projectRoot: normalizedRoot,
         generation: ++this.trackingGeneration,
       });
       if (checkoutKey !== undefined) {
@@ -2899,16 +2944,17 @@ export class RunManager {
 
     return {
       action: "reject",
-      failure: this.busyFailure("busy_capacity"),
+      failure: this.busyFailure("busy_capacity", { scope: "global" }),
     };
   }
 
   private tryReserve(
     checkoutKey: string | undefined,
+    projectRoot: string = this.projectRoot,
   ):
     | { ok: true; provisionalId: string }
     | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
-    const admitted = this.tryAdmitOrEnqueue(checkoutKey);
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey, projectRoot);
     if (admitted.action === "reserve") {
       return { ok: true, provisionalId: admitted.provisionalId };
     }
@@ -3102,7 +3148,7 @@ export class RunManager {
       return "cancelled";
     }
 
-    const reserved = this.tryReserve(checkoutKey);
+    const reserved = this.tryReserve(checkoutKey, projectRoot);
     if (!reserved.ok) {
       if (reserved.failure.code === "busy_checkout") {
         return "checkout_busy";
