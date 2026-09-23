@@ -13,7 +13,7 @@ import {
   resolveAllowedHosts,
 } from "../src/server/allowedHosts.js";
 import { loadControlTokens } from "../src/server/controlToken.js";
-import { isMutatingApi, startUiServer } from "../src/server/http.js";
+import { startUiServer } from "../src/server/http.js";
 import { FIXTURES_ROOT, netPipeline } from "./helpers/fixturePaths.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 
@@ -28,11 +28,6 @@ async function closeServer(server: {
 }
 
 describe("POST /api/projects ensure", () => {
-  it("isMutatingApi includes ensure", () => {
-    expect(isMutatingApi("POST", "/api/projects")).toBe(true);
-    expect(isMutatingApi("GET", "/api/projects")).toBe(false);
-  });
-
   it("loopback ensure registers project_root", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-ensure-loop-"));
     const project = await mkdtemp(path.join(tmpdir(), "sf-ensure-proj-"));

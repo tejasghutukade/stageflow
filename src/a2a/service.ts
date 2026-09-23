@@ -1,5 +1,9 @@
-import path from "node:path";
 import { readRunArtifactBytes, artifactMediaType } from "../mcp/readArtifact.js";
+import {
+  CatalogPathError,
+  resolveCatalogRelativePath,
+  resolveCatalogStartInput,
+} from "../config/catalogRelativePath.js";
 import { waitRun } from "../mcp/waitRun.js";
 import { readYamlObject } from "../config/readYamlObject.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
@@ -249,11 +253,30 @@ export class A2aInvocations {
 
     let pipelineArg: string | InlinePipelineDefinition;
     let resultStageId: string | undefined;
+    let runProjectRoot: string | undefined;
     if (cmd.stage !== undefined) {
       let stageBody: Record<string, unknown>;
       if (typeof cmd.stage === "string") {
         if (!cmd.stage.trim()) throw new A2aApplicationError("invalid-input", "stage is required");
-        const absPath = path.resolve(this.rootDir, cmd.stage);
+        let absPath = "";
+        try {
+          const { wireRoot, roots } = await resolveCatalogStartInput(
+            { store: this.runStore },
+            cmd.project_root,
+          );
+          runProjectRoot = wireRoot.path;
+          absPath = resolveCatalogRelativePath({
+            inputPath: cmd.stage,
+            projectRoot: wireRoot.project_root,
+            roots,
+            fieldName: "stage",
+          }).absolutePath;
+        } catch (err) {
+          if (err instanceof CatalogPathError) {
+            throw new A2aApplicationError("invalid-input", err.message);
+          }
+          throw err;
+        }
         try {
           stageBody = await readYamlObject(absPath);
         } catch (err) {
@@ -312,7 +335,11 @@ export class A2aInvocations {
     let result;
     try {
       result = await this.manager.startRunOnce(
-        { pipeline: pipelineArg, task: taskInput },
+        {
+          pipeline: pipelineArg,
+          task: taskInput,
+          ...(runProjectRoot !== undefined ? { projectRoot: runProjectRoot } : {}),
+        },
         { key: submissionKey, requestHash: hash },
       );
     } catch (err) {

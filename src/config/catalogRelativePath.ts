@@ -1,12 +1,13 @@
 import path from "node:path";
 import { realpathSync } from "node:fs";
-import type { CatalogRoot } from "./resolveCatalogRoots.js";
-import { findCatalogRoot } from "./resolveCatalogRoots.js";
+import type { CatalogRoot, ResolveCatalogRootsOptions } from "./resolveCatalogRoots.js";
+import { findCatalogRoot, resolveCatalogRoots } from "./resolveCatalogRoots.js";
 
 export type CatalogPathErrorCode =
   | "absolute_path_not_allowed"
   | "path_outside_project_root"
-  | "unknown_project_root";
+  | "unknown_project_root"
+  | "catalog_root_read_only";
 
 export class CatalogPathError extends Error {
   readonly code: CatalogPathErrorCode;
@@ -143,6 +144,38 @@ export function selectCatalogRootForStart(
     "unknown_project_root",
     registered,
   );
+}
+
+/**
+ * Shared helper: resolveCatalogRoots → selectCatalogRootForStart.
+ * All network-surface start-input call sites use this to avoid the hand-copy sequence.
+ */
+export async function resolveCatalogStartInput(
+  options: ResolveCatalogRootsOptions,
+  projectRoot?: string,
+): Promise<{ roots: CatalogRoot[]; wireRoot: CatalogRoot }> {
+  const roots = await resolveCatalogRoots(options);
+  const wireRoot = selectCatalogRootForStart(roots, projectRoot);
+  return { roots, wireRoot };
+}
+
+/**
+ * Like resolveCatalogStartInput but additionally refuses read-only roots.
+ * Used by write surfaces (POST /api/stages, POST /api/pipelines).
+ */
+export async function resolveWritableCatalogRoot(
+  options: ResolveCatalogRootsOptions,
+  projectRoot?: string,
+): Promise<{ roots: CatalogRoot[]; wireRoot: CatalogRoot }> {
+  const { roots, wireRoot } = await resolveCatalogStartInput(options, projectRoot);
+  if (wireRoot.read_only) {
+    throw new CatalogPathError(
+      `Catalog root ${wireRoot.project_root} is read-only`,
+      "catalog_root_read_only",
+      roots.map((r) => r.project_root),
+    );
+  }
+  return { roots, wireRoot };
 }
 
 /**

@@ -15,7 +15,7 @@ import {
   startPeriodicRunGc,
   DEFAULT_GC_INTERVAL_MS,
 } from "../src/server/bootstrap.js";
-import { isMutatingApi, startUiServer } from "../src/server/http.js";
+import { startUiServer } from "../src/server/http.js";
 import { FIXTURES_ROOT } from "./helpers/fixturePaths.js";
 
 const fixtures = FIXTURES_ROOT;
@@ -121,14 +121,6 @@ afterEach(async () => {
   for (const dir of temps.splice(0)) {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
-});
-
-describe("isMutatingApi gc widening", () => {
-  it("recognizes POST /api/runs/gc", () => {
-    expect(isMutatingApi("POST", "/api/runs/gc")).toBe(true);
-    expect(isMutatingApi("GET", "/api/runs/gc")).toBe(false);
-    expect(isMutatingApi("DELETE", "/api/runs/abc-123")).toBe(true);
-  });
 });
 
 describe("sf runs gc", () => {

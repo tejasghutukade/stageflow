@@ -24,9 +24,9 @@ import {
   catalogPathErrorBody,
   CatalogPathError,
   resolveCatalogRelativePath,
-  selectCatalogRootForStart,
+  resolveCatalogStartInput,
+  resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
-import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
@@ -114,6 +114,7 @@ import {
 } from "./operatorResults.js";
 import {
   installShutdownController,
+  makeDrainableHostFromOptional,
   type ShutdownController,
 } from "./shutdown.js";
 import { writeAudit } from "../logging/audit.js";
@@ -213,37 +214,6 @@ async function serveStatic(
   res.writeHead(200, { "Content-Type": contentTypeFor(filePath) });
   res.end(data);
   return true;
-}
-
-export function isMutatingApi(method: string, pathname: string): boolean {
-  if (method === "DELETE") {
-    return /^\/api\/runs\/[^/]+$/.test(pathname);
-  }
-  if (method !== "POST") return false;
-  return (
-    pathname === "/api/runs" ||
-    pathname === "/api/runs/gc" ||
-    pathname === "/api/projects" ||
-    pathname === "/api/backup" ||
-    pathname === "/api/restore" ||
-    pathname === "/api/settings" ||
-    pathname === "/api/stages" ||
-    pathname === "/api/pipelines" ||
-    /^\/api\/runs\/[^/]+\/rerun$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/feedback-decision$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/resume$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/logout$/.test(pathname) ||
-    /^\/api\/project-mcp\/[^/]+\/probe$/.test(pathname)
-  );
 }
 
 function isCredentialMutatingApi(method: string, pathname: string): boolean {
@@ -813,10 +783,13 @@ export function createOperatorRoutes(
               return true;
             }
           }
-          const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
           let wireRoot;
+          let roots;
           try {
-            wireRoot = selectCatalogRootForStart(roots, typed.project_root);
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              typed.project_root,
+            ));
           } catch (err) {
             if (err instanceof CatalogPathError) {
               json(res, 400, catalogPathErrorBody(err));
@@ -1303,19 +1276,14 @@ export function createOperatorRoutes(
               : undefined;
           let stageWriteRoot: string;
           try {
-            const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
-            const selected = selectCatalogRootForStart(roots, writeRoot);
-            if (selected.read_only) {
-              json(res, 403, {
-                error: `Catalog root ${selected.project_root} is read-only`,
-                code: "catalog_root_read_only",
-              });
-              return true;
-            }
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
             stageWriteRoot = selected.path;
           } catch (err) {
             if (err instanceof CatalogPathError) {
-              json(res, 400, catalogPathErrorBody(err));
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
               return true;
             }
             throw err;
@@ -1359,19 +1327,14 @@ export function createOperatorRoutes(
               : undefined;
           let pipelineWriteRoot: string;
           try {
-            const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
-            const selected = selectCatalogRootForStart(roots, writeRoot);
-            if (selected.read_only) {
-              json(res, 403, {
-                error: `Catalog root ${selected.project_root} is read-only`,
-                code: "catalog_root_read_only",
-              });
-              return true;
-            }
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
             pipelineWriteRoot = selected.path;
           } catch (err) {
             if (err instanceof CatalogPathError) {
-              json(res, 400, catalogPathErrorBody(err));
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
               return true;
             }
             throw err;
@@ -1587,8 +1550,7 @@ export async function startUiServer(
   });
   shutdown = installShutdownController({
     server: envelope.server,
-    manager: envelope.manager,
-    store: envelope.store,
+    host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
   });
   envelope.server.on("close", () => {
     shutdown?.uninstall();

@@ -19,6 +19,7 @@ import {
 import { createOperatorRoutes } from "./http.js";
 import {
   installShutdownController,
+  makeDrainableHostFromOptional,
   type ShutdownController,
 } from "./shutdown.js";
 
@@ -81,8 +82,7 @@ export async function startMcpServer(
   });
   shutdown = installShutdownController({
     server: envelope.server,
-    manager: envelope.manager,
-    store: envelope.store,
+    host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
   });
   envelope.server.on("close", () => {
     shutdown?.uninstall();

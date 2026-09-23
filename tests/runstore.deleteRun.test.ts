@@ -23,7 +23,6 @@ import type { FeedbackLoopConfig } from "../src/types/pipeline.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { deleteRunEverywhere } from "../src/runtime/runDeletion.js";
 import { worktreePathForRun } from "../src/runtime/repositoryMaterialize.js";
-import { isMutatingApi } from "../src/server/http.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
 import { RunManager } from "../src/runtime/runManager.js";
 
@@ -132,15 +131,6 @@ afterEach(async () => {
   for (const dir of temps.splice(0)) {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
-});
-
-describe("isMutatingApi DELETE widening", () => {
-  it("recognizes DELETE /api/runs/:runId", () => {
-    expect(isMutatingApi("DELETE", "/api/runs/abc-123")).toBe(true);
-    expect(isMutatingApi("DELETE", "/api/runs/abc-123/cancel")).toBe(false);
-    expect(isMutatingApi("GET", "/api/runs/abc-123")).toBe(false);
-    expect(isMutatingApi("POST", "/api/runs/abc-123/cancel")).toBe(true);
-  });
 });
 
 describe("deleteRun store + deleteRunEverywhere", () => {

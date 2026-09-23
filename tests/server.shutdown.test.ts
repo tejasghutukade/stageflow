@@ -13,6 +13,7 @@ import { storeRootFor } from "../src/runstore/paths.js";
 import {
   HOST_EXIT,
   ShutdownController,
+  makeDrainableHost,
   parseShutdownGraceMs,
   workerBudgetMs,
   DEFAULT_SHUTDOWN_GRACE_MS,
@@ -96,8 +97,7 @@ describe("ShutdownController", () => {
     servers.push(server);
     const controller = new ShutdownController({
       server,
-      manager,
-      store,
+      host: makeDrainableHost(manager, store),
       graceMs: 500,
       installSignals: false,
     });
@@ -192,8 +192,7 @@ describe("ShutdownController", () => {
     servers.push(server);
     const controller = new ShutdownController({
       server,
-      manager,
-      store,
+      host: makeDrainableHost(manager, store),
       graceMs: 300,
       installSignals: false,
     });
@@ -221,8 +220,7 @@ describe("ShutdownController", () => {
     servers.push(server);
     const controller = new ShutdownController({
       server,
-      manager,
-      store,
+      host: makeDrainableHost(manager, store),
       graceMs: 300,
       installSignals: false,
     });
@@ -268,8 +266,7 @@ describe("ShutdownController", () => {
     servers.push(server);
     const controller = new ShutdownController({
       server,
-      manager,
-      store,
+      host: makeDrainableHost(manager, store),
       graceMs: 3000,
       installSignals: false,
     });
@@ -314,6 +311,14 @@ describe.skipIf(process.platform === "win32")(
         stageProcessLauncher: launcher,
       });
 
+      const server = await listen();
+      const controller = new ShutdownController({
+        server,
+        host: makeDrainableHost(manager, store),
+        graceMs: 2500,
+        installSignals: false,
+      });
+
       const launchPromise = launcher.launch({
         runId: run.runId,
         stageId: "wedged",
@@ -322,15 +327,8 @@ describe.skipIf(process.platform === "win32")(
       await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
         timeout: 2000,
       });
-
-      const server = await listen();
-      const controller = new ShutdownController({
-        server,
-        manager,
-        store,
-        graceMs: 2500,
-        installSignals: false,
-      });
+      await new Promise<void>((r) => setTimeout(r, 50));
+      expect(launcher.activeCount()).toBe(1);
 
       const started = Date.now();
       const outcome = await controller.beginDrain();

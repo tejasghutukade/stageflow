@@ -5,6 +5,7 @@ import {
   catalogPathErrorBody,
   CatalogPathError,
   resolveCatalogRelativePath,
+  resolveCatalogStartInput,
   selectCatalogRootForStart,
 } from "../config/catalogRelativePath.js";
 import {
@@ -150,7 +151,13 @@ const runStageSchema = z
     stage: z
       .union([z.string(), z.record(z.string(), z.unknown())])
       .describe(
-        "Filesystem path to a stage YAML file, or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
+        "Catalog-relative path to a stage YAML file (same path contract as start_run — absolute paths rejected, must be inside a registered project_root), or a bare inline stage body object ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper) authored directly in this call",
+      ),
+    project_root: z
+      .string()
+      .optional()
+      .describe(
+        "Catalog project root to resolve a string stage path against; required when multiple catalog roots are configured and no sole non-seeded root exists",
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
@@ -515,13 +522,13 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       if (taskInput === undefined) {
         return textResult({ error: "Exactly one of task_path or task is required" }, true);
       }
-      const roots = await resolveCatalogRoots({
-        store: deps.store,
-        bootCwd: deps.cwd,
-      });
       let wireRoot;
+      let roots;
       try {
-        wireRoot = selectCatalogRootForStart(roots, project_root);
+        ({ wireRoot, roots } = await resolveCatalogStartInput(
+          { store: deps.store, bootCwd: deps.cwd },
+          project_root,
+        ));
       } catch (err) {
         if (err instanceof CatalogPathError) {
           return textResult(catalogPathErrorBody(err), true);
@@ -647,7 +654,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         "Run a single stage directly, without authoring a pipeline. `stage` is a filesystem path to a stage YAML file, or a bare inline stage body ({ id, system_prompt, io, model?, gate_kinds?, mcp?, verify?, timeout_ms? } — no uses:/route/pipeline wrapper), and exactly one of task_path, an inline task, or envelope_ref ({ runId, stageId, attempt? }) to resolve a previously stored envelope — from another run_stage call or any stage in a full pipeline run — as this stage's input. Internally this synthesizes a one-stage pipeline and executes it through the normal run path, so it shows up in list_runs/get_run and is polled with wait_run / get_envelope exactly like any other run. By default returns { runId, stageId } immediately (async); pass blocking:true to wait in this same call and get back { runId, stageId, status: \"completed\"|\"needs_input\"|\"timeout\", envelope? , pending_prompt? }.",
       inputSchema: runStageSchema,
     },
-    async ({ stage, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms }) => {
+    async ({ stage, project_root, task_path, task, envelope_ref, checkout, model, blocking, timeout_ms }) => {
       let taskInput: string | z.infer<typeof taskFileSchema> | undefined = task_path ?? task;
       if (envelope_ref) {
         try {
@@ -667,11 +674,30 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       }
 
       let stageBody: Record<string, unknown>;
+      let stageProjectRoot: string | undefined;
       if (typeof stage === "string") {
         if (!stage.trim()) {
           return textResult({ error: "stage is required" }, true);
         }
-        const absPath = path.resolve(cwd, stage);
+        let absPath = "";
+        try {
+          const { wireRoot, roots } = await resolveCatalogStartInput(
+            { store: deps.store, bootCwd: deps.cwd },
+            project_root,
+          );
+          stageProjectRoot = wireRoot.path;
+          absPath = resolveCatalogRelativePath({
+            inputPath: stage,
+            projectRoot: wireRoot.project_root,
+            roots,
+            fieldName: "stage",
+          }).absolutePath;
+        } catch (err) {
+          if (err instanceof CatalogPathError) {
+            return textResult(catalogPathErrorBody(err), true);
+          }
+          throw err;
+        }
         try {
           stageBody = await readYamlObject(absPath);
         } catch (err) {
@@ -699,7 +725,11 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
 
       let result;
       try {
-        result = await manager.startRun({ pipeline, task: taskInput });
+        result = await manager.startRun({
+          pipeline,
+          task: taskInput,
+          ...(stageProjectRoot !== undefined ? { projectRoot: stageProjectRoot } : {}),
+        });
       } catch (err) {
         if (err instanceof PipelineValidationError) {
           return textResult(

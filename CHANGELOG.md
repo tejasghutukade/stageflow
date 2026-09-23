@@ -14,9 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Catalog start/write path selection is shared (`resolveCatalogStartInput` / `resolveWritableCatalogRoot`); MCP `run_stage` and A2A string stage paths honor the same catalog containment as `start_run`.
+- Operator-terminal run statuses (`cancelled` / `queued`) are preserved inside `deriveStatusFromStages` so recovery and projection cannot overwrite them.
+- Host shutdown drains through a required `DrainableHost` adapter (single drain path).
+- Stage worker builds / preserves curated env explicitly (forked workers keep launcher-granted secrets; in-process path filters via `buildStageEnvironment`).
 - Path-checkout lease (`busy_checkout`) applies only to path-bound runs. Repository-bound runs each get their own worktree and may run in parallel on the same repository; attach/resume no longer re-lease worktree paths.
 - `verify` commands run under `bash -c` (not `/bin/sh`).
 - Stage MCP `${VAR}` interpolation resolves against the curated stage env only.
+
+### Removed
+
+- Dead `RunStore.listProjectRoots` (superseded by `listRegisteredProjects`) and unused `isMutatingApi` predicate (superseded by `requiredScopeFor`).
 
 ## [0.25.0] - 2026-09-21
 

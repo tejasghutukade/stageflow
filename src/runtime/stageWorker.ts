@@ -9,10 +9,14 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import {
   bindPiAgentDirEnv,
+  overlayStageBindingEnv,
   rootsForStageWorker,
   stageBindingEnvFromRun,
   withResolvedAuthPath,
 } from "./stageRoots.js";
+import { buildStageEnvironment } from "./stageEnvironment.js";
+import { ensureStageCacheDirs } from "./stageCacheEnv.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import {
   runStage,
   type RunStageOutcome,
@@ -23,6 +27,7 @@ import { attemptContext } from "./stageAttemptContext.js";
 import { loadActiveFeedbackLoopContext } from "./feedbackLoopCoordinator.js";
 import {
   outcomeToWorkerResult,
+  SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
   type StageWorkerInput,
   type StageWorkerResult,
@@ -30,36 +35,6 @@ import {
 
 export type { StageWorkerInput, StageWorkerResult } from "./stageWorkerProtocol.js";
 
-function applyStageEnvToWorkerProcess(
-  env: Record<string, string>,
-  kind: "repository" | "checkout" | "unbound",
-): void {
-  for (const [key, value] of Object.entries(env)) {
-    process.env[key] = value;
-  }
-  if (kind !== "repository") {
-    delete process.env.STAGEFLOW_REPOSITORY;
-    delete process.env.STAGEFLOW_REF;
-    delete process.env.STAGEFLOW_BASE_SHA;
-    delete process.env.STAGEFLOW_RUN_BRANCH;
-  }
-  if (kind === "unbound" || !Object.hasOwn(env, "STAGEFLOW_CHECKOUT")) {
-    delete process.env.STAGEFLOW_CHECKOUT;
-  }
-  if (!Object.hasOwn(env, "GIT_CONFIG_COUNT")) {
-    delete process.env.GIT_CONFIG_COUNT;
-    delete process.env.GIT_CONFIG_KEY_0;
-    delete process.env.GIT_CONFIG_VALUE_0;
-  }
-}
-
-function curatedWorkerStageEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) out[key] = value;
-  }
-  return out;
-}
 
 export async function runStageWorker(
   input: StageWorkerInput,
@@ -103,8 +78,22 @@ export async function runStageWorker(
           runWorkspaceDir: workspaceDir,
           hostEnv: process.env,
         });
-  applyStageEnvToWorkerProcess(binding.env, binding.kind);
-  const stageEnv = curatedWorkerStageEnv();
+  const baseEnv: Record<string, string> =
+    process.env[SF_STAGE_WORKER] === "1"
+      ? Object.fromEntries(
+          Object.entries(process.env).filter(
+            (e): e is [string, string] => e[1] !== undefined,
+          ),
+        )
+      : buildStageEnvironment({
+          hostEnv: process.env,
+          cacheVars: ensureStageCacheDirs(),
+          packageVersion: PACKAGE_VERSION,
+        }).env;
+  const stageEnv: Record<string, string> = Object.fromEntries(
+    Object.entries(overlayStageBindingEnv(baseEnv, binding.env, binding.kind))
+      .filter((e): e is [string, string] => e[1] !== undefined),
+  );
   const mode = input.mode ?? "run";
   const attempt = input.attempt ?? 1;
   loadNamedSecretsFromAttemptDir(

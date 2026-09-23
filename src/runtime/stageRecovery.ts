@@ -59,9 +59,8 @@ export async function syncRunStatusFromStages(
   runId: string,
 ): Promise<void> {
   const meta = await store.readRunMeta(runId);
-  if (meta.status === "cancelled" || meta.status === "queued") return;
   const run = await store.readRun(runId);
-  const derived = deriveStatusFromStages(run.stages, meta.pipeline_dag);
+  const derived = deriveStatusFromStages(run.stages, meta.pipeline_dag, meta.status);
   if (meta.status === "succeeded" && derived !== "running") return;
   if ((meta.status ?? "created") !== derived) {
     await store.updateRunStatus(runId, derived);

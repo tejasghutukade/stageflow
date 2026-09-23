@@ -222,31 +222,6 @@ describe.each(adapters)("$label RunStore contract", ({ kind }) => {
     ).rejects.toThrow();
   });
 
-  it("listProjectRoots returns every distinct project_root, deduped, excluding empty/missing", async () => {
-    await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: defaultTaskYaml,
-      projectRoot: "/projects/a",
-    });
-    await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: defaultTaskYaml,
-      projectRoot: "/projects/b",
-    });
-    await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: defaultTaskYaml,
-      projectRoot: "/projects/a",
-    });
-    await store.createRun({
-      pipelineId: "docs-only",
-      taskYaml: defaultTaskYaml,
-    });
-
-    const roots = await store.listProjectRoots();
-    expect(new Set(roots)).toEqual(new Set(["/projects/a", "/projects/b"]));
-  });
-
   it("updatePipelineDag round-trips stage_ids", async () => {
     const frozen = linearCompatDagSnapshot(["detect", "author-diagrams", "collect"]);
     const run = await store.createRun({

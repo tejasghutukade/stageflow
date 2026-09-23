@@ -175,10 +175,8 @@ function resolveListedStatus(
   meta: RunMeta,
   dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
 ): RunStatus {
-  if (meta.status === "cancelled") return "cancelled";
-  if (meta.status === "queued") return "queued";
   if (stages.length === 0) return meta.status ?? "created";
-  const derived = deriveStatusFromStages(stages, dag);
+  const derived = deriveStatusFromStages(stages, dag, meta.status);
   if (meta.status === "succeeded" && derived === "running") {
     const hasActiveStage = stages.some(
       (s) => s.status === "running" || s.status === "waiting_for_input",

@@ -42,7 +42,6 @@ describe("projects registry", () => {
     const second = await store.ensureProject(path.join(project, "."));
     expect(second).toBe(first);
     expect(await store.listRegisteredProjects()).toEqual([first]);
-    expect(await store.listProjectRoots()).toEqual([]);
   });
 
   it("normalizes symlink input to the realpath key", async () => {

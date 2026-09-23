@@ -6,6 +6,37 @@ import {
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager } from "../runtime/runManager.js";
 
+
+export interface DrainableHost {
+  stopAcceptingWork(): void;
+  drainActiveStages(opts: { deadlineMs: number; isEscalated?: () => boolean }): Promise<{ forced: boolean }>;
+  closeStore(): Promise<void>;
+}
+
+export function makeDrainableHost(manager: RunManager, store: RunStore): DrainableHost {
+  return {
+    stopAcceptingWork: () => manager.stopAcceptingWork(),
+    drainActiveStages: (opts) => manager.drainActiveStages(opts),
+    closeStore: () => store.close(),
+  };
+}
+
+const noopDrainableHost: DrainableHost = {
+  stopAcceptingWork: () => {},
+  drainActiveStages: async () => ({ forced: false }),
+  closeStore: async () => {},
+};
+
+export function makeDrainableHostFromOptional(
+  manager: RunManager | undefined,
+  store: RunStore | undefined,
+): DrainableHost {
+  if (manager !== undefined && store !== undefined) {
+    return makeDrainableHost(manager, store);
+  }
+  return noopDrainableHost;
+}
+
 export const SHUTDOWN_GRACE_MS_ENV = "STAGEFLOW_SHUTDOWN_GRACE_MS";
 export const DEFAULT_SHUTDOWN_GRACE_MS = 8000;
 export const CHECKPOINT_RESERVE_MS = 2000;
@@ -32,8 +63,7 @@ export type HostDrainResult = {
 
 export type ShutdownControllerOptions = {
   server: Server;
-  manager?: RunManager;
-  store?: RunStore;
+  host: DrainableHost;
   graceMs?: number;
   env?: NodeJS.ProcessEnv;
   logger?: Logger;
@@ -61,8 +91,7 @@ export function workerBudgetMs(graceMs: number): number {
 
 export class ShutdownController {
   private readonly server: Server;
-  private readonly manager: RunManager | undefined;
-  private readonly store: RunStore | undefined;
+  private readonly host: DrainableHost;
   private readonly graceMs: number;
   private readonly log: Logger;
   private readonly installSignals: boolean;
@@ -76,8 +105,7 @@ export class ShutdownController {
 
   constructor(options: ShutdownControllerOptions) {
     this.server = options.server;
-    this.manager = options.manager;
-    this.store = options.store;
+    this.host = options.host;
     this.graceMs =
       options.graceMs ?? parseShutdownGraceMs(options.env ?? process.env);
     this.log =
@@ -184,46 +212,7 @@ export class ShutdownController {
       worker_budget_ms: workerBudgetMs(this.graceMs),
     });
 
-    const manager = this.manager;
-    const store = this.store;
-    if (manager === undefined || store === undefined) {
-      try {
-        this.server.closeIdleConnections();
-      } catch {
-        // older Node or already closing
-      }
-      const serverClosed = new Promise<void>((resolve) => {
-        this.server.close(() => resolve());
-      });
-      await Promise.race([
-        serverClosed,
-        this.waitUntil(hardDeadline),
-      ]);
-      try {
-        this.server.closeAllConnections();
-      } catch {
-        // ignore
-      }
-      await Promise.race([
-        serverClosed,
-        this.waitUntil(Date.now() + 100),
-      ]);
-      this.uninstall();
-      const exitCode = this.escalated ? HOST_EXIT.ESCALATED : HOST_EXIT.CLEAN;
-      this.log.info("host.shutdown.drain_complete", "host drain complete", {
-        exit_code: exitCode,
-        forced: false,
-        escalated: this.escalated,
-        elapsed_ms: Date.now() - startedAt,
-      });
-      return {
-        exitCode,
-        forced: false,
-        escalated: this.escalated,
-      };
-    }
-
-    manager.stopAcceptingWork();
+    this.host.stopAcceptingWork();
 
     try {
       this.server.closeIdleConnections();
@@ -235,7 +224,7 @@ export class ShutdownController {
       this.server.close(() => resolve());
     });
 
-    const stageResult = await manager.drainActiveStages({
+    const stageResult = await this.host.drainActiveStages({
       deadlineMs: workerDeadline,
       isEscalated: () => this.escalated,
     });
@@ -246,7 +235,7 @@ export class ShutdownController {
 
     let storeCloseFailed = false;
     try {
-      await store.close();
+      await this.host.closeStore();
     } catch (err) {
       storeCloseFailed = true;
       this.log.error(

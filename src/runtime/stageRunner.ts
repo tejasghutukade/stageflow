@@ -277,7 +277,7 @@ export async function runStage(
     stage,
     dag,
     roots,
-    commandEnv: process.env,
+    commandEnv: stageEnv ?? process.env,
   });
   await verifiedExecution.prepare();
   console.error(`Running stage ${stageId} (${stage.model})...`);

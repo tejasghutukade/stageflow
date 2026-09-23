@@ -602,8 +602,6 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
-  /** Every distinct non-empty project_root recorded across all runs. */
-  listProjectRoots(): Promise<string[]>;
   /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */
@@ -735,10 +733,16 @@ function stageResolvedForSuccess(
   return false;
 }
 
+const OPERATOR_TERMINAL_STATUSES = new Set<RunStatus>(["cancelled", "queued"]);
+
 export function deriveStatusFromStages(
   stages: StageSnapshot[],
   dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+  currentStatus?: RunStatus,
 ): RunStatus {
+  if (currentStatus !== undefined && OPERATOR_TERMINAL_STATUSES.has(currentStatus)) {
+    return currentStatus;
+  }
   if (stages.length === 0) return "created";
   if (findUnhandledFailedStage(stages, dag)) return "failed";
   const byId = new Map(stages.map((s) => [s.stage_id, s]));
