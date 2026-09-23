@@ -129,6 +129,13 @@ export async function createHttpHost(
 
     if (pathname === "/mcp") {
       if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (boot.serveBlocked !== undefined) {
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return;
+      }
       if (!enforceBearerAuth(controlTokens, req, res, "drive")) return;
       res.setTimeout(0);
       try {

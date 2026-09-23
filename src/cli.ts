@@ -19,6 +19,10 @@ import {
   BACKUP_USAGE,
   runBackupCommand,
 } from "./cli/backupCommand.js";
+import {
+  RESTORE_USAGE,
+  runRestoreCommand,
+} from "./cli/restoreCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -36,7 +40,6 @@ import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcpHost.js";
-import { installShutdownController } from "./server/shutdown.js";
 import { resolveListenHost } from "./server/listenHost.js";
 import {
   assertBindAllowed,
@@ -60,6 +63,7 @@ const USAGE = `Usage:
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
   sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+  sf restore <file> [--force] [--json]
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
   sf runs verify --run <runId> --stage <stageId> [--json]
@@ -114,6 +118,8 @@ ${EXPORT_RUN_USAGE}
 
 ${BACKUP_USAGE}
 
+${RESTORE_USAGE}
+
 ${RUNS_USAGE}
 
 ${PROVIDERS_USAGE}
@@ -165,6 +171,7 @@ function parseArgs(argv: string[]): {
     command === "envelope" ||
     command === "export-run" ||
     command === "backup" ||
+    command === "restore" ||
     command === "runs" ||
     command === "skills"
   ) {
@@ -489,6 +496,10 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
+    if (parsed.command === "restore") {
+      return runRestoreCommand(argv.slice(3));
+    }
+
     if (parsed.command === "runs") {
       return runRunsCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
@@ -529,12 +540,7 @@ async function main(argv: string[]): Promise<number> {
       if (!isNoOpenEnabled(parsed.noOpen)) {
         openBrowser(host.url);
       }
-      const shutdown = installShutdownController({
-        server: host.server,
-        manager: host.manager,
-        store: host.store,
-      });
-      const outcome = await shutdown.whenDrained();
+      const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
     }
 
@@ -558,12 +564,7 @@ async function main(argv: string[]): Promise<number> {
         controlTokens: tokens,
       });
       console.log(`MCP endpoint: ${host.mcpUrl}`);
-      const shutdown = installShutdownController({
-        server: host.server,
-        manager: host.manager,
-        store: host.store,
-      });
-      const outcome = await shutdown.whenDrained();
+      const outcome = await host.shutdown.whenDrained();
       return outcome.exitCode;
     }
 

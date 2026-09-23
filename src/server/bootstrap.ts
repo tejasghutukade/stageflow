@@ -39,6 +39,10 @@ import {
   type HostConfig,
 } from "../config/hostConfig.js";
 import { bootProviderConfig } from "../agent/bootProviderConfig.js";
+import {
+  applyPendingRestoreAtBoot,
+  type BootRestoreOutcome,
+} from "../runstore/restore.js";
 import { logger as rootLogger } from "../logging/logger.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
@@ -79,6 +83,11 @@ export type StageflowHostBootstrap = {
   stopGcInterval: () => void;
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
+  /**
+   * When set, Host must not serve API/MCP (restore.failed or failed boot apply).
+   * /livez still answers; /readyz fails.
+   */
+  serveBlocked?: { code: string; reason: string };
 };
 
 function sqliteConnectionFromStore(
@@ -191,6 +200,37 @@ export async function bootstrapStageflowHost(
     warn: (message) => console.warn(message),
   });
 
+  const bootLog = rootLogger.child({ component: "bootstrap" });
+  let serveBlocked: { code: string; reason: string } | undefined;
+  let restoreOutcome: BootRestoreOutcome = { status: "none" };
+  if (!options.store) {
+    restoreOutcome = await applyPendingRestoreAtBoot(ctx.globalHome);
+    if (restoreOutcome.status === "blocked") {
+      serveBlocked = {
+        code: "restore_failed",
+        reason: restoreOutcome.reason,
+      };
+      bootLog.error(
+        "restore.blocked",
+        `restore.failed: ${restoreOutcome.reason}`,
+      );
+    } else if (restoreOutcome.status === "failed") {
+      serveBlocked = {
+        code: "restore_failed",
+        reason: restoreOutcome.reason,
+      };
+      bootLog.error(
+        "restore.apply_failed",
+        `restore apply failed (attempts=${restoreOutcome.attempts}): ${restoreOutcome.reason}`,
+      );
+    } else if (restoreOutcome.status === "applied") {
+      bootLog.info(
+        "restore.applied",
+        `restore applied schema_version=${restoreOutcome.result.schema_version}`,
+      );
+    }
+  }
+
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
   const storeRootDir = options.store
@@ -216,8 +256,7 @@ export async function bootstrapStageflowHost(
     }
   }
 
-  if (sqliteConnection !== undefined) {
-    const bootLog = rootLogger.child({ component: "bootstrap" });
+  if (sqliteConnection !== undefined && serveBlocked === undefined) {
     try {
       assertStoreQuickCheck(sqliteConnection);
     } catch (err) {
@@ -317,5 +356,6 @@ export async function bootstrapStageflowHost(
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
     storeFilesystem,
+    ...(serveBlocked !== undefined ? { serveBlocked } : {}),
   };
 }

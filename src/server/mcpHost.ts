@@ -17,6 +17,10 @@ import {
   type HttpHostEnvelope,
 } from "./createHttpHost.js";
 import { createOperatorRoutes } from "./http.js";
+import {
+  installShutdownController,
+  type ShutdownController,
+} from "./shutdown.js";
 
 export type McpServerOptions = {
   agent: AgentPort;
@@ -39,7 +43,7 @@ export type McpServerOptions = {
 
 export async function startMcpServer(
   options: McpServerOptions,
-): Promise<HttpHostEnvelope> {
+): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
@@ -48,7 +52,8 @@ export async function startMcpServer(
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
-  return createHttpHost({
+  let shutdown: ShutdownController | undefined;
+  const envelope = await createHttpHost({
     boot,
     host,
     port,
@@ -56,9 +61,6 @@ export async function startMcpServer(
     controlTokens,
     requestTimeoutMs: options.requestTimeoutMs,
     maxConnections: options.maxConnections,
-    // Headless daemon: same REST API surface as `sf ui` (this is what lets
-    // `sf run`/`sf runs *` talk to an auto-started `sf mcp` over HTTP), just
-    // without serving the console's static UI files.
     routes: createOperatorRoutes({
       manager,
       store,
@@ -68,8 +70,16 @@ export async function startMcpServer(
       providerAuthContext,
       allowedHosts,
       controlTokens,
+      getShutdown: () => shutdown,
     }),
   });
+  shutdown = installShutdownController({
+    server: envelope.server,
+    manager: envelope.manager,
+    store: envelope.store,
+    installSignals: process.env.VITEST !== "true",
+  });
+  return { ...envelope, shutdown };
 }
 
 export { DEFAULT_PORT };

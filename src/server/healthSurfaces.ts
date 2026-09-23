@@ -24,6 +24,20 @@ export async function handleReadyz(
   res: ServerResponse,
   boot: StageflowHostBootstrap,
 ): Promise<void> {
+  if (boot.serveBlocked !== undefined) {
+    json(res, 503, {
+      ready: false,
+      code: boot.serveBlocked.code,
+      error: boot.serveBlocked.reason,
+      checks: {
+        store_openable: false,
+        home_writable: false,
+        migrations_complete: false,
+        git_present: false,
+      },
+    });
+    return;
+  }
   const result = await runReadyzChecks({
     store: boot.store,
     homeDir: globalStageflowHome(),

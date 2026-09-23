@@ -49,6 +49,12 @@ import {
   createBackup,
   resolveBackupDownloadPath,
 } from "../runstore/backup.js";
+import {
+  RestoreError,
+  resolveBackupNameForRestore,
+  stageRestoreForBoot,
+} from "../runstore/restore.js";
+import { parseShutdownGraceMs } from "./shutdown.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
@@ -100,6 +106,10 @@ import {
   mapStartFailure,
   mapStoreLookupError,
 } from "./operatorResults.js";
+import {
+  installShutdownController,
+  type ShutdownController,
+} from "./shutdown.js";
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -247,6 +257,8 @@ export type OperatorRouteDeps = {
   uiDistDir?: string;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  /** Live shutdown controller; set after listen so restore can beginDrain. */
+  getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
 };
 
 /**
@@ -263,6 +275,13 @@ export function createOperatorRoutes(
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method, boot }) => {
+      if (boot.serveBlocked !== undefined && pathname.startsWith("/api/")) {
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return true;
+      }
       if (pathname.startsWith("/api/")) {
         if (
           !assertAllowedHttpAccess(allowedHosts, req, res, {
@@ -330,6 +349,57 @@ export function createOperatorRoutes(
           } catch (err) {
             if (err instanceof BackupError) {
               json(res, 400, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/restore") {
+          const body = (await readJsonBody(req)) as {
+            backup?: unknown;
+            path?: unknown;
+          };
+          const backupName =
+            typeof body.backup === "string"
+              ? body.backup
+              : typeof body.path === "string"
+                ? body.path
+                : undefined;
+          if (backupName === undefined) {
+            json(res, 400, {
+              error: "body.backup (backup name under backups/) is required",
+              code: "restore_not_found",
+            });
+            return true;
+          }
+          try {
+            const archivePath = await resolveBackupNameForRestore(
+              path.basename(backupName),
+              globalStageflowHome(),
+            );
+            const graceMs = parseShutdownGraceMs();
+            const staged = await stageRestoreForBoot({
+              archivePath,
+              homeDir: globalStageflowHome(),
+              graceMs,
+            });
+            json(res, 202, {
+              ok: true,
+              staged: staged.stagedPath,
+              drain_deadline: staged.marker.drain_deadline,
+            });
+            const shutdown = deps.getShutdown?.();
+            if (shutdown !== undefined) {
+              void shutdown.beginDrain();
+            }
+          } catch (err) {
+            if (err instanceof RestoreError || err instanceof BackupError) {
+              json(res, 400, {
+                error: err.message,
+                code: err.code,
+              });
               return true;
             }
             throw err;
@@ -1185,7 +1255,7 @@ export function createOperatorRoutes(
 
 export async function startUiServer(
   options: UiServerOptions,
-): Promise<HttpHostEnvelope> {
+): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
@@ -1195,7 +1265,8 @@ export async function startUiServer(
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = options.controlTokens ?? loadControlTokens();
 
-  return createHttpHost({
+  let shutdown: ShutdownController | undefined;
+  const envelope = await createHttpHost({
     boot,
     host,
     port,
@@ -1211,8 +1282,16 @@ export async function startUiServer(
       uiDistDir,
       allowedHosts,
       controlTokens,
+      getShutdown: () => shutdown,
     }),
   });
+  shutdown = installShutdownController({
+    server: envelope.server,
+    manager: envelope.manager,
+    store: envelope.store,
+    installSignals: process.env.VITEST !== "true",
+  });
+  return { ...envelope, shutdown };
 }
 
 export { DEFAULT_PORT };
