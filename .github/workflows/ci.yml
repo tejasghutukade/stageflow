@@ -9,6 +9,9 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      TMPDIR: /tmp
+      SQLITE_TMPDIR: /tmp
     steps:
       - uses: actions/checkout@v4
 
