@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
 import type { StageUsage } from "../../types/usage.js";
-import type { FeedbackLoopConfig } from "../../types/pipeline.js";
+import type { FeedbackLoopConfig, InlinePipelineDefinition } from "../../types/pipeline.js";
 import type { StageLogLine } from "../../agent/activity.js";
 import { derivePendingPrompt } from "../../hitl/qaTrail.js";
 import {
@@ -401,6 +401,14 @@ export class SqliteRunStore implements RunStore {
     const projectRoot = input.projectRoot
       ? normalizeCatalogPath(input.projectRoot)
       : null;
+    const pipelineBody =
+      input.pipelineBody ??
+      (input.inlinePipeline !== undefined
+        ? JSON.stringify(input.inlinePipeline)
+        : null);
+    const pipelineSource =
+      input.pipelineSource ??
+      (pipelineBody != null && pipelinePath == null ? "inline" : null);
 
     this.db.transaction(() => {
       if (input.submission) {
@@ -438,8 +446,8 @@ export class SqliteRunStore implements RunStore {
         run_branch: input.runBranch ?? null,
         git_author_name: input.gitAuthorName ?? null,
         git_author_email: input.gitAuthorEmail ?? null,
-        pipeline_source: input.pipelineSource ?? null,
-        pipeline_body: input.pipelineBody ?? null,
+        pipeline_source: pipelineSource,
+        pipeline_body: pipelineBody,
         caller_id: input.callerId ?? null,
         run_manifest:
           input.runManifest !== undefined
@@ -1796,6 +1804,13 @@ export class SqliteRunStore implements RunStore {
         : {}),
       ...(row.skip_gates != null ? { skip_gates: row.skip_gates !== 0 } : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
+      ...(row.pipeline_body
+        ? {
+            inline_pipeline: JSON.parse(
+              row.pipeline_body,
+            ) as InlinePipelineDefinition,
+          }
+        : {}),
     };
   }
 

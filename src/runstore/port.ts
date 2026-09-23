@@ -6,6 +6,7 @@ import type { AskOperatorPrompt } from "../tools/askOperator.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
   FeedbackLoopConfig,
+  InlinePipelineDefinition,
   ResolvedPipelineDag,
 } from "../types/pipeline.js";
 import type { CompletionCheck } from "../types/completion.js";
@@ -94,6 +95,11 @@ export type RunMeta = {
   caller_id?: string;
   run_manifest?: unknown;
   skip_gates?: boolean;
+  /**
+   * Parsed inline pipeline body for stage-worker reload when there is no
+   * pipeline_path. Derived from stored pipeline_body.
+   */
+  inline_pipeline?: InlinePipelineDefinition;
 };
 
 export type CreatedRun = {
@@ -446,7 +452,13 @@ export type CreateRunInput = {
   gitAuthorEmail?: string;
   status?: RunStatus;
   pipelineSource?: "inline" | "path";
+  /** Durable JSON string stored in pipeline_body. Prefer this for slots writers. */
   pipelineBody?: string;
+  /**
+   * Convenience for callers/tests that have a parsed inline pipeline.
+   * Stored as pipeline_body JSON; surfaced back as meta.inline_pipeline on read.
+   */
+  inlinePipeline?: InlinePipelineDefinition;
   callerId?: string;
   runManifest?: unknown;
   skipGates?: boolean;

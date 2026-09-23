@@ -102,11 +102,13 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 `--pipeline` and `--task` require **filesystem paths** — there is no bare-id fallback.
 
-Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+`sf run` is an HTTP client of a single **global** Stageflow service shared by every project on the machine — it auto-starts that service (headless, no browser) the first time anything needs it, and reuses it if `sf ui`/`sf mcp` is already running. Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — one shared store for every project, not a per-project `.stageflow/` folder. See [Data directory](data-directory.md). Pipeline/task catalog resolution (`stageflow.yaml`, `pipelines/`, `tasks/`) still stays project-local, resolved from whichever git root you're running in.
 
 ## 5. Operate via the console
 
 With `sf ui` running (default `http://127.0.0.1:3847`):
+
+Start `sf ui` before running any pipeline if you want the console open: `sf run` (or any mutating `sf runs` command) auto-starts the same global service headlessly the first time it's needed, and a second process can't then bind the console to that already-occupied port. Running `sf ui` first — as in step 3 above — avoids this; it becomes the one running instance everything else talks to.
 
 - **Runs** — see active and recent runs
 - **Run detail** — spatial stage map; select a stage for transcripts, envelopes, and HITL

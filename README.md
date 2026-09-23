@@ -35,9 +35,11 @@ The same pipeline runs three ways without rewriting anything:
 - **HITL gates** — operator questions in the console; CI exits `2` when a run is waiting
 - **Operator console** — triage runs, connect providers, answer gates, inspect transcripts at `http://127.0.0.1:3847`
 - **MCP endpoint** — Streamable HTTP at `/mcp` when `sf ui` or `sf mcp` is running
+- **Standalone stage execution** — run a single stage directly with `run_stage` (MCP tool, `sf run-stage` CLI, or the A2A `run_stage` operation), no pipeline file required; chain calls with `envelope_ref` (one or many prior results) instead of a pipeline DAG
 - **CI / headless** — `sf validate --strict --json`, `sf run --json` with exit codes `0` / `1` / `2`
 - **Parallel stages** — pipeline DAG with fan-out, join, and Clone Chains (one Clone Instance per Clone Array element; see [YAML catalog](docs/yaml-catalog.md#clone-chain))
-- **SQLite run store** — `<git-root>/.stageflow/` state plus per-run workspaces under `.stageflow/runs/`
+- **Definition-time graph view** — `sf graph --pipeline <path>` prints how a pipeline is wired before any run (terminal diagram or `--json`)
+- **SQLite run store** — global `~/.stageflow/.stageflow/` state plus per-run workspaces, shared across every project since Stageflow became a single auto-starting service
 
 ## Architecture at a glance
 
@@ -184,19 +186,25 @@ See [docs/ci.md](docs/ci.md) for the full CI recipe and [`.github/actions/sf-run
 
 ## State
 
-Runtime state lives in **`<git-root>/.stageflow/`** when inside a git repository (SQLite + per-run workspaces under `.stageflow/runs/`). Global config and `sf_owned` auth live under **`~/.stageflow/`**. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
+Runtime state (SQLite run store + per-run workspaces) is **global** — `~/.stageflow/.stageflow/` — shared across every project on the machine, since Stageflow became a single auto-starting service. Global config and `sf_owned` auth live directly under **`~/.stageflow/`**; per-project settings (`maxConcurrent`, `credentialSource`) still live at `<git-root>/.stageflow/settings.json`. If `.stageflow` is missing and `.software-factory` exists from an older install, the next store open renames it to `.stageflow` once.
 
 ## MCP
 
 Host MCP via `sf ui` or `sf mcp` at `http://127.0.0.1:3847/mcp` (URL printed on boot). Sessions are the default. Point a Cursor (or other) MCP client at that URL. Do not run both hosts against the same store.
 
-HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_feedback_loop`. Inspect tools (`list_providers`, `list_models`, `describe_pipeline`, …) are read-only. Full tool list: [docs/mcp.md](docs/mcp.md).
+Stageflow runs as **one global auto-starting service per machine** (not one process per project): `sf run`, `sf run-stage`, and `sf runs *` health-probe the well-known port and spawn the service headlessly if nothing answers, so you do not have to start `sf ui`/`sf mcp` by hand before using the CLI.
+
+HITL-aware tools include `wait_run`, `answer_gate`, `list_waiting`, and `decide_feedback_loop`. Inspect tools (`list_providers`, `list_models`, `describe_pipeline`, …) are read-only. `run_stage` runs a single stage directly, no pipeline file required — see [Standalone stages](#standalone-stages) below. Full tool list: [docs/mcp.md](docs/mcp.md).
 
 Stages use project `.mcp.json` plus stage `mcp` names. See [YAML catalog — Stage MCP](docs/yaml-catalog.md#stage-mcp).
 
+## Standalone stages
+
+Run a single stage directly, without authoring a pipeline: the MCP `run_stage` tool, the `sf run-stage` CLI command, and (over A2A, wildcard-access — see below) the `run_stage` operation all give a calling agent (Claude Code, Cursor, Codex, Pi, ...) the same capability, so it can decide what to run next itself rather than following a pre-authored DAG. Chain calls with `envelope_ref` — a reference to a previous call's stored envelope, one or many at once — instead of copying results around by hand. Full reference: [docs/mcp.md#run_stage](docs/mcp.md#run_stage), [docs/cli-reference.md#sf-run-stage](docs/cli-reference.md#sf-run-stage).
+
 ## A2A
 
-MCP is for your own trusted, local tools. A2A is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines.
+MCP is for your own trusted, local tools. A2A's `invoke` operation is a second, gated door for other agents on the network: publish specific pipelines in a separate `a2a.yaml`, and outside callers invoke them over JSON-RPC with a bearer token, poll for results, and download frozen artifacts -- never touching your internal run IDs or unpublished pipelines. A2A also exposes `run_stage` (above) with deliberately no gate: any caller with a valid bearer token can run any catalog or inline stage/pipeline, the same wildcard-access default MCP and the CLI give a local harness -- a temporary trade-off, not a hardened access boundary; keep that in mind before exposing a host with real callers.
 
 Drop `a2a.yaml` next to `stageflow.yaml` and it's auto-discovered when `sf ui` starts -- no extra flag needed. `sf a2a add-caller <id>` registers a caller and generates its token. Full reference: [docs/a2a.md](docs/a2a.md).
 
@@ -243,12 +251,13 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/architecture.md](docs/architecture.md) | Runtime components, execution flow, persistence, and design decisions |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
-| [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
+| [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf graph`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
 | [docs/envelopes.md](docs/envelopes.md) | Handoff envelope contract |
+| [docs/verified-stage-execution.md](docs/verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [docs/hitl.md](docs/hitl.md) | Gate kinds, `--skip-gates`, exit code `2` |
 | [docs/ci.md](docs/ci.md) | `--json`, env vars, GitHub Actions |
-| [docs/mcp.md](docs/mcp.md) | MCP tool reference |
-| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A) |
+| [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `run_stage` |
+| [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus the wildcard-access `run_stage` operation |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |

@@ -9,7 +9,7 @@ The operator console is a local web UI started by `sf ui`. Default URL: **`http:
 
 It is the primary surface for triaging runs, connecting providers, answering HITL gates, and inspecting stage transcripts and envelopes. The same process also serves MCP at `/mcp`.
 
-Catalog browse resolves to the **project git root** (and its `stageflow.yaml` manifest) even when you start `sf ui` from a subdirectory. The run store is the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+The run store is **global**, not project-scoped — it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and is shared by every project on the machine, whichever directory you start `sf ui` from. Catalog browse (pipelines, tasks, skills, extensions) still resolves to the **project git root**: starting `sf ui` from a subdirectory uses `<git-root>/stageflow.yaml` and its declared catalog roots. See [Data directory](data-directory.md). `sf ui` is one of two ways to start the shared background service (`sf mcp` is the other, headless); `sf run` / `sf run-stage` / mutating `sf runs` commands auto-start the same service if neither is already running.
 
 ## Starting the console
 
@@ -70,7 +70,9 @@ Recent runs show stored **`pipeline_path`** and **`task_path`** locators when pr
 
 ## Run detail
 
-The live pane is a zoomable spatial stage map (`SpatialRunMap`). Selecting a stage opens a gated, resizable workspace for logs, files, envelopes, and HITL. Hide the workspace to return to the map; drag the splitter to resize. **Fit run** recenters the graph.
+The live pane is a zoomable spatial stage map (`SpatialRunMap`). Selecting a stage opens a gated, resizable workspace for files, envelopes, and HITL. **Fit run** recenters the graph.
+
+The workspace center splits into two independently hideable panels: a conversational **transcript** (system dividers, prompt, thinking, assistant text, tool calls) and a step-by-step **log panel** (`LogPanel`) — a GitHub-Actions-style trace built from the same stage event stream, one collapsible row per step with a status icon and duration, the running or failed step expanded by default, and a pinned failure banner that jumps to the failing step. Toggle either with **Hide/Show transcript** and **Hide/Show logs**; **Hide workspace** returns to the map. Drag the splitter to resize.
 
 A created run shows status **not started**. The primary action is **Start run** until history exists; after that it is **Start fresh** (rerun).
 
@@ -110,7 +112,7 @@ The rail footer can show active run count vs soft max (`get_health` semantics) �
 
 ## MCP co-location
 
-MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). For MCP without the console, use `sf mcp` instead — do not run both against the same project store. See [MCP](mcp.md).
+MCP Streamable HTTP is available at `<console-origin>/mcp` while `sf ui` runs (sessions by default). For MCP without the console, use `sf mcp` instead — both bind the same well-known local port as the one shared global service, so don't run both at once. See [MCP](mcp.md).
 
 ## Screenshots
 

@@ -48,7 +48,7 @@ At Host boot (`sf ui` / `sf mcp`), Stageflow configures providers from:
 
 Do not set both. Unreadable files soft-fail by default (Host still starts). `STAGEFLOW_REQUIRE_PROVIDERS=id1,id2` makes missing providers fatal. OAuth remains interactive via `sf providers login … --type oauth`.
 
-The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Per-project settings stay at `<git-root>/.stageflow/settings.json`. See [Data directory](data-directory.md).
+The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth and are not the run store. See [Data directory](data-directory.md).
 
 Provider API keys are **not** passed into stage process environments. Model auth continues via `authPath` (file binding). Claude backend refuses to start as root (`euid=0`) because the SDK requires `bypassPermissions`. See [migration-stage-environment.md](migration-stage-environment.md).
 

@@ -16,7 +16,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 |-----|-------------------|
 | [Quick start](quickstart.md) | Install, `sf init`, path-based run |
 | [YAML catalog](yaml-catalog.md) | Author dialect `io` / `verify` / `on_verify_fail` and wiring `route` / `entry` / `type: loop` / [Clone Chain](yaml-catalog.md#clone-chain) ([upgrading older catalogs](yaml-catalog.md#upgrading-older-catalogs)) |
-| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
+| [CLI reference](cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf validate`, `sf envelope`, `sf ui`, `sf mcp`, `sf providers` |
 | [Harness skills suite](skills-suite.md) | `npx skills add tejasghutukade/stageflow` — router + five job skills for Cursor, Claude Code, Codex, Pi, and OpenCode |
 
 ## Core concepts
@@ -36,8 +36,8 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Data directory](data-directory.md) | Durable root layout, keep vs disposable, image user, version support |
 | [Docker and self-hosting](docker.md) | Backup/restore, local volume boundary, provenance, egress posture, compose reference |
 | [Operator console](operator-console.md) | Spatial stage map, gated workspace, navigation, settings |
-| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running |
-| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC |
+| [MCP](mcp.md) | Streamable HTTP tools when `sf ui` or `sf mcp` is running, including standalone `run_stage` |
+| [A2A](a2a.md) | Publish pipelines for other agents to invoke over JSON-RPC, plus the wildcard-access `run_stage` operation |
 | [CI / headless](ci.md) | `--json`, exit codes, GitHub Actions, PR diagram dogfood |
 
 ## Featured example

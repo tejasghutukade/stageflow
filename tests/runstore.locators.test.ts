@@ -42,6 +42,51 @@ describe("run store locators", () => {
     expect(meta.project_root).toBeUndefined();
   });
 
+  it("persists and reads back an inline pipeline body when there is no pipeline_path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-locators-inline-"));
+    const store = createRunStore({ rootDir: root });
+    const inlinePipeline = {
+      id: "standalone-check",
+      stages: [
+        {
+          id: "check",
+          system_prompt: "Do work",
+          model: "anthropic/claude-sonnet-4-5",
+          io: {
+            input: { schema: { type: "object" } },
+            output: { schema: { type: "object" } },
+          },
+        },
+      ],
+    };
+    const run = await store.createRun({
+      pipelineId: "standalone-check",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+      inlinePipeline,
+    });
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.pipeline_path).toBeUndefined();
+    expect(meta.inline_pipeline).toEqual(inlinePipeline);
+
+    // Also round-trips through listRuns, not just readRunMeta.
+    const [summary] = await store.listRuns({ pipeline: "standalone-check" });
+    expect(summary).toBeDefined();
+  });
+
+  it("omits inline_pipeline for a file-based (non-inline) run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-locators-non-inline-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      pipelinePath: path.resolve("/abs/pipeline.yaml"),
+    });
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.inline_pipeline).toBeUndefined();
+  });
+
   it("migrates existing databases idempotently", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-locators-migrate-"));
     const dbPath = path.join(root, "state.db");
@@ -78,5 +123,6 @@ VALUES ('legacy-1', 'docs-only', 'id: t\ngoal: g\n', 'succeeded', '2026-01-01T00
     expect(names).toContain("pipeline_path");
     expect(names).toContain("task_path");
     expect(names).toContain("project_root");
+    expect(names).toContain("pipeline_body");
   });
 });

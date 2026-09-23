@@ -11,8 +11,8 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json` |
-| `<git-root>/.stageflow/` | Per-project settings only (`settings.json`); not the run store |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log` |
+| `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo; not the run store |
 
 Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
 
@@ -65,8 +65,10 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 | `--git-sha` | Record git SHA on the run (CI identity) |
 | `--ci-pr-url` | Record PR URL on the run |
 | `--ci-job-url` | Record CI job URL on the run |
-| `--operator-cwd` | Operator checkout root for skill resolution (default: process cwd) |
-| `--operator-agent-dir` | Pi agent directory for user/runner skills (default: Pi `getAgentDir()`) |
+| `--operator-cwd` | Accepted for compatibility but has **no effect** on `sf run` — see note below |
+| `--operator-agent-dir` | Accepted for compatibility but has **no effect** on `sf run` — see note below |
+
+`sf run` is an HTTP client of the shared global Stageflow service (started/reused across invocations, see [`sf ui`](#sf-ui) / [`sf mcp`](#sf-mcp)); it no longer constructs a per-invocation `RunManager`, so `--operator-cwd`/`--operator-agent-dir` can't be threaded through per call. Passing either flag prints a warning and is otherwise a no-op. Set `STAGEFLOW_OPERATOR_CWD` / `STAGEFLOW_OPERATOR_AGENT_DIR` in the environment **before that service first starts** instead — the operator catalog used for skill resolution is fixed once, at daemon start. See [CI: Skills in CI](ci.md#skills-in-ci).
 
 **Exit codes:**
 
@@ -109,6 +111,60 @@ sf run --task examples/hello-world/my-task.task.yaml \
 Each `stages[]` item is a `StageProjection` (snake_case): `stage_id`, `status`, `envelope`, `artifacts`, and optional `last_at`, `pending_prompt`. That `--include stages` schema is unchanged for diamond runs — it does not add `pipeline_track` or join-input fields. The multi-edge graph (a diamond join has two inbound `pipeline_track` edges; `blocked_by` lists unresolved parents) is on `sf runs show --json`, MCP `get_run`, and `sf export-run`.
 
 `--include stages` without `--json` exits `1`. See [CI / headless](ci.md#including-stage-projections).
+
+## `sf run-stage` {#sf-run-stage}
+
+Run a single stage directly against the shared Stageflow service, without authoring a pipeline file — the CLI counterpart of the MCP [`run_stage`](mcp.md#run_stage) tool (it talks to the same running `sf ui`/`sf mcp` service over MCP). Distinct from the internal-only, worker-process-only `sf internal run-stage` below.
+
+```bash
+sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>] [--envelope-ref ...]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--stage` | Filesystem path to a catalog stage YAML file |
+| `--stage-inline` | Inline stage body JSON (`{ id, system_prompt, io, ... }` — no `uses:`/`route:`/pipeline wrapper) |
+| `--task` | Filesystem path to a catalog task YAML file |
+| `--task-inline` | Inline task JSON (`{ id, goal, ... }`) |
+| `--envelope-ref` | Resolve a previously stored `StageEnvelope` as this stage's input instead of a task: `<runId>:<stageId>[:<attempt>]`. Repeat the flag to pass more than one — each resolved payload is namespaced under its `stageId` in `input` (disambiguated by `runId` on a `stageId` collision), and summaries are combined into `goal` |
+| `--checkout` | Optional working directory to use with `--envelope-ref` (`--task`/`--task-inline` carry their own checkout) |
+| `--model` | Override the model/backend for this call only, ahead of the stage's own declared model |
+| `--blocking` | Wait for the run to reach a terminal or waiting state and print the result in this same call, instead of just printing the run id |
+| `--timeout-ms` | Wait budget in ms when `--blocking` is set |
+| `--json` | Machine-readable JSON output |
+
+Exactly one of `--stage`/`--stage-inline` is required, and exactly one of `--task`/`--task-inline`/`--envelope-ref`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Async mode: call accepted, run started. Blocking mode: stage completed with a successful envelope |
+| `1` | Tool-level error (bad input, validation failure, unknown `envelope_ref`), or blocking mode completed with a failed envelope |
+| `2` | Blocking mode: the stage parked on a human-in-the-loop gate (`needs_input`), or the `--timeout-ms` budget elapsed before the run finished |
+
+Async mode (the default) prints `{ runId, stageId }` and exits `0` immediately — poll or inspect with `sf runs show --run <runId>` / `sf runs wait --run <runId>` like any other run.
+
+Examples:
+
+```bash
+# Async: start a catalog stage, print the run id
+sf run-stage --stage stages/research.yaml --task tasks/research.task.yaml
+
+# Blocking: wait for the result in this same call
+sf run-stage --stage stages/research.yaml --task-inline '{"id":"t","goal":"Research it"}' --blocking
+
+# Chain off a prior run's envelope instead of a task
+sf run-stage --stage stages/summarize.yaml --envelope-ref 2026-09-21T17-44-36-201Z-9411d9:research --blocking
+
+# Combine two prior results in one call
+sf run-stage --stage stages/combine.yaml \
+  --envelope-ref 2026-09-21T17-44-36-201Z-9411d9:research \
+  --envelope-ref 2026-09-21T17-48-08-307Z-cc78f9:titleize \
+  --blocking
+```
+
+Access is deliberately unrestricted, the same as the MCP tool: `sf run-stage` can run any catalog or inline stage the caller names, with no publish/allowlist step.
 
 ## `sf runs`
 
@@ -676,7 +732,7 @@ On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal activ
 
 **Access control.** Non-loopback binds require `STAGEFLOW_CONTROL_TOKEN` (or `_FILE`); otherwise the process refuses to start (exit `1`) before `listen`. See [MCP — access control](mcp.md#access-control).
 
-Run **either** `sf ui` **or** `sf mcp` for a project — not both against the same store.
+Run **either** `sf ui` **or** `sf mcp` at a time — both bind the same default port (`3847`) on the shared global service, so running both together is a port collision, not a store conflict (they already share the same global store). `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet, so starting `sf ui` first avoids racing a later headless auto-start for the port.
 
 ## `sf mcp`
 
@@ -786,4 +842,5 @@ Full CI-related flags and env vars: [CI / headless](ci.md).
 - [CI / headless](ci.md) — GitHub Actions and `--json`
 - [Providers](providers.md) — `pi_home` vs `sf_owned`
 - [HITL](hitl.md) — `--skip-gates`, exit `2`, and `sf runs` answer/wait
-- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC
+- [MCP](mcp.md#run_stage) — `run_stage`, the tool `sf run-stage` talks to
+- [A2A](a2a.md) — publish pipelines for other agents to call over JSON-RPC, plus the wildcard-access `run_stage` operation

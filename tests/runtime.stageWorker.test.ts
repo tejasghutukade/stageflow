@@ -441,6 +441,113 @@ describe("stage worker feedback session modes", () => {
   });
 });
 
+describe("stage worker reload — inline pipeline run", () => {
+  // Regression test: a stage worker (this is exactly what `sf internal
+  // run-stage` runs — the real subprocess spawned per stage attempt in the
+  // default STAGEFLOW_STAGE_EXECUTION=process mode) has no memory of the
+  // parent process's in-memory pipeline object. It reloads everything from
+  // the store via loadRunContext -> reloadPipelineForRun, which used to
+  // require a stored pipeline_path unconditionally — but an inline pipeline
+  // (used by MCP start_run's inline-pipeline path and by run_stage, which is
+  // ALWAYS inline) never gets one, so this reload always threw "missing
+  // pipeline_path" for any inline-pipeline run in real (non-test) process
+  // mode. `env.VITEST === "true"` auto-forces in-process execution
+  // (src/runtime/stageConcurrency.ts), so no test ever exercised this real
+  // worker-subprocess reload path for an inline pipeline before this test —
+  // calling runStageWorker directly here (as the pre-existing tests above
+  // do) exercises that exact reload path regardless.
+  const previousHome = process.env.HOME;
+
+  beforeEach(async () => {
+    process.env.HOME = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-home-"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  });
+
+  it("reloads and runs a stage from an inline pipeline with no pipeline_path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-"));
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "standalone-check",
+      // No pipelinePath — this is what an inline pipeline run looks like.
+      inlinePipeline: {
+        id: "standalone-check",
+        stages: [
+          {
+            id: "check",
+            system_prompt: "x",
+            model: "anthropic/claude-sonnet-4-5",
+            io: {
+              input: { schema: { type: "object" } },
+              output: { schema: { type: "object" } },
+            },
+          },
+        ],
+      },
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "check");
+    await store.createStageExecution(run.runId, "check");
+
+    vi.spyOn(PiAgentAdapter.prototype, "openStage").mockImplementation(
+      (input: StageRunInput): StageHandle => ({
+        stageId: input.stageId ?? input.stage.id,
+        async next() {
+          return {
+            status: "completed",
+            result: {
+              ok: true,
+              envelope: { status: "success", summary: "done", artifacts: [] },
+            },
+          };
+        },
+        deliverAnswer: vi.fn(),
+        async close() {},
+      }),
+    );
+
+    const outcome = await runStageWorker({
+      runId: run.runId,
+      stageId: "check",
+      rootDir: root,
+      mode: "run",
+    });
+
+    expect(outcome).toMatchObject({ ok: true });
+    const execution = await store.getLatestStageExecution(run.runId, "check");
+    expect(execution?.status).toBe("succeeded");
+  });
+
+  it("still throws a clear error when a run has neither pipeline_path nor an inline pipeline (defensive/legacy path)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-worker-inline-broken-"));
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    const run = await store.createRun({
+      pipelineId: "broken",
+      taskYaml: "id: t\ngoal: g\n",
+      taskId: "t",
+    });
+    await store.ensureStageWorkspace(run.runId, "check");
+    await store.createStageExecution(run.runId, "check");
+
+    await expect(
+      runStageWorker({
+        runId: run.runId,
+        stageId: "check",
+        rootDir: root,
+        mode: "run",
+      }),
+    ).rejects.toThrow(/missing pipeline_path/);
+  });
+});
+
 describe("runStage workerMode", () => {
   it("returns waiting without HITL controller", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-worker-"));

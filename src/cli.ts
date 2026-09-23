@@ -34,6 +34,7 @@ import {
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
+import { RUN_STAGE_USAGE, runRunStageCommand } from "./cli/runStageCommand.js";
 import { RUNS_USAGE, runRunsCommand } from "./cli/runsCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
@@ -63,6 +64,7 @@ import { logger as cliLogger } from "./logging/logger.js";
 const USAGE = `Usage:
   sf init
   sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+  sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
   sf doctor [--json] [--pipeline <path>] [--strict]
   sf graph --pipeline <path> [--json]
@@ -109,6 +111,8 @@ Store backend: SF_STORE=sqlite only. SF_STORE=disk is rejected; disk-era .stagef
 ${INIT_USAGE}
 
 ${RUN_USAGE}
+
+${RUN_STAGE_USAGE}
 
 ${VALIDATE_USAGE}
 
@@ -183,6 +187,7 @@ function parseArgs(argv: string[]): {
     command === "a2a" ||
     command === "migrate-yaml" ||
     command === "run" ||
+    command === "run-stage" ||
     command === "init" ||
     command === "artifact" ||
     command === "envelope" ||
@@ -478,6 +483,12 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "run") {
       return runRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
+    }
+
+    if (parsed.command === "run-stage") {
+      return runRunStageCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
       });
     }

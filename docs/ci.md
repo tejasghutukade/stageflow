@@ -239,12 +239,12 @@ Recorded on the run for operator triage in the console.
 
 ## Skills in CI {#skills-in-ci}
 
-Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator checkout** `{ cwd, agentDir }`:
+Stages can reference installed skills via the `skill:` field in stage YAML. Skills resolve from the **operator checkout** `{ cwd, agentDir }`, which the shared global Stageflow service fixes once, at daemon start — `sf run --operator-cwd`/`--operator-agent-dir` are accepted for compatibility but are now no-ops (see [CLI reference](cli-reference.md#sf-run)):
 
-- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the project git root. Run `sf run` from the repo (or pass `--operator-cwd <path>` / set `STAGEFLOW_OPERATOR_CWD`).
-- **User/runner skills:** install under the Pi agent directory (`~/.pi/agent/skills/<name>/SKILL.md`), or pass `--operator-agent-dir <path>` / set `STAGEFLOW_OPERATOR_AGENT_DIR` to point at a Pi agent dir that contains a `skills/` subtree.
+- **Project skills:** commit under `.pi/skills/<name>/SKILL.md` in the project git root. Set `STAGEFLOW_OPERATOR_CWD` before the service's first `sf run`/`sf ui`/`sf mcp` invocation in the job (or run from the repo root, which is the default `cwd` the service captures at start).
+- **User/runner skills:** install under the Pi agent directory (`~/.pi/agent/skills/<name>/SKILL.md`), or set `STAGEFLOW_OPERATOR_AGENT_DIR` before the service starts to point at a Pi agent dir that contains a `skills/` subtree.
 
-The guest CLI defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }`. Override when the job checkout is not the skill tree root or when skills live in a shared agent dir on the runner.
+The service defaults to `{ cwd: process.cwd(), agentDir: getAgentDir() }` captured at the moment it auto-starts. Export the env vars in the job **before** the first command that could start the global service, when the job checkout is not the skill tree root or when skills live in a shared agent dir on the runner.
 
 ## Extensions in CI
 
@@ -285,9 +285,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: sf providers login anthropic --type api_key --api-key-env ANTHROPIC_API_KEY
       - name: Run pipeline
+        env:
+          # When skills live outside the repo checkout, set this so it's in
+          # place before this step's `sf run` auto-starts the shared service
+          # (STAGEFLOW_OPERATOR_CWD is captured once, at daemon start — the
+          # --operator-cwd flag on `sf run` itself is a no-op, see
+          # docs/cli-reference.md#sf-run):
+          STAGEFLOW_OPERATOR_CWD: ${{ github.workspace }}
         run: sf run --task examples/hello-world/my-task.task.yaml --pipeline examples/hello-world/hello.pipeline.yaml --json --skip-gates
-        # When skills live outside the repo checkout, add:
-        # --operator-cwd path/to/checkout
 ```
 
 Adjust task, pipeline, and secrets for your project. Dogfood release automation lives in [`examples/github-release/`](../examples/github-release/). To rewrite notes on an already-published GitHub Release, run **Repair GitHub Release notes** from the Actions tab.
