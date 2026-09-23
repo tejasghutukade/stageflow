@@ -36,6 +36,8 @@ export type ResolvedSkill = {
   name: string;
   filePath: string;
   baseDir: string;
+  scope: SkillScope;
+  source: string;
 };
 
 function toListing(skill: Skill): SkillListing {
@@ -81,6 +83,8 @@ export async function resolveSkillByName(
     name: match.name,
     filePath: match.filePath,
     baseDir: match.baseDir,
+    scope: match.sourceInfo.scope,
+    source: match.sourceInfo.source,
   };
 }
 

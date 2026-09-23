@@ -693,6 +693,117 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("POST /api/pipelines respects project_root write target and read_only aliases", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-pipeline-root-"));
+    const { root: repoA, cleanup: cleanupA } = await initTempGitRepo();
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoA, { recursive: true });
+    await cp(manifestCatalog, repoB, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoA, "pipelines"), { recursive: true });
+    await mkdir(path.join(repoB, "pipelines"), { recursive: true });
+    for (const repo of [repoA, repoB]) {
+      await writeFile(
+        path.join(repo, "pipelines", "alpha.yaml"),
+        ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+      await writeFile(
+        path.join(repo, "pipelines", "beta.yaml"),
+        ["id: beta", "system_prompt: Beta.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+    }
+
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.createRun({
+      pipelineId: "seed-root",
+      taskYaml: "id: t\ngoal: g\n",
+      projectRoot: repoB,
+    });
+
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoA,
+    });
+
+    try {
+      const unknown = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: "/no/such/root",
+          directory: "pipelines",
+          id: "should-fail",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.code).toBe("unknown_project_root");
+
+      const created = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: path.resolve(repoB),
+          directory: "pipelines",
+          id: "in-repo-b",
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "beta", uses: "./beta.yaml" },
+          ],
+        }),
+      });
+      expect(created.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).resolves.toBeUndefined();
+      await expect(
+        access(path.join(repoA, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).rejects.toThrow();
+
+      const { resolveSeededExamplesPath } = await import(
+        "../src/config/seededCatalog.js"
+      );
+      const seededPath = resolveSeededExamplesPath();
+      if (seededPath !== undefined) {
+        const byId = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            directory: "pipelines",
+            id: "seeded-refuse",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byId.status).toBe(403);
+        expect(byId.body.code).toBe("catalog_root_read_only");
+
+        const byAbs = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: seededPath,
+            directory: "pipelines",
+            id: "seeded-refuse-abs",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byAbs.status).toBe(403);
+        expect(byAbs.body.code).toBe("catalog_root_read_only");
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupA();
+      await cleanupB();
+    }
+  });
+
   it("lists runs, returns detail, starts and re-runs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-"));
     const store = createRunStore({ rootDir: root });

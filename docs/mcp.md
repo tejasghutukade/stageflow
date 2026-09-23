@@ -131,7 +131,7 @@ No-argument first-run orientation for remote harnesses. Returns host version, pr
 
 List manifest-declared pipeline paths across every catalog root this Host knows (boot cwd, registered store roots, seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
-**Input:** `{}`
+**Input:** `{ "project_root": "string (optional)" }`
 
 **Output:**
 
@@ -141,6 +141,7 @@ List manifest-declared pipeline paths across every catalog root this Host knows 
     {
       "path": "examples/hello-world/hello.pipeline.yaml",
       "id": "hello",
+      "project_root": "examples",
       "stages": [
         { "id": "research", "uses_path": "examples/hello-world/research.yaml" }
       ]
@@ -148,19 +149,27 @@ List manifest-declared pipeline paths across every catalog root this Host knows 
     {
       "path": "examples/plan-review/plan-review.pipeline.yaml",
       "id": "plan-review",
+      "project_root": "examples",
       "stages": [{ "id": "plan-review" }]
+    }
+  ],
+  "root_errors": [
+    {
+      "project_root": "/abs/unreadable",
+      "code": "catalog_root_unreadable",
+      "message": "Catalog root is not readable"
     }
   ]
 }
 ```
 
-Paths are relative to the project git root (as declared in `stageflow.yaml`). Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`).
+Paths are relative to the project git root (as declared in `stageflow.yaml`). Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`). `root_errors` is always present (possibly empty).
 
 ### `list_tasks`
 
-List manifest-declared task paths from the project catalog.
+List manifest-declared task paths across every catalog root this Host knows (boot cwd, registered store roots, seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
-**Input:** `{}`
+**Input:** `{ "project_root": "string (optional)" }`
 
 **Output:**
 
@@ -169,21 +178,24 @@ List manifest-declared task paths from the project catalog.
   "tasks": [
     {
       "path": "examples/hello-world/my-task.task.yaml",
-      "id": "my-task"
+      "id": "my-task",
+      "project_root": "examples"
     },
     {
       "path": "examples/plan-review/my-task.task.yaml",
-      "id": "my-task"
+      "id": "my-task",
+      "project_root": "examples"
     }
-  ]
+  ],
+  "root_errors": []
 }
 ```
 
 ### `list_models`
 
-List catalog model ids from the same browse source as `GET /api/models`.
+List catalog model ids from the same browse source as `GET /api/models`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors`.
 
-**Input:** `{}`
+**Input:** `{ "project_root": "string (optional)" }`
 
 **Output:**
 
@@ -193,11 +205,17 @@ List catalog model ids from the same browse source as `GET /api/models`.
     "anthropic/claude-sonnet-4-5",
     "cursor/auto",
     "cursor/composer-2-5"
-  ]
+  ],
+  "entries": [
+    { "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/boot" },
+    { "id": "cursor/auto", "project_root": "examples" },
+    { "id": "cursor/composer-2-5", "project_root": "examples" }
+  ],
+  "root_errors": []
 }
 ```
 
-There is no model-write, filter, or provider-login tool.
+`models` is the deduped id list; `entries` tags each id with the `project_root` it came from. There is no model-write or provider-login tool.
 
 ### `list_project_mcp`
 

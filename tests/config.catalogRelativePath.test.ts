@@ -1,5 +1,7 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   CatalogPathError,
   resolveCatalogRelativePath,
@@ -21,6 +23,18 @@ const roots: CatalogRoot[] = [
     read_only: true,
   },
 ];
+
+const temps: string[] = [];
+
+afterEach(() => {
+  for (const dir of temps.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
 
 describe("resolveCatalogRelativePath", () => {
   it("refuses absolute paths with registered roots listed", () => {
@@ -74,6 +88,43 @@ describe("resolveCatalogRelativePath", () => {
       expect((err as CatalogPathError).code).toBe("path_outside_project_root");
     }
   });
+
+  it("accepts absolute unknown project_root as request-scoped root", () => {
+    const base = mkdtempSync(path.join(tmpdir(), "sf-ephem-root-"));
+    temps.push(base);
+    mkdirSync(path.join(base, "pipelines"), { recursive: true });
+    writeFileSync(path.join(base, "pipelines", "x.pipeline.yaml"), "id: x\n");
+
+    const resolved = resolveCatalogRelativePath({
+      inputPath: "pipelines/x.pipeline.yaml",
+      projectRoot: base,
+      roots,
+      fieldName: "pipeline",
+    });
+    expect(resolved.root.kind).toBe("registered");
+    expect(resolved.absolutePath).toBe(
+      path.resolve(realpathSync(base), "pipelines", "x.pipeline.yaml"),
+    );
+  });
+
+  it("still rejects unknown symbolic project_root", () => {
+    expect(() =>
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        projectRoot: "unknown-seed",
+        roots,
+      }),
+    ).toThrow(CatalogPathError);
+    try {
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        projectRoot: "unknown-seed",
+        roots,
+      });
+    } catch (err) {
+      expect((err as CatalogPathError).code).toBe("unknown_project_root");
+    }
+  });
 });
 
 describe("relativizeLocalPathForNetwork", () => {
@@ -82,5 +133,19 @@ describe("relativizeLocalPathForNetwork", () => {
     const out = relativizeLocalPathForNetwork(cwd, "/proj/pipelines/x.pipeline.yaml");
     expect(out.path).toBe("pipelines/x.pipeline.yaml");
     expect(out.project_root).toBe(path.resolve(cwd));
+  });
+
+  it("realpaths both sides when cwd is a symlink", () => {
+    const realBase = mkdtempSync(path.join(tmpdir(), "sf-rel-real-"));
+    temps.push(realBase);
+    const linkParent = mkdtempSync(path.join(tmpdir(), "sf-rel-link-parent-"));
+    temps.push(linkParent);
+    const linkCwd = path.join(linkParent, "proj-link");
+    symlinkSync(realBase, linkCwd);
+    writeFileSync(path.join(realBase, "x.pipeline.yaml"), "id: x\n");
+
+    const out = relativizeLocalPathForNetwork(linkCwd, "x.pipeline.yaml");
+    expect(out.path).toBe("x.pipeline.yaml");
+    expect(out.project_root).toBe(realpathSync(linkCwd));
   });
 });

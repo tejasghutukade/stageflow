@@ -6,12 +6,23 @@ import type {
   StageRunInput,
   StageSessionMode,
 } from "../agent/port.js";
+import {
+  bindingKindForOrigin,
+  catalogOrSeededOrigin,
+  decideWorkspaceConfigTrust,
+  skillOriginKind,
+  type ConfigOriginRecord,
+} from "../config/configOrigin.js";
 import { resolveSkillByName } from "../config/listSkills.js";
+import { loadHostConfig } from "../config/hostConfig.js";
+import { defaultSeededRoots } from "../config/seededCatalog.js";
 import { mkdir } from "node:fs/promises";
 import {
   MCP_CATALOG_FILENAME,
   STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV,
   StageMcpError,
+  mcpCatalogExists,
+  mcpCatalogPath,
   resolveStageMcpServers,
   stampStagePromptArtifactsDir,
   type ResolvedMcpServers,
@@ -40,9 +51,11 @@ import {
 import { assignment } from "./cloneSchedule.js";
 import { resumeSessionFilePath, type StageAttemptContext } from "./stageAttemptContext.js";
 import {
+  bindingKindFromMeta,
   buildStageRoots,
   rootsForStageWorker,
   withResolvedAuthPath,
+  type DerivedBindingKind,
   type StageRoots,
 } from "./stageRoots.js";
 
@@ -78,6 +91,8 @@ export type StageAttemptOpenInput = {
   stageId?: string;
   feedbackLoopContext?: FeedbackLoopContext;
   stageEnv?: Record<string, string>;
+  trustWorkspaceConfig?: string[];
+  bindingKind?: DerivedBindingKind;
 };
 
 export type StageAttemptOpenResult =
@@ -90,10 +105,32 @@ export type StageAttemptOpenResult =
     }
   | { ok: false; reason: string };
 
+function resolveTrustWorkspaceConfig(explicit?: string[]): string[] {
+  if (explicit !== undefined) return explicit;
+  try {
+    return loadHostConfig().trustWorkspaceConfig;
+  } catch {
+    return [];
+  }
+}
+
+function seededRootPaths(): string[] {
+  return defaultSeededRoots().map((root) => root.path);
+}
+
 async function resolveStageSkillForRun(
   stage: Pick<StageConfig, "skill">,
   catalog: OperatorCatalog | undefined,
-): Promise<{ ok: true; skillFilePath?: string } | { ok: false; reason: string }> {
+  options: {
+    bindingKind: DerivedBindingKind;
+    checkoutRoot?: string;
+    factoryCwd?: string;
+    trustWorkspaceConfig: string[];
+  },
+): Promise<
+  | { ok: true; skillFilePath?: string; origin?: ConfigOriginRecord }
+  | { ok: false; reason: string }
+> {
   const name = stage.skill;
   if (name === undefined) return { ok: true };
   if (catalog?.agentDir === undefined) {
@@ -106,35 +143,135 @@ async function resolveStageSkillForRun(
   if (!resolved) {
     return { ok: false, reason: `Skill "${name}" is not installed` };
   }
-  return { ok: true, skillFilePath: resolved.filePath };
+  const originKind = skillOriginKind(
+    resolved.scope,
+    resolved.filePath,
+    options.checkoutRoot,
+  );
+  if (originKind === "workspace") {
+    const decision = decideWorkspaceConfigTrust({
+      bindingKind: bindingKindForOrigin(options.bindingKind),
+      projectRoot: options.factoryCwd ?? options.checkoutRoot ?? "",
+      trustWorkspaceConfig: options.trustWorkspaceConfig,
+      source: "workspace",
+    });
+    if (!decision.allow) {
+      return {
+        ok: false,
+        reason: decision.code ?? "untrusted_config_origin",
+      };
+    }
+  }
+  return {
+    ok: true,
+    skillFilePath: resolved.filePath,
+    origin: {
+      name,
+      origin: originKind,
+      path: resolved.filePath,
+    },
+  };
 }
 
 async function resolveAttemptMcpServers(
   allowlist: readonly string[] | undefined,
   factoryCwd: string | undefined,
   artifactsDir: string,
-  stageEnv?: Record<string, string>,
-  stageId?: string,
-): Promise<ResolvedMcpServers | undefined> {
+  options: {
+    checkoutRoot?: string;
+    bindingKind: DerivedBindingKind;
+    trustWorkspaceConfig: string[];
+    stageEnv?: Record<string, string>;
+    stageId?: string;
+  },
+): Promise<{
+  servers: ResolvedMcpServers | undefined;
+  origins: ConfigOriginRecord[];
+}> {
   const names = allowlist ?? [];
-  if (names.length === 0) return undefined;
-  if (factoryCwd === undefined) {
-    throw new StageMcpError(
-      `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
-      "missing_catalog",
-    );
+  if (names.length === 0) return { servers: undefined, origins: [] };
+  const env = {
+    ...(options.stageEnv ?? {}),
+    [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
+  };
+  const stageIdOpt =
+    options.stageId !== undefined ? { stageId: options.stageId } : {};
+  const bindingKind = bindingKindForOrigin(options.bindingKind);
+
+  if (factoryCwd !== undefined && (await mcpCatalogExists(factoryCwd))) {
+    await mkdir(artifactsDir, { recursive: true });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: factoryCwd,
+      allowlist: names,
+      env,
+      bindingKind,
+      trustWorkspaceConfig: options.trustWorkspaceConfig,
+      ...stageIdOpt,
+    });
+    const origin = catalogOrSeededOrigin(factoryCwd, seededRootPaths());
+    const catalogPath = mcpCatalogPath(factoryCwd);
+    return {
+      servers: Object.keys(resolved).length > 0 ? resolved : undefined,
+      origins: names.map((name) => ({
+        name,
+        origin,
+        path: catalogPath,
+      })),
+    };
   }
-  await mkdir(artifactsDir, { recursive: true });
-  const resolved = await resolveStageMcpServers({
-    projectRoot: factoryCwd,
-    allowlist: names,
-    env: {
-      ...(stageEnv ?? {}),
-      [STAGEFLOW_STAGE_ARTIFACTS_DIR_ENV]: artifactsDir,
-    },
-    ...(stageId !== undefined ? { stageId } : {}),
-  });
-  return Object.keys(resolved).length > 0 ? resolved : undefined;
+
+  const checkoutRoot = options.checkoutRoot;
+  if (
+    checkoutRoot !== undefined &&
+    checkoutRoot !== factoryCwd &&
+    (await mcpCatalogExists(checkoutRoot))
+  ) {
+    await mkdir(artifactsDir, { recursive: true });
+    const resolved = await resolveStageMcpServers({
+      projectRoot: checkoutRoot,
+      allowlist: names,
+      env,
+      bindingKind,
+      trustWorkspaceConfig: options.trustWorkspaceConfig,
+      trustProjectRoot: factoryCwd ?? checkoutRoot,
+      workspaceSourced: true,
+      ...stageIdOpt,
+    });
+    const catalogPath = mcpCatalogPath(checkoutRoot);
+    return {
+      servers: Object.keys(resolved).length > 0 ? resolved : undefined,
+      origins: names.map((name) => ({
+        name,
+        origin: "workspace" as const,
+        path: catalogPath,
+      })),
+    };
+  }
+
+  throw new StageMcpError(
+    `MCP catalog "${MCP_CATALOG_FILENAME}" is missing`,
+    "missing_catalog",
+  );
+}
+
+function verifyCommandOrigins(
+  dag: ResolvedPipelineDag,
+  stageId: string,
+  pipelinePath: string | undefined,
+  factoryCwd: string | undefined,
+): ConfigOriginRecord[] {
+  const completion = dag.nodes.find((node) => node.id === stageId)?.completion;
+  const origin = catalogOrSeededOrigin(factoryCwd, seededRootPaths());
+  const records: ConfigOriginRecord[] = [];
+  for (const check of completion?.checks ?? []) {
+    if (check.type !== "command") continue;
+    records.push({
+      name: check.id,
+      origin,
+      ...(pipelinePath !== undefined ? { path: pipelinePath } : {}),
+    });
+  }
+  return records;
 }
 
 async function openStageWithOperatorCatalog(
@@ -143,24 +280,62 @@ async function openStageWithOperatorCatalog(
   catalog: OperatorCatalog | undefined,
   factoryCwd: string | undefined,
   artifactsDir: string,
-  stageEnv?: Record<string, string>,
+  resolveOptions: {
+    checkoutRoot?: string;
+    bindingKind: DerivedBindingKind;
+    trustWorkspaceConfig: string[];
+    stageEnv?: Record<string, string>;
+    store: RunStore;
+    runId: string;
+    pipelinePath?: string;
+    dag: ResolvedPipelineDag;
+  },
 ): Promise<OpenStageWithOperatorCatalogResult> {
-  const skill = await resolveStageSkillForRun(input.stage, catalog);
+  const skill = await resolveStageSkillForRun(input.stage, catalog, {
+    bindingKind: resolveOptions.bindingKind,
+    checkoutRoot: resolveOptions.checkoutRoot,
+    factoryCwd,
+    trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
+  });
   if (!skill.ok) return skill;
   let resolvedMcpServers: ResolvedMcpServers | undefined;
+  const origins: ConfigOriginRecord[] = [];
+  if (skill.origin !== undefined) origins.push(skill.origin);
   try {
-    resolvedMcpServers = await resolveAttemptMcpServers(
+    const mcp = await resolveAttemptMcpServers(
       input.stage.mcp,
       factoryCwd,
       artifactsDir,
-      stageEnv,
-      input.stageId,
+      {
+        checkoutRoot: resolveOptions.checkoutRoot,
+        bindingKind: resolveOptions.bindingKind,
+        trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
+        stageEnv: resolveOptions.stageEnv,
+        stageId: input.stageId,
+      },
     );
+    resolvedMcpServers = mcp.servers;
+    origins.push(...mcp.origins);
   } catch (err) {
     if (err instanceof StageMcpError) {
-      return { ok: false, reason: err.message };
+      return {
+        ok: false,
+        reason:
+          err.code === "untrusted_config_origin" ? err.code : err.message,
+      };
     }
     throw err;
+  }
+  origins.push(
+    ...verifyCommandOrigins(
+      resolveOptions.dag,
+      input.stageId ?? input.stage.id,
+      resolveOptions.pipelinePath,
+      factoryCwd,
+    ),
+  );
+  if (origins.length > 0) {
+    await resolveOptions.store.appendConfigOrigins(resolveOptions.runId, origins);
   }
   try {
     const handle = agent.openStage({
@@ -381,6 +556,13 @@ export async function openStageAttempt(
     attempt,
   );
 
+  const meta = await input.store.readRunMeta(input.runId);
+  const bindingKind =
+    input.bindingKind ?? bindingKindFromMeta(meta);
+  const trustWorkspaceConfig = resolveTrustWorkspaceConfig(
+    input.trustWorkspaceConfig,
+  );
+
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {
@@ -418,7 +600,16 @@ export async function openStageAttempt(
     input.operatorCatalog,
     input.factoryCwd,
     attemptArtifactsDir(input.workspaceDir, stageId, attempt),
-    input.stageEnv,
+    {
+      checkoutRoot: input.checkoutRoot ?? meta.checkout_root,
+      bindingKind,
+      trustWorkspaceConfig,
+      stageEnv: input.stageEnv,
+      store: input.store,
+      runId: input.runId,
+      pipelinePath: meta.pipeline_path,
+      dag: input.dag,
+    },
   );
   if (!opened.ok) return opened;
   return {

@@ -8,6 +8,7 @@ export type StageMcpErrorCode =
   | "reserved_name"
   | "unresolved_var"
   | "invalid_config"
+  | "untrusted_config_origin"
   | "connect_failed";
 
 export class StageMcpError extends Error {
@@ -101,6 +102,17 @@ export function parseMcpCatalog(
     servers[name] = entry;
   }
   return servers;
+}
+
+export async function mcpCatalogExists(projectRoot: string): Promise<boolean> {
+  try {
+    await readFile(mcpCatalogPath(projectRoot), "utf8");
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return false;
+    throw err;
+  }
 }
 
 export async function loadMcpCatalog(projectRoot: string): Promise<InspectedMcpCatalog> {
@@ -329,6 +341,8 @@ export async function resolveStageMcpServers(options: {
   stageId?: string;
   bindingKind?: "repository" | "checkout" | "none";
   trustWorkspaceConfig?: string[];
+  /** Host project root used for trust_workspace_config allowlist matching. */
+  trustProjectRoot?: string;
   /** When true, .mcp.json is treated as workspace-sourced. */
   workspaceSourced?: boolean;
 }): Promise<ResolvedMcpServers> {
@@ -340,14 +354,14 @@ export async function resolveStageMcpServers(options: {
     const { decideWorkspaceConfigTrust } = await import("./configOrigin.js");
     const decision = decideWorkspaceConfigTrust({
       bindingKind: options.bindingKind ?? "none",
-      projectRoot: options.projectRoot,
+      projectRoot: options.trustProjectRoot ?? options.projectRoot,
       trustWorkspaceConfig: options.trustWorkspaceConfig,
       source: "workspace",
     });
     if (!decision.allow) {
       throw new StageMcpError(
         decision.message ?? "untrusted_config_origin",
-        "invalid_config",
+        "untrusted_config_origin",
       );
     }
   }

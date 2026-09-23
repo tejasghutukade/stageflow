@@ -341,6 +341,16 @@ describe("stage binding env (U6)", () => {
       listStageEvents: async () => [],
       listVerificationCheckResults: async () => [],
       getWorkspaceDir: () => "/ws/run-1",
+      readRunMeta: async () => ({
+        run_id: "run-same",
+        pipeline_id: "p",
+        task_id: "t1",
+        status: "running",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        checkout_root: "/data/worktrees/run-1",
+      }),
+      appendConfigOrigins: async () => {},
     };
 
     const opened = await openStageAttempt({

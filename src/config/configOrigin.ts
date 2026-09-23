@@ -1,3 +1,5 @@
+import path from "node:path";
+
 export type ConfigOriginKind = "catalog" | "inline" | "workspace" | "seeded";
 
 export type ConfigOriginRecord = {
@@ -14,6 +16,13 @@ export type TrustWorkspaceDecision = {
   code?: "untrusted_config_origin";
   message?: string;
 };
+
+export function bindingKindForOrigin(
+  kind: "repository" | "checkout" | "unbound" | "none" | undefined,
+): BindingKindForOrigin {
+  if (kind === "repository" || kind === "checkout") return kind;
+  return "none";
+}
 
 /**
  * Decide whether workspace-sourced config (.mcp.json / skills under checkout)
@@ -52,4 +61,37 @@ export function decideWorkspaceConfigTrust(options: {
     code: "untrusted_config_origin",
     message: `Workspace config is not trusted at ${options.projectRoot}`,
   };
+}
+
+function isUnderRoot(candidate: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  const resolved = path.resolve(candidate);
+  const rel = path.relative(resolvedRoot, resolved);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+export function skillOriginKind(
+  scope: "user" | "project" | "temporary",
+  filePath: string,
+  checkoutRoot: string | undefined,
+): ConfigOriginKind {
+  if (scope === "temporary") return "inline";
+  if (
+    scope === "project" &&
+    checkoutRoot !== undefined &&
+    isUnderRoot(filePath, checkoutRoot)
+  ) {
+    return "workspace";
+  }
+  return "catalog";
+}
+
+export function catalogOrSeededOrigin(
+  projectRoot: string | undefined,
+  seededRoots: readonly string[],
+): ConfigOriginKind {
+  if (projectRoot !== undefined && seededRoots.some((root) => root === projectRoot)) {
+    return "seeded";
+  }
+  return "catalog";
 }

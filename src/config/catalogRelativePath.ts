@@ -76,11 +76,21 @@ export function resolveCatalogRelativePath(
   if (input.projectRoot !== undefined) {
     root = findCatalogRoot(input.roots, input.projectRoot);
     if (root === undefined) {
-      throw new CatalogPathError(
-        `Unknown project_root: ${input.projectRoot}`,
-        "unknown_project_root",
-        registered,
-      );
+      if (path.isAbsolute(input.projectRoot)) {
+        const abs = realOrResolve(input.projectRoot);
+        root = {
+          project_root: abs,
+          path: abs,
+          kind: "registered",
+          read_only: false,
+        };
+      } else {
+        throw new CatalogPathError(
+          `Unknown project_root: ${input.projectRoot}`,
+          "unknown_project_root",
+          registered,
+        );
+      }
     }
   } else if (input.roots.length === 1) {
     root = input.roots[0];
@@ -132,7 +142,7 @@ export function relativizeLocalPathForNetwork(
   cwd: string,
   inputPath: string,
 ): { path: string; project_root: string } {
-  const abs = path.resolve(cwd, inputPath);
+  const abs = realOrResolve(path.resolve(cwd, inputPath));
   const cwdAbs = realOrResolve(cwd);
   const rel = path.relative(cwdAbs, abs);
   if (rel.startsWith("..") || path.isAbsolute(rel)) {

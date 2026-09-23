@@ -23,6 +23,7 @@ const STAGE_MCP_ERROR_CODES = [
   "reserved_name",
   "unresolved_var",
   "invalid_config",
+  "untrusted_config_origin",
   "connect_failed",
 ] as const;
 

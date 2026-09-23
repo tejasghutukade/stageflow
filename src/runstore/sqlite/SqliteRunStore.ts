@@ -38,6 +38,7 @@ import {
   type StageSnapshot,
   type VerificationCheckResult,
   type VerificationCheckResultPatch,
+  type ConfigOriginRecord,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
 import { normalizeCatalogPath } from "../normalizeCatalogPath.js";
@@ -86,6 +87,7 @@ type RunRow = {
   slimmed_at: string | null;
   disk_bytes: number | null;
   disk_measured_at: string | null;
+  config_origins_json: string | null;
 };
 
 type StageRow = {
@@ -578,6 +580,41 @@ export class SqliteRunStore implements RunStore {
     const result = this.db
       .prepare(`UPDATE runs SET ${sets.join(", ")} WHERE run_id = @run_id`)
       .run(params);
+    if (result.changes === 0) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+  }
+
+  async appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
+  ): Promise<void> {
+    await this.ready();
+    if (origins.length === 0) return;
+    const row = this.getRunRow(runId);
+    const existing: ConfigOriginRecord[] = row.config_origins_json
+      ? (JSON.parse(row.config_origins_json) as ConfigOriginRecord[])
+      : [];
+    const keyOf = (o: ConfigOriginRecord) =>
+      `${o.name}\0${o.origin}\0${o.path ?? ""}`;
+    const seen = new Set(existing.map(keyOf));
+    const merged = [...existing];
+    for (const origin of origins) {
+      const key = keyOf(origin);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(origin);
+    }
+    if (merged.length === existing.length) return;
+    const result = this.db
+      .prepare(
+        `UPDATE runs SET config_origins_json = @config_origins_json, updated_at = @updated_at WHERE run_id = @run_id`,
+      )
+      .run({
+        run_id: runId,
+        config_origins_json: JSON.stringify(merged),
+        updated_at: new Date().toISOString(),
+      });
     if (result.changes === 0) {
       throw new Error(`Run not found: ${runId}`);
     }
@@ -1708,6 +1745,13 @@ export class SqliteRunStore implements RunStore {
       ...(row.disk_measured_at != null
         ? { disk_measured_at: row.disk_measured_at }
         : {}),
+      ...(row.config_origins_json
+        ? {
+            config_origins: JSON.parse(
+              row.config_origins_json,
+            ) as ConfigOriginRecord[],
+          }
+        : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
     };
   }
@@ -1715,7 +1759,7 @@ export class SqliteRunStore implements RunStore {
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

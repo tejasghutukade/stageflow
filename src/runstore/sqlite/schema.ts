@@ -83,7 +83,8 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at TEXT,
   slimmed_at TEXT,
   disk_bytes INTEGER,
-  disk_measured_at TEXT
+  disk_measured_at TEXT,
+  config_origins_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_submissions (
@@ -438,6 +439,13 @@ export function ensureFeedbackLoopDeferredSendBackColumn(db: Database.Database):
   }
 }
 
+export function ensureConfigOriginsColumn(db: Database.Database): void {
+  const cols = db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === "config_origins_json")) {
+    db.exec(`ALTER TABLE runs ADD COLUMN config_origins_json TEXT`);
+  }
+}
+
 export function applyBaselineSchema(db: Database.Database): void {
   db.exec(SCHEMA_MIGRATIONS_DDL);
   db.exec(SCHEMA_SQL);
@@ -454,6 +462,7 @@ export function applyBaselineSchema(db: Database.Database): void {
   ensureFeedbackReplayStagePassEnvelopeColumn(db);
   ensureFeedbackReplayStagePassSessionOriginColumn(db);
   ensureFeedbackLoopDeferredSendBackColumn(db);
+  ensureConfigOriginsColumn(db);
   db.exec(A2A_SCHEMA_SQL);
   backfillVerificationOutcomes(db);
 }

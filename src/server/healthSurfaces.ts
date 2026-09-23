@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { redactHostConfig } from "../config/hostConfig.js";
+import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import type { StageflowHostBootstrap } from "./bootstrap.js";
 import { json } from "./createHttpHost.js";
 import {
@@ -36,6 +37,10 @@ export async function buildRichHealthPayload(
   const capacity = await boot.manager.getHealthWithDisk();
   const gitVersion = await probeGitVersion();
   const schema = readSchemaHealth(boot.store);
+  const catalogRoots = await resolveCatalogRoots({
+    store: boot.store,
+    bootCwd: boot.cwd,
+  });
   const payload: Record<string, unknown> = {
     ...capacity,
     capacity: {
@@ -52,7 +57,11 @@ export async function buildRichHealthPayload(
     stageflow_home: globalStageflowHome(),
     schema,
     git_version: gitVersion ?? null,
-    catalog_roots: [],
+    catalog_roots: catalogRoots.map((r) => ({
+      project_root: r.project_root,
+      kind: r.kind,
+      read_only: r.read_only,
+    })),
     providers: boot.providerBoot
       ? {
           configured: boot.providerBoot.configured,

@@ -266,5 +266,8 @@ export function projectRunDetail(
     stages: ordered,
     pipeline_track,
     feedback_loops: feedback?.feedback_loops ?? [],
+    ...(meta.config_origins !== undefined && meta.config_origins.length > 0
+      ? { config_origins: meta.config_origins }
+      : {}),
   };
 }

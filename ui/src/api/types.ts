@@ -357,6 +357,11 @@ export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
   feedback_loops: FeedbackLoopHistory[];
+  config_origins?: Array<{
+    name: string;
+    origin: "catalog" | "inline" | "workspace" | "seeded";
+    path?: string;
+  }>;
 };
 
 export type TaskListing = {

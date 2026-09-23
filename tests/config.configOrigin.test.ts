@@ -42,3 +42,37 @@ describe("decideWorkspaceConfigTrust", () => {
     ).toBe(true);
   });
 });
+
+describe("resolveStageMcpServers workspace trust", () => {
+  it("throws untrusted_config_origin when workspaceSourced under repository", async () => {
+    const { mkdtemp, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const {
+      resolveStageMcpServers,
+      StageMcpError,
+    } = await import("../src/config/resolveStageMcpServers.js");
+    const root = await mkdtemp(path.join(tmpdir(), "sf-origin-ws-"));
+    await writeFile(
+      path.join(root, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: { github: { command: "npx", args: ["-y", "x"] } },
+      }),
+      "utf8",
+    );
+    await expect(
+      resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: {},
+        workspaceSourced: true,
+        bindingKind: "repository",
+        trustProjectRoot: "/factory",
+        trustWorkspaceConfig: [],
+      }),
+    ).rejects.toMatchObject({
+      name: "StageMcpError",
+      code: "untrusted_config_origin",
+    } satisfies Partial<InstanceType<typeof StageMcpError>>);
+  });
+});

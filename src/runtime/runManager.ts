@@ -3014,6 +3014,11 @@ export class RunManager {
           blockedRoots.add(next.projectRoot);
           continue;
         }
+        if (outcome === "project_capacity_busy") {
+          // Already requeued once inside startDequeuedAdmission.
+          blockedRoots.add(next.projectRoot);
+          continue;
+        }
         if (outcome === "capacity_busy") {
           // Already requeued once inside startDequeuedAdmission.
           break;
@@ -3027,7 +3032,13 @@ export class RunManager {
   private async startDequeuedAdmission(next: {
     projectRoot: string;
     entry: AdmissionQueueEntry;
-  }): Promise<"started" | "checkout_busy" | "capacity_busy" | "cancelled"> {
+  }): Promise<
+    | "started"
+    | "checkout_busy"
+    | "project_capacity_busy"
+    | "capacity_busy"
+    | "cancelled"
+  > {
     if (!this.acceptingWork) {
       this.admissionQueue.requeueFront(next.projectRoot, next.entry);
       return "capacity_busy";
@@ -3154,6 +3165,12 @@ export class RunManager {
         return "checkout_busy";
       }
       this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      if (
+        reserved.failure.code === "busy_capacity" &&
+        reserved.failure.scope === "project"
+      ) {
+        return "project_capacity_busy";
+      }
       return "capacity_busy";
     }
 

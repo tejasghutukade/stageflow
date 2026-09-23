@@ -24,7 +24,10 @@ import {
   CatalogPathError,
   resolveCatalogRelativePath,
 } from "../config/catalogRelativePath.js";
-import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
+import {
+  findCatalogRoot,
+  resolveCatalogRoots,
+} from "../config/resolveCatalogRoots.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
@@ -927,23 +930,32 @@ export function createOperatorRoutes(
             typeof (body as { project_root?: unknown }).project_root === "string"
               ? (body as { project_root: string }).project_root
               : undefined;
+          let pipelineWriteRoot = cwd;
           if (writeRoot !== undefined) {
             const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
-            const match = roots.find((r) => r.project_root === writeRoot);
-            if (match?.read_only) {
+            const match = findCatalogRoot(roots, writeRoot);
+            if (match === undefined) {
+              json(res, 400, {
+                error: `Unknown project_root: ${writeRoot}`,
+                code: "unknown_project_root",
+              });
+              return true;
+            }
+            if (match.read_only) {
               json(res, 403, {
                 error: `Catalog root ${writeRoot} is read-only`,
                 code: "catalog_root_read_only",
               });
               return true;
             }
+            pipelineWriteRoot = match.path;
           }
           const parsed = parseCreatePipelineBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
+          const ctx = await resolveStageflowContext(pipelineWriteRoot);
           if (!ctx.isGitProject) {
             json(res, 400, {
               error:

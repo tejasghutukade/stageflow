@@ -184,6 +184,8 @@ describe("resolveSkillByName", () => {
       name: first!.name,
       filePath: first!.filePath,
       baseDir: first!.baseDir,
+      scope: first!.sourceInfo.scope,
+      source: first!.sourceInfo.source,
     });
   });
 

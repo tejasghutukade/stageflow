@@ -1,4 +1,5 @@
 import type { StageLogLine } from "../agent/activity.js";
+import type { ConfigOriginRecord } from "../config/configOrigin.js";
 import type { RunSubmission, RunSubmissionRecord } from "./submission.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
@@ -10,6 +11,8 @@ import type {
 import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 import type { StageUsage } from "../types/usage.js";
+
+export type { ConfigOriginRecord };
 
 export type RunStatus =
   | "created"
@@ -86,6 +89,7 @@ export type RunMeta = {
   slimmed_at?: string;
   disk_bytes?: number;
   disk_measured_at?: string;
+  config_origins?: ConfigOriginRecord[];
 };
 
 export type CreatedRun = {
@@ -399,6 +403,7 @@ export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
   pipeline_track: PipelineTrackProjection;
   /** Append-only feedback-loop and replay history, ordered by creation. */
   feedback_loops: FeedbackLoopHistory[];
+  config_origins?: ConfigOriginRecord[];
 };
 
 export type FeedbackLoopHistory = {
@@ -475,6 +480,11 @@ export interface RunStore {
       resolvedSha?: string;
       runBranch?: string;
     },
+  ): Promise<void>;
+  /** Append resolved config origin records (MCP / skill / verify). Dedupes by name+origin+path. */
+  appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
   ): Promise<void>;
   setCancelReason(runId: string, reason: string): Promise<void>;
   /** Persist cached disk usage for `listRuns` (never measured inside listRuns). */

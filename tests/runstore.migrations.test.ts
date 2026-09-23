@@ -114,13 +114,12 @@ function columnSignature(rows: TableInfoRow[]): string {
 }
 
 describe("sqlite store migrations", () => {
-  it("fresh store has user_version 4 and four ledger rows", async () => {
+  it("fresh store has user_version matching CURRENT_SCHEMA_VERSION and ledger rows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-fresh-"));
     createRunStore({ rootDir: root, kind: "sqlite" });
     const dbPath = path.join(storeRootFor(root), "state.db");
     const db = new Database(dbPath);
     const userVersion = db.pragma("user_version", { simple: true });
-    expect(userVersion).toBe(4);
     expect(userVersion).toBe(CURRENT_SCHEMA_VERSION);
     const ledger = db
       .prepare(
@@ -132,7 +131,7 @@ describe("sqlite store migrations", () => {
       applied_at: string;
       min_stageflow_version: string;
     }>;
-    expect(ledger).toHaveLength(4);
+    expect(ledger).toHaveLength(CURRENT_SCHEMA_VERSION);
     expect(ledger[0]?.version).toBe(1);
     expect(ledger[0]?.name).toBe("001_baseline");
     expect(ledger[1]?.version).toBe(2);
@@ -141,7 +140,9 @@ describe("sqlite store migrations", () => {
     expect(ledger[2]?.name).toBe("003_run_lifecycle");
     expect(ledger[3]?.version).toBe(4);
     expect(ledger[3]?.name).toBe("004_auto_resume_count");
-    expect(ledger[3]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger[4]?.version).toBe(5);
+    expect(ledger[4]?.name).toBe("005_config_origins");
+    expect(ledger[4]?.min_stageflow_version).toBe(PACKAGE_VERSION);
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -152,6 +153,7 @@ describe("sqlite store migrations", () => {
       "run_branch",
       "git_author_name",
       "git_author_email",
+      "config_origins_json",
       ...LIFECYCLE_COLUMNS,
     ]) {
       expect(cols).toContain(name);
@@ -388,14 +390,13 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     expect(row.verification_outcome).toBe("not_run");
   });
 
-  it("migrates a v1 database to v4 and adds binding plus lifecycle plus auto_resume columns", async () => {
+  it("migrates a v1 database to current and adds binding plus lifecycle plus auto_resume plus config_origins columns", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v1-v4-"));
     const dbPath = await seedSchemaV1WithoutBinding(root);
 
     createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
 
     const db = new Database(dbPath);
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(db.pragma("user_version", { simple: true })).toBe(
       CURRENT_SCHEMA_VERSION,
     );
@@ -409,6 +410,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       { version: 2, name: "002_repository_binding" },
       { version: 3, name: "003_run_lifecycle" },
       { version: 4, name: "004_auto_resume_count" },
+      { version: 5, name: "005_config_origins" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
@@ -421,6 +423,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     for (const name of LIFECYCLE_COLUMNS) {
       expect(cols.has(name)).toBe(true);
     }
+    expect(cols.has("config_origins_json")).toBe(true);
     const execCols = new Set(
       (
         db.prepare(`PRAGMA table_info(stage_executions)`).all() as {
@@ -436,7 +439,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
     db.close();
   });
 
-  it("migrates a v3 database to v4 without losing rows", async () => {
+  it("migrates a v3 database to current without losing rows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v3-v4-"));
     const storeRoot = storeRootFor(root);
     await mkdir(storeRoot, { recursive: true });
@@ -521,7 +524,9 @@ CREATE TABLE stage_executions (
     createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
 
     const after = new Database(dbPath);
-    expect(after.pragma("user_version", { simple: true })).toBe(4);
+    expect(after.pragma("user_version", { simple: true })).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
     const kept = after
       .prepare(
         `SELECT run_id, status, auto_resume_count FROM stage_executions WHERE run_id = 'keep-me'`,
@@ -536,6 +541,12 @@ CREATE TABLE stage_executions (
       status: "interrupted",
       auto_resume_count: 0,
     });
+    const cols = new Set(
+      (after.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
+        (c) => c.name,
+      ),
+    );
+    expect(cols.has("config_origins_json")).toBe(true);
     after.close();
   });
 
