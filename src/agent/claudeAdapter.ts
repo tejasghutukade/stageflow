@@ -54,6 +54,7 @@ import {
   STAGEFLOW_MCP_SERVER_NAME,
   WRITE_STAGE_ARTIFACT_TOOL_NAME,
   ASK_OPERATOR_TOOL_NAME,
+  SANDBOX_BASH_TOOL_NAME,
   type AskOperatorCapture,
 } from "./claudeTools.js";
 import { createClaudeActivityMapper } from "./claudeActivity.js";
@@ -258,6 +259,8 @@ async function runTurn(
 
   let sessionId = resumeSessionId;
 
+  const containerName = input.roots.containerName;
+
   try {
     const mcpServer = buildStageflowMcpServer({
       capture: emitCapture,
@@ -280,6 +283,9 @@ async function runTurn(
               ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
             },
           }
+        : {}),
+      ...(containerName !== undefined
+        ? { sandboxBash: { containerName, dockerBin: input.roots.containerDockerBin } }
         : {}),
     });
 
@@ -305,6 +311,9 @@ async function runTurn(
         persistSession: true,
         strictMcpConfig: true,
         ...(resumeSessionId !== undefined ? { resume: resumeSessionId } : {}),
+        ...(containerName !== undefined
+          ? { toolAliases: { Bash: SANDBOX_BASH_TOOL_NAME } }
+          : {}),
       },
     });
 

@@ -121,6 +121,21 @@ run finishes (or if it fails partway through), remove the worktree with
 `git worktree remove ../your-repo-feature-branch` from the main clone once
 you no longer need it.
 
+Alternatively, let Stageflow do this for you: point `checkout` at an object
+instead of a path —
+
+```yaml
+checkout:
+  branch: your-feature-branch   # optional — defaults to stageflow/<task id>
+  base: origin/main             # optional — defaults to HEAD
+```
+
+— and Stageflow creates (or reuses, if it already exists) a worktree for
+that branch the same way, as a sibling of your project root
+(`../.stageflow-worktrees/<branch>`). It's never auto-removed, same as one
+you make by hand — clean it up yourself with `git worktree remove` when
+you're done.
+
 ## Create a task
 
 Task context is the pipeline's portable feature brief. Include enough detail

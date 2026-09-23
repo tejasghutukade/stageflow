@@ -1,10 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { parse as parseYaml } from "yaml";
-import type { TaskFile } from "../types/task.js";
+import type { CheckoutDescriptor, TaskFile } from "../types/task.js";
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseCheckout(value: unknown): CheckoutDescriptor | undefined {
+  if (typeof value === "string") return value;
+  if (isPlainObject(value)) {
+    const branch = typeof value.branch === "string" ? value.branch : undefined;
+    const base = typeof value.base === "string" ? value.base : undefined;
+    return { ...(branch !== undefined ? { branch } : {}), ...(base !== undefined ? { base } : {}) };
+  }
+  return undefined;
 }
 
 export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFile> {
@@ -29,12 +39,35 @@ export function parseTaskFile(raw: unknown, source = "task"): LoadOutcome<TaskFi
       },
     ]);
   }
+  if (isPlainObject(record.checkout)) {
+    const { branch, base } = record.checkout;
+    if (branch !== undefined && typeof branch !== "string") {
+      return loadFailure([
+        {
+          code: "task.invalid_shape",
+          message: `Invalid ${source}: checkout.branch must be a string`,
+          category: "task",
+          taskId: record.id,
+        },
+      ]);
+    }
+    if (base !== undefined && typeof base !== "string") {
+      return loadFailure([
+        {
+          code: "task.invalid_shape",
+          message: `Invalid ${source}: checkout.base must be a string`,
+          category: "task",
+          taskId: record.id,
+        },
+      ]);
+    }
+  }
   return loadSuccess({
     id: record.id,
     goal: record.goal,
     context: typeof record.context === "string" ? record.context : undefined,
     constraints: typeof record.constraints === "string" ? record.constraints : undefined,
-    checkout: typeof record.checkout === "string" ? record.checkout : undefined,
+    checkout: parseCheckout(record.checkout),
     ...(record.input !== undefined ? { input: record.input } : {}),
   });
 }

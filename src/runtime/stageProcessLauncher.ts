@@ -53,7 +53,14 @@ function isStageWorkerResult(value: unknown): value is StageWorkerResult {
   return type === "succeeded" || type === "failed" || type === "waiting";
 }
 
-function resultFromExitCode(code: number | null): StageLaunchResult {
+// `fallbackReason` is the last non-empty stderr line seen from the child —
+// used when the child exits without ever sending a worker message (e.g. a
+// crash before it could report), so a specific reason survives even
+// without IPC having delivered one.
+function resultFromExitCode(
+  code: number | null,
+  fallbackReason?: string,
+): StageLaunchResult {
   if (code === STAGE_WORKER_EXIT.SUCCEEDED) {
     return { type: "succeeded" };
   }
@@ -61,11 +68,13 @@ function resultFromExitCode(code: number | null): StageLaunchResult {
     return { type: "waiting" };
   }
   if (code === STAGE_WORKER_EXIT.FAILED) {
-    return { type: "failed", reason: "stage failed" };
+    return { type: "failed", reason: fallbackReason ?? "stage failed" };
   }
   return {
     type: "failed",
-    reason: code === null ? "stage process exited" : `stage process exit ${code}`,
+    reason:
+      fallbackReason ??
+      (code === null ? "stage process exited" : `stage process exit ${code}`),
   };
 }
 
@@ -205,11 +214,7 @@ export class StageProcessLauncher {
       args.push("--skip-gates");
     }
 
-    const child = fork(this.cliEntry, args, {
-      cwd: input.rootDir,
-      env: { ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" },
-      stdio: ["pipe", "pipe", "pipe", "ipc"],
-    });
+    const child = this.spawnHostProcess(input, args);
 
     const key = activeKey(input.runId, input.stageId);
     const tracked: TrackedChild = {
@@ -220,6 +225,8 @@ export class StageProcessLauncher {
     };
     this.active.set(key, tracked);
 
+    let lastStderrLine = "";
+
     if (child.stderr) {
       let stderrBuffer = "";
       child.stderr.on("data", (chunk: Buffer | string) => {
@@ -227,11 +234,13 @@ export class StageProcessLauncher {
         const lines = stderrBuffer.split("\n");
         stderrBuffer = lines.pop() ?? "";
         for (const line of lines) {
+          if (line.trim().length > 0) lastStderrLine = line;
           process.stderr.write(`[stage:${input.stageId}] ${line}\n`);
         }
       });
       child.stderr.on("end", () => {
         if (stderrBuffer.length > 0) {
+          if (stderrBuffer.trim().length > 0) lastStderrLine = stderrBuffer;
           process.stderr.write(`[stage:${input.stageId}] ${stderrBuffer}\n`);
           stderrBuffer = "";
         }
@@ -260,7 +269,12 @@ export class StageProcessLauncher {
 
       child.on("exit", (code) => {
         if (settled) return;
-        finish(resultFromExitCode(code));
+        finish(
+          resultFromExitCode(
+            code,
+            lastStderrLine.length > 0 ? lastStderrLine : undefined,
+          ),
+        );
       });
 
       child.on("error", (err) => {
@@ -269,6 +283,21 @@ export class StageProcessLauncher {
           reason: err instanceof Error ? err.message : String(err),
         });
       });
+    });
+  }
+
+  private buildChildEnv(): Record<string, string | undefined> {
+    return { ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" };
+  }
+
+  private spawnHostProcess(
+    input: StageLaunchInput,
+    args: string[],
+  ): ChildProcess {
+    return fork(this.cliEntry, args, {
+      cwd: input.rootDir,
+      env: this.buildChildEnv(),
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
   }
 }
