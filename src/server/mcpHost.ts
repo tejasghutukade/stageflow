@@ -77,7 +77,9 @@ export async function startMcpServer(
     server: envelope.server,
     manager: envelope.manager,
     store: envelope.store,
-    installSignals: process.env.VITEST !== "true",
+  });
+  envelope.server.on("close", () => {
+    shutdown?.uninstall();
   });
   return { ...envelope, shutdown };
 }
