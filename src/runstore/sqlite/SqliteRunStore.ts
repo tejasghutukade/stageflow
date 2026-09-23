@@ -56,9 +56,10 @@ import {
   assertSchemaVersion,
 } from "./migrations/index.js";
 import { StoreSchemaError } from "./storeSchemaError.js";
+import { applyStorePragmas } from "./applyStorePragmas.js";
+import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type SqliteRunStoreOpenerMode = "assert" | "migrate";
-import { RunSubmissionExistsError, type RunSubmissionRecord } from "../submission.js";
 
 type RunRow = {
   run_id: string;
@@ -192,20 +193,6 @@ type ForkGenerationRow = {
 };
 
 const ensuredStageDirs = new Set<string>();
-
-const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
-
-function readSqliteBusyTimeoutMs(): number {
-  const raw = process.env.STAGEFLOW_SQLITE_BUSY_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
-  }
-  return parsed;
-}
 
 function executionFromRow(row: ExecutionRow): StageExecution {
   return {
@@ -349,17 +336,13 @@ export class SqliteRunStore implements RunStore {
         );
       }
       this.db = new Database(dbPath);
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
-      this.db.pragma("foreign_keys = ON");
+      applyStorePragmas(this.db);
       assertSchemaVersion(this.db);
       this.migratePromise = Promise.resolve();
       return;
     }
     this.db = new Database(dbPath);
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma(`busy_timeout = ${readSqliteBusyTimeoutMs()}`);
-    this.db.pragma("foreign_keys = ON");
+    applyStorePragmas(this.db);
     applyPendingMigrations(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
   }

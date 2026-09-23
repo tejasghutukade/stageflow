@@ -35,6 +35,10 @@ export const NETWORK_ERROR_CODES = [
   "shutting_down",
   "start.token_rejected",
   "pinned_sha_unavailable",
+  "store_integrity_failed",
+  "store_unsupported_filesystem",
+  "tmpdir_unusable",
+  "backup_insufficient_disk",
 ] as const;
 
 export type NetworkErrorCode = (typeof NETWORK_ERROR_CODES)[number] | string;

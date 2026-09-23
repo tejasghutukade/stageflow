@@ -12,6 +12,14 @@ import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { RunStore } from "../runstore/port.js";
 import { warnDurableRootDiskIfNeeded } from "../runstore/diskUsage.js";
+import { assertStoreFilesystemSupported } from "../runstore/storeFilesystem.js";
+import type { StoreFilesystemClassification } from "../runstore/storeFilesystem.js";
+import {
+  assertStoreQuickCheck,
+  isSqliteCorruptError,
+  maybeCheckpointResidualWal,
+  rethrowAsStoreIntegrityFailed,
+} from "../runstore/sqlite/applyStorePragmas.js";
 import { RunManager } from "../runtime/runManager.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
@@ -31,6 +39,7 @@ import {
   type HostConfig,
 } from "../config/hostConfig.js";
 import { bootProviderConfig } from "../agent/bootProviderConfig.js";
+import { logger as rootLogger } from "../logging/logger.js";
 
 export const DEFAULT_GC_INTERVAL_MS = 60 * 60 * 1000;
 
@@ -68,6 +77,8 @@ export type StageflowHostBootstrap = {
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
+  /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
+  storeFilesystem?: StoreFilesystemClassification;
 };
 
 function sqliteConnectionFromStore(
@@ -174,6 +185,12 @@ export async function bootstrapStageflowHost(
     options.rootDir !== undefined
       ? findProjectRoot(rootDir) !== null
       : ctx.isGitProject;
+
+  const storeFilesystem = assertStoreFilesystemSupported(ctx.globalHome, {
+    env,
+    warn: (message) => console.warn(message),
+  });
+
   let rawStore: RunStore;
   let sqliteConnection: Database.Database | undefined;
   const storeRootDir = options.store
@@ -183,13 +200,37 @@ export async function bootstrapStageflowHost(
     rawStore = options.store;
     sqliteConnection = sqliteConnectionFromStore(rawStore);
   } else {
-    const created = createRunStoreWithConnection({
-      rootDir: ctx.globalHome,
-      kind: options.storeKind,
-      openerMode: "migrate",
+    try {
+      const created = createRunStoreWithConnection({
+        rootDir: ctx.globalHome,
+        kind: options.storeKind,
+        openerMode: "migrate",
+      });
+      rawStore = created.store;
+      sqliteConnection = created.connection;
+    } catch (err) {
+      if (isSqliteCorruptError(err)) {
+        rethrowAsStoreIntegrityFailed(err);
+      }
+      throw err;
+    }
+  }
+
+  if (sqliteConnection !== undefined) {
+    const bootLog = rootLogger.child({ component: "bootstrap" });
+    try {
+      assertStoreQuickCheck(sqliteConnection);
+    } catch (err) {
+      if (isSqliteCorruptError(err)) {
+        rethrowAsStoreIntegrityFailed(err);
+      }
+      throw err;
+    }
+    maybeCheckpointResidualWal(storeRootDir, sqliteConnection, {
+      log: (event, fields) => {
+        bootLog.info(event, event, fields);
+      },
     });
-    rawStore = created.store;
-    sqliteConnection = created.connection;
   }
   const a2aStore =
     sqliteConnection !== undefined
@@ -275,5 +316,6 @@ export async function bootstrapStageflowHost(
     ...(providerBoot !== undefined ? { providerBoot } : {}),
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
+    storeFilesystem,
   };
 }
