@@ -66,7 +66,7 @@ describe("api Authorization attachment", () => {
     const { fetchRuns } = await import("./client");
     await fetchRuns();
     expect(fetchMock).toHaveBeenCalled();
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const init = (fetchMock.mock.calls[0] as unknown as [unknown, RequestInit])[1];
     const headers = init.headers as Record<string, string>;
     expect(headers.Authorization).toBe(`Bearer ${"u".repeat(32)}`);
   });
