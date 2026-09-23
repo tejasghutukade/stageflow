@@ -358,6 +358,16 @@ export class SqliteRunStore implements RunStore {
     this.db.close();
   }
 
+  async snapshotInto(destPath: string): Promise<{ userVersion: number }> {
+    await this.ready();
+    const userVersion = this.db.pragma("user_version", {
+      simple: true,
+    }) as number;
+    const escaped = destPath.replace(/'/g, "''");
+    this.db.exec(`VACUUM INTO '${escaped}'`);
+    return { userVersion };
+  }
+
   /**
    * The connection this store owns, for the one caller allowed to share it: the composition root
    * wiring the A2A tables into the same `state.db` file. Not part of the `RunStore` interface.

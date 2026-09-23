@@ -112,4 +112,13 @@ describe("requiredScopeFor", () => {
     expect(requiredScopeFor("DELETE", "/api/runs/abc")).toBe("drive");
     expect(requiredScopeFor("POST", "/mcp")).toBe("drive");
   });
+
+  it("requires drive for backup GET and POST (credential-bearing archives)", () => {
+    expect(requiredScopeFor("GET", "/api/backup")).toBe("drive");
+    expect(requiredScopeFor("GET", "/api/backup/stageflow.tar.gz")).toBe(
+      "drive",
+    );
+    expect(requiredScopeFor("POST", "/api/backup")).toBe("drive");
+    expect(requiredScopeFor("GET", "/api/export")).toBe("read");
+  });
 });

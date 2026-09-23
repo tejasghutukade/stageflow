@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, access } from "node:fs/promises";
+import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentPort } from "../agent/port.js";
@@ -43,6 +44,12 @@ import {
 } from "../mcp/checkoutTools.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
+import {
+  BackupError,
+  createBackup,
+  resolveBackupDownloadPath,
+} from "../runstore/backup.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
@@ -189,6 +196,8 @@ export function isMutatingApi(method: string, pathname: string): boolean {
   return (
     pathname === "/api/runs" ||
     pathname === "/api/runs/gc" ||
+    pathname === "/api/backup" ||
+    pathname === "/api/restore" ||
     pathname === "/api/settings" ||
     pathname === "/api/stages" ||
     pathname === "/api/pipelines" ||
@@ -271,6 +280,60 @@ export function createOperatorRoutes(
       try {
         if (method === "GET" && pathname === "/api/runs") {
           json(res, 200, { runs: await store.listRuns() });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/backup") {
+          const body = (await readJsonBody(req)) as {
+            out?: unknown;
+            db_only?: unknown;
+            no_credentials?: unknown;
+            include_a2a_artifacts?: unknown;
+          };
+          try {
+            const result = await createBackup({
+              store,
+              homeDir: globalStageflowHome(),
+              outPath: typeof body.out === "string" ? body.out : undefined,
+              dbOnly: body.db_only === true,
+              noCredentials: body.no_credentials === true,
+              includeA2aArtifacts: body.include_a2a_artifacts === true,
+            });
+            json(res, 200, result);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              const status =
+                err.code === "backup_insufficient_disk" ? 507 : 400;
+              json(res, status, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const backupGetMatch = pathname.match(/^\/api\/backup\/([^/]+)$/);
+        if (method === "GET" && backupGetMatch) {
+          const name = decodeURIComponent(backupGetMatch[1] ?? "");
+          try {
+            const filePath = await resolveBackupDownloadPath(
+              name,
+              globalStageflowHome(),
+            );
+            const st = statSync(filePath);
+            res.writeHead(200, {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": st.size,
+              "Content-Disposition": `attachment; filename="${name}"`,
+            });
+            createReadStream(filePath).pipe(res);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              json(res, 400, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
           return true;
         }
 

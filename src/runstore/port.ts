@@ -457,6 +457,11 @@ export type ListRunsFilter = {
 export interface RunStore {
   /** Checkpoint WAL (when applicable) and release the store connection. */
   close(): Promise<void>;
+  /**
+   * Consistent compacted snapshot of the live DB via `VACUUM INTO`.
+   * Only SqliteRunStore implements this; callers must not open a second raw connection.
+   */
+  snapshotInto(destPath: string): Promise<{ userVersion: number }>;
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;

@@ -115,6 +115,9 @@ export function requiredScopeFor(
 ): ControlScope | null {
   if (pathname === "/mcp") return "drive";
   if (!pathname.startsWith("/api/")) return null;
+  if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
+    return "drive";
+  }
   if (method === "GET" || method === "HEAD") return "read";
   return "drive";
 }
