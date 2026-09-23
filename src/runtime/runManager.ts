@@ -687,6 +687,33 @@ export class RunManager {
     };
   }
 
+  getPerProjectCapacity():
+    | {
+        maxConcurrent: number | undefined;
+        projects: Array<{
+          project_root: string;
+          activeCount: number;
+          maxConcurrent: number | undefined;
+        }>;
+      }
+    | undefined {
+    if (this.maxConcurrentPerProject === undefined) {
+      return { maxConcurrent: undefined, projects: [] };
+    }
+    const byRoot = new Map<string, number>();
+    for (const runId of this.active.keys()) {
+      void runId;
+    }
+    return {
+      maxConcurrent: this.maxConcurrentPerProject,
+      projects: [...byRoot.entries()].map(([project_root, activeCount]) => ({
+        project_root,
+        activeCount,
+        maxConcurrent: this.maxConcurrentPerProject,
+      })),
+    };
+  }
+
   /** Capacity plus on-demand durable-root disk breakdown (KTD16). */
   async getHealthWithDisk(): Promise<CapacityHealth> {
     const base = this.getHealth();

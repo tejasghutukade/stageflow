@@ -217,7 +217,10 @@ export async function bootstrapStageflowHost(
     isGitProject,
     store,
     maxConcurrent:
-      options.maxConcurrent ?? hostConfig?.maxConcurrentRuns,
+      options.maxConcurrent ??
+      (hostConfig?.maxConcurrentRunsExplicit
+        ? hostConfig.maxConcurrentRuns
+        : undefined),
     maxQueued: hostConfig?.maxQueued,
     maxConcurrentPerProject: hostConfig?.maxConcurrentRunsPerProject,
     operatorCatalog: { cwd, agentDir },

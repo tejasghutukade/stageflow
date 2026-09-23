@@ -29,7 +29,7 @@ async function waitForHealthy(port: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/api/health`);
+      const res = await fetch(`http://127.0.0.1:${port}/livez`);
       if (res.status === 200) {
         await res.text();
         return;

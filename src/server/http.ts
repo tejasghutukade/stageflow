@@ -73,6 +73,7 @@ import {
   type HttpHostEnvelope,
   type HttpHostRouteContext,
 } from "./createHttpHost.js";
+import { handleApiHealth } from "./healthSurfaces.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
@@ -238,7 +239,7 @@ export function createOperatorRoutes(
   const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
-  return async ({ req, res, url, pathname, method }) => {
+  return async ({ req, res, url, pathname, method, boot }) => {
       if (pathname.startsWith("/api/")) {
         if (
           !assertAllowedHttpAccess(allowedHosts, req, res, {
@@ -903,8 +904,7 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          // Bearer-exempt for ensureGlobalService autostart probes; Host/Origin still gated. Slot 7 splits /livez.
-          json(res, 200, await manager.getHealthWithDisk());
+          await handleApiHealth(req, res, boot);
           return true;
         }
 

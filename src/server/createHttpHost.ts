@@ -21,6 +21,7 @@ import {
   type ControlTokens,
 } from "./controlToken.js";
 import { advertisedHost } from "./listenHost.js";
+import { handleLivez, handleReadyz } from "./healthSurfaces.js";
 
 export const DEFAULT_PORT = 3847;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
@@ -104,6 +105,19 @@ export async function createHttpHost(
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", `http://${advertisedHost(host)}:${port}`);
     const pathname = url.pathname;
+
+    if (
+      (pathname === "/livez" || pathname === "/readyz") &&
+      (method === "GET" || method === "HEAD")
+    ) {
+      if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;
+      if (pathname === "/livez") {
+        handleLivez(req, res);
+        return;
+      }
+      await handleReadyz(req, res, boot);
+      return;
+    }
 
     if (pathname === "/api/a2a/status" && method === "GET") {
       if (!assertAllowedHttpAccess(allowedHosts, req, res)) return;

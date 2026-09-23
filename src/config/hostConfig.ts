@@ -98,6 +98,8 @@ export type HostConfig = {
   /** Absolute path of config.yaml when loaded; undefined if absent. */
   configFilePath: string | undefined;
   warnings: string[];
+  /** True when maxConcurrentRuns came from override, env, or file (not bare default). */
+  maxConcurrentRunsExplicit: boolean;
 };
 
 export type HostConfigOverrides = {
@@ -299,6 +301,7 @@ export function loadHostConfig(options?: {
   warnings.push(...file.warnings);
 
   let maxConcurrentRuns = DEFAULT_MAX_CONCURRENT;
+  let maxConcurrentRunsExplicit = false;
   if (file.values.maxConcurrentRuns !== undefined) {
     const n = coerceFileNumber(
       file.values.maxConcurrentRuns,
@@ -312,15 +315,18 @@ export function loadHostConfig(options?: {
       );
     }
     maxConcurrentRuns = n;
+    maxConcurrentRunsExplicit = true;
   }
   if (env.STAGEFLOW_MAX_CONCURRENT_RUNS !== undefined) {
     maxConcurrentRuns = parsePositiveInt(
       env.STAGEFLOW_MAX_CONCURRENT_RUNS,
       "STAGEFLOW_MAX_CONCURRENT_RUNS",
     );
+    maxConcurrentRunsExplicit = true;
   }
   if (options?.overrides?.maxConcurrentRuns !== undefined) {
     maxConcurrentRuns = options.overrides.maxConcurrentRuns;
+    maxConcurrentRunsExplicit = true;
   }
 
   let maxConcurrentRunsPerProject: number | undefined;
@@ -409,6 +415,7 @@ export function loadHostConfig(options?: {
         ? configFilePath
         : undefined,
     warnings,
+    maxConcurrentRunsExplicit,
   };
 }
 

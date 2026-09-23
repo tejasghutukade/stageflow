@@ -206,7 +206,15 @@ describe("createHttpHost shared listen", () => {
       });
       expect(readPost.status).toBe(403);
 
-      const health = await fetch(`${url}/api/health`);
+      const livez = await fetch(`${url}/livez`);
+      expect(livez.status).toBe(200);
+
+      const healthDenied = await fetch(`${url}/api/health`);
+      expect(healthDenied.status).toBe(401);
+
+      const health = await fetch(`${url}/api/health`, {
+        headers: { Authorization: `Bearer ${READ}` },
+      });
       expect(health.status).toBe(200);
 
       const mcpRead = await fetch(`${url}/mcp`, {

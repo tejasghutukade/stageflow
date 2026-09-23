@@ -115,10 +115,6 @@ export function requiredScopeFor(
 ): ControlScope | null {
   if (pathname === "/mcp") return "drive";
   if (!pathname.startsWith("/api/")) return null;
-  // Slot 7 replaces this exemption with /livez + gated /api/health.
-  if (pathname === "/api/health" && (method === "GET" || method === "HEAD")) {
-    return null;
-  }
   if (method === "GET" || method === "HEAD") return "read";
   return "drive";
 }

@@ -105,8 +105,8 @@ describe("assertBindAllowed", () => {
 });
 
 describe("requiredScopeFor", () => {
-  it("maps health exemption and mcp drive", () => {
-    expect(requiredScopeFor("GET", "/api/health")).toBeNull();
+  it("maps mcp drive and api scopes including gated health", () => {
+    expect(requiredScopeFor("GET", "/api/health")).toBe("read");
     expect(requiredScopeFor("GET", "/api/runs")).toBe("read");
     expect(requiredScopeFor("POST", "/api/runs")).toBe("drive");
     expect(requiredScopeFor("DELETE", "/api/runs/abc")).toBe("drive");

@@ -65,7 +65,7 @@ export async function probeGlobalServiceDetailed(): Promise<ServiceProbeResult> 
   try {
     let res: Response;
     try {
-      res = await fetch(`${hostBaseUrl()}/api/health`, { signal: ac.signal });
+      res = await fetch(`${hostBaseUrl()}/livez`, { signal: ac.signal });
     } catch {
       return "unreachable";
     }

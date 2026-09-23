@@ -282,7 +282,7 @@ describe("ensureGlobalService integration", () => {
 
         expect(result).toEqual({ ok: true, alreadyRunning: false });
 
-        const health = await fetch(`http://127.0.0.1:${DEFAULT_PORT}/api/health`);
+        const health = await fetch(`http://127.0.0.1:${DEFAULT_PORT}/livez`);
         expect(health.status).toBe(200);
       });
     },
