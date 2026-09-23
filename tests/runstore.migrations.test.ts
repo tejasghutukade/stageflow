@@ -44,6 +44,14 @@ const LIFECYCLE_COLUMNS = [
   "disk_measured_at",
 ] as const;
 
+const PIPELINE_BODY_COLUMNS = [
+  "pipeline_source",
+  "pipeline_body",
+  "caller_id",
+  "run_manifest",
+  "skip_gates",
+] as const;
+
 async function seedSchemaV1WithoutBinding(root: string): Promise<string> {
   const storeRoot = storeRootFor(root);
   await mkdir(storeRoot, { recursive: true });
@@ -143,6 +151,9 @@ describe("sqlite store migrations", () => {
     expect(ledger[4]?.version).toBe(5);
     expect(ledger[4]?.name).toBe("005_config_origins");
     expect(ledger[4]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger[5]?.version).toBe(6);
+    expect(ledger[5]?.name).toBe("006_pipeline_body_and_caller");
+    expect(ledger[5]?.min_stageflow_version).toBe(PACKAGE_VERSION);
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -155,9 +166,14 @@ describe("sqlite store migrations", () => {
       "git_author_email",
       "config_origins_json",
       ...LIFECYCLE_COLUMNS,
+      ...PIPELINE_BODY_COLUMNS,
     ]) {
       expect(cols).toContain(name);
     }
+    const skipGates = (
+      db.prepare(`PRAGMA table_info(runs)`).all() as TableInfoRow[]
+    ).find((c) => c.name === "skip_gates");
+    expect(skipGates?.type.toUpperCase()).toBe("INTEGER");
     const diskBytes = (
       db.prepare(`PRAGMA table_info(runs)`).all() as TableInfoRow[]
     ).find((c) => c.name === "disk_bytes");
@@ -411,6 +427,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       { version: 3, name: "003_run_lifecycle" },
       { version: 4, name: "004_auto_resume_count" },
       { version: 5, name: "005_config_origins" },
+      { version: 6, name: "006_pipeline_body_and_caller" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
@@ -424,6 +441,9 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       expect(cols.has(name)).toBe(true);
     }
     expect(cols.has("config_origins_json")).toBe(true);
+    for (const name of PIPELINE_BODY_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
     const execCols = new Set(
       (
         db.prepare(`PRAGMA table_info(stage_executions)`).all() as {
@@ -547,6 +567,28 @@ CREATE TABLE stage_executions (
       ),
     );
     expect(cols.has("config_origins_json")).toBe(true);
+    for (const name of PIPELINE_BODY_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
+    const legacyCols = after
+      .prepare(
+        `SELECT pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+         FROM runs WHERE run_id = 'keep-me'`,
+      )
+      .get() as {
+      pipeline_source: string | null;
+      pipeline_body: string | null;
+      caller_id: string | null;
+      run_manifest: string | null;
+      skip_gates: number | null;
+    };
+    expect(legacyCols).toEqual({
+      pipeline_source: null,
+      pipeline_body: null,
+      caller_id: null,
+      run_manifest: null,
+      skip_gates: null,
+    });
     after.close();
   });
 
@@ -609,6 +651,9 @@ CREATE TABLE runs (
     for (const name of LIFECYCLE_COLUMNS) {
       expect(cols.has(name)).toBe(true);
     }
+    for (const name of PIPELINE_BODY_COLUMNS) {
+      expect(cols.has(name)).toBe(true);
+    }
     const execCols = new Set(
       (
         after.prepare(`PRAGMA table_info(stage_executions)`).all() as {
@@ -617,6 +662,25 @@ CREATE TABLE runs (
       ).map((c) => c.name),
     );
     expect(execCols.has("auto_resume_count")).toBe(true);
+    const legacyCols = after
+      .prepare(
+        `SELECT pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
+         FROM runs WHERE run_id = 'keep-me'`,
+      )
+      .get() as {
+      pipeline_source: string | null;
+      pipeline_body: string | null;
+      caller_id: string | null;
+      run_manifest: string | null;
+      skip_gates: number | null;
+    };
+    expect(legacyCols).toEqual({
+      pipeline_source: null,
+      pipeline_body: null,
+      caller_id: null,
+      run_manifest: null,
+      skip_gates: null,
+    });
     after.close();
   });
 

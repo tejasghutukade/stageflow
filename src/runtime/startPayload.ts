@@ -1,3 +1,6 @@
+/** Cap for inline pipeline body + skills start payload (1 MiB). */
+export const START_PAYLOAD_MAX_BYTES = 1_048_576;
+
 export const START_TOKEN_REJECTED = "start.token_rejected" as const;
 
 const TOKEN_SHAPED_KEY =

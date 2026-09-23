@@ -90,6 +90,10 @@ export type RunMeta = {
   disk_bytes?: number;
   disk_measured_at?: string;
   config_origins?: ConfigOriginRecord[];
+  pipeline_source?: "inline" | "path";
+  caller_id?: string;
+  run_manifest?: unknown;
+  skip_gates?: boolean;
 };
 
 export type CreatedRun = {
@@ -438,6 +442,11 @@ export type CreateRunInput = {
   gitAuthorName?: string;
   gitAuthorEmail?: string;
   status?: RunStatus;
+  pipelineSource?: "inline" | "path";
+  pipelineBody?: string;
+  callerId?: string;
+  runManifest?: unknown;
+  skipGates?: boolean;
 };
 
 export type ListRunsFilter = {
@@ -446,6 +455,7 @@ export type ListRunsFilter = {
   since?: string;
   /** Match pipeline_id or pipeline_path */
   pipeline?: string;
+  caller_id?: string;
 };
 
 /**
@@ -504,6 +514,7 @@ export interface RunStore {
   deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
+  readPipelineBody(runId: string): Promise<string | null>;
   /** Opaque run workspace root for agents and artifact tools. */
   getWorkspaceDir(runId: string): string;
   ensureStageWorkspace(runId: string, stageId: string): Promise<void>;

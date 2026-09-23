@@ -89,6 +89,11 @@ type RunRow = {
   disk_bytes: number | null;
   disk_measured_at: string | null;
   config_origins_json: string | null;
+  pipeline_source: string | null;
+  pipeline_body: string | null;
+  caller_id: string | null;
+  run_manifest: string | null;
+  skip_gates: number | null;
 };
 
 type StageRow = {
@@ -405,9 +410,9 @@ export class SqliteRunStore implements RunStore {
       this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @git_sha, @ci_pr_url, @ci_job_url, @pipeline_path, @task_path, @project_root, @repository, @ref, @resolved_sha, @run_branch, @git_author_name, @git_author_email, @pipeline_source, @pipeline_body, @caller_id, @run_manifest, @skip_gates)`,
       )
       .run({
         run_id: runId,
@@ -433,6 +438,15 @@ export class SqliteRunStore implements RunStore {
         run_branch: input.runBranch ?? null,
         git_author_name: input.gitAuthorName ?? null,
         git_author_email: input.gitAuthorEmail ?? null,
+        pipeline_source: input.pipelineSource ?? null,
+        pipeline_body: input.pipelineBody ?? null,
+        caller_id: input.callerId ?? null,
+        run_manifest:
+          input.runManifest !== undefined
+            ? JSON.stringify(input.runManifest)
+            : null,
+        skip_gates:
+          input.skipGates === undefined ? null : input.skipGates ? 1 : 0,
       });
 
       if (input.submission) {
@@ -719,6 +733,11 @@ export class SqliteRunStore implements RunStore {
   async readTaskYaml(runId: string): Promise<string> {
     await this.ready();
     return this.getRunRow(runId).task_yaml;
+  }
+
+  async readPipelineBody(runId: string): Promise<string | null> {
+    await this.ready();
+    return this.getRunRow(runId).pipeline_body;
   }
 
   async ensureStageWorkspace(runId: string, stageId: string): Promise<void> {
@@ -1170,12 +1189,16 @@ export class SqliteRunStore implements RunStore {
       );
       params.push(pipeline, pipeline, normalized);
     }
+    if (filter?.caller_id !== undefined) {
+      clauses.push("caller_id = ?");
+      params.push(filter.caller_id);
+    }
 
     const where =
       clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
          FROM runs ${where} ORDER BY created_at DESC`,
       )
       .all(...params) as RunRow[];
@@ -1745,6 +1768,14 @@ export class SqliteRunStore implements RunStore {
             ) as ConfigOriginRecord[],
           }
         : {}),
+      ...(row.pipeline_source === "inline" || row.pipeline_source === "path"
+        ? { pipeline_source: row.pipeline_source }
+        : {}),
+      ...(row.caller_id != null ? { caller_id: row.caller_id } : {}),
+      ...(row.run_manifest
+        ? { run_manifest: JSON.parse(row.run_manifest) as unknown }
+        : {}),
+      ...(row.skip_gates != null ? { skip_gates: row.skip_gates !== 0 } : {}),
       ...(pipeline_dag ? { pipeline_dag } : {}),
     };
   }
@@ -1752,7 +1783,7 @@ export class SqliteRunStore implements RunStore {
   private getRunRow(runId: string): RunRow {
     const row = this.db
       .prepare(
-        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json
+        `SELECT run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, git_sha, ci_pr_url, ci_job_url, pipeline_path, task_path, project_root, repository, ref, resolved_sha, run_branch, git_author_name, git_author_email, cancel_reason, finished_at, slimmed_at, disk_bytes, disk_measured_at, config_origins_json, pipeline_source, pipeline_body, caller_id, run_manifest, skip_gates
          FROM runs WHERE run_id = ?`,
       )
       .get(runId) as RunRow | undefined;

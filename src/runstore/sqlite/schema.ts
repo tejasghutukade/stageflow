@@ -84,7 +84,12 @@ CREATE TABLE IF NOT EXISTS runs (
   slimmed_at TEXT,
   disk_bytes INTEGER,
   disk_measured_at TEXT,
-  config_origins_json TEXT
+  config_origins_json TEXT,
+  pipeline_source TEXT,
+  pipeline_body TEXT,
+  caller_id TEXT,
+  run_manifest TEXT,
+  skip_gates INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS run_submissions (
