@@ -7,7 +7,7 @@ title: Docker and self-hosting
 
 This page describes Stageflow’s **finished** data-safety and ops contracts for self-hosted Hosts (including containers). The Dockerfile / GHCR publish job consume these values; they are not shipped in this slot.
 
-See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md).
+See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
 
 ## Precious vs disposable
 
@@ -138,6 +138,69 @@ networks:
 volumes:
   stageflow-data:
 ```
+
+## CLI via `docker exec` {#cli-via-docker-exec}
+
+A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
+
+### Exec-only commands
+
+```bash
+# ASCII pipeline diagram (humans). Harnesses: MCP describe_pipeline / get_run.
+docker exec -it stageflow sf graph --pipeline examples/hello-world/hello.pipeline.yaml
+
+# Rewrite legacy YAML keys in a checkout (authors on a laptop; not a Host API).
+docker exec -it stageflow sf migrate-yaml /workspace/my-catalog --write
+
+# Durable skill install for image bake or a mounted workspace.
+# Harnesses: prefer start_run.skills (Slot 9) instead of install.
+docker exec -it stageflow sf skills install --from-path /workspace/skills/my-skill
+docker exec -it stageflow sf skills install --from-zip "https://example.com/skill.zip" \
+  --skill-name my-skill
+
+# A2A deployment config (boot-read; restart Host after changes).
+# Read whether A2A is enabled without exec: GET /api/a2a/status (read token).
+docker exec -it stageflow sf a2a validate --config /data/a2a.yaml
+docker exec -it stageflow sf a2a list --config /data/a2a.yaml
+docker exec -it stageflow sf a2a add-caller procurement --config /data/a2a.yaml
+
+# Provider OAuth (interactive / browser). API keys: boot env, not exec — see below.
+docker exec -it stageflow sf providers login anthropic --type oauth
+```
+
+### Provider API keys (no exec)
+
+Set at Host boot so the container self-configures without `docker exec`:
+
+```bash
+# compose / k8s env (example)
+STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
+# or STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY=…
+# optional: STAGEFLOW_REQUIRE_PROVIDERS=anthropic
+```
+
+See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials).
+
+### Worktree escape hatch {#worktree-escape-hatch}
+
+When you need a shell inside a run's checkout (diff inspection, one-off git, post-mortem), obtain the path from the run projection, then exec:
+
+1. Call MCP `get_run` with the `runId`, or `GET /api/runs/<runId>` with a **read** token.
+2. Read `binding.checkout_root` (absolute path inside the container). Unbound runs omit it — there is nothing to enter. Repository-bound runs typically use `$STAGEFLOW_HOME/worktrees/<runId>/`.
+3. Open a shell (or run a one-shot command) with that path as the working directory:
+
+```bash
+RUN_ID=run_…
+# From the Host REST detail (token required when bind is non-loopback):
+CHECKOUT=$(curl -fsS -H "Authorization: Bearer $STAGEFLOW_READ_TOKEN" \
+  "http://127.0.0.1:3847/api/runs/$RUN_ID" | jq -r '.binding.checkout_root // empty')
+test -n "$CHECKOUT"
+docker exec -it -w "$CHECKOUT" stageflow bash
+# one-shot example:
+docker exec -it -w "$CHECKOUT" stageflow git status
+```
+
+There is no MCP shell/`exec` tool — this is the supported escape hatch. Per-run `export_run` / debug-bundle over MCP/HTTP land in Slot 9; until then use `docker exec … sf export-run --run <runId>` or whole-instance `GET /api/export`.
 
 ## Continuous replication
 

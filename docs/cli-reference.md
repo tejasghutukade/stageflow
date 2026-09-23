@@ -518,7 +518,7 @@ sf skills install --from-zip "https://github.com/tt-a1i/archify/releases/downloa
   --skill-name archify
 ```
 
-See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding).
+See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding). Durable install in a container is [docker exec / image bake](docker.md#cli-via-docker-exec); harnesses prefer run-scoped `start_run.skills` when that lands ([MCP decision table](mcp.md#cli-only-capabilities-decision-table)).
 
 ## `sf validate`
 
@@ -614,6 +614,8 @@ sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml
 sf graph --pipeline examples/feature-loop/feature-loop.pipeline.yaml --json
 ```
 
+Harnesses should use MCP `describe_pipeline` / `get_run` instead of `sf graph`. In containers this command is [docker exec–only](docker.md#cli-via-docker-exec) — see [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table).
+
 ## `sf migrate-yaml` {#sf-migrate-yaml}
 
 For catalogs that still use pre-`io` field names: convert legacy YAML (`payload_schema`, `pre_emit_checks`, `completion`, `recovery`, `clone_input_schema`) to target YAML (`io`, `verify`, `on_verify_fail`). Dry-run is the default. Does not rewrite `.stageflow` snapshots. Still reads legacy YAML when `STAGEFLOW_LEGACY_YAML=0`.
@@ -642,7 +644,7 @@ sf migrate-yaml examples/hello-world --json
 sf migrate-yaml examples/hello-world --write
 ```
 
-See [CI / headless](ci.md) for `catalog.legacy_yaml` (not promoted by `--strict` this release).
+See [CI / headless](ci.md) for `catalog.legacy_yaml` (not promoted by `--strict` this release). Not available over MCP — [docker exec / laptop only](docker.md#cli-via-docker-exec); [decision](mcp.md#cli-only-capabilities-decision-table).
 
 ## `sf ui`
 
@@ -711,7 +713,7 @@ sf providers logout <providerId>
 
 Raw `--api-key` on the command line is **not** supported; use a prompt or `--api-key-env`.
 
-See [Providers](providers.md).
+Container Hosts should prefer boot env / `*_FILE` for API keys ([Providers](providers.md#non-interactive-host-boot-credentials)). OAuth remains [docker exec–only](docker.md#cli-via-docker-exec). See [Providers](providers.md) and [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table).
 
 ## `sf a2a`
 
@@ -730,6 +732,8 @@ sf a2a add-caller <id> [--config <path>] [--token-env <NAME>]
 | `add-caller` | Register a new caller: writes its `id` and `token_env` name into `a2a.yaml` (creating the file if needed) and prints a generated token to export -- never writes a secret value to disk |
 
 `--config` defaults to `<project-root>/a2a.yaml` when omitted -- the same file `STAGEFLOW_A2A_CONFIG` overrides if set. `sf ui` uses this same resolution to decide whether A2A is enabled at all.
+
+Mutating / validate CLI is [docker exec–only](docker.md#cli-via-docker-exec) in containers; read whether A2A is enabled via `GET /api/a2a/status`. See [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [A2A](a2a.md).
 
 ## Internal: `sf internal run-stage`
 

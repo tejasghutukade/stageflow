@@ -536,7 +536,7 @@ Poll run status without loading the full event stream.
 
 **Input:** `{ "runId": "…" }`
 
-**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes). On `on_max_replays: wait_for_human`, the loop **source** pass in `feedback_loops[].replays[].stage_passes` is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. The projection includes `total_cost_usd` and per-stage `cost_usd` / `definition_id` when the store has them.
+**Output:** Projected run detail — status, stage statuses, envelope summary/payload/artifact paths (**no events**), and `pipeline_track` when present. A diamond join has two inbound track edges; a blocked join lists every unresolved parent in `blocked_by`. When a stage is waiting, includes run-level `waiting_*` fields and per-stage `pending_prompt`. When present on the run record, includes `pipeline_path` and `task_path`. Includes `binding` (`kind`, optional `repository` / `ref` / `resolved_sha`, and on detail `checkout_root` / `run_branch` when bound) — use `binding.checkout_root` to locate the run worktree for a `docker exec` escape hatch ([Docker](docker.md#worktree-escape-hatch)). Feedback-loop runs also expose `active_feedback_loop` (when a loop is `active` or `waiting_for_human`) and `feedback_loops` (history with replays and stage passes). On `on_max_replays: wait_for_human`, the loop **source** pass in `feedback_loops[].replays[].stage_passes` is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. The projection includes `total_cost_usd` and per-stage `cost_usd` / `definition_id` when the store has them.
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
@@ -854,13 +854,29 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 | `busy_capacity` / `busy_checkout` / `aborted` | Unchanged admission codes |
 | `internal_error` | Uncoded internal failure |
 
+## CLI-only capabilities (decision table)
+
+In a container, anything that is CLI-only means `docker exec`. A remote harness holding a control token cannot run those commands. This table is the negative surface: what is deliberately **not** an MCP tool, why, and what to use instead. Literal `docker exec` lines for every exec-only row live in [Docker and self-hosting — CLI via docker exec](docker.md#cli-via-docker-exec).
+
+| Capability | Decision | Reason / substitute |
+|------------|----------|---------------------|
+| `sf graph` | **Not MCP.** Use `describe_pipeline` (definition DAG) or `get_run` / `pipeline_track` (per-run shape). | `sf graph` is a human terminal ASCII render of the same resolved DAG. A second rendering tool would spend MCP context on data the harness already has as JSON. |
+| `sf migrate-yaml` | **`docker exec` / laptop only.** | Rewrites checkout YAML in place and shells `git status` to refuse dirty trees. An API that mutates a caller's repository from a request crosses the "repository content is untrusted input" line. Authors migrate before commit. |
+| `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` for harnesses (Slot 9; see `start_run` params). | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call once that param lands — not install into the container. |
+| `sf a2a validate` / `list` / `add-caller` | **`docker exec` only** for mutate/validate. Read surface: `GET /api/a2a/status` (`read` scope). | A2A config is read once at Host boot by design (no hot reload). A mutating API for config that only applies after restart is a trap; `add-caller` writes deployment config (`a2a.yaml`), not a runtime call. |
+| Provider login — API key | **No MCP login tool.** Configure at Host boot via `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` ([Providers](providers.md#non-interactive-host-boot-credentials)). | Container path is env/file at boot (Slot 7), not an interactive MCP call. `list_providers` remains read-only inspect. |
+| Provider login — OAuth | **`docker exec` only.** | Terminal- or browser-driven flow; no headless paste-code API. Once-per-deployment operator action. |
+| `sf export-run` / post-mortem debug | **CLI today** (`sf export-run`). Whole-instance export is already remote: `GET /api/export` (read). Per-run MCP `export_run` and HTTP `GET /api/runs/<id>/export`, plus `sf debug-run` / debug-bundle, land in Slot 9 — do not invent those tools yet. | Until they ship, use CLI/`docker exec` for a single-run export, or the whole-instance HTTP export while the Host is up. |
+
+There is no MCP `exec`, web terminal, or shell tool — `docker exec` is the supported operator escape hatch ([Docker](docker.md#cli-via-docker-exec)).
+
 ## Limitations
 
 - Cancel signals workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included
 - Until Slot 5, destructive MCP/REST verbs (`cancel_run`, `delete_run`, `gc_runs`, and their HTTP routes) rely on `isMutatingApi` loopback gating and local bind — not application auth. Slot 5 must cover MCP tools as well as HTTP
 - REST `POST /api/runs` is path-pipeline-only; inline pipelines are MCP-only (see `start_run` REST asymmetry)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
-- No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect)
+- No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect). See [CLI-only capabilities](#cli-only-capabilities-decision-table)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)
@@ -871,6 +887,7 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 - [Operator console](operator-console.md) — starts MCP alongside the UI
 - [HITL](hitl.md) — gate kinds and answer shapes
 - [CLI reference](cli-reference.md) — `sf ui`, `sf mcp`, `sf validate`, and host-down `sf runs` (inspect / wait / answer / feedback-decide / retry / resume / abandon / cancel / delete / gc / rerun). CLI `sf runs` is not a 1:1 MCP tool list; it does not clone catalog listing (`list_pipelines` / `list_tasks` / `describe_pipeline`).
+- [Docker and self-hosting](docker.md#cli-via-docker-exec) — literal `docker exec` for CLI-only ops and worktree escape hatch
 - [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops) — `feedback_loop` / `replay_safe` policy
 - [CI / headless](ci.md) — MCP not used in CI jobs
 - [Envelopes](envelopes.md) — artifact paths returned by `get_run` / `get_envelope`
