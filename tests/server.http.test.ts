@@ -2,7 +2,7 @@ import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
-import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -218,9 +218,11 @@ async function withServer(
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; agentDir?: string; providerAuthContext?: Parameters<typeof startUiServer>[0]["providerAuthContext"] } = {},
 ) {
+  const cwd = opts.cwd ?? catalogRoot;
+  await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? catalogRoot,
+    cwd,
     rootDir: root,
     agentDir: opts.agentDir,
     store,
@@ -718,17 +720,25 @@ describe("localhost HTTP API", () => {
     }
 
     const store = createRunStore({ rootDir: storeRoot });
-    await store.createRun({
-      pipelineId: "seed-root",
-      taskYaml: "id: t\ngoal: g\n",
-      projectRoot: repoB,
-    });
+    await store.ensureProject(repoB);
 
     const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
       cwd: repoA,
     });
 
     try {
+      const omitted = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directory: "pipelines",
+          id: "needs-root",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(omitted.status).toBe(400);
+      expect(omitted.body.code).toBe("unknown_project_root");
+
       const unknown = await jsonFetch(`${base}/api/pipelines`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -746,7 +756,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          project_root: path.resolve(repoB),
+          project_root: await realpath(repoB),
           directory: "pipelines",
           id: "in-repo-b",
           stages: [
@@ -762,6 +772,23 @@ describe("localhost HTTP API", () => {
       await expect(
         access(path.join(repoA, "pipelines", "in-repo-b.pipeline.yaml")),
       ).rejects.toThrow();
+
+      const stageCreated = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: await realpath(repoB),
+          pipeline_directory: "pipelines",
+          filename: "stage-in-b.yaml",
+          id: "stage-in-b",
+          system_prompt: "Write in B.",
+          model: "cursor/auto",
+        }),
+      });
+      expect(stageCreated.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "stage-in-b.yaml")),
+      ).resolves.toBeUndefined();
 
       const { resolveSeededExamplesPath } = await import(
         "../src/config/seededCatalog.js"
@@ -793,6 +820,21 @@ describe("localhost HTTP API", () => {
         });
         expect(byAbs.status).toBe(403);
         expect(byAbs.body.code).toBe("catalog_root_read_only");
+
+        const stageSeeded = await jsonFetch(`${base}/api/stages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            pipeline_directory: "pipelines",
+            filename: "seeded-stage.yaml",
+            id: "seeded-stage",
+            system_prompt: "Refuse.",
+            model: "cursor/auto",
+          }),
+        });
+        expect(stageSeeded.status).toBe(403);
+        expect(stageSeeded.body.code).toBe("catalog_root_read_only");
       }
     } finally {
       clearFindProjectRootCacheForTests();
@@ -801,6 +843,74 @@ describe("localhost HTTP API", () => {
       });
       await cleanupA();
       await cleanupB();
+    }
+  });
+
+  it("POST /api/runs persists wire project_root when Host boot differs", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-wire-root-"));
+    const { root: bootRoot, cleanup: cleanupBoot } = await initTempGitRepo();
+    const { root: wireRoot, cleanup: cleanupWire } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(wireRoot, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(wireRoot, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(wireRoot, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(wireRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+
+    const store = createRunStore({ rootDir: storeRoot });
+    const wireAbs = await store.ensureProject(wireRoot);
+    const agent = scriptedFakeAgent([
+      {
+        type: "emit" as const,
+        envelope: { status: "success" as const, summary: "ok", artifacts: [] },
+      },
+    ]);
+    const { server, base } = await withServer(storeRoot, agent, store, {
+      cwd: bootRoot,
+    });
+    const bootAbs = path.resolve(bootRoot);
+    expect(wireAbs).not.toBe(bootAbs);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: { id: "wire", goal: "persist wire root" },
+          project_root: wireAbs,
+        }),
+      });
+      expect(started.status).toBe(202);
+      const meta = await store.readRunMeta(started.body.runId as string);
+      expect(meta.project_root).toBe(wireAbs);
+      expect(meta.project_root).not.toBe(bootAbs);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupBoot();
+      await cleanupWire();
     }
   });
 

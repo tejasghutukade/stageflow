@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { httpDeleteRun, httpReadRun, httpStartRun } from "../src/cli/hostClient.js";
+import {
+  httpDeleteRun,
+  httpEnsureProject,
+  httpReadRun,
+  httpStartRun,
+} from "../src/cli/hostClient.js";
 
 const DRIVE = "d".repeat(32);
 const READ = "r".repeat(32);
@@ -126,5 +131,49 @@ describe("hostClient Authorization", () => {
 
     await httpReadRun("http://127.0.0.1:3847", "r1");
     expect(auth).toBeNull();
+  });
+});
+
+describe("httpEnsureProject", () => {
+  it("POSTs /api/projects with project_root and drive Bearer", async () => {
+    process.env.STAGEFLOW_CONTROL_TOKEN = DRIVE;
+    let urlSeen = "";
+    let auth: string | null = null;
+    let bodySeen: unknown;
+    stubFetch((input, init) => {
+      urlSeen = String(input);
+      const headers = new Headers(init?.headers);
+      auth = headers.get("Authorization");
+      bodySeen = JSON.parse(String(init?.body ?? "{}"));
+      return new Response(JSON.stringify({ project_root: "/proj/a" }), {
+        status: 200,
+      });
+    });
+
+    const result = await httpEnsureProject("http://127.0.0.1:3847", "/proj/a");
+    expect(result).toEqual({ ok: true, project_root: "/proj/a" });
+    expect(urlSeen).toBe("http://127.0.0.1:3847/api/projects");
+    expect(auth).toBe(`Bearer ${DRIVE}`);
+    expect(bodySeen).toEqual({ project_root: "/proj/a" });
+  });
+
+  it("maps ensure_project_not_allowed failures", async () => {
+    stubFetch(
+      () =>
+        new Response(
+          JSON.stringify({
+            error: "ensure_project is only allowed from trusted local clients",
+            code: "ensure_project_not_allowed",
+          }),
+          { status: 403 },
+        ),
+    );
+
+    const result = await httpEnsureProject("http://127.0.0.1:3847", "/proj/a");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(403);
+      expect(result.code).toBe("ensure_project_not_allowed");
+    }
   });
 });

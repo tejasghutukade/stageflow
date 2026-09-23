@@ -107,6 +107,7 @@ describe("mcp list_skills", () => {
     );
 
     const store = createRunStore({ rootDir });
+    await store.ensureProject(catalogRoot);
     const { server, manager } = await startUiServer({
       agent: completedAgent(),
       cwd: catalogRoot,
@@ -186,6 +187,7 @@ describe("mcp list_skills", () => {
   it("rejects bad skills before creating a Run", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-skills-reject-"));
     const store = createRunStore({ rootDir });
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent: completedAgent(),
       cwd: catalogRoot,

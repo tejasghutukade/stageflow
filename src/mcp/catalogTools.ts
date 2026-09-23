@@ -5,6 +5,7 @@ import {
   catalogPathErrorBody,
   CatalogPathError,
   resolveCatalogRelativePath,
+  selectCatalogRootForStart,
 } from "../config/catalogRelativePath.js";
 import {
   listModelsMultiProject,
@@ -245,7 +246,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_pipelines",
     {
       description:
-        "List manifest-declared pipeline paths across every project this host knows about (boot cwd, registered store roots, and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
+        "List manifest-declared pipeline paths across every project this host knows about (registered store roots and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
       inputSchema: z.object({
         project_root: z.string().optional(),
       }),
@@ -280,7 +281,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_tasks",
     {
       description:
-        "List manifest-declared task paths across every project this host knows about (boot cwd, registered store roots, and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
+        "List manifest-declared task paths across every project this host knows about (registered store roots and seeded roots). Each entry is tagged with project_root. Optional project_root filter narrows; unknown value returns unknown_project_root.",
       inputSchema: z.object({
         project_root: z.string().optional(),
       }),
@@ -416,9 +417,11 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         store: deps.store,
         bootCwd: deps.cwd,
       });
-      let projectRoot = project_root ?? deps.cwd;
       let loaded;
+      let projectRoot: string;
       try {
+        const wireRoot = selectCatalogRootForStart(roots, project_root);
+        projectRoot = wireRoot.project_root;
         if (typeof pipeline === "string") {
           const resolved = resolveCatalogRelativePath({
             inputPath: pipeline,
@@ -516,6 +519,16 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         store: deps.store,
         bootCwd: deps.cwd,
       });
+      let wireRoot;
+      try {
+        wireRoot = selectCatalogRootForStart(roots, project_root);
+      } catch (err) {
+        if (err instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(err), true);
+        }
+        throw err;
+      }
+      const wireProjectRoot = wireRoot.project_root;
       let resolvedPipeline: typeof pipeline = pipeline;
       let resolvedTask: typeof taskInput = taskInput;
       let resolvedCheckout: string | undefined;
@@ -523,7 +536,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         if (typeof pipeline === "string") {
           resolvedPipeline = resolveCatalogRelativePath({
             inputPath: pipeline,
-            projectRoot: project_root,
+            projectRoot: wireProjectRoot,
             roots,
             fieldName: "pipeline",
           }).absolutePath;
@@ -531,7 +544,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         if (typeof task_path === "string") {
           resolvedTask = resolveCatalogRelativePath({
             inputPath: task_path,
-            projectRoot: project_root,
+            projectRoot: wireProjectRoot,
             roots,
             fieldName: "task_path",
           }).absolutePath;
@@ -540,7 +553,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         if (rawCheckout !== undefined) {
           resolvedCheckout = resolveCatalogRelativePath({
             inputPath: rawCheckout,
-            projectRoot: project_root,
+            projectRoot: wireProjectRoot,
             roots,
             fieldName: "checkout",
           }).absolutePath;
@@ -557,6 +570,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         result = await manager.startRun({
           pipeline: resolvedPipeline,
           task: resolvedTask,
+          projectRoot: wireRoot.path,
           ...(resolvedCheckout !== undefined
             ? { checkoutOverride: resolvedCheckout }
             : {}),

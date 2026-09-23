@@ -7,6 +7,8 @@ title: Data Directory
 
 Stageflow keeps the SQLite run store, run workspaces, Host Pi agent files, and related state under one **durable root**. Override it with `STAGEFLOW_HOME`. When unset, the default is `~/.stageflow`.
 
+The Host is **machine-global**: where `sf ui` / `sf mcp` was started does not define which projects exist. Catalog roots are **seeded** examples plus **registered** absolute project folders stored in the durable SQLite store (not only past-run history). Local `sf run` registers its resolved project folder before start; remote MCP/HTTP may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [CLI — `sf run`](cli-reference.md#sf-run).
+
 Per-project settings stay at `<git-root>/.stageflow/settings.json`. They are not the run store.
 
 See also [CLI reference — Storage locations](cli-reference.md#storage-locations) and [Providers](providers.md).
@@ -15,7 +17,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 
 | Path under `$STAGEFLOW_HOME` | Keep / disposable | Notes |
 |------------------------------|-------------------|-------|
-| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode) |
+| `state.db` (+ `-wal`, `-shm`) | **keep** | Run store (SQLite, WAL mode), including the durable **projects registry** |
 | `settings.json` | **keep** | Global settings (credential source, concurrency, …) |
 | `agent/auth.json` | **keep** | Stageflow-owned provider credentials (`sf_owned`) |
 | `agent/` | **keep** | Host Pi agent directory (`PI_CODING_AGENT_DIR` for the Host process) |

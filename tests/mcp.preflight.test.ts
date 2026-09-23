@@ -76,6 +76,7 @@ describe("MCP preflight", () => {
     process.env[TOOLCHAIN_MANIFEST_ENV] = manifestPath;
 
     store = createRunStore({ rootDir: home, openerMode: "migrate" });
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent: completedAgent(),
       cwd: catalogRoot,

@@ -105,9 +105,9 @@ Same flag/env applies to `sf ui`. Stateless mode uses per-request create/teardow
 
 `sf mcp` mounts the **same** `createOperatorRoutes` surface as `sf ui` — every `/api/*` route is available on both; only the console's static files are omitted. Both hosts apply the [access control](#access-control) Host/Origin allow-list and optional bearer scopes to `/mcp` and `/api/*`. Loopback with no token keeps the historical unauthenticated local UX.
 
-Both use the same project git-root catalog and **global durable-root** run store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and default port `3847` on the shared global service. Run **either** `sf ui` **or** `sf mcp` at a time — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported. `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet. See [Data directory](data-directory.md).
+Both use the same **global durable-root** run store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and default port `3847` on the shared global service. Catalog membership is **seeded ∪ registered** roots under that store — not the shell cwd where you started the Host. Run **either** `sf ui` **or** `sf mcp` at a time — not both (one writer process; the second bind on the same port fails). Different ports against the same store with two managers is unsupported. `sf run` / `sf run-stage` / mutating `sf runs` verbs also auto-start this service headlessly if nothing is listening yet. See [Data directory](data-directory.md) and [Catalog roots](#catalog-roots-and-project_root).
 
-MCP tools resolve the **project git root** for catalog browse (pipelines, tasks, skills, extensions) and the **global durable root** for the run store — the same semantics as CLI commands, not the shell cwd where you started the host.
+MCP tools browse pipelines/tasks under those catalog roots and persist runs in the global durable root — not the Host process boot cwd.
 
 Implementation: `src/mcp/tools.ts`, `src/mcp/resources.ts`, `src/mcp/server.ts`.
 
@@ -148,6 +148,25 @@ start_run → wait_run (until waiting/any) → decide_feedback_loop → wait_run
 start_run → resources/subscribe(stageflow://runs/{runId}) → on updated, get_run / answer_gate / decide_feedback_loop
 ```
 
+## Catalog roots and `project_root` {#catalog-roots-and-project_root}
+
+The Host is machine-global under `$STAGEFLOW_HOME`. Catalog roots are:
+
+| Kind | Wire `project_root` | Notes |
+|------|---------------------|-------|
+| `registered` | Absolute filesystem path | Durable rows in the store projects registry (ensure / past-run backfill) |
+| `seeded` | Symbolic id (e.g. `examples`) | Read-only packaged catalogs; Host maps id → path |
+
+There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an empty registry lists seeded roots only.
+
+**Path contract (MCP / remote HTTP / A2A sharing the helper):**
+
+- Pipeline/task paths must be **catalog-relative** under a known root (absolute pipeline/task paths → `absolute_path_not_allowed`).
+- Unknown absolute `project_root` → `unknown_project_root` (listing and path resolution agree; the Host does **not** invent a request-scoped root).
+- `..` / realpath escape of the selected root → `path_outside_project_root`.
+
+**Registration:** Trusted local clients (CLI / loopback + control token) call `POST /api/projects` with `{ "project_root": "/abs/path" }` to ensure a folder into the registry. Remote MCP and non-loopback HTTP cannot ensure arbitrary paths (`ensure_project_not_allowed`). After ensure, remotes may `start_run` with that absolute `project_root` and catalog-relative paths. Local `sf run` ensure-then-starts automatically — see [CLI reference](cli-reference.md#sf-run).
+
 ## Tools
 
 ### `get_started`
@@ -156,7 +175,7 @@ No-argument first-run orientation for remote harnesses. Returns host version, pr
 
 ### `list_pipelines`
 
-List manifest-declared pipeline paths across every catalog root this Host knows (boot cwd, registered store roots, seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
+List manifest-declared pipeline paths across every catalog root this Host knows (registered store roots and seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -194,7 +213,7 @@ Paths are relative to the project git root (as declared in `stageflow.yaml`). Ea
 
 ### `list_tasks`
 
-List manifest-declared task paths across every catalog root this Host knows (boot cwd, registered store roots, seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
+List manifest-declared task paths across every catalog root this Host knows (registered store roots and seeded `examples`). Each entry includes `project_root`. Optional `project_root` filter; unknown values return `unknown_project_root`. Unreadable roots appear in `root_errors` with `catalog_root_unreadable`.
 
 **Input:** `{ "project_root": "string (optional)" }`
 
@@ -234,7 +253,7 @@ List catalog model ids from the same browse source as `GET /api/models`. Optiona
     "cursor/composer-2-5"
   ],
   "entries": [
-    { "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/boot" },
+    { "id": "anthropic/claude-sonnet-4-5", "project_root": "/abs/registered" },
     { "id": "cursor/auto", "project_root": "examples" },
     { "id": "cursor/composer-2-5", "project_root": "examples" }
   ],
@@ -515,7 +534,7 @@ Exactly one of `task_path` or `task` is required. Accepted start params:
 |-------|--------|
 | `pipeline` | Catalog-relative path **or** inline `{ id, stages: [...] }` (MCP only — see REST asymmetry below) |
 | `task_path` / `task` | Exactly one; inline `task` may carry `repository`/`ref` or `checkout` |
-| `project_root` | Optional catalog root selector |
+| `project_root` | Optional catalog root selector — absolute **registered** path or symbolic **seeded** id. Unknown absolute roots are refused (`unknown_project_root`); remotes cannot invent a new root. Wire root is persisted on the run when present. |
 | `checkout` | Catalog-relative path-checkout; maps to REST `checkoutOverride`. Absolute paths → `absolute_path_not_allowed` (not bare ENOENT) |
 | `checkout_override` | Temporary alias of `checkout` |
 | `skip_gates` | Skip HITL gates for unattended starts |
@@ -537,6 +556,7 @@ Exactly one of `task_path` or `task` is required. Accepted start params:
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout`. Never queued |
 | Free disk below floor | `insufficient_disk` | Includes `freeBytes`, `minFreeBytes`. Distinct from `busy_capacity`; the run is not created or queued |
 | Absolute checkout/path | `absolute_path_not_allowed` | Network path contract; includes `registered_roots` |
+| Unknown catalog root | `unknown_project_root` | Absolute or symbolic `project_root` not in registered ∪ seeded |
 | Repository + checkout | `task.binding_conflict` | Same named code on MCP, REST, and CLI |
 
 Task schema matches `TaskFile` (`id`, `goal`, optional `context`, `constraints`, `checkout`, `repository`, `ref`, `input`). Optional `input` on the inline `task` object (or on a catalog task file) can satisfy an entry stage's `io.input`. If an entry declares `io.input` and the task has no `input`, start-run treats it as `{}` and fails with `task.invalid_shape` when that does not match.
@@ -926,10 +946,11 @@ Network errors from `/mcp` and `/api/*` include a stable snake_case `code` along
 
 | Code | Meaning |
 |------|---------|
-| `unknown_project_root` | Filter or path targeted an unregistered root |
+| `unknown_project_root` | Filter or path targeted a root outside registered ∪ seeded (no invent) |
 | `absolute_path_not_allowed` | Absolute path from a network caller |
 | `path_outside_project_root` | `..` or realpath escape of the selected root |
 | `catalog_root_unreadable` | Root listed but not readable |
+| `ensure_project_not_allowed` | `POST /api/projects` from remote / non-trusted client |
 | `config_invalid` / `config_unknown_key` | HostConfig validation |
 | `provider_not_configured` | Boot/provider credential failure |
 | `a2a_configuration_error` | A2A registry/config failed |

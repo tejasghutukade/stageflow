@@ -72,39 +72,7 @@ export function resolveCatalogRelativePath(
     );
   }
 
-  let root: CatalogRoot | undefined;
-  if (input.projectRoot !== undefined) {
-    root = findCatalogRoot(input.roots, input.projectRoot);
-    if (root === undefined) {
-      if (path.isAbsolute(input.projectRoot)) {
-        const abs = realOrResolve(input.projectRoot);
-        root = {
-          project_root: abs,
-          path: abs,
-          kind: "registered",
-          read_only: false,
-        };
-      } else {
-        throw new CatalogPathError(
-          `Unknown project_root: ${input.projectRoot}`,
-          "unknown_project_root",
-          registered,
-        );
-      }
-    }
-  } else if (input.roots.length === 1) {
-    root = input.roots[0];
-  } else {
-    const boot = input.roots.find((r) => r.kind === "boot");
-    root = boot ?? input.roots[0];
-  }
-  if (root === undefined) {
-    throw new CatalogPathError(
-      `No catalog roots available to resolve ${field}`,
-      "unknown_project_root",
-      registered,
-    );
-  }
+  const root = selectCatalogRootForStart(input.roots, input.projectRoot);
 
   const absolutePath = path.resolve(root.path, input.inputPath);
   if (!isInsideProjectRoot(root.path, absolutePath)) {
@@ -132,6 +100,49 @@ export function catalogPathErrorBody(err: CatalogPathError): {
     code: err.code,
     registered_roots: err.registered_roots,
   };
+}
+
+/**
+ * Pick the catalog root for start_run / POST /api/runs.
+ * Wire project_root (symbolic seeded id or absolute) maps to CatalogRoot.path
+ * (absolute store key). When omitted: sole root, or sole non-seeded root;
+ * otherwise require explicit — no invent.
+ */
+export function selectCatalogRootForStart(
+  roots: CatalogRoot[],
+  projectRoot?: string,
+): CatalogRoot {
+  const registered = roots.map((r) => r.project_root);
+  if (projectRoot !== undefined) {
+    const found = findCatalogRoot(roots, projectRoot);
+    if (found === undefined) {
+      throw new CatalogPathError(
+        `Unknown project_root: ${projectRoot}`,
+        "unknown_project_root",
+        registered,
+      );
+    }
+    return found;
+  }
+  if (roots.length === 0) {
+    throw new CatalogPathError(
+      "No catalog roots configured; ensure a project_root first",
+      "unknown_project_root",
+      registered,
+    );
+  }
+  if (roots.length === 1) {
+    return roots[0]!;
+  }
+  const writable = roots.filter((r) => r.kind !== "seeded");
+  if (writable.length === 1) {
+    return writable[0]!;
+  }
+  throw new CatalogPathError(
+    "project_root is required when multiple catalog roots are configured",
+    "unknown_project_root",
+    registered,
+  );
 }
 
 /**

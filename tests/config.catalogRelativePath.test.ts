@@ -6,14 +6,16 @@ import {
   CatalogPathError,
   resolveCatalogRelativePath,
   relativizeLocalPathForNetwork,
+  selectCatalogRootForStart,
 } from "../src/config/catalogRelativePath.js";
 import type { CatalogRoot } from "../src/config/resolveCatalogRoots.js";
+import { findCatalogRoot } from "../src/config/resolveCatalogRoots.js";
 
 const roots: CatalogRoot[] = [
   {
     project_root: "/proj/a",
     path: "/proj/a",
-    kind: "boot",
+    kind: "registered",
     read_only: false,
   },
   {
@@ -89,21 +91,51 @@ describe("resolveCatalogRelativePath", () => {
     }
   });
 
-  it("accepts absolute unknown project_root as request-scoped root", () => {
+  it("refuses absolute unknown project_root", () => {
     const base = mkdtempSync(path.join(tmpdir(), "sf-ephem-root-"));
     temps.push(base);
     mkdirSync(path.join(base, "pipelines"), { recursive: true });
     writeFileSync(path.join(base, "pipelines", "x.pipeline.yaml"), "id: x\n");
 
+    expect(() =>
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        projectRoot: base,
+        roots,
+        fieldName: "pipeline",
+      }),
+    ).toThrow(CatalogPathError);
+    try {
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        projectRoot: base,
+        roots,
+        fieldName: "pipeline",
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(CatalogPathError);
+      expect((err as CatalogPathError).code).toBe("unknown_project_root");
+    }
+  });
+
+  it("resolves catalog-relative under a known registered absolute root", () => {
+    const withRegistered: CatalogRoot[] = [
+      ...roots,
+      {
+        project_root: "/proj/b",
+        path: "/proj/b",
+        kind: "registered",
+        read_only: false,
+      },
+    ];
     const resolved = resolveCatalogRelativePath({
       inputPath: "pipelines/x.pipeline.yaml",
-      projectRoot: base,
-      roots,
-      fieldName: "pipeline",
+      projectRoot: "/proj/b",
+      roots: withRegistered,
     });
     expect(resolved.root.kind).toBe("registered");
     expect(resolved.absolutePath).toBe(
-      path.resolve(realpathSync(base), "pipelines", "x.pipeline.yaml"),
+      path.resolve("/proj/b", "pipelines/x.pipeline.yaml"),
     );
   });
 
@@ -120,6 +152,32 @@ describe("resolveCatalogRelativePath", () => {
         inputPath: "pipelines/x.pipeline.yaml",
         projectRoot: "unknown-seed",
         roots,
+      });
+    } catch (err) {
+      expect((err as CatalogPathError).code).toBe("unknown_project_root");
+    }
+  });
+
+  it("requires explicit project_root when multiple roots and omitted", () => {
+    const multi: CatalogRoot[] = [
+      ...roots,
+      {
+        project_root: "/proj/b",
+        path: "/proj/b",
+        kind: "registered",
+        read_only: false,
+      },
+    ];
+    expect(() =>
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        roots: multi,
+      }),
+    ).toThrow(CatalogPathError);
+    try {
+      resolveCatalogRelativePath({
+        inputPath: "pipelines/x.pipeline.yaml",
+        roots: multi,
       });
     } catch (err) {
       expect((err as CatalogPathError).code).toBe("unknown_project_root");
@@ -147,5 +205,85 @@ describe("relativizeLocalPathForNetwork", () => {
     const out = relativizeLocalPathForNetwork(linkCwd, "x.pipeline.yaml");
     expect(out.path).toBe("x.pipeline.yaml");
     expect(out.project_root).toBe(realpathSync(linkCwd));
+  });
+});
+
+describe("findCatalogRoot", () => {
+  it("does not resolve symbolic ids against absolute registered paths", () => {
+    const abs = path.resolve("examples");
+    const roots: CatalogRoot[] = [
+      {
+        project_root: abs,
+        path: abs,
+        kind: "registered",
+        read_only: false,
+      },
+      {
+        project_root: "examples",
+        path: "/opt/stageflow/examples",
+        kind: "seeded",
+        read_only: true,
+      },
+    ];
+    expect(findCatalogRoot(roots, "examples")?.project_root).toBe("examples");
+    expect(findCatalogRoot(roots, "examples")?.kind).toBe("seeded");
+    expect(findCatalogRoot(roots, abs)?.kind).toBe("registered");
+  });
+
+  it("returns undefined for unknown symbolic id even if resolve collides", () => {
+    const abs = path.resolve("not-a-root");
+    const roots: CatalogRoot[] = [
+      {
+        project_root: abs,
+        path: abs,
+        kind: "registered",
+        read_only: false,
+      },
+    ];
+    expect(findCatalogRoot(roots, "not-a-root")).toBeUndefined();
+  });
+});
+
+describe("selectCatalogRootForStart", () => {
+  it("maps wire project_root to absolute CatalogRoot.path", () => {
+    const selected = selectCatalogRootForStart(roots, "examples");
+    expect(selected.path).toBe("/opt/stageflow/examples");
+    expect(selected.project_root).toBe("examples");
+  });
+
+  it("uses sole non-seeded root when project_root omitted", () => {
+    const selected = selectCatalogRootForStart(roots);
+    expect(selected.kind).toBe("registered");
+    expect(selected.path).toBe("/proj/a");
+  });
+
+  it("requires explicit project_root when multiple writable roots", () => {
+    const multi: CatalogRoot[] = [
+      ...roots,
+      {
+        project_root: "/proj/b",
+        path: "/proj/b",
+        kind: "registered",
+        read_only: false,
+      },
+    ];
+    expect(() => selectCatalogRootForStart(multi)).toThrow(CatalogPathError);
+    try {
+      selectCatalogRootForStart(multi);
+    } catch (err) {
+      expect((err as CatalogPathError).code).toBe("unknown_project_root");
+    }
+  });
+
+  it("rejects empty roots when project_root omitted", () => {
+    expect(() => selectCatalogRootForStart([])).toThrow(CatalogPathError);
+    try {
+      selectCatalogRootForStart([]);
+    } catch (err) {
+      expect((err as CatalogPathError).message).toMatch(
+        /No catalog roots configured/,
+      );
+      expect((err as CatalogPathError).code).toBe("unknown_project_root");
+    }
   });
 });

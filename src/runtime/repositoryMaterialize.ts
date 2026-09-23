@@ -53,6 +53,7 @@ export type StartFailureCode =
   | "unresolved_var"
   | "shutting_down"
   | "autostart_disabled"
+  | "ensure_project_not_allowed"
   | "claude_as_root";
 
 export type MaterializedBinding = {

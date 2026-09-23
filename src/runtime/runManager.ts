@@ -7,7 +7,7 @@ import type { AgentPort, OpaqueAnswer } from "../agent/port.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
-import { normalizeCatalogPath } from "../runstore/normalizeCatalogPath.js";
+import { normalizeCatalogPath, normalizeProjectRoot } from "../runstore/normalizeCatalogPath.js";
 import {
   durableRootDiskBreakdown,
   readFilesystemSize,
@@ -1563,6 +1563,12 @@ export class RunManager {
       gitSha?: string;
       ciPrUrl?: string;
       ciJobUrl?: string;
+      /**
+       * Absolute store-key project root from the wire (registered path or
+       * seeded-mapped absolute). When set, persisted as run project_root;
+       * Host boot / findProjectRoot are not used to override it.
+       */
+      projectRoot?: string;
       /** Attribution from auth only — never from request body/query. */
       callerId?: string | null;
       skills?: SkillsPayload;
@@ -1577,13 +1583,21 @@ export class RunManager {
         code: "shutting_down",
       };
     }
-    const cwd = this.options.cwd ?? process.cwd();
-    // An inline pipeline has no filesystem anchor to derive a project root from.
+    const hostCwd = this.options.cwd ?? process.cwd();
+    const wireRoot =
+      typeof input.projectRoot === "string" && input.projectRoot.trim().length > 0
+        ? normalizeProjectRoot(input.projectRoot)
+        : undefined;
+    // Wire root wins. Otherwise path pipelines may derive via findProjectRoot;
+    // inline-only without projectRoot keeps Host projectRoot.
     const derivedProjectRoot =
-      typeof input.pipeline === "string"
-        ? (findProjectRoot(path.dirname(path.resolve(cwd, input.pipeline))) ??
-          this.projectRoot)
-        : this.projectRoot;
+      wireRoot ??
+      (typeof input.pipeline === "string"
+        ? (findProjectRoot(
+            path.dirname(path.resolve(hostCwd, input.pipeline)),
+          ) ?? this.projectRoot)
+        : this.projectRoot);
+    const cwd = wireRoot ?? hostCwd;
 
     let resolved;
     try {

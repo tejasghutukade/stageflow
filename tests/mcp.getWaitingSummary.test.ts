@@ -89,10 +89,15 @@ function waitingPrompt(id: string) {
   return { kind: "free_text" as const, id, message: `hold ${id}` };
 }
 
-async function startWaitingRun(base: string, pipeline: string) {
+async function startWaitingRun(
+  base: string,
+  pipeline: string,
+  projectRoot: string,
+) {
   const started = await mcpCall(base, "start_run", {
     pipeline,
     task: { id: "t", goal: "g" },
+    project_root: projectRoot,
   });
   expect(started.isError).toBe(false);
   return started.payload.runId as string;
@@ -117,6 +122,8 @@ describe("get_waiting_summary", () => {
   it("returns count/runs across every project when unscoped, and only the documented fields", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-wsum-"));
     const store = createRunStore({ rootDir: storeRoot });
+    const rootA = await store.ensureProject(projectA.root);
+    const rootB = await store.ensureProject(projectB.root);
 
     const agentA = scriptedFakeAgent([
       {
@@ -167,6 +174,7 @@ describe("get_waiting_summary", () => {
       const runIdA = await startWaitingRun(
         baseA,
         "pipelines/single.pipeline.yaml",
+        rootA,
       );
       await waitFor(async () => {
         const detail = await store.readRun(runIdA);
@@ -176,6 +184,7 @@ describe("get_waiting_summary", () => {
       const runIdB = await startWaitingRun(
         baseB,
         "pipelines/single.pipeline.yaml",
+        rootB,
       );
       await waitFor(async () => {
         const detail = await store.readRun(runIdB);

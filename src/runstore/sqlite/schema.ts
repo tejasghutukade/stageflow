@@ -92,6 +92,11 @@ CREATE TABLE IF NOT EXISTS runs (
   skip_gates INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS projects (
+  project_root TEXT PRIMARY KEY NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS run_submissions (
   submission_key TEXT PRIMARY KEY,
   request_hash TEXT NOT NULL,

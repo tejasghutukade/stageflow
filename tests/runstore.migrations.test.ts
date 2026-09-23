@@ -154,6 +154,9 @@ describe("sqlite store migrations", () => {
     expect(ledger[5]?.version).toBe(6);
     expect(ledger[5]?.name).toBe("006_pipeline_body_and_caller");
     expect(ledger[5]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger[6]?.version).toBe(7);
+    expect(ledger[6]?.name).toBe("007_projects_registry");
+    expect(ledger[6]?.min_stageflow_version).toBe(PACKAGE_VERSION);
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -170,6 +173,12 @@ describe("sqlite store migrations", () => {
     ]) {
       expect(cols).toContain(name);
     }
+    const projects = (
+      db.prepare(`PRAGMA table_info(projects)`).all() as { name: string }[]
+    ).map((c) => c.name);
+    expect(projects).toEqual(
+      expect.arrayContaining(["project_root", "created_at"]),
+    );
     const skipGates = (
       db.prepare(`PRAGMA table_info(runs)`).all() as TableInfoRow[]
     ).find((c) => c.name === "skip_gates");
@@ -428,6 +437,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       { version: 4, name: "004_auto_resume_count" },
       { version: 5, name: "005_config_origins" },
       { version: 6, name: "006_pipeline_body_and_caller" },
+      { version: 7, name: "007_projects_registry" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(

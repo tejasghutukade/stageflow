@@ -366,6 +366,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
   it("POST /api/runs HITL still parks", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-skip-gates-http-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(fixtures);
     const started = await startUiServer({
       agent: scriptedFakeAgent([waitThenEmit]),
       cwd: fixtures,

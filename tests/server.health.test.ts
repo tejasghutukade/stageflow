@@ -117,11 +117,12 @@ describe("health surfaces", () => {
         expect(r).toEqual(
           expect.objectContaining({
             project_root: expect.any(String),
-            kind: expect.stringMatching(/^(boot|registered|seeded)$/),
+            kind: expect.stringMatching(/^(registered|seeded)$/),
             read_only: expect.any(Boolean),
           }),
         );
         expect(r).not.toHaveProperty("path");
+        expect(r.kind).not.toBe("boot");
       }
     } finally {
       await closeServer(started.server);

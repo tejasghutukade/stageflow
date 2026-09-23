@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
-import { cp, mkdtemp, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,7 @@ describe("start_run surface parity (U2)", () => {
   it("checkout reaches manager; checkout_override alias; XOR; absolute path-contract; description lists params", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-u2-"));
     const store = createRunStore({ rootDir: root });
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent: completedAgent(),
       cwd: catalogRoot,
@@ -145,9 +146,11 @@ describe("start_run surface parity (U2)", () => {
         checkout: "pipelines",
       });
       expect(viaCheckout.isError).toBe(false);
+      const catalogAbs = await realpath(catalogRoot);
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({
           checkoutOverride: expect.stringMatching(/pipelines$/),
+          projectRoot: catalogAbs,
         }),
       );
 
@@ -161,6 +164,7 @@ describe("start_run surface parity (U2)", () => {
       expect(spy).toHaveBeenCalledWith(
         expect.objectContaining({
           checkoutOverride: expect.stringMatching(/pipelines$/),
+          projectRoot: catalogAbs,
         }),
       );
 
@@ -241,6 +245,91 @@ describe("start_run surface parity (U2)", () => {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });
+    }
+  });
+
+  it("persists wire project_root on MCP and REST (Host boot ≠ wire root)", async () => {
+    const boot = await initTempGitRepo();
+    const wire = await initTempGitRepo();
+    try {
+      await cp(path.join(fixtures, "pipelines"), path.join(wire.root, "pipelines"), {
+        recursive: true,
+      });
+      await cp(path.join(fixtures, "tasks"), path.join(wire.root, "tasks"), {
+        recursive: true,
+      });
+      await cp(path.join(fixtures, "stages"), path.join(wire.root, "stages"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(wire.root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "catalog:",
+          "  pipelines:",
+          "    - pipelines",
+          "  tasks:",
+          "    - tasks",
+          "  patterns:",
+          '    pipeline: "*.yaml"',
+          '    task: "*.yaml"',
+          "",
+        ].join("\n"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-u4-"));
+      const store = createRunStore({ rootDir: storeRoot });
+      const wireAbs = await store.ensureProject(wire.root);
+
+      const { server } = await startUiServer({
+        agent: completedAgent(),
+        cwd: boot.root,
+        rootDir: storeRoot,
+        store,
+        port: 0,
+        uiDistDir: path.join(storeRoot, "missing-ui"),
+        mcpStateless: true,
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("expected TCP");
+      const url = `http://127.0.0.1:${address.port}`;
+      const bootAbs = path.resolve(boot.root);
+      expect(wireAbs).not.toBe(bootAbs);
+
+      try {
+        const mcpStarted = await mcpCall(url, "start_run", {
+          pipeline: netPipeline("docs-only"),
+          task: { id: "u4-mcp", goal: "wire root" },
+          project_root: wireAbs,
+        });
+        expect(mcpStarted.isError).toBe(false);
+        const mcpRunId = (mcpStarted.payload as { runId: string }).runId;
+        const mcpMeta = await store.readRunMeta(mcpRunId);
+        expect(mcpMeta.project_root).toBe(wireAbs);
+        expect(mcpMeta.project_root).not.toBe(bootAbs);
+
+        const restStarted = await jsonFetch(`${url}/api/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pipeline: netPipeline("docs-only"),
+            task: { id: "u4-rest", goal: "wire root" },
+            project_root: wireAbs,
+          }),
+        });
+        expect(restStarted.status).toBe(202);
+        const restMeta = await store.readRunMeta(restStarted.body.runId as string);
+        expect(restMeta.project_root).toBe(wireAbs);
+        expect(restMeta.project_root).not.toBe(bootAbs);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
+    } finally {
+      await wire.cleanup();
+      await boot.cleanup();
     }
   });
 });

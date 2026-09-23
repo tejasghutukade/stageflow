@@ -118,6 +118,7 @@ describe("requiredScopeFor", () => {
     expect(requiredScopeFor("GET", "/api/health")).toBe("read");
     expect(requiredScopeFor("GET", "/api/runs")).toBe("read");
     expect(requiredScopeFor("POST", "/api/runs")).toBe("drive");
+    expect(requiredScopeFor("POST", "/api/projects")).toBe("drive");
     expect(requiredScopeFor("DELETE", "/api/runs/abc")).toBe("drive");
     expect(requiredScopeFor("POST", "/mcp")).toBe("drive");
   });

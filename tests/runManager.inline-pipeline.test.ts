@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,6 +113,49 @@ describe("run manager inline pipeline", () => {
 
     const meta = await store.readRunMeta(result.runId);
     expect(meta.project_root).toBe(fixtures);
+  });
+
+  it("persists wire projectRoot instead of Host boot / findProjectRoot", async () => {
+    const hostBoot = await mkdtemp(path.join(tmpdir(), "sf-host-boot-"));
+    const wireRoot = await mkdtemp(path.join(tmpdir(), "sf-wire-root-"));
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-wire-store-"));
+    const store = createRunStore({ rootDir: storeRoot });
+    const agent = scriptedFakeAgent([successEnvelope("done")]);
+    const manager = new RunManager({
+      agent,
+      cwd: hostBoot,
+      projectRoot: hostBoot,
+      store,
+    });
+
+    const pipeline: InlinePipelineDefinition = {
+      id: "wire-root-demo",
+      stages: [
+        {
+          id: "plan",
+          system_prompt: "Do work",
+          model: "anthropic/claude-sonnet-4-5",
+          ...REQUIRED_IO,
+        },
+      ],
+    };
+
+    const result = await manager.startRun({
+      pipeline,
+      task: { id: "t", goal: "wire root" },
+      projectRoot: wireRoot,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    await waitFor(async () => {
+      const detail = await store.readRun(result.runId);
+      return detail.status === "succeeded";
+    });
+
+    const meta = await store.readRunMeta(result.runId);
+    expect(meta.project_root).toBe(await realpath(wireRoot));
+    expect(meta.project_root).not.toBe(await realpath(hostBoot));
   });
 
   it("rerun on an inline-pipeline run replays the stored body", async () => {

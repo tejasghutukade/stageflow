@@ -34,7 +34,7 @@ let cleanupCatalogRoot: () => Promise<void>;
 
 beforeAll(async () => {
   const setup = await initTempGitRepo();
-  catalogRoot = setup.root;
+  catalogRoot = await realpath(setup.root);
   cleanupCatalogRoot = setup.cleanup;
   await cp(path.join(fixtures, "pipelines"), path.join(catalogRoot, "pipelines"), {
     recursive: true,
@@ -183,6 +183,7 @@ describe("MCP tools and HTTP inline task", () => {
       })),
     );
 
+    await store.ensureProject(repoRoot);
     const { server, mcpUrl } = await startUiServer({
       agent,
       cwd: repoRoot,
@@ -361,9 +362,11 @@ describe("MCP tools and HTTP inline task", () => {
       { type: "emit", envelope: { status: "success", summary: "b", artifacts: [] } },
     ]);
 
-    // Host is launched pointed at repoA. repoB is registered via a prior run
-    // row so catalog listing can discover it; start_run then uses catalog-relative
-    // paths + project_root (absolute wire paths are refused on network surfaces).
+    // Host is launched pointed at repoA. Both roots are registered via ensure;
+    // start_run then uses catalog-relative paths + project_root (absolute wire
+    // paths are refused on network surfaces).
+    await store.ensureProject(repoA);
+    await store.ensureProject(repoB);
     const { server } = await startUiServer({
       agent,
       cwd: repoA,
@@ -382,15 +385,10 @@ describe("MCP tools and HTTP inline task", () => {
       const realRepoA = await realpath(repoA);
       const realRepoB = await realpath(repoB);
 
-      await store.createRun({
-        pipelineId: "register-b",
-        taskYaml: "id: seed\ngoal: register root\n",
-        projectRoot: realRepoB,
-      });
-
       const startedA = await mcpCall(base, "start_run", {
         pipeline: netPipeline("single"),
         task: { id: "a-task", goal: "project a" },
+        project_root: realRepoA,
       });
       expect(startedA.isError).toBe(false);
       await waitUntilIdleHealth(base);
@@ -468,6 +466,7 @@ describe("MCP tools and HTTP inline task", () => {
         },
       ]);
 
+      await store.ensureProject(catalogRoot);
       const { server } = await startUiServer({
         agent,
         cwd: catalogRoot,
@@ -586,6 +585,7 @@ describe("MCP tools and HTTP inline task", () => {
       },
     ]);
 
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent,
       cwd: catalogRoot,
@@ -846,9 +846,11 @@ async function withMcpServer(
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; mcpStateless?: boolean } = {},
 ) {
+  const cwd = opts.cwd ?? catalogRoot;
+  await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? catalogRoot,
+    cwd,
     rootDir: root,
     store,
     port: 0,
@@ -2633,6 +2635,7 @@ describe("MCP start_run repository binding (U7)", () => {
         };
       },
     };
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent,
       cwd: catalogRoot,

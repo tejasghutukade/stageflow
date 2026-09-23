@@ -604,6 +604,10 @@ export interface RunStore {
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
   /** Every distinct non-empty project_root recorded across all runs. */
   listProjectRoots(): Promise<string[]>;
+  /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
+  ensureProject(absPath: string): Promise<string>;
+  /** Absolute roots from the durable projects registry. */
+  listRegisteredProjects(): Promise<string[]>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
   createFeedbackLoop(

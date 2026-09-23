@@ -194,6 +194,31 @@ export async function httpStartRun(
   };
 }
 
+export type HttpEnsureProjectResult =
+  | { ok: true; project_root: string }
+  | Extract<StartRunResult, { ok: false }>;
+
+export async function httpEnsureProject(
+  base: string,
+  projectRoot: string,
+): Promise<HttpEnsureProjectResult> {
+  const { status, body } = await postJson(base, "/api/projects", {
+    project_root: projectRoot,
+  });
+  if (status === 200) {
+    const parsed = body as { project_root?: unknown };
+    if (typeof parsed.project_root === "string" && parsed.project_root.length > 0) {
+      return { ok: true, project_root: parsed.project_root };
+    }
+    return {
+      ok: false,
+      reason: "ensure_project response missing project_root",
+      status,
+    };
+  }
+  return toStartFailure(status, body);
+}
+
 export async function httpRerun(
   base: string,
   runId: string,

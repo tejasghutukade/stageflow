@@ -112,6 +112,7 @@ describe("start_run — inline pipeline (MCP)", () => {
         envelope: { status: "success", summary: "checked", artifacts: [] },
       },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,
@@ -169,6 +170,7 @@ describe("start_run — inline pipeline (MCP)", () => {
   it("a structurally invalid inline pipeline returns the same ValidationFinding-shaped error a bad file would", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-inline-bad-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent: scriptedFakeAgent([]),
       cwd: projectRoot,
@@ -208,6 +210,7 @@ describe("start_run — inline pipeline (MCP)", () => {
   it("uses: on an inline stage is rejected, not treated as a file reference", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-inline-uses-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent: scriptedFakeAgent([]),
       cwd: projectRoot,
@@ -246,6 +249,7 @@ describe("start_run — inline pipeline (MCP)", () => {
       { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
       { type: "emit", envelope: { status: "success", summary: "rerun ok", artifacts: [] } },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,
@@ -299,6 +303,7 @@ describe("start_run — inline pipeline (MCP)", () => {
     const agent = scriptedFakeAgent([
       { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,

@@ -61,6 +61,37 @@ export function isLoopbackHostname(hostname: string): boolean {
   return false;
 }
 
+export function isLoopbackRemoteAddress(addr: string | undefined): boolean {
+  if (addr === undefined || addr.length === 0) return false;
+  let normalized = addr;
+  if (normalized.toLowerCase().startsWith("::ffff:")) {
+    normalized = normalized.slice(7);
+  }
+  if (normalized === "::1") return true;
+  if (isIP(normalized) === 4) {
+    const first = Number(normalized.split(".")[0]);
+    return first === 127;
+  }
+  return false;
+}
+
+/** Loopback peer plus Host (and Origin, when present) — trusted local plane for ensure. */
+export function isTrustedLocalHttpRequest(req: IncomingMessage): boolean {
+  const hostHeader = req.headers.host;
+  if (typeof hostHeader !== "string" || hostHeader.length === 0) return false;
+  if (!isLoopbackHostname(hostnameFromHostHeader(hostHeader))) return false;
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && origin.length > 0) {
+    try {
+      const originUrl = new URL(origin);
+      if (!isLoopbackHostname(originUrl.hostname)) return false;
+    } catch {
+      return false;
+    }
+  }
+  return isLoopbackRemoteAddress(req.socket?.remoteAddress);
+}
+
 export function resolveAllowedHosts(
   env: NodeJS.ProcessEnv = process.env,
 ): AllowedHosts {

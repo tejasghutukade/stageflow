@@ -89,6 +89,7 @@ async function writeHostCatalog(
 
 async function withInspectServer(root: string) {
   const store = createRunStore({ rootDir: root });
+  await store.ensureProject(catalogRoot);
   const agent = scriptedFakeAgent([]);
   const openStage = vi.spyOn(agent, "openStage");
   const started = await startUiServer({

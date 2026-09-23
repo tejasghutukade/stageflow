@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll, vi } from "vitest";
+import { mkdtemp, readdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -16,6 +16,7 @@ import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.j
 import type { RunStore } from "../src/runstore/port.js";
 import { validateCatalog } from "../src/config/validateCatalog.js";
 import { SAMPLE_TASK, SINGLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { spawnTestGlobalService, type TestGlobalService } from "./helpers/testGlobalService.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cli = path.join(root, "src", "cli.ts");
@@ -1035,14 +1036,27 @@ describe("sf run STAGEFLOW_NO_AUTOSTART (U7)", () => {
   });
 });
 
-describe("sf run --json exit drain (U8)", { timeout: 15_000 }, () => {
+describe("sf run --json exit drain (U8)", { timeout: 30_000 }, () => {
+  let service: TestGlobalService;
+  let isolatedHome: string;
+
+  beforeAll(async () => {
+    isolatedHome = await mkdtemp(path.join(tmpdir(), "sf-run-json-u8-home-"));
+    service = await spawnTestGlobalService({ cwd: fixtures, home: isolatedHome });
+  });
+
+  afterAll(async () => {
+    await service.stop();
+    await rm(isolatedHome, { recursive: true, force: true });
+  });
+
   it("piped stdout yields complete parseable JSON repeatedly", () => {
     for (let i = 0; i < 5; i++) {
       const result = spawnSync(process.execPath, [tsxCli, cli, "run", "--json"], {
         cwd: root,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env },
+        env: service.env,
       });
       expect(result.status).toBe(1);
       expect(result.stdout.trim().length).toBe(0);
@@ -1059,7 +1073,7 @@ describe("sf run --json exit drain (U8)", { timeout: 15_000 }, () => {
           cwd: fixtures,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env },
+          env: service.env,
         },
       );
       expect(result.status).toBe(1);

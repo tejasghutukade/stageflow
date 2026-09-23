@@ -24,11 +24,9 @@ import {
   catalogPathErrorBody,
   CatalogPathError,
   resolveCatalogRelativePath,
+  selectCatalogRootForStart,
 } from "../config/catalogRelativePath.js";
-import {
-  findCatalogRoot,
-  resolveCatalogRoots,
-} from "../config/resolveCatalogRoots.js";
+import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
@@ -91,6 +89,7 @@ import {
 } from "./bootstrap.js";
 import {
   assertAllowedHttpAccess,
+  isTrustedLocalHttpRequest,
   resolveAllowedHosts,
   type AllowedHosts,
 } from "./allowedHosts.js";
@@ -224,6 +223,7 @@ export function isMutatingApi(method: string, pathname: string): boolean {
   return (
     pathname === "/api/runs" ||
     pathname === "/api/runs/gc" ||
+    pathname === "/api/projects" ||
     pathname === "/api/backup" ||
     pathname === "/api/restore" ||
     pathname === "/api/settings" ||
@@ -717,6 +717,52 @@ export function createOperatorRoutes(
           }
         }
 
+        if (method === "POST" && pathname === "/api/projects") {
+          if (!isTrustedLocalHttpRequest(req)) {
+            json(res, 403, {
+              error:
+                "ensure_project is only allowed from trusted local clients (loopback peer and Host)",
+              code: "ensure_project_not_allowed",
+            });
+            return true;
+          }
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const projectRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root.trim()
+              : "";
+          if (!projectRoot) {
+            json(res, 400, { error: "project_root is required" });
+            return true;
+          }
+          if (!path.isAbsolute(projectRoot)) {
+            json(res, 400, {
+              error: "project_root must be an absolute path",
+            });
+            return true;
+          }
+          try {
+            const registered = await store.ensureProject(projectRoot);
+            json(res, 200, { project_root: registered });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            json(res, 400, {
+              error: message,
+              code: "invalid_project_root",
+            });
+          }
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/runs") {
           const body = (await readJsonBody(req)) as Record<string, unknown>;
           const tokenField = findTokenShapedField(body);
@@ -768,20 +814,31 @@ export function createOperatorRoutes(
             }
           }
           const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
+          let wireRoot;
+          try {
+            wireRoot = selectCatalogRootForStart(roots, typed.project_root);
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const wireProjectRoot = wireRoot.project_root;
           let pipelinePath = typed.pipeline.trim();
           let taskInput: string | TaskFile = typed.task;
           let checkoutOverride: string | undefined;
           try {
             pipelinePath = resolveCatalogRelativePath({
               inputPath: pipelinePath,
-              projectRoot: typed.project_root,
+              projectRoot: wireProjectRoot,
               roots,
               fieldName: "pipeline",
             }).absolutePath;
             if (typeof typed.task === "string") {
               taskInput = resolveCatalogRelativePath({
                 inputPath: typed.task,
-                projectRoot: typed.project_root,
+                projectRoot: wireProjectRoot,
                 roots,
                 fieldName: "task",
               }).absolutePath;
@@ -789,7 +846,7 @@ export function createOperatorRoutes(
             if (typed.checkoutOverride !== undefined) {
               checkoutOverride = resolveCatalogRelativePath({
                 inputPath: typed.checkoutOverride,
-                projectRoot: typed.project_root,
+                projectRoot: wireProjectRoot,
                 roots,
                 fieldName: "checkout",
               }).absolutePath;
@@ -807,6 +864,7 @@ export function createOperatorRoutes(
             result = await manager.startRun({
               task: taskInput,
               pipeline: pipelinePath,
+              projectRoot: wireRoot.path,
               ...(checkoutOverride !== undefined
                 ? { checkoutOverride }
                 : {}),
@@ -1236,12 +1294,38 @@ export function createOperatorRoutes(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let stageWriteRoot: string;
+          try {
+            const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
+            const selected = selectCatalogRootForStart(roots, writeRoot);
+            if (selected.read_only) {
+              json(res, 403, {
+                error: `Catalog root ${selected.project_root} is read-only`,
+                code: "catalog_root_read_only",
+              });
+              return true;
+            }
+            stageWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           const parsed = parseCreateStageBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
+          const ctx = await resolveStageflowContext(stageWriteRoot);
           if (!ctx.isGitProject) {
             json(res, 400, {
               error:
@@ -1273,25 +1357,24 @@ export function createOperatorRoutes(
             typeof (body as { project_root?: unknown }).project_root === "string"
               ? (body as { project_root: string }).project_root
               : undefined;
-          let pipelineWriteRoot = cwd;
-          if (writeRoot !== undefined) {
+          let pipelineWriteRoot: string;
+          try {
             const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
-            const match = findCatalogRoot(roots, writeRoot);
-            if (match === undefined) {
-              json(res, 400, {
-                error: `Unknown project_root: ${writeRoot}`,
-                code: "unknown_project_root",
-              });
-              return true;
-            }
-            if (match.read_only) {
+            const selected = selectCatalogRootForStart(roots, writeRoot);
+            if (selected.read_only) {
               json(res, 403, {
-                error: `Catalog root ${writeRoot} is read-only`,
+                error: `Catalog root ${selected.project_root} is read-only`,
                 code: "catalog_root_read_only",
               });
               return true;
             }
-            pipelineWriteRoot = match.path;
+            pipelineWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
           }
           const parsed = parseCreatePipelineBody(body);
           if ("ok" in parsed) {

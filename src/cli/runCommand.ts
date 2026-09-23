@@ -12,7 +12,7 @@ import {
   hostBaseUrl,
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
-import { httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
+import { httpEnsureProject, httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
 import {
   reportCliRun,
   writeQueuedAdmissionLine,
@@ -237,10 +237,12 @@ function defaultStartRun(
         projectRoot = taskRef.project_root;
       }
     }
+    const ensuredProject = await httpEnsureProject(base, projectRoot);
+    if (!ensuredProject.ok) return ensuredProject;
     return httpStartRun(base, {
       pipeline: pipelineRef.path,
       task,
-      project_root: projectRoot,
+      project_root: ensuredProject.project_root,
       ...(input.checkoutOverride !== undefined
         ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
         : {}),

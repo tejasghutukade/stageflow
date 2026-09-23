@@ -15,6 +15,7 @@ export const NETWORK_ERROR_CODES = [
   "absolute_path_not_allowed",
   "path_outside_project_root",
   "catalog_root_unreadable",
+  "ensure_project_not_allowed",
   "config_invalid",
   "config_unknown_key",
   "provider_not_configured",

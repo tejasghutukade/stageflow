@@ -6,6 +6,7 @@ import { MIGRATION_003 } from "./003-run-lifecycle.js";
 import { MIGRATION_004 } from "./004-auto-resume-count.js";
 import { MIGRATION_005 } from "./005-config-origins.js";
 import { MIGRATION_006 } from "./006-pipeline-body-and-caller.js";
+import { MIGRATION_007 } from "./007-projects-registry.js";
 
 export type SqliteMigration = {
   version: number;
@@ -21,6 +22,7 @@ const DEFAULT_MIGRATIONS: SqliteMigration[] = [
   MIGRATION_004,
   MIGRATION_005,
   MIGRATION_006,
+  MIGRATION_007,
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Host-global project registry under `$STAGEFLOW_HOME`: durable `ensure` of absolute project roots; `sf run` ensure-then-starts before `start_run`; remotes may only use registered ∪ seeded catalog roots (no invent of unknown absolute `project_root`; Host boot cwd is not a catalog root). See `docs/mcp.md`, `docs/cli-reference.md`, `docs/data-directory.md`.
 - Curated stage environment (Slot 6): stages no longer inherit Host ambient env; declare `secrets:`; file-backed git askpass; value redaction; proxy/CA passthrough; shared `$STAGEFLOW_HOME/cache`; MCP connect default 30s; finite stage-process/heap caps; Claude-as-root refusal. See `docs/migration-stage-environment.md`.
 
 ### Changed

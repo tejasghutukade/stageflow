@@ -29,6 +29,7 @@ describe("catalog surface parity", () => {
     clearFindProjectRootCacheForTests();
 
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
     const agent = scriptedFakeAgent([
       {
         type: "emit",

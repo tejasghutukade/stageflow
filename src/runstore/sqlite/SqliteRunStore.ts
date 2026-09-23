@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { StageEnvelope } from "../../types/envelope.js";
@@ -41,7 +41,7 @@ import {
   type ConfigOriginRecord,
 } from "../port.js";
 import { projectRunDetail, projectRunSummary, orderStageSnapshots } from "../runProjection.js";
-import { normalizeCatalogPath } from "../normalizeCatalogPath.js";
+import { normalizeCatalogPath, normalizeProjectRoot } from "../normalizeCatalogPath.js";
 import { buildStageSnapshotFromStore } from "../stageSnapshot.js";
 import { parsePipelineDagSnapshot } from "../pipelineDagSnapshot.js";
 import { newRunId, runWorkspaceDir } from "../paths.js";
@@ -1250,6 +1250,40 @@ export class SqliteRunStore implements RunStore {
       .prepare(
         `SELECT DISTINCT project_root FROM runs WHERE project_root IS NOT NULL AND project_root != ''`,
       )
+      .all() as { project_root: string }[];
+    return rows.map((row) => row.project_root);
+  }
+
+  async ensureProject(absPath: string): Promise<string> {
+    await this.ready();
+    const resolved = path.resolve(absPath);
+    let st;
+    try {
+      st = statSync(resolved);
+    } catch {
+      throw new Error(`project_root does not exist: ${resolved}`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`project_root is not a directory: ${resolved}`);
+    }
+    const normalized = normalizeProjectRoot(absPath);
+    if (normalized === path.parse(normalized).root) {
+      throw new Error(`project_root must not be filesystem root: ${normalized}`);
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO projects (project_root, created_at) VALUES (?, ?)
+         ON CONFLICT(project_root) DO NOTHING`,
+      )
+      .run(normalized, now);
+    return normalized;
+  }
+
+  async listRegisteredProjects(): Promise<string[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(`SELECT project_root FROM projects ORDER BY project_root`)
       .all() as { project_root: string }[];
     return rows.map((row) => row.project_root);
   }

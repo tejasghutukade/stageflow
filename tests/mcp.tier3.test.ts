@@ -266,6 +266,7 @@ describe("MCP Tier 3 run resources", () => {
   it("list/read run resource; no catalog URI; tool and resource agree", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-res-"));
     const store = createRunStore({ rootDir: root });
+    await store.ensureProject(catalogRoot);
     const agent = scriptedFakeAgent([
       {
         type: "emit",
@@ -345,6 +346,7 @@ describe("MCP Tier 3 run resources", () => {
     async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-sub-"));
     const store = createRunStore({ rootDir: root });
+    await store.ensureProject(catalogRoot);
     const freeTextPrompt = {
       kind: "free_text" as const,
       id: "prompt-1",

@@ -11,7 +11,7 @@ The `sf` and `stageflow` binaries expose the same commands. Run `sf --help` for 
 
 | Path | Purpose |
 |------|---------|
-| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log` |
+| `$STAGEFLOW_HOME` (default `~/.stageflow/`) | Global durable root — SQLite run store (`state.db`, including the projects registry), run workspaces (`runs/`), `sf_owned` auth (`agent/auth.json`), global `settings.json`, `service.log` |
 | `<git-root>/.stageflow/settings.json` | Per-project settings (`maxConcurrent`, `credentialSource`) when run from inside a git repo; not the run store |
 
 Override the durable root with `STAGEFLOW_HOME`. See [Data directory](data-directory.md) for the full tree (keep vs disposable), image user, and version support.
@@ -69,6 +69,8 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include s
 | `--operator-agent-dir` | Accepted for compatibility but has **no effect** on `sf run` — see note below |
 
 `sf run` is an HTTP client of the shared global Stageflow service (started/reused across invocations, see [`sf ui`](#sf-ui) / [`sf mcp`](#sf-mcp)); it no longer constructs a per-invocation `RunManager`, so `--operator-cwd`/`--operator-agent-dir` can't be threaded through per call. Passing either flag prints a warning and is otherwise a no-op. Set `STAGEFLOW_OPERATOR_CWD` / `STAGEFLOW_OPERATOR_AGENT_DIR` in the environment **before that service first starts** instead — the operator catalog used for skill resolution is fixed once, at daemon start. See [CI: Skills in CI](ci.md#skills-in-ci).
+
+**Project identity.** Pipeline/task paths resolve from the CLI cwd (relative or absolute local paths). Before `start_run`, the CLI ensure-registers that resolved project folder with the Host (`POST /api/projects` on trusted loopback), then sends catalog-relative paths plus `project_root` for that folder. Host boot cwd does not define the run's project. Remote MCP/HTTP callers cannot ensure arbitrary paths — they may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [Data directory](data-directory.md).
 
 **Exit codes:**
 
@@ -724,7 +726,7 @@ Prints:
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 
-Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses the project git root; the run store is the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md).
+Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses **seeded ∪ registered** roots under the global durable store (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — Host boot cwd is not a catalog root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal active stage process groups, mark remaining stages `interrupted`, checkpoint and close SQLite, then exit. Default grace is `STAGEFLOW_SHUTDOWN_GRACE_MS=8000` (pair with compose `stop_grace_period`). Host exit codes and related env vars: [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp).
 
@@ -742,7 +744,7 @@ Start an MCP-only HTTP host (no operator console UI, no browser open). Preferred
 sf mcp [--host <addr>] [--port 3847] [--mcp-stateless]
 ```
 
-Same `--host` / `STAGEFLOW_BIND`, port, MCP session, and access-control rules as `sf ui` (`--no-open` is not accepted here). Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same git-root catalog and global durable-root store semantics as `sf ui`, including the same SIGTERM/SIGINT drain and Host exit codes. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
+Same `--host` / `STAGEFLOW_BIND`, port, MCP session, and access-control rules as `sf ui` (`--no-open` is not accepted here). Prints the MCP endpoint URL (default `http://127.0.0.1:3847/mcp`). Also serves the console REST API (no static assets) and `GET /api/health`. Same global durable-root store and seeded ∪ registered catalog semantics as `sf ui`, including the same SIGTERM/SIGINT drain and Host exit codes. Sessions are the default; `--mcp-stateless` / env as above. See [MCP](mcp.md).
 
 ## `sf providers`
 
