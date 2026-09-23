@@ -35,6 +35,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 | [feature-loop](feature-loop/) | Epic-to-PR; two Clone Chains + `{ type: loop }` | `sf validate`, then `sf run` |
 | [ship-feature](ship-feature/) | Plan → implement → parallel review → operator-approved PR | `sf validate`, then `sf run` |
 | [oss-issue-contribution](oss-issue-contribution/) | Real upstream issue: reproduce, parallel investigation, gated fix, verification, parallel review | [README](oss-issue-contribution/README.md), then `sf run` |
+| [oss-quick-fix](oss-quick-fix/) | Unattended sibling of oss-issue-contribution: straight-line fix with no operator gate | [README](oss-quick-fix/README.md), then `sf run` |
 | [github-release](github-release/) | Dogfood: draft + publish GitHub Release | Used in publish/release workflows |
 | [archify-on-pr](archify-on-pr/) | **Featured** — PR diagrams via Route `if` + Archify handoff | [README](archify-on-pr/README.md), archify-pr-diagrams workflow |
 | [ci-validate](ci-validate/) | Strict manifest validate in CI | `./validate.sh` |

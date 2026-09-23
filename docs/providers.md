@@ -39,7 +39,7 @@ sf providers source set sf_owned
 - **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
 - **`sf_owned`** — isolate Stageflow credentials in `~/.stageflow/` without touching Pi home
 
-Project run state and settings live under **`<git-root>/.stageflow/`** — separate from global auth.
+Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth. Run state itself is **global** — `~/.stageflow/.stageflow/`, shared across every project — since Stageflow became a single auto-starting service.
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 
