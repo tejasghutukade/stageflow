@@ -124,11 +124,12 @@ function copyDefined(
 }
 
 export function isForeverDeniedSecret(name: string): boolean {
-  return FOREVER_DENIED_SECRET_NAMES.has(name);
+  if (FOREVER_DENIED_SECRET_NAMES.has(name)) return true;
+  return name.startsWith("STAGEFLOW_CONTROL_TOKEN_");
 }
 
 export function isAmbientBlockedEnv(name: string): boolean {
-  return AMBIENT_BLOCKED_ENV_NAMES.has(name);
+  return isForeverDeniedSecret(name) || AMBIENT_BLOCKED_ENV_NAMES.has(name);
 }
 
 function stripForeverDenied(
@@ -137,7 +138,7 @@ function stripForeverDenied(
   const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (FOREVER_DENIED_SECRET_NAMES.has(key)) continue;
+    if (isForeverDeniedSecret(key)) continue;
     out[key] = value;
   }
   return out;

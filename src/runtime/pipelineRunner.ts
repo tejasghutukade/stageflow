@@ -173,6 +173,7 @@ async function preparePipeline(options: {
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  callerId?: string | null;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
@@ -315,6 +316,9 @@ async function preparePipeline(options: {
       ...(persistence.fields.pipelineBody !== undefined
         ? { pipelineBody: persistence.fields.pipelineBody }
         : {}),
+      ...(options.callerId !== undefined && options.callerId !== null
+        ? { callerId: options.callerId }
+        : {}),
       skipGates: options.skipGates,
     });
   }
@@ -455,6 +459,7 @@ export async function startPipeline(options: {
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   schedulingHalt?: { halted: boolean };
+  callerId?: string | null;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -483,6 +488,7 @@ export async function startPipeline(options: {
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
+    callerId: options.callerId,
   });
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,

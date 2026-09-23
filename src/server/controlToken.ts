@@ -5,10 +5,24 @@ import { isLoopbackHostname } from "./allowedHosts.js";
 
 export type ControlScope = "read" | "drive";
 
+export type BearerAuth = {
+  scope: ControlScope;
+  caller_id: string;
+};
+
+export type NamedDriveToken = {
+  caller_id: string;
+  digest: Buffer;
+};
+
 export type ControlTokens = {
   driveDigest: Buffer | undefined;
   readDigest: Buffer | undefined;
+  namedDrive: readonly NamedDriveToken[];
 };
+
+const CONTROL_TOKEN_PREFIX = "STAGEFLOW_CONTROL_TOKEN_";
+const DEFAULT_CALLER_ID = "default";
 
 function digest(value: string): Buffer {
   return createHash("sha256").update(value).digest();
@@ -23,19 +37,101 @@ function validateToken(token: string, label: string): string {
   return token;
 }
 
+function normalizeCallerId(name: string): string {
+  return name.toLowerCase();
+}
+
+/** Parse named drive callers from STAGEFLOW_CONTROL_TOKEN_<NAME> / _FILE. */
+export function listNamedControlTokenEnvKeys(
+  env: NodeJS.ProcessEnv = process.env,
+): Array<{ envKey: string; caller_id: string; isFile: boolean }> {
+  const out: Array<{ envKey: string; caller_id: string; isFile: boolean }> = [];
+  const seen = new Set<string>();
+  for (const key of Object.keys(env)) {
+    if (!key.startsWith(CONTROL_TOKEN_PREFIX)) continue;
+    let namePart: string;
+    let isFile = false;
+    if (key.endsWith("_FILE")) {
+      namePart = key.slice(CONTROL_TOKEN_PREFIX.length, -"_FILE".length);
+      isFile = true;
+    } else {
+      namePart = key.slice(CONTROL_TOKEN_PREFIX.length);
+    }
+    if (namePart === "" || namePart === "FILE") continue;
+    const caller_id = normalizeCallerId(namePart);
+    const dedupe = `${caller_id}:${isFile ? "file" : "plain"}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    out.push({ envKey: key, caller_id, isFile });
+  }
+  return out;
+}
+
+function assertUniqueDigests(
+  entries: Array<{ label: string; digest: Buffer }>,
+): void {
+  const byHex = new Map<string, string>();
+  for (const entry of entries) {
+    const hex = entry.digest.toString("hex");
+    const prior = byHex.get(hex);
+    if (prior !== undefined) {
+      throw new Error(
+        `Duplicate control token digests for ${prior} and ${entry.label}`,
+      );
+    }
+    byHex.set(hex, entry.label);
+  }
+}
+
 export function loadControlTokens(
   env: NodeJS.ProcessEnv = process.env,
 ): ControlTokens {
   const driveRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
   const readRaw = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
-  return {
-    driveDigest: driveRaw
-      ? digest(validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN"))
-      : undefined,
-    readDigest: readRaw
-      ? digest(validateToken(readRaw, "STAGEFLOW_READ_TOKEN"))
-      : undefined,
-  };
+
+  const callerBases = new Map<string, string>();
+  for (const named of listNamedControlTokenEnvKeys(env)) {
+    const base = named.isFile
+      ? named.envKey.slice(0, -"_FILE".length)
+      : named.envKey;
+    if (!callerBases.has(named.caller_id)) {
+      callerBases.set(named.caller_id, base);
+    }
+  }
+
+  const namedDrive: NamedDriveToken[] = [];
+  for (const [caller_id, base] of callerBases) {
+    const raw = readSecretFromEnvOrFile(env, base);
+    if (raw === undefined) continue;
+    namedDrive.push({
+      caller_id,
+      digest: digest(validateToken(raw, base)),
+    });
+  }
+
+  const driveDigest = driveRaw
+    ? digest(validateToken(driveRaw, "STAGEFLOW_CONTROL_TOKEN"))
+    : undefined;
+  const readDigest = readRaw
+    ? digest(validateToken(readRaw, "STAGEFLOW_READ_TOKEN"))
+    : undefined;
+
+  const uniqueness: Array<{ label: string; digest: Buffer }> = [];
+  if (driveDigest) {
+    uniqueness.push({ label: "STAGEFLOW_CONTROL_TOKEN", digest: driveDigest });
+  }
+  if (readDigest) {
+    uniqueness.push({ label: "STAGEFLOW_READ_TOKEN", digest: readDigest });
+  }
+  for (const named of namedDrive) {
+    uniqueness.push({
+      label: `STAGEFLOW_CONTROL_TOKEN_${named.caller_id}`,
+      digest: named.digest,
+    });
+  }
+  assertUniqueDigests(uniqueness);
+
+  return { driveDigest, readDigest, namedDrive };
 }
 
 /** Plain bearer for CLI→host calls. Drive preferred; read only for GET/HEAD. */
@@ -66,11 +162,15 @@ export function clientAuthorizationHeaders(
 }
 
 export function hasDriveToken(tokens: ControlTokens): boolean {
-  return tokens.driveDigest !== undefined;
+  return tokens.driveDigest !== undefined || tokens.namedDrive.length > 0;
 }
 
 export function hasAnyToken(tokens: ControlTokens): boolean {
-  return tokens.driveDigest !== undefined || tokens.readDigest !== undefined;
+  return (
+    tokens.driveDigest !== undefined ||
+    tokens.readDigest !== undefined ||
+    tokens.namedDrive.length > 0
+  );
 }
 
 export function isLoopbackBind(bind: string): boolean {
@@ -90,6 +190,7 @@ shell commands with this process's environment — including provider API keys.
 Set one of:
   STAGEFLOW_CONTROL_TOKEN=<at least 32 characters>
   STAGEFLOW_CONTROL_TOKEN_FILE=/path/to/secret
+  STAGEFLOW_CONTROL_TOKEN_<NAME>=<at least 32 characters>
 
 Or bind to loopback instead:
   --host 127.0.0.1   (or unset STAGEFLOW_BIND)`;
@@ -122,20 +223,49 @@ export function requiredScopeFor(
   return "drive";
 }
 
+/**
+ * Digest once; timingSafeEqual against every loaded digest (no early-return oracle).
+ * Named control tokens are drive-only; READ stays the singular global token.
+ */
 export function authenticateBearer(
   tokens: ControlTokens,
   authorization: string | undefined,
-): ControlScope | undefined {
+): BearerAuth | undefined {
   const match = authorization?.match(/^Bearer ([^\s]+)$/i);
   if (!match) return undefined;
   const hash = digest(match[1]!);
-  if (tokens.driveDigest && timingSafeEqual(tokens.driveDigest, hash)) {
-    return "drive";
+
+  type Candidate = { scope: ControlScope; caller_id: string; digest: Buffer };
+  const candidates: Candidate[] = [];
+  if (tokens.driveDigest) {
+    candidates.push({
+      scope: "drive",
+      caller_id: DEFAULT_CALLER_ID,
+      digest: tokens.driveDigest,
+    });
   }
-  if (tokens.readDigest && timingSafeEqual(tokens.readDigest, hash)) {
-    return "read";
+  if (tokens.readDigest) {
+    candidates.push({
+      scope: "read",
+      caller_id: DEFAULT_CALLER_ID,
+      digest: tokens.readDigest,
+    });
   }
-  return undefined;
+  for (const named of tokens.namedDrive) {
+    candidates.push({
+      scope: "drive",
+      caller_id: named.caller_id,
+      digest: named.digest,
+    });
+  }
+
+  let matched: BearerAuth | undefined;
+  for (const candidate of candidates) {
+    if (timingSafeEqual(candidate.digest, hash)) {
+      matched = { scope: candidate.scope, caller_id: candidate.caller_id };
+    }
+  }
+  return matched;
 }
 
 function scopeSatisfies(
@@ -146,13 +276,17 @@ function scopeSatisfies(
   return granted === "drive";
 }
 
+export type EnforceBearerResult =
+  | { ok: true; auth: BearerAuth | undefined }
+  | { ok: false };
+
 export function enforceBearerAuth(
   tokens: ControlTokens,
   req: IncomingMessage,
   res: ServerResponse,
   required: ControlScope,
-): boolean {
-  if (!hasAnyToken(tokens)) return true;
+): EnforceBearerResult {
+  if (!hasAnyToken(tokens)) return { ok: true, auth: undefined };
   const granted = authenticateBearer(tokens, req.headers.authorization);
   if (granted === undefined) {
     const payload = JSON.stringify({ error: "Unauthorized" });
@@ -162,16 +296,16 @@ export function enforceBearerAuth(
       "WWW-Authenticate": "Bearer",
     });
     res.end(payload);
-    return false;
+    return { ok: false };
   }
-  if (!scopeSatisfies(granted, required)) {
+  if (!scopeSatisfies(granted.scope, required)) {
     const payload = JSON.stringify({ error: "Forbidden" });
     res.writeHead(403, {
       "Content-Type": "application/json; charset=utf-8",
       "Content-Length": Buffer.byteLength(payload),
     });
     res.end(payload);
-    return false;
+    return { ok: false };
   }
-  return true;
+  return { ok: true, auth: granted };
 }

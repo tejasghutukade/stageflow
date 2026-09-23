@@ -20,6 +20,10 @@ import {
   requiredScopeFor,
   type ControlTokens,
 } from "./controlToken.js";
+import {
+  requestAuthFromBearer,
+  runWithRequestAuth,
+} from "./requestAuthContext.js";
 import { advertisedHost } from "./listenHost.js";
 import { handleLivez, handleReadyz } from "./healthSurfaces.js";
 
@@ -128,7 +132,8 @@ export async function createHttpHost(
         });
         return;
       }
-      if (!enforceBearerAuth(controlTokens, req, res, "read")) return;
+      const a2aAuth = enforceBearerAuth(controlTokens, req, res, "read");
+      if (!a2aAuth.ok) return;
       json(res, 200, boot.a2a?.status ?? { state: "disabled" });
       return;
     }
@@ -158,10 +163,14 @@ export async function createHttpHost(
         });
         return;
       }
-      if (!enforceBearerAuth(controlTokens, req, res, "drive")) return;
+      const mcpAuth = enforceBearerAuth(controlTokens, req, res, "drive");
+      if (!mcpAuth.ok) return;
       res.setTimeout(0);
       try {
-        await boot.mcpHandler.handle(req, res);
+        await runWithRequestAuth(
+          requestAuthFromBearer(mcpAuth.auth, "mcp"),
+          () => boot.mcpHandler.handle(req, res),
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error("mcp.handler_error", message);

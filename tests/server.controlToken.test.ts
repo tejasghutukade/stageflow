@@ -43,20 +43,29 @@ describe("loadControlTokens", () => {
     await writeFile(file, `${DRIVE}\n`, "utf8");
     const tokens = loadControlTokens({ STAGEFLOW_CONTROL_TOKEN_FILE: file });
     expect(hasDriveToken(tokens)).toBe(true);
-    expect(authenticateBearer(tokens, `Bearer ${DRIVE}`)).toBe("drive");
+    expect(authenticateBearer(tokens, `Bearer ${DRIVE}`)).toEqual({
+      scope: "drive",
+      caller_id: "default",
+    });
   });
 });
 
 describe("authenticateBearer", () => {
   it("accepts the correct bearer via digest compare", () => {
     const tokens = loadControlTokens({ STAGEFLOW_CONTROL_TOKEN: DRIVE });
-    expect(authenticateBearer(tokens, `Bearer ${DRIVE}`)).toBe("drive");
+    expect(authenticateBearer(tokens, `Bearer ${DRIVE}`)).toEqual({
+      scope: "drive",
+      caller_id: "default",
+    });
     expect(authenticateBearer(tokens, `Bearer ${OTHER}`)).toBeUndefined();
   });
 
   it("read token does not satisfy drive", () => {
     const tokens = loadControlTokens({ STAGEFLOW_READ_TOKEN: READ });
-    expect(authenticateBearer(tokens, `Bearer ${READ}`)).toBe("read");
+    expect(authenticateBearer(tokens, `Bearer ${READ}`)).toEqual({
+      scope: "read",
+      caller_id: "default",
+    });
     expect(requiredScopeFor("POST", "/api/runs")).toBe("drive");
   });
 });

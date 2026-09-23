@@ -755,7 +755,9 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_BIND` | Listen address for `sf ui` / `sf mcp` (overridden by `--host`) |
 | `STAGEFLOW_NO_OPEN` | Skip browser open for `sf ui` (overridden by `--no-open`) |
 | `STAGEFLOW_ALLOWED_HOSTS` | Comma-separated Host/Origin allow-list (loopback always allowed); reject `*` |
-| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind |
+| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Drive-scoped bearer token (min 32 chars); required for non-loopback bind; `caller_id` `default` |
+| `STAGEFLOW_CONTROL_TOKEN_<NAME>` / `_FILE` | Named drive token (`caller_id` = lowercased `NAME`; not isolation — any drive token can access any run) |
+| `STAGEFLOW_READ_TOKEN` / `_FILE` | Read-scoped bearer (`caller_id` `default`; singular — no `READ_TOKEN_<NAME>`) |
 | `STAGEFLOW_READ_TOKEN` / `_FILE` | Read-scoped bearer token (GET/HEAD `/api/*` only) |
 | `STAGEFLOW_REQUEST_TIMEOUT_MS` | HTTP request receive timeout (default `60000`) |
 | `STAGEFLOW_MAX_CONNECTIONS` | `server.maxConnections` (default `256`) |

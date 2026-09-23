@@ -14,11 +14,17 @@ import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+} from "../server/requestAuthContext.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
 import { classifyArtifactContent, readRunArtifactBytes } from "./readArtifact.js";
@@ -37,6 +43,8 @@ import {
   runPipelinePreflight,
 } from "../preflight/pipelinePreflight.js";
 import { toolchainHealthMap } from "../preflight/toolchain.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
 
 const gitIdentitySchema = z
   .object({
@@ -228,14 +236,15 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "list_runs",
     {
       description:
-        "List known pipeline runs. Optional filters: status, since (ISO created_at lower bound), pipeline (id or path).",
+        "List known pipeline runs. Optional filters: status, since (ISO created_at lower bound), pipeline (id or path), caller_id.",
       inputSchema: z.object({
         status: runStatusSchema.optional(),
         since: z.string().optional(),
         pipeline: z.string().optional(),
+        caller_id: z.string().optional(),
       }),
     },
-    async ({ status, since, pipeline }) => {
+    async ({ status, since, pipeline, caller_id }) => {
       const filter: ListRunsFilter = {};
       if (status !== undefined) filter.status = status as RunStatus;
       if (since !== undefined) {
@@ -245,6 +254,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         filter.since = since;
       }
       if (pipeline !== undefined) filter.pipeline = pipeline;
+      if (caller_id !== undefined) filter.caller_id = caller_id;
       const runs = await store.listRuns(
         Object.keys(filter).length > 0 ? filter : undefined,
       );
@@ -425,6 +435,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         }
         throw err;
       }
+      const callerId = callerIdFromRequestAuth();
       let result;
       try {
         result = await manager.startRun({
@@ -437,27 +448,62 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
           ...(git_sha !== undefined ? { gitSha: git_sha } : {}),
           ...(ci_pr_url !== undefined ? { ciPrUrl: ci_pr_url } : {}),
           ...(ci_job_url !== undefined ? { ciJobUrl: ci_job_url } : {}),
+          callerId,
         });
       } catch (err) {
         if (err instanceof PipelineValidationError) {
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "mcp",
+            action: "start_run",
+            outcome: "error",
+            error_code: "pipeline_validation",
+          });
           return textResult(
             { error: "Pipeline validation failed", validation: err.result },
             true,
           );
         }
         if (err instanceof PipelinePreflightError) {
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "mcp",
+            action: "start_run",
+            outcome: "error",
+            error_code: err.code,
+          });
           return textResult(err.toNetworkBody(), true);
         }
         throw err;
       }
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerId,
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "start_run",
+          outcome: "error",
+          error_code: result.code,
+        });
         const { ok: _ok, reason, ...rest } = result;
         return textResult({ error: reason, ...rest }, true);
       }
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "start_run",
+        target_run_id: result.runId,
+        outcome: "ok",
+      });
       return textResult({
         runId: result.runId,
         ...(result.queued === true
-          ? { queued: true, queuePosition: result.queuePosition }
+          ? {
+              queued: true,
+              queuePosition: result.queuePosition,
+              ...(result.queuedCode !== undefined
+                ? { queuedCode: result.queuedCode }
+                : {}),
+            }
           : {}),
       });
     },

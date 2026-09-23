@@ -112,6 +112,17 @@ import {
   installShutdownController,
   type ShutdownController,
 } from "./shutdown.js";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+  requestAuthFromBearer,
+  runWithRequestAuth,
+} from "./requestAuthContext.js";
+import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -293,14 +304,40 @@ export function createOperatorRoutes(
           return true;
         }
         const scope = requiredScopeFor(method, pathname);
-        if (scope !== null && !enforceBearerAuth(controlTokens, req, res, scope)) {
-          return true;
+        if (scope !== null) {
+          const authResult = enforceBearerAuth(
+            controlTokens,
+            req,
+            res,
+            scope,
+          );
+          if (!authResult.ok) return true;
+          return runWithRequestAuth(
+            requestAuthFromBearer(authResult.auth, "rest"),
+            () => handleOperatorRequest(),
+          );
         }
       }
 
+      return handleOperatorRequest();
+
+      async function handleOperatorRequest(): Promise<boolean> {
       try {
         if (method === "GET" && pathname === "/api/runs") {
-          json(res, 200, { runs: await store.listRuns() });
+          const filter: ListRunsFilter = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
+          if (status !== null) filter.status = status as RunStatus;
+          if (since !== null) filter.since = since;
+          if (pipeline !== null) filter.pipeline = pipeline;
+          if (callerId !== null) filter.caller_id = callerId;
+          json(res, 200, {
+            runs: await store.listRuns(
+              Object.keys(filter).length > 0 ? filter : undefined,
+            ),
+          });
           return true;
         }
 
@@ -311,6 +348,7 @@ export function createOperatorRoutes(
             no_credentials?: unknown;
             include_a2a_artifacts?: unknown;
           };
+          const callerId = callerIdFromRequestAuth();
           try {
             const result = await createBackup({
               store,
@@ -320,9 +358,22 @@ export function createOperatorRoutes(
               noCredentials: body.no_credentials === true,
               includeA2aArtifacts: body.include_a2a_artifacts === true,
             });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "backup",
+              outcome: "ok",
+            });
             json(res, 200, result);
           } catch (err) {
             if (err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "backup",
+                outcome: "error",
+                error_code: err.code,
+              });
               const status =
                 err.code === "backup_insufficient_disk" ? 507 : 400;
               json(res, status, { error: err.message, code: err.code });
@@ -376,6 +427,7 @@ export function createOperatorRoutes(
             });
             return true;
           }
+          const callerId = callerIdFromRequestAuth();
           try {
             const archivePath = await resolveBackupNameForRestore(
               path.basename(backupName),
@@ -386,6 +438,12 @@ export function createOperatorRoutes(
               archivePath,
               homeDir: globalStageflowHome(),
               graceMs,
+            });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "restore",
+              outcome: "ok",
             });
             json(res, 202, {
               ok: true,
@@ -398,6 +456,13 @@ export function createOperatorRoutes(
             }
           } catch (err) {
             if (err instanceof RestoreError || err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "restore",
+                outcome: "error",
+                error_code: err.code,
+              });
               json(res, 400, {
                 error: err.message,
                 code: err.code,
@@ -414,13 +479,16 @@ export function createOperatorRoutes(
             status?: import("../runstore/port.js").RunStatus;
             since?: string;
             pipeline?: string;
+            caller_id?: string;
           } = {};
           const status = url.searchParams.get("status");
           const since = url.searchParams.get("since");
           const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
           if (status) filter.status = status as import("../runstore/port.js").RunStatus;
           if (since) filter.since = since;
           if (pipeline) filter.pipeline = pipeline;
+          if (callerId) filter.caller_id = callerId;
           res.writeHead(200, {
             "Content-Type": "application/x-ndjson; charset=utf-8",
           });
@@ -700,6 +768,7 @@ export function createOperatorRoutes(
             throw err;
           }
           let result: Awaited<ReturnType<typeof manager.startRun>>;
+          const callerId = callerIdFromRequestAuth();
           try {
             result = await manager.startRun({
               task: taskInput,
@@ -711,9 +780,17 @@ export function createOperatorRoutes(
               ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),
               ...(typed.ciPrUrl !== undefined ? { ciPrUrl: typed.ciPrUrl } : {}),
               ...(typed.ciJobUrl !== undefined ? { ciJobUrl: typed.ciJobUrl } : {}),
+              callerId,
             });
           } catch (err) {
             if (err instanceof PipelineValidationError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: "pipeline_validation",
+              });
               json(res, 400, {
                 error: "Pipeline validation failed",
                 validation: err.result,
@@ -721,19 +798,46 @@ export function createOperatorRoutes(
               return true;
             }
             if (err instanceof PipelinePreflightError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: err.code,
+              });
               json(res, 400, err.toNetworkBody());
               return true;
             }
             throw err;
           }
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "start_run",
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "start_run",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
           json(res, 202, {
             runId: result.runId,
             ...(result.queued === true
-              ? { queued: true, queuePosition: result.queuePosition }
+              ? {
+                  queued: true,
+                  queuePosition: result.queuePosition,
+                  ...(result.queuedCode !== undefined
+                    ? { queuedCode: result.queuedCode }
+                    : {}),
+                }
               : {}),
           });
           return true;
@@ -748,14 +852,30 @@ export function createOperatorRoutes(
             json(res, 400, { error: "pinned must be a boolean" });
             return true;
           }
-          const result = await manager.rerun(
-            runId,
-            body.pinned !== undefined ? { pinned: body.pinned } : undefined,
-          );
+          const callerId = callerIdFromRequestAuth();
+          const result = await manager.rerun(runId, {
+            ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+            callerId,
+          });
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "rerun",
+              target_run_id: runId,
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "rerun",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
           json(res, 202, { runId: result.runId });
           return true;
         }
@@ -1304,6 +1424,7 @@ export function createOperatorRoutes(
           });
         }
         return true;
+      }
       }
   };
 }

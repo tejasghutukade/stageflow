@@ -2,11 +2,14 @@
 
 export const BUSY_CAPACITY = "busy_capacity" as const;
 export const BUSY_CHECKOUT = "busy_checkout" as const;
+/** Per-caller concurrency quota: queued when under global capacity; reject when queue full. */
+export const BUSY_CALLER_QUOTA = "busy_caller_quota" as const;
 export const ABORTED = "aborted" as const;
 
 export const NETWORK_ERROR_CODES = [
   BUSY_CAPACITY,
   BUSY_CHECKOUT,
+  BUSY_CALLER_QUOTA,
   ABORTED,
   "unknown_project_root",
   "absolute_path_not_allowed",

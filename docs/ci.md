@@ -126,7 +126,7 @@ When concurrency slots are full but the admission queue still has room, start su
 }
 ```
 
-`code` is `busy_capacity` or `busy_checkout`. **`busy_capacity` means the admission queue is full** (or concurrency is full when queuing cannot accept the run) — not merely “active slots are full,” which now queues instead. Capacity fields include `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`. `busy_checkout` never queues.
+`code` is `busy_capacity`, `busy_checkout`, or `busy_caller_quota`. **`busy_capacity` means the admission queue is full** (or concurrency is full when queuing cannot accept the run) — not merely “active slots are full,” which now queues instead. Capacity fields include `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`. `busy_checkout` never queues. `busy_caller_quota` is for named-caller concurrency limits (queues while the global queue has room; rejects when that queue is full) — distinct from per-project `busy_capacity` rejects.
 
 **Insufficient disk** (`outcome: "failed"`, no `runId`, exit `1`):
 

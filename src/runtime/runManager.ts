@@ -130,7 +130,7 @@ import {
   type StartFailureCode,
 } from "./repositoryMaterialize.js";
 
-export type BusyCode = "busy_capacity" | "busy_checkout";
+export type BusyCode = "busy_capacity" | "busy_checkout" | "busy_caller_quota";
 
 export type { StartFailureCode } from "./repositoryMaterialize.js";
 
@@ -141,6 +141,8 @@ export type StartRunResult =
       done: Promise<PipelineRunResult>;
       queued?: boolean;
       queuePosition?: number;
+      /** Present when queued because the caller hit its concurrency quota. */
+      queuedCode?: "busy_caller_quota";
     }
   | {
       ok: false;
@@ -150,8 +152,9 @@ export type StartRunResult =
       activeCount?: number;
       maxConcurrent?: number;
       activeRunIds?: string[];
-      scope?: "global" | "project";
+      scope?: "global" | "project" | "caller";
       project_root?: string;
+      caller_id?: string;
       conflictingRunId?: string;
       conflictingCheckout?: string;
       freeBytes?: number;
@@ -249,6 +252,7 @@ type ActiveEntry = {
   checkoutKey?: string;
   durableCheckoutRoot?: string;
   projectRoot?: string;
+  callerId?: string | null;
   generation: number;
   done?: Promise<unknown>;
 };
@@ -449,6 +453,7 @@ type PendingQueuedStart = {
   pathCheckoutRoot?: string;
   binding: WorkspaceBinding;
   checkoutKey?: string;
+  callerId?: string | null;
 };
 
 type QueuedDoneDeferred = {
@@ -488,6 +493,7 @@ export class RunManager {
   private maxConcurrent: number;
   private readonly maxQueued: number;
   private readonly maxConcurrentPerProject: number | undefined;
+  private readonly callerQuotas: ReadonlyMap<string, number>;
   private readonly maxActiveStagesPerRun: number;
   private readonly executionMode: StageExecutionMode;
   private readonly stageProcessLauncher: StageProcessLauncher | undefined;
@@ -538,6 +544,8 @@ export class RunManager {
       maxConcurrent?: number;
       maxQueued?: number;
       maxConcurrentPerProject?: number;
+      /** caller_id → max concurrent active runs for that caller. */
+      callerQuotas?: Record<string, number>;
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
@@ -561,6 +569,12 @@ export class RunManager {
     this.maxQueued =
       options.maxQueued ?? parseMaxQueued(process.env.STAGEFLOW_MAX_QUEUED);
     this.maxConcurrentPerProject = options.maxConcurrentPerProject;
+    this.callerQuotas = new Map(
+      Object.entries(options.callerQuotas ?? {}).map(([id, n]) => [
+        id.toLowerCase(),
+        n,
+      ]),
+    );
     this.maxActiveStagesPerRun = readMaxActiveStagesPerRun(
       process.env,
       options.maxActiveStagesPerRun,
@@ -733,6 +747,22 @@ export class RunManager {
     return n;
   }
 
+  private countActiveForCaller(callerId: string): number {
+    const normalized = callerId.toLowerCase();
+    let n = 0;
+    for (const entry of this.active.values()) {
+      if (entry.callerId?.toLowerCase() === normalized) n += 1;
+    }
+    return n;
+  }
+
+  private callerQuotaLimit(callerId: string | null | undefined): number | undefined {
+    if (callerId === null || callerId === undefined || callerId === "") {
+      return undefined;
+    }
+    return this.callerQuotas.get(callerId.toLowerCase());
+  }
+
   /** Capacity plus on-demand durable-root disk breakdown (KTD16). */
   async getHealthWithDisk(): Promise<CapacityHealth> {
     const base = this.getHealth();
@@ -799,8 +829,14 @@ export class RunManager {
 
       let checkoutKey: string | undefined;
       let durableCheckoutRoot: string | undefined;
+      let attachCallerId: string | null = null;
+      let attachProjectRoot: string | undefined;
       try {
         const meta = await this.options.store.readRunMeta(runId);
+        attachCallerId = meta.caller_id ?? null;
+        attachProjectRoot = meta.project_root
+          ? normalizeCatalogPath(meta.project_root)
+          : undefined;
         const kind = derivedBindingKindFromMeta(meta);
         if (kind === "checkout") {
           const checkoutRoot = meta.checkout_root;
@@ -838,6 +874,8 @@ export class RunManager {
       this.active.set(runId, {
         checkoutKey,
         durableCheckoutRoot,
+        projectRoot: attachProjectRoot,
+        callerId: attachCallerId,
         generation: ++this.trackingGeneration,
       });
       for (const stage of waitingStages) {
@@ -1484,6 +1522,8 @@ export class RunManager {
       gitSha?: string;
       ciPrUrl?: string;
       ciJobUrl?: string;
+      /** Attribution from auth only — never from request body/query. */
+      callerId?: string | null;
     },
     submission?: RunSubmission,
   ): Promise<StartRunResult> {
@@ -1547,12 +1587,14 @@ export class RunManager {
       derivedProjectRoot,
       resolved.kind === "path" ? resolved.taskPath : undefined,
       submission,
+      undefined,
+      input.callerId,
     );
   }
 
   async rerun(
     runId: string,
-    options?: { pinned?: boolean },
+    options?: { pinned?: boolean; callerId?: string | null },
   ): Promise<StartRunResult> {
     if (!this.acceptingWork) {
       return {
@@ -1649,6 +1691,7 @@ export class RunManager {
       undefined,
       undefined,
       pinned,
+      options?.callerId,
     );
   }
 
@@ -2595,6 +2638,7 @@ export class RunManager {
     taskPath?: string,
     submission?: RunSubmission,
     pinned?: { ref: string; resolvedSha: string },
+    callerId?: string | null,
   ): Promise<StartRunResult> {
     const persistence = pipelinePersistenceForStart(pipeline);
     if (!persistence.ok) {
@@ -2729,7 +2773,11 @@ export class RunManager {
     const diskGate = await this.checkDiskFloorAdmission();
     if (diskGate !== undefined) return diskGate;
 
-    const admitted = this.tryAdmitOrEnqueue(checkoutKey, resolvedProjectRoot);
+    const admitted = this.tryAdmitOrEnqueue(
+      checkoutKey,
+      resolvedProjectRoot,
+      callerId,
+    );
     if (admitted.action === "reject") return admitted.failure;
 
     if (admitted.action === "enqueue") {
@@ -2760,6 +2808,9 @@ export class RunManager {
         ...(persistence.fields.pipelineBody !== undefined
           ? { pipelineBody: persistence.fields.pipelineBody }
           : {}),
+        ...(callerId !== undefined && callerId !== null
+          ? { callerId }
+          : {}),
         skipGates,
       });
       const meta = await this.options.store.readRunMeta(created.runId);
@@ -2782,6 +2833,7 @@ export class RunManager {
         pathCheckoutRoot,
         binding,
         checkoutKey,
+        callerId,
       });
       const done = this.ensureQueuedDone(created.runId);
       return {
@@ -2790,6 +2842,9 @@ export class RunManager {
         done,
         queued: true,
         queuePosition,
+        ...(admitted.reason === "caller_quota"
+          ? { queuedCode: "busy_caller_quota" as const }
+          : {}),
       };
     }
 
@@ -2833,6 +2888,7 @@ export class RunManager {
         operatorCatalog: this.options.operatorCatalog,
         skipGates,
         schedulingHalt,
+        callerId,
       });
       this.track(admitted.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
@@ -2880,26 +2936,29 @@ export class RunManager {
     extras?: {
       conflictingRunId?: string;
       conflictingCheckout?: string;
-      scope?: "global" | "project";
+      scope?: "global" | "project" | "caller";
       project_root?: string;
+      caller_id?: string;
       activeCount?: number;
       maxConcurrent?: number;
     },
   ): Extract<StartRunResult, { ok: false }> {
     const activeRunIds = this.getActiveRunIds();
-    const scope = extras?.scope ?? "global";
+    const scope = extras?.scope ?? (code === "busy_caller_quota" ? "caller" : "global");
     const activeCount = extras?.activeCount ?? this.active.size;
     const maxConcurrent = extras?.maxConcurrent ?? this.maxConcurrent;
     const reason =
-      code === "busy_capacity"
-        ? scope === "project"
-          ? `Project capacity full: ${activeCount}/${maxConcurrent} active runs for ${extras?.project_root ?? "project"}`
-          : this.active.size >= this.maxConcurrent &&
-              this.admissionQueue.size >= this.maxQueued &&
-              this.maxQueued > 0
-            ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
-            : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
-        : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
+      code === "busy_caller_quota"
+        ? `Caller quota full: ${activeCount}/${maxConcurrent} active runs for caller ${extras?.caller_id ?? "unknown"}`
+        : code === "busy_capacity"
+          ? scope === "project"
+            ? `Project capacity full: ${activeCount}/${maxConcurrent} active runs for ${extras?.project_root ?? "project"}`
+            : this.active.size >= this.maxConcurrent &&
+                this.admissionQueue.size >= this.maxQueued &&
+                this.maxQueued > 0
+              ? `Admission queue full: ${this.admissionQueue.size}/${this.maxQueued} queued runs`
+              : `Capacity full: ${this.active.size}/${this.maxConcurrent} active runs`
+          : `Checkout in use by run ${extras?.conflictingRunId ?? "unknown"}`;
     return {
       ok: false,
       reason,
@@ -2912,6 +2971,7 @@ export class RunManager {
       ...(extras?.project_root !== undefined
         ? { project_root: extras.project_root }
         : {}),
+      ...(extras?.caller_id !== undefined ? { caller_id: extras.caller_id } : {}),
       ...(extras?.conflictingRunId !== undefined
         ? { conflictingRunId: extras.conflictingRunId }
         : {}),
@@ -2981,9 +3041,10 @@ export class RunManager {
   private tryAdmitOrEnqueue(
     checkoutKey: string | undefined,
     projectRoot: string = this.projectRoot,
+    callerId?: string | null,
   ):
     | { action: "reserve"; provisionalId: string }
-    | { action: "enqueue" }
+    | { action: "enqueue"; reason: "capacity" | "caller_quota" }
     | { action: "reject"; failure: Extract<StartRunResult, { ok: false }> } {
     if (checkoutKey !== undefined) {
       const holder = this.checkoutLeases.get(checkoutKey);
@@ -3018,11 +3079,33 @@ export class RunManager {
     }
 
     if (this.active.size < this.maxConcurrent) {
+      const quota = this.callerQuotaLimit(callerId);
+      if (
+        quota !== undefined &&
+        callerId !== undefined &&
+        callerId !== null &&
+        this.countActiveForCaller(callerId) >= quota
+      ) {
+        if (this.admissionQueue.size < this.maxQueued) {
+          return { action: "enqueue", reason: "caller_quota" };
+        }
+        return {
+          action: "reject",
+          failure: this.busyFailure("busy_caller_quota", {
+            scope: "caller",
+            caller_id: callerId,
+            activeCount: this.countActiveForCaller(callerId),
+            maxConcurrent: quota,
+          }),
+        };
+      }
+
       const provisionalId = randomUUID();
       this.provisionalIds.add(provisionalId);
       this.active.set(provisionalId, {
         checkoutKey,
         projectRoot: normalizedRoot,
+        callerId: callerId ?? null,
         generation: ++this.trackingGeneration,
       });
       if (checkoutKey !== undefined) {
@@ -3032,7 +3115,7 @@ export class RunManager {
     }
 
     if (this.admissionQueue.size < this.maxQueued) {
-      return { action: "enqueue" };
+      return { action: "enqueue", reason: "capacity" };
     }
 
     return {
@@ -3044,14 +3127,30 @@ export class RunManager {
   private tryReserve(
     checkoutKey: string | undefined,
     projectRoot: string = this.projectRoot,
+    callerId?: string | null,
   ):
     | { ok: true; provisionalId: string }
     | { ok: false; failure: Extract<StartRunResult, { ok: false }> } {
-    const admitted = this.tryAdmitOrEnqueue(checkoutKey, projectRoot);
+    const admitted = this.tryAdmitOrEnqueue(checkoutKey, projectRoot, callerId);
     if (admitted.action === "reserve") {
       return { ok: true, provisionalId: admitted.provisionalId };
     }
     if (admitted.action === "enqueue") {
+      if (admitted.reason === "caller_quota") {
+        const quota = this.callerQuotaLimit(callerId) ?? 0;
+        return {
+          ok: false,
+          failure: this.busyFailure("busy_caller_quota", {
+            scope: "caller",
+            caller_id: callerId ?? undefined,
+            activeCount:
+              callerId !== undefined && callerId !== null
+                ? this.countActiveForCaller(callerId)
+                : 0,
+            maxConcurrent: quota,
+          }),
+        };
+      }
       return { ok: false, failure: this.busyFailure("busy_capacity") };
     }
     return { ok: false, failure: admitted.failure };
@@ -3098,22 +3197,24 @@ export class RunManager {
     this.admissionDrainInFlight = true;
     try {
       const blockedRoots = new Set<string>();
+      const blockedCallers = new Set<string>();
       while (this.acceptingWork && this.active.size < this.maxConcurrent) {
         const next = this.admissionQueue.dequeueNext(blockedRoots);
         if (next === undefined) break;
-        const outcome = await this.startDequeuedAdmission(next);
+        const outcome = await this.startDequeuedAdmission(next, blockedCallers);
         if (outcome === "checkout_busy") {
           this.admissionQueue.requeueFront(next.projectRoot, next.entry);
           blockedRoots.add(next.projectRoot);
           continue;
         }
         if (outcome === "project_capacity_busy") {
-          // Already requeued once inside startDequeuedAdmission.
           blockedRoots.add(next.projectRoot);
           continue;
         }
+        if (outcome === "caller_quota_busy") {
+          continue;
+        }
         if (outcome === "capacity_busy") {
-          // Already requeued once inside startDequeuedAdmission.
           break;
         }
       }
@@ -3122,13 +3223,17 @@ export class RunManager {
     }
   }
 
-  private async startDequeuedAdmission(next: {
-    projectRoot: string;
-    entry: AdmissionQueueEntry;
-  }): Promise<
+  private async startDequeuedAdmission(
+    next: {
+      projectRoot: string;
+      entry: AdmissionQueueEntry;
+    },
+    blockedCallers: Set<string>,
+  ): Promise<
     | "started"
     | "checkout_busy"
     | "project_capacity_busy"
+    | "caller_quota_busy"
     | "capacity_busy"
     | "cancelled"
   > {
@@ -3175,6 +3280,17 @@ export class RunManager {
     let taskPath: string | undefined;
     let submission: RunSubmission | undefined;
     let pinned: PendingQueuedStart["pinned"];
+    let callerId: string | null | undefined =
+      pending?.callerId ?? meta.caller_id ?? null;
+
+    if (
+      callerId !== undefined &&
+      callerId !== null &&
+      blockedCallers.has(callerId.toLowerCase())
+    ) {
+      this.admissionQueue.requeueFront(next.projectRoot, next.entry);
+      return "caller_quota_busy";
+    }
 
     try {
       if (pending !== undefined) {
@@ -3191,6 +3307,7 @@ export class RunManager {
         taskPath = pending.taskPath;
         submission = pending.submission;
         pinned = pending.pinned;
+        callerId = pending.callerId ?? meta.caller_id ?? null;
         const loadedTask = loadTaskFromYamlOutcome(taskYaml, pending.taskLabel);
         if (!loadedTask.ok) {
           await this.cancelRun(
@@ -3266,7 +3383,7 @@ export class RunManager {
       return "cancelled";
     }
 
-    const reserved = this.tryReserve(checkoutKey, projectRoot);
+    const reserved = this.tryReserve(checkoutKey, projectRoot, callerId);
     if (!reserved.ok) {
       if (reserved.failure.code === "busy_checkout") {
         return "checkout_busy";
@@ -3277,6 +3394,12 @@ export class RunManager {
         reserved.failure.scope === "project"
       ) {
         return "project_capacity_busy";
+      }
+      if (reserved.failure.code === "busy_caller_quota") {
+        if (callerId !== undefined && callerId !== null) {
+          blockedCallers.add(callerId.toLowerCase());
+        }
+        return "caller_quota_busy";
       }
       return "capacity_busy";
     }
@@ -3471,8 +3594,14 @@ export class RunManager {
 
     let checkoutKey: string | undefined;
     let durableCheckoutRoot: string | undefined;
+    let resumeCallerId: string | null = null;
+    let resumeProjectRoot: string | undefined;
     try {
       const meta = await this.options.store.readRunMeta(runId);
+      resumeCallerId = meta.caller_id ?? null;
+      resumeProjectRoot = meta.project_root
+        ? normalizeCatalogPath(meta.project_root)
+        : undefined;
       const kind = derivedBindingKindFromMeta(meta);
       if (kind === "checkout") {
         const checkoutRoot = meta.checkout_root;
@@ -3510,6 +3639,8 @@ export class RunManager {
     this.active.set(runId, {
       checkoutKey,
       durableCheckoutRoot,
+      projectRoot: resumeProjectRoot,
+      callerId: resumeCallerId,
       generation: ++this.trackingGeneration,
     });
     return { ok: true };

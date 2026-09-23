@@ -2699,7 +2699,10 @@ describe("MCP start_run repository binding (U7)", () => {
         status: 400,
       });
       await mcpCall(url, "rerun", { runId: "missing", pinned: true });
-      expect(rerunSpy).toHaveBeenCalledWith("missing", { pinned: true });
+      expect(rerunSpy).toHaveBeenCalledWith("missing", {
+        pinned: true,
+        callerId: null,
+      });
       rerunSpy.mockRestore();
     } finally {
       spy.mockRestore();

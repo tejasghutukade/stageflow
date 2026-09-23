@@ -1,6 +1,8 @@
 import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import type {
   AbandonStageResult,
@@ -13,6 +15,10 @@ import {
   mapStartFailure,
   mapStoreLookupError,
 } from "../server/operatorResults.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+} from "../server/requestAuthContext.js";
 import { attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
@@ -20,6 +26,8 @@ import { readStreamLogTail } from "./tailStreamLog.js";
 import { textResult } from "./toolResults.js";
 import { projectWaitingGates } from "./waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
 
 export function registerControlTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;
@@ -81,15 +89,36 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         parsed = parseAskOperatorAnswer(answer);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "answer_gate",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult({ error: message, status: 400 }, true);
       }
       const result = await manager.deliverAnswer(runId, stageId, parsed);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "answer_gate",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: result.reason, status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "answer_gate",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({ ok: true });
     },
   );
@@ -344,11 +373,26 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId, stageId }) => {
       const result = await manager.retryStage(runId, stageId);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "retry_stage",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           { ...mapRetryStageFailure(result), status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "retry_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         runId: result.runId,
         stageId: result.stageId,
@@ -370,11 +414,26 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId, stageId }) => {
       const result = await manager.resumeTimedOutStage(runId, stageId);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "resume_stage",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           { ...mapRetryStageFailure(result), status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "resume_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         runId: result.runId,
         stageId: result.stageId,
@@ -397,11 +456,25 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       const result = await manager.abandonStage(runId, stageId);
       if (!result.ok) {
         const fail = result as Extract<AbandonStageResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "abandon_stage",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: fail.reason, status: fail.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "abandon_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         ok: true,
         runId: result.runId,
@@ -424,11 +497,25 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       const result = await manager.cancelRun(runId, reason);
       if (!result.ok) {
         const fail = result as Extract<CancelRunResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "cancel_run",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: fail.reason, status: fail.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "cancel_run",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         ok: true,
         runId: result.runId,
@@ -453,11 +540,25 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       });
       if (!result.ok) {
         const fail = result as Extract<DeleteRunResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "delete_run",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: fail.reason, status: fail.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "delete_run",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         ok: true,
         runId: result.runId,
@@ -505,11 +606,20 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       }),
     },
     async ({ runId, pinned }) => {
-      const result = await manager.rerun(
-        runId,
-        pinned !== undefined ? { pinned } : undefined,
-      );
+      const callerId = callerIdFromRequestAuth();
+      const result = await manager.rerun(runId, {
+        ...(pinned !== undefined ? { pinned } : {}),
+        callerId,
+      });
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerId,
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "rerun",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           {
             ...mapStartFailure(result),
@@ -518,6 +628,13 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "rerun",
+        target_run_id: result.runId,
+        outcome: "ok",
+      });
       return textResult({ runId: result.runId });
     },
   );

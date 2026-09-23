@@ -74,6 +74,7 @@ const KNOWN_ENV_PREFIXES = [
   "STAGEFLOW_PROVIDER_",
   "STAGEFLOW_SLIM_",
   "STAGEFLOW_PURGE_",
+  "STAGEFLOW_CONTROL_TOKEN_",
 ] as const;
 
 const FILE_KEY_TO_FIELD = {
@@ -83,9 +84,15 @@ const FILE_KEY_TO_FIELD = {
   require_providers: "requireProviders",
   trust_workspace_config: "trustWorkspaceConfig",
   allow_unknown_config: "allowUnknownConfig",
+  callers: "callers",
 } as const;
 
 type FileField = (typeof FILE_KEY_TO_FIELD)[keyof typeof FILE_KEY_TO_FIELD];
+
+/** Per-caller concurrent-active quota from host `callers:` config. */
+export type CallerQuotaConfig = {
+  maxConcurrent: number;
+};
 
 export type HostConfig = {
   maxConcurrentRuns: number;
@@ -96,6 +103,8 @@ export type HostConfig = {
   allowUnknownConfig: boolean;
   controlToken: string | undefined;
   readToken: string | undefined;
+  /** caller_id → quota; empty when unset. */
+  callers: Record<string, CallerQuotaConfig>;
   /** Absolute path of config.yaml when loaded; undefined if absent. */
   configFilePath: string | undefined;
   warnings: string[];
@@ -119,6 +128,7 @@ export type HostConfigPublicEcho = {
   requireProviders: string[];
   trustWorkspaceConfig: string[];
   allowUnknownConfig: boolean;
+  callers: Record<string, CallerQuotaConfig>;
   secrets: HostConfigSecretsEcho;
 };
 
@@ -263,6 +273,71 @@ function coerceFileBool(value: unknown, key: string): boolean {
   );
 }
 
+function coerceCallers(
+  value: unknown,
+  key: string,
+): Record<string, CallerQuotaConfig> {
+  if (value === null || value === undefined) return {};
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new HostConfigError(
+      `Invalid value for ${key}; expected mapping of caller_id → { max_concurrent }`,
+      "config_invalid",
+      key,
+    );
+  }
+  const out: Record<string, CallerQuotaConfig> = {};
+  for (const [rawId, rawEntry] of Object.entries(
+    value as Record<string, unknown>,
+  )) {
+    const callerId = rawId.trim().toLowerCase();
+    if (callerId.length === 0) {
+      throw new HostConfigError(
+        `Invalid empty caller id in ${key}`,
+        "config_invalid",
+        key,
+      );
+    }
+    if (
+      rawEntry === null ||
+      typeof rawEntry !== "object" ||
+      Array.isArray(rawEntry)
+    ) {
+      throw new HostConfigError(
+        `Invalid value for ${key}.${rawId}; expected { max_concurrent }`,
+        "config_invalid",
+        key,
+      );
+    }
+    const entry = rawEntry as Record<string, unknown>;
+    if (entry.max_concurrent === undefined) {
+      throw new HostConfigError(
+        `Missing max_concurrent for ${key}.${rawId}`,
+        "config_invalid",
+        key,
+      );
+    }
+    const n = coerceFileNumber(entry.max_concurrent, `${key}.${rawId}.max_concurrent`);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new HostConfigError(
+        `Invalid max_concurrent for ${key}.${rawId}`,
+        "config_invalid",
+        key,
+      );
+    }
+    for (const sub of Object.keys(entry)) {
+      if (sub !== "max_concurrent") {
+        throw new HostConfigError(
+          `Unknown key "${sub}" under ${key}.${rawId}`,
+          "config_unknown_key",
+          sub,
+        );
+      }
+    }
+    out[callerId] = { maxConcurrent: n };
+  }
+  return out;
+}
+
 /**
  * Assemble HostConfig once at boot. Precedence: overrides (CLI flags) > env > file > default.
  */
@@ -402,6 +477,11 @@ export function loadHostConfig(options?: {
   const controlToken = readSecretFromEnvOrFile(env, "STAGEFLOW_CONTROL_TOKEN");
   const readToken = readSecretFromEnvOrFile(env, "STAGEFLOW_READ_TOKEN");
 
+  let callers: Record<string, CallerQuotaConfig> = {};
+  if (file.values.callers !== undefined) {
+    callers = coerceCallers(file.values.callers, "callers");
+  }
+
   return {
     maxConcurrentRuns,
     maxConcurrentRunsPerProject,
@@ -411,6 +491,7 @@ export function loadHostConfig(options?: {
     allowUnknownConfig,
     controlToken,
     readToken,
+    callers,
     configFilePath:
       configFilePath !== undefined && existsSync(configFilePath)
         ? configFilePath
@@ -428,6 +509,7 @@ export function redactHostConfig(config: HostConfig): HostConfigPublicEcho {
     requireProviders: [...config.requireProviders],
     trustWorkspaceConfig: [...config.trustWorkspaceConfig],
     allowUnknownConfig: config.allowUnknownConfig,
+    callers: { ...config.callers },
     secrets: {
       controlToken: config.controlToken ? "set" : "unset",
       readToken: config.readToken ? "set" : "unset",

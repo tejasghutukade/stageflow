@@ -23,6 +23,7 @@ import type { WorkspaceBinding } from "./workspaceBinding.js";
 export type StartFailureCode =
   | "busy_capacity"
   | "busy_checkout"
+  | "busy_caller_quota"
   | "repository_auth_failed"
   | "repository_not_found"
   | "ref_not_found"

@@ -332,6 +332,12 @@ export async function bootstrapStageflowHost(
         : undefined),
     maxQueued: hostConfig?.maxQueued,
     maxConcurrentPerProject: hostConfig?.maxConcurrentRunsPerProject,
+    callerQuotas: Object.fromEntries(
+      Object.entries(hostConfig?.callers ?? {}).map(([id, cfg]) => [
+        id,
+        cfg.maxConcurrent,
+      ]),
+    ),
     operatorCatalog: { cwd, agentDir },
     a2aStore,
   });

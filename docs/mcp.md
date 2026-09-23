@@ -49,10 +49,27 @@ See [Docker and self-hosting](docker.md) and [CLI reference](cli-reference.md).
 | Env | Role |
 |-----|------|
 | `STAGEFLOW_ALLOWED_HOSTS` | Extra hostnames/IPs (optional `:port`). Unset → loopback only. Loopback always allowed. `*` rejected. |
-| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Bearer **drive** scope (implies read). Required when bind is non-loopback. |
-| `STAGEFLOW_READ_TOKEN` / `_FILE` | Bearer **read** scope only. |
+| `STAGEFLOW_CONTROL_TOKEN` / `_FILE` | Bearer **drive** scope (implies read). `caller_id` **`default`**. Required when bind is non-loopback (or any named drive token). |
+| `STAGEFLOW_CONTROL_TOKEN_<NAME>` / `_FILE` | Named **drive** token. `caller_id` is `<NAME>` lowercased. `NAME` must not be empty or `FILE` (so `_FILE` stays the default-token file pointer). |
+| `STAGEFLOW_READ_TOKEN` / `_FILE` | Bearer **read** scope only (`caller_id` **`default`**). Singular — there is no `READ_TOKEN_<NAME>`. |
 
-Send `Authorization: Bearer <token>` on protected requests.
+Send `Authorization: Bearer <token>` on protected requests. The Host digests the presented bearer once and compares it against **every** configured token digest (constant-time; no early-return oracle).
+
+**Named tokens are attribution and quota only — not isolation.** Any valid drive token can still read or mutate any `run_id`. Do not treat `caller_id` as a tenancy boundary.
+
+Optional host `config.yaml` quotas (after global capacity reserve; distinct from per-project reject):
+
+```yaml
+callers:
+  ci_github:
+    max_concurrent: 2
+  default:
+    max_concurrent: 1
+```
+
+When a caller is at its quota but the Host still has global slots, the start is **queued** and success may include `queuedCode: "busy_caller_quota"`. If the admission queue (`STAGEFLOW_MAX_QUEUED`) is also full, start fails with `code: "busy_caller_quota"` (≠ `busy_capacity`). Per-project caps still **reject** with `busy_capacity` + `scope: "project"` and never queue. Global queue-full remains `busy_capacity`.
+
+CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `caller_id` from the authenticated bearer only — never from body, query, or tool args. `list_runs` / `GET /api/runs?caller_id=` filter by stored attribution.
 
 | Surface | Scope |
 |---------|-------|
@@ -516,6 +533,7 @@ Exactly one of `task_path` or `task` is required. Accepted start params:
 | Reason | Code | Meaning |
 |--------|------|---------|
 | Admission queue full | `busy_capacity` | Includes `activeCount`, `maxConcurrent`, `activeRunIds`. Fired when `STAGEFLOW_MAX_QUEUED` cannot accept another queued run (not merely when active slots are full) |
+| Caller concurrency quota | `busy_caller_quota` | Queues while the admission queue has room (`queuedCode` on success); rejects with this code when the queue is full. Distinct from per-project `busy_capacity` |
 | Checkout lease conflict | `busy_checkout` | Includes `conflictingRunId`, `conflictingCheckout`. Never queued |
 | Free disk below floor | `insufficient_disk` | Includes `freeBytes`, `minFreeBytes`. Distinct from `busy_capacity`; the run is not created or queued |
 | Absolute checkout/path | `absolute_path_not_allowed` | Network path contract; includes `registered_roots` |
