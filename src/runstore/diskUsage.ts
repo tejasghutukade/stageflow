@@ -92,12 +92,22 @@ export async function readFilesystemSize(rootPath: string): Promise<FilesystemSi
   if (freeSpaceReaderOverride !== null) {
     return freeSpaceReaderOverride(rootPath);
   }
-  const fsStats = await statfs(rootPath);
-  const blockSize = fsStats.bsize;
-  return {
-    freeBytes: fsStats.bavail * blockSize,
-    totalBytes: fsStats.blocks * blockSize,
-  };
+  let target = path.resolve(rootPath);
+  for (;;) {
+    try {
+      const fsStats = await statfs(target);
+      const blockSize = fsStats.bsize;
+      return {
+        freeBytes: fsStats.bavail * blockSize,
+        totalBytes: fsStats.blocks * blockSize,
+      };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      const parent = path.dirname(target);
+      if (parent === target) throw err;
+      target = parent;
+    }
+  }
 }
 
 async function usageOfMissingOk(target: string): Promise<number> {
