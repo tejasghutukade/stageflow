@@ -60,7 +60,8 @@ function classifyStoreMessage(
   if (policy === "envelope") {
     const notFound =
       error.startsWith("Envelope not found") ||
-      error.startsWith("Run not found");
+      error.startsWith("Run not found") ||
+      error.startsWith("Stage execution not found");
     return {
       kind: notFound ? "not_found" : "error",
       status: notFound ? 404 : 500,

@@ -18,7 +18,7 @@ import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
@@ -765,7 +765,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
         }),
       });
       expect(started.status).toBe(202);
@@ -813,7 +813,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -968,7 +968,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("parallel-hitl-multi-wait"),
+          pipeline: netPipeline("parallel-hitl-multi-wait"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1091,7 +1091,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("parallel-track-fanout"),
+          pipeline: netPipeline("parallel-track-fanout"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1273,7 +1273,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1354,7 +1354,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1410,7 +1410,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1466,7 +1466,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("feedback-loop-wait-human"),
+          pipeline: netPipeline("feedback-loop-wait-human"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1558,7 +1558,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("feedback-loop-wait-human"),
+          pipeline: netPipeline("feedback-loop-wait-human"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1631,7 +1631,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1777,7 +1777,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "a", goal: "first" },
         }),
       });
@@ -1785,7 +1785,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "b", goal: "second" },
         }),
       });
@@ -1849,7 +1849,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: pipelinePath("single"),
+            pipeline: netPipeline("single"),
             task: { id: "holder", goal: "hold slot", checkout },
           }),
         });
@@ -1865,7 +1865,7 @@ describe("localhost HTTP API", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: pipelinePath("single"),
+            pipeline: netPipeline("single"),
             task: { id: "cap", goal: "over max" },
           }),
         });
@@ -1897,7 +1897,7 @@ describe("localhost HTTP API", () => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              pipeline: pipelinePath("single"),
+              pipeline: netPipeline("single"),
               task: { id: "a", goal: "first", checkout },
             }),
           });
@@ -1912,7 +1912,7 @@ describe("localhost HTTP API", () => {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              pipeline: pipelinePath("single"),
+              pipeline: netPipeline("single"),
               task: { id: "b", goal: "same checkout", checkout },
             }),
           });
@@ -2107,7 +2107,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "holder", goal: "hold slot" },
         }),
       });
@@ -2155,7 +2155,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "blocked", goal: "should 409" },
         }),
       });
@@ -2354,7 +2354,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         expect(started.status).toBe(202);
@@ -2439,7 +2439,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2501,7 +2501,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2563,7 +2563,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2610,7 +2610,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2643,7 +2643,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2709,7 +2709,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2746,7 +2746,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2796,7 +2796,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2851,7 +2851,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -3000,7 +3000,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -4138,7 +4138,7 @@ describe("HTTP repository binding surfaces (U7)", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
           task: { id: "t", goal: "g" },
           github_token: "nope",
         }),
@@ -4151,7 +4151,7 @@ describe("HTTP repository binding surfaces (U7)", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
           task: {
             id: "t",
             goal: "g",
@@ -4223,7 +4223,7 @@ describe("HTTP repository binding surfaces (U7)", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
           task: {
             id: "repo-task",
             goal: "edit",

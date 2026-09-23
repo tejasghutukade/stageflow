@@ -166,7 +166,7 @@ describe("get_waiting_summary", () => {
 
       const runIdA = await startWaitingRun(
         baseA,
-        path.join(projectA.root, "pipelines", "single.pipeline.yaml"),
+        "pipelines/single.pipeline.yaml",
       );
       await waitFor(async () => {
         const detail = await store.readRun(runIdA);
@@ -175,7 +175,7 @@ describe("get_waiting_summary", () => {
 
       const runIdB = await startWaitingRun(
         baseB,
-        path.join(projectB.root, "pipelines", "single.pipeline.yaml"),
+        "pipelines/single.pipeline.yaml",
       );
       await waitFor(async () => {
         const detail = await store.readRun(runIdB);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   CatalogPathError,
   resolveCatalogRelativePath,
+  relativizeLocalPathForNetwork,
 } from "../src/config/catalogRelativePath.js";
 import type { CatalogRoot } from "../src/config/resolveCatalogRoots.js";
 
@@ -72,5 +73,14 @@ describe("resolveCatalogRelativePath", () => {
     } catch (err) {
       expect((err as CatalogPathError).code).toBe("path_outside_project_root");
     }
+  });
+});
+
+describe("relativizeLocalPathForNetwork", () => {
+  it("rewrites absolute under cwd to relative + project_root", () => {
+    const cwd = "/proj";
+    const out = relativizeLocalPathForNetwork(cwd, "/proj/pipelines/x.pipeline.yaml");
+    expect(out.path).toBe("pipelines/x.pipeline.yaml");
+    expect(out.project_root).toBe(path.resolve(cwd));
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -179,7 +179,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     });
     const started = await manager.startRun({
       task: sampleTask,
-      pipeline: singlePipeline,
+      pipeline: netPipeline("single"),
       skipGates: true,
     });
     expect(started.ok).toBe(true);
@@ -207,7 +207,7 @@ describe("sf run --skip-gates parse (U1)", { timeout: 15_000 }, () => {
     });
     const started = await manager.startRun({
       task: sampleTask,
-      pipeline: singlePipeline,
+      pipeline: netPipeline("single"),
     });
     expect(started.ok).toBe(true);
     if (started.ok) await started.done;
@@ -384,7 +384,7 @@ describe("sf run --skip-gates guest proof (U3)", { timeout: 20_000 }, () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: singlePipeline,
+          pipeline: netPipeline("single"),
         }),
       });
       expect(res.status).toBe(202);

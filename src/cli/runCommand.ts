@@ -3,6 +3,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { coerceTaskFile } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
+import { relativizeLocalPathForNetwork } from "../config/catalogRelativePath.js";
 import { PipelineValidationError } from "../runtime/pipelineRunner.js";
 import type { StartRunResult } from "../runtime/runManager.js";
 import type { TaskFile } from "../types/task.js";
@@ -221,12 +222,25 @@ function defaultStartRun(
           : {}),
       };
     }
+    const pipelineRef = relativizeLocalPathForNetwork(cwd, input.pipeline);
+    let task: string | TaskFile = input.task;
+    let projectRoot = pipelineRef.project_root;
+    if (typeof input.task === "string") {
+      const absTask = path.resolve(cwd, input.task);
+      const cwdAbs = path.resolve(cwd);
+      const relTask = path.relative(cwdAbs, absTask);
+      if (relTask.startsWith("..") || path.isAbsolute(relTask)) {
+        task = await loadTaskWithBindingOverrides(input.task, cwd, {});
+      } else {
+        const taskRef = relativizeLocalPathForNetwork(cwd, input.task);
+        task = taskRef.path;
+        projectRoot = taskRef.project_root;
+      }
+    }
     return httpStartRun(base, {
-      pipeline: resolveAbsolute(cwd, input.pipeline),
-      task:
-        typeof input.task === "string"
-          ? resolveAbsolute(cwd, input.task)
-          : input.task,
+      pipeline: pipelineRef.path,
+      task,
+      project_root: projectRoot,
       ...(input.checkoutOverride !== undefined
         ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
         : {}),

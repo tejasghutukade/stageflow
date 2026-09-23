@@ -153,6 +153,7 @@ function toStartFailure(
 export type HttpStartRunInput = {
   pipeline: string;
   task: string | TaskFile;
+  project_root?: string;
   checkoutOverride?: string;
   skipGates?: boolean;
   gitSha?: string;
@@ -260,7 +261,16 @@ export async function httpRetryStageUntilStop(
     {},
   );
   if (status !== 202) {
-    return { ok: false, reason: extractError(body, status), status };
+    const code =
+      body && typeof body === "object" && typeof (body as { code?: unknown }).code === "string"
+        ? (body as { code: string }).code
+        : undefined;
+    return {
+      ok: false,
+      reason: extractError(body, status),
+      status,
+      ...(code !== undefined ? { code } : {}),
+    };
   }
   const detail = await pollRunUntilTerminal(base, runId);
   return { ok: true, pipeline: runDetailToPipelineRunResult(detail) };

@@ -123,3 +123,25 @@ export function catalogPathErrorBody(err: CatalogPathError): {
     registered_roots: err.registered_roots,
   };
 }
+
+/**
+ * Local CLI control: turn a cwd-resolved filesystem path into a catalog-relative
+ * wire path + project_root so the network surface does not see an absolute path.
+ */
+export function relativizeLocalPathForNetwork(
+  cwd: string,
+  inputPath: string,
+): { path: string; project_root: string } {
+  const abs = path.resolve(cwd, inputPath);
+  const cwdAbs = realOrResolve(cwd);
+  const rel = path.relative(cwdAbs, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(
+      `Path ${abs} is outside CLI cwd ${cwdAbs}; run from the project root, pass a path under cwd, or use an inline definition on the Host API`,
+    );
+  }
+  return {
+    path: rel === "" ? "." : rel.replace(/\\/g, "/"),
+    project_root: cwdAbs,
+  };
+}

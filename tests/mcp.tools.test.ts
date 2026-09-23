@@ -24,7 +24,7 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { mcpCall } from "./helpers/mcpCall.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -242,7 +242,7 @@ describe("MCP tools and HTTP inline task", () => {
       }
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("docs-only"),
+        pipeline: netPipeline("docs-only"),
         task: { id: "mcp-inline", goal: "from mcp" },
       });
       expect(started.isError).toBe(false);
@@ -262,7 +262,7 @@ describe("MCP tools and HTTP inline task", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
           task: { id: "rest-inline", goal: "from rest" },
         }),
       });
@@ -361,9 +361,9 @@ describe("MCP tools and HTTP inline task", () => {
       { type: "emit", envelope: { status: "success", summary: "b", artifacts: [] } },
     ]);
 
-    // Host is launched pointed at repoA; repoB is only ever reached via an
-    // absolute pipeline path in start_run — proves list_pipelines/list_tasks
-    // pick it up from the run store alone, not from the host's own cwd.
+    // Host is launched pointed at repoA. repoB is registered via a prior run
+    // row so catalog listing can discover it; start_run then uses catalog-relative
+    // paths + project_root (absolute wire paths are refused on network surfaces).
     const { server } = await startUiServer({
       agent,
       cwd: repoA,
@@ -379,23 +379,29 @@ describe("MCP tools and HTTP inline task", () => {
         throw new Error("expected TCP address");
       }
       const base = `http://127.0.0.1:${address.port}`;
+      const realRepoA = await realpath(repoA);
+      const realRepoB = await realpath(repoB);
+
+      await store.createRun({
+        pipelineId: "register-b",
+        taskYaml: "id: seed\ngoal: register root\n",
+        projectRoot: realRepoB,
+      });
 
       const startedA = await mcpCall(base, "start_run", {
-        pipeline: path.join(repoA, "pipelines", "single.pipeline.yaml"),
+        pipeline: netPipeline("single"),
         task: { id: "a-task", goal: "project a" },
       });
       expect(startedA.isError).toBe(false);
       await waitUntilIdleHealth(base);
 
       const startedB = await mcpCall(base, "start_run", {
-        pipeline: path.join(repoB, "pipelines", "single.pipeline.yaml"),
+        pipeline: netPipeline("single"),
+        project_root: realRepoB,
         task: { id: "b-task", goal: "project b" },
       });
       expect(startedB.isError).toBe(false);
       await waitUntilIdleHealth(base);
-
-      const realRepoA = await realpath(repoA);
-      const realRepoB = await realpath(repoB);
 
       const pipelines = await mcpCall(base, "list_pipelines");
       expect(pipelines.isError).toBe(false);
@@ -489,7 +495,7 @@ describe("MCP tools and HTTP inline task", () => {
         expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
 
         const first = await mcpCall(base, "start_run", {
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "holder", goal: "hold", checkout },
         });
         expect(first.isError).toBe(false);
@@ -521,7 +527,7 @@ describe("MCP tools and HTTP inline task", () => {
         });
 
         const overCap = await mcpCall(base, "start_run", {
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "over", goal: "no slot" },
         });
         expect(overCap.isError).toBe(true);
@@ -598,7 +604,7 @@ describe("MCP tools and HTTP inline task", () => {
       const base = `http://127.0.0.1:${address.port}`;
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "a", goal: "first", checkout },
       });
       expect(first.isError).toBe(false);
@@ -611,7 +617,7 @@ describe("MCP tools and HTTP inline task", () => {
       }
 
       const conflict = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "b", goal: "same", checkout },
       });
       expect(conflict.isError).toBe(true);
@@ -924,7 +930,7 @@ describe("MCP Tier 1 operator parity", () => {
       expect(empty.payload.waiting).toEqual([]);
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -1022,7 +1028,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("feedback-loop-wait-human"),
+        pipeline: netPipeline("feedback-loop-wait-human"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -1175,7 +1181,7 @@ describe("MCP Tier 1 operator parity", () => {
       const { server, base, store } = await withMcpServer(root, agent);
       try {
         const started = await mcpCall(base, "start_run", {
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "t", goal: "g" },
         });
         const runId = started.payload.runId as string;
@@ -1216,7 +1222,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1288,7 +1294,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1438,7 +1444,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("linear-explicit"),
+        pipeline: netPipeline("linear-explicit"),
         task_path: "tasks/sample.task.yaml",
       });
       expect(started.isError).toBe(false);
@@ -1547,7 +1553,7 @@ describe("MCP Tier 1 operator parity", () => {
     const { server, base, store } = await withMcpServer(root, agent);
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1585,15 +1591,15 @@ describe("MCP Tier 1 operator parity", () => {
       });
 
       const scoped = await mcpCall(base, "validate", {
-        pipeline: pipelinePath("broken"),
+        pipeline: netPipeline("broken"),
       });
       expect(scoped.isError).toBe(false);
       expect(scoped.payload.ok).toBe(false);
       expect(scoped.payload.findings.length).toBeGreaterThan(0);
 
-      const diamondPath = pipelinePath("diamond-fan-in");
+      const diamondPath = path.join(catalogRoot, "pipelines", "diamond-fan-in.pipeline.yaml");
       const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: diamondPath,
+        pipeline: netPipeline("diamond-fan-in"),
       });
       expect(described.isError).toBe(false);
       expect(described.payload).toEqual(
@@ -1632,8 +1638,10 @@ describe("MCP Tier 1 operator parity", () => {
         "route-if-eq",
         "route-loop-basic",
       ]) {
-        const pipeline = pipelinePath(name);
-        const described = await mcpCall(base, "describe_pipeline", { pipeline });
+        const pipeline = path.join(catalogRoot, "pipelines", `${name}.pipeline.yaml`);
+        const described = await mcpCall(base, "describe_pipeline", {
+          pipeline: netPipeline(name),
+        });
         expect(described.isError).toBe(false);
         expect(described.payload).toEqual(
           describePipeline(await loadPipeline(pipeline, { cwd: catalogRoot })),
@@ -2114,7 +2122,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -2169,7 +2177,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2206,7 +2214,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2268,7 +2276,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2373,7 +2381,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2445,7 +2453,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2641,7 +2649,7 @@ describe("MCP start_run repository binding (U7)", () => {
     const spy = vi.spyOn(RunManager.prototype, "startRun");
     try {
       const tokenReject = await mcpCall(url, "start_run", {
-        pipeline: pipelinePath("docs-only"),
+        pipeline: netPipeline("docs-only"),
         task: { id: "tok", goal: "nope" },
         github_token: "should-not-work",
       });
@@ -2650,7 +2658,7 @@ describe("MCP start_run repository binding (U7)", () => {
       expect(tokenReject.payload.field).toBe("github_token");
 
       const conflict = await mcpCall(url, "start_run", {
-        pipeline: pipelinePath("docs-only"),
+        pipeline: netPipeline("docs-only"),
         task: {
           id: "conflict",
           goal: "both",
@@ -2663,7 +2671,7 @@ describe("MCP start_run repository binding (U7)", () => {
       expect(conflict.payload.code).toBe("task.binding_conflict");
 
       const skipCall = await mcpCall(url, "start_run", {
-        pipeline: pipelinePath("docs-only"),
+        pipeline: netPipeline("docs-only"),
         task: { id: "skip", goal: "gates" },
         skip_gates: true,
         git_sha: "abc",
