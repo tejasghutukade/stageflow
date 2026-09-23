@@ -12,6 +12,7 @@ import {
   runReadyzChecks,
 } from "../diagnostics/checks.js";
 import { buildEgressHealth } from "../net/proxy.js";
+import { toolchainHealthMap } from "../preflight/toolchain.js";
 
 export function handleLivez(
   _req: IncomingMessage,
@@ -88,6 +89,7 @@ export async function buildRichHealthPayload(
     stageflow_home: globalStageflowHome(),
     schema,
     git_version: gitVersion ?? null,
+    toolchain: toolchainHealthMap(),
     store_filesystem: boot.storeFilesystem ?? null,
     egress: buildEgressHealth(),
     catalog_roots: catalogRoots.map((r) => ({

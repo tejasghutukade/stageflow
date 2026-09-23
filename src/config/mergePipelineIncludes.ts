@@ -11,6 +11,7 @@ import {
 } from "./legacyYaml.js";
 import { parseModelField } from "./modelField.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { parseToolRequires, type ToolRequirement } from "./toolRequires.js";
 import {
   classifyYamlDocument,
   collectDocumentKeys,
@@ -167,6 +168,7 @@ export async function mergePipelineStages(
     agent?: string;
     model?: string;
     schemas?: PayloadSchemaMap;
+    requires?: ToolRequirement[];
     warnings: LoadIssue[];
   }>
 > {
@@ -238,6 +240,14 @@ export async function mergePipelineStages(
   if (!schemasOutcome.ok) return schemasOutcome;
   const schemas = schemasOutcome.value;
 
+  const requiresOutcome = parseToolRequires(raw.requires, `pipeline ${absRoot}`, {
+    code: "pipeline.invalid_requires",
+    category: "pipeline",
+    pipelineId,
+  });
+  if (!requiresOutcome.ok) return requiresOutcome;
+  const requires = requiresOutcome.value;
+
   const idLocations = new Map<string, string>();
   const entries: RawMergedEntry[] = [];
   const warnings: LoadIssue[] = [];
@@ -261,6 +271,7 @@ export async function mergePipelineStages(
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(schemas !== undefined ? { schemas } : {}),
+    ...(requires !== undefined ? { requires } : {}),
     warnings,
   });
 }
@@ -277,6 +288,7 @@ export async function mergeInlinePipelineStages(
     agent?: string;
     model?: string;
     schemas?: PayloadSchemaMap;
+    requires?: ToolRequirement[];
     warnings: LoadIssue[];
   }>
 > {
@@ -333,6 +345,18 @@ export async function mergeInlinePipelineStages(
   if (!schemasOutcome.ok) return schemasOutcome;
   const schemas = schemasOutcome.value;
 
+  const requiresOutcome = parseToolRequires(
+    raw.requires,
+    `inline pipeline ${pipelineId}`,
+    {
+      code: "pipeline.invalid_requires",
+      category: "pipeline",
+      pipelineId,
+    },
+  );
+  if (!requiresOutcome.ok) return requiresOutcome;
+  const requires = requiresOutcome.value;
+
   const entries: RawMergedEntry[] = [];
   for (let index = 0; index < raw.stages.length; index++) {
     const entry = raw.stages[index];
@@ -355,6 +379,7 @@ export async function mergeInlinePipelineStages(
     ...(agent !== undefined ? { agent } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(schemas !== undefined ? { schemas } : {}),
+    ...(requires !== undefined ? { requires } : {}),
     warnings: [],
   });
 }

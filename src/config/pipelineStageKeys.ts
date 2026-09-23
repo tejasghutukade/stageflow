@@ -39,6 +39,7 @@ export const BODY_KEYS = new Set([
   "skill",
   "mcp",
   "secrets",
+  "requires",
   "io",
   "verify",
 ]);

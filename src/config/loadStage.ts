@@ -18,6 +18,7 @@ import {
 import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
+import { parseToolRequires } from "./toolRequires.js";
 import {
   classifyYamlDocument,
   compileTargetContract,
@@ -402,6 +403,16 @@ function parseStageFields(
   if (!secretsOutcome.ok) return secretsOutcome;
   if (secretsOutcome.value !== undefined) {
     stage.secrets = secretsOutcome.value;
+  }
+
+  const requiresOutcome = parseToolRequires(raw.requires, `stage ${label}`, {
+    code: "stage.invalid_requires",
+    category: "stage",
+    stageId: entryId,
+  });
+  if (!requiresOutcome.ok) return requiresOutcome;
+  if (requiresOutcome.value !== undefined) {
+    stage.requires = requiresOutcome.value;
   }
 
   const agentField = parseAgentField(raw.agent);

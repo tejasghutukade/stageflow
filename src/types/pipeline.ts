@@ -1,6 +1,7 @@
 import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
+import type { ToolRequirement } from "../config/toolRequires.js";
 
 export type PipelineConfig = {
   id: string;
@@ -11,6 +12,8 @@ export type PipelineConfig = {
   model?: string;
   /** Pipeline-file `$ref` root (`#/schemas/<name>`). */
   schemas?: Record<string, unknown>;
+  /** Declared toolchain binaries this pipeline needs (Slot 9). */
+  requires?: ToolRequirement[];
 };
 
 /** An inline pipeline definition authored directly in a `start_run` call, with no backing file. */
@@ -20,6 +23,7 @@ export type InlinePipelineDefinition = {
   agent?: unknown;
   model?: unknown;
   schemas?: unknown;
+  requires?: unknown;
 };
 
 export type PipelineForkConfig = {
@@ -192,6 +196,7 @@ export type NormalizedPipelineStageEntry = {
   skill?: string;
   mcp?: string[];
   secrets?: StageSecretDecl[];
+  requires?: ToolRequirement[];
   clone_cap?: number;
   clone_mode?: CloneMode;
   body:

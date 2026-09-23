@@ -38,6 +38,7 @@ import type { StageEnvelope } from "../types/envelope.js";
 import type { TaskFile } from "../types/task.js";
 import {
   InlinePipelineTooLargeError,
+  PipelinePreflightError,
   PipelineValidationError,
   QueuedRunActivationAborted,
   startPipeline,
@@ -76,6 +77,10 @@ import { proxyHealthFields } from "../net/proxy.js";
 import { getContainerLimits } from "./containerLimits.js";
 import { stageflowCacheRoot } from "./stageCacheEnv.js";
 import { assertClaudeNotRoot, ClaudeRootError } from "../preflight/claudeRoot.js";
+import {
+  preflightFailureCode,
+  runPipelinePreflight,
+} from "../preflight/pipelinePreflight.js";
 import { asAgentBackendId } from "../agent/agentBackend.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
@@ -2688,8 +2693,32 @@ export class RunManager {
         }
         throw err;
       }
+
+      const preflight = await runPipelinePreflight(loadResult.loaded, {
+        projectRoot: resolvedProjectRoot,
+        forStart: true,
+      });
+      if (!preflight.ok) {
+        const code =
+          (preflightFailureCode(preflight, { forStart: true }) as StartFailureCode) ??
+          "missing_tool";
+        return {
+          ok: false,
+          reason: `Pipeline preflight failed: ${code}`,
+          status: 400,
+          code,
+        };
+      }
     } catch (err) {
       if (err instanceof PipelineValidationError) throw err;
+      if (err instanceof PipelinePreflightError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code as StartFailureCode,
+        };
+      }
       return {
         ok: false,
         reason: err instanceof Error ? err.message : String(err),
@@ -2816,6 +2845,14 @@ export class RunManager {
           reason: err.message,
           status: 400,
           code: err.code,
+        };
+      }
+      if (err instanceof PipelinePreflightError) {
+        return {
+          ok: false,
+          reason: err.message,
+          status: 400,
+          code: err.code as StartFailureCode,
         };
       }
       if (err instanceof PipelineValidationError || err instanceof RunSubmissionExistsError) {

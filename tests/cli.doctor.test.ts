@@ -1,14 +1,22 @@
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runDoctorChecks } from "../src/cli/doctorCommand.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import type { RunStore } from "../src/runstore/port.js";
+import { TOOLCHAIN_MANIFEST_ENV } from "../src/preflight/toolchain.js";
+
+const fixtures = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+);
 
 const temps: string[] = [];
 
 afterEach(() => {
+  delete process.env[TOOLCHAIN_MANIFEST_ENV];
   for (const dir of temps.splice(0)) {
     try {
       chmodSync(dir, 0o755);
@@ -97,6 +105,38 @@ describe("runDoctorChecks", () => {
       const tls = result.checks.find((c) => c.id === "tls_ca_paths");
       expect(tls?.status).toBe("warn");
       expect(tls?.code).toBe("ca_path_missing");
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("--pipeline fails on tool_version_mismatch against injected manifest", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-doctor-pipe-"));
+    temps.push(home);
+    const manifestPath = path.join(home, "toolchain.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        tools: {
+          node: { path: "/usr/bin/node", version: "22.0.0" },
+          pnpm: { path: "/usr/bin/pnpm", version: "9.0.0" },
+          git: { path: "/usr/bin/git", version: "2.43.0" },
+        },
+      }),
+    );
+    const store = createRunStore({ rootDir: home, openerMode: "migrate" });
+    try {
+      const result = await runDoctorChecks({
+        cwd: fixtures,
+        homeDir: home,
+        store,
+        env: { [TOOLCHAIN_MANIFEST_ENV]: manifestPath },
+        pipeline: "pipelines/requires-demo.pipeline.yaml",
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.checks.some((c) => c.code === "tool_version_mismatch"),
+      ).toBe(true);
     } finally {
       await store.close();
     }

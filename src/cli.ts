@@ -36,7 +36,7 @@ import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
-import { DOCTOR_USAGE, runDoctorChecks } from "./cli/doctorCommand.js";
+import { DOCTOR_USAGE, runDoctorCommand } from "./cli/doctorCommand.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
 import { scheduleExitWithDrain } from "./runtime/stageWorkerProtocol.js";
@@ -60,7 +60,7 @@ const USAGE = `Usage:
   sf init
   sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
-  sf doctor [--json]
+  sf doctor [--json] [--pipeline <path>] [--strict]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
@@ -451,22 +451,7 @@ async function main(argv: string[]): Promise<number> {
     }
 
     if (parsed.command === "doctor") {
-      const args = argv.slice(3);
-      const asJson = args.includes("--json");
-      const result = await runDoctorChecks({ cwd: ctx.invocationCwd });
-      if (asJson) {
-        console.log(JSON.stringify(result, null, 2));
-      } else {
-        for (const check of result.checks) {
-          console.log(`[${check.status}] ${check.id}: ${check.message}`);
-        }
-        if (!result.ok) {
-          console.error(
-            "sf doctor reported failures. Do not use doctor as a container HEALTHCHECK; use GET /livez.",
-          );
-        }
-      }
-      return result.ok ? 0 : 1;
+      return runDoctorCommand(argv.slice(3), { cwd: ctx.invocationCwd });
     }
 
     if (parsed.command === "graph") {

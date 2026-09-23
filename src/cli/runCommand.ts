@@ -4,7 +4,7 @@ import { parse as parseYaml } from "yaml";
 import { coerceTaskFile } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
 import { relativizeLocalPathForNetwork } from "../config/catalogRelativePath.js";
-import { PipelineValidationError } from "../runtime/pipelineRunner.js";
+import { PipelinePreflightError, PipelineValidationError } from "../runtime/pipelineRunner.js";
 import type { StartRunResult } from "../runtime/runManager.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -373,6 +373,14 @@ export async function runRunCommand(
         out.error(formatValidationHuman(err.result));
       }
       return exitCodeForValidation(err.result);
+    }
+    if (err instanceof PipelinePreflightError) {
+      if (parsed.json) {
+        out.log(JSON.stringify(err.toNetworkBody(), null, 2));
+      } else {
+        out.error(err.message);
+      }
+      return 1;
     }
     out.error(err instanceof Error ? err.message : String(err));
     return 1;

@@ -38,6 +38,7 @@ import {
   collectRouteIfIllegalCombos,
   collectRouteAllGatedWarnings,
 } from "./routeIf.js";
+import { mergeToolRequires, type ToolRequirement } from "./toolRequires.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
@@ -202,6 +203,7 @@ async function buildLoadedPipelineFromMerge(
     agent?: string;
     model?: string;
     schemas?: PayloadSchemaMap;
+    requires?: ToolRequirement[];
     warnings: LoadIssue[];
   },
   options: { projectRoot: string; requireIo: boolean; pipelinePath: string },
@@ -213,6 +215,7 @@ async function buildLoadedPipelineFromMerge(
     agent: pipelineAgent,
     model: pipelineModel,
     schemas: pipelineSchemas,
+    requires: pipelineRequires,
     warnings: mergeWarnings,
   } = merge;
   const ctx = { pipelineId, path: pipelinePath };
@@ -272,7 +275,16 @@ async function buildLoadedPipelineFromMerge(
       if (!inlineOutcome.ok) {
         return loadFailure(inlineOutcome.issues);
       }
-      stages.push(inlineOutcome.value);
+      let stage = inlineOutcome.value;
+      if (entry.requires !== undefined) {
+        const merged = mergeToolRequires(
+          [stage.requires, entry.requires],
+          { pipelineId, label: `stage "${entry.id}"` },
+        );
+        if (!merged.ok) return loadFailure(merged.issues);
+        stage = { ...stage, requires: merged.value };
+      }
+      stages.push(stage);
       stageSources[stageId] = { kind: "inline" };
       continue;
     }
@@ -323,11 +335,22 @@ async function buildLoadedPipelineFromMerge(
       ]);
     }
 
+    let stageRequires = stageOutcome.value.requires;
+    if (entry.requires !== undefined) {
+      const merged = mergeToolRequires(
+        [stageRequires, entry.requires],
+        { pipelineId, label: `stage "${entry.id}"` },
+      );
+      if (!merged.ok) return loadFailure(merged.issues);
+      stageRequires = merged.value;
+    }
+
     const stage: StageConfig = {
       ...stageOutcome.value,
       ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
       ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
       ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),
+      ...(stageRequires !== undefined ? { requires: stageRequires } : {}),
     };
     stages.push(stage);
     stageSources[stageId] = { kind: "file", path: entry.body.absolutePath };
@@ -386,7 +409,14 @@ async function buildLoadedPipelineFromMerge(
     ...(pipelineAgent !== undefined ? { agent: pipelineAgent } : {}),
     ...(pipelineModel !== undefined ? { model: pipelineModel } : {}),
     ...(pipelineSchemas !== undefined ? { schemas: pipelineSchemas } : {}),
+    ...(pipelineRequires !== undefined ? { requires: pipelineRequires } : {}),
   };
+
+  const effectiveRequires = mergeToolRequires(
+    [pipelineRequires, ...loadedStages.map((s) => s.requires)],
+    { pipelineId },
+  );
+  if (!effectiveRequires.ok) return loadFailure(effectiveRequires.issues);
 
   const nodeById = new Map(dag.nodes.map((node) => [node.id, node]));
   for (const [stageId, after] of fileAfterById) {

@@ -30,8 +30,34 @@ import { PipelineValidationError } from "./pipelineValidationError.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { checkTaskEntryInput } from "./taskInput.js";
 import { pipelinePersistenceForStart } from "./startPayload.js";
+import {
+  preflightFailureCode,
+  runPipelinePreflight,
+} from "../preflight/pipelinePreflight.js";
+import { networkError } from "../errors/codes.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
+
+export class PipelinePreflightError extends Error {
+  readonly code: string;
+  readonly preflight: Awaited<ReturnType<typeof runPipelinePreflight>>;
+
+  constructor(
+    code: string,
+    preflight: Awaited<ReturnType<typeof runPipelinePreflight>>,
+  ) {
+    super(`Pipeline preflight failed: ${code}`);
+    this.name = "PipelinePreflightError";
+    this.code = code;
+    this.preflight = preflight;
+  }
+
+  toNetworkBody() {
+    return networkError(this.code, this.message, {
+      checks: this.preflight.checks,
+    });
+  }
+}
 
 export type PipelineRunOutcome = "succeeded" | "failed" | "waiting" | "cancelled";
 
@@ -159,6 +185,16 @@ async function preparePipeline(options: {
     );
   }
   const loaded = loadResult.loaded;
+
+  const preflight = await runPipelinePreflight(loaded, {
+    projectRoot: options.projectRoot ?? options.cwd,
+    forStart: true,
+  });
+  if (!preflight.ok) {
+    const code =
+      preflightFailureCode(preflight, { forStart: true }) ?? "missing_tool";
+    throw new PipelinePreflightError(code, preflight);
+  }
 
   const taskYaml =
     options.taskYaml ??

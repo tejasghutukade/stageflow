@@ -41,6 +41,11 @@ export type StartFailureCode =
   | "task.load_error"
   | "start.token_rejected"
   | "inline_pipeline_too_large"
+  | "missing_tool"
+  | "tool_version_mismatch"
+  | "unknown_version"
+  | "secret_unavailable"
+  | "unresolved_var"
   | "shutting_down"
   | "autostart_disabled"
   | "claude_as_root";

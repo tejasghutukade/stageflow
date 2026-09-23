@@ -10,6 +10,11 @@ import {
 import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
 import { assertBashAvailable } from "../preflight/bash.js";
 import { warnMissingCaPaths } from "../preflight/tls.js";
+import {
+  runPipelinePreflight,
+  type PipelinePreflightResult,
+} from "../preflight/pipelinePreflight.js";
+import { loadPipelineOutcome } from "../config/loadPipeline.js";
 import { MCP_CATALOG_FILENAME } from "../config/resolveStageMcpServers.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore } from "../runstore/createStore.js";
@@ -31,6 +36,17 @@ export type DoctorCheck = {
 export type DoctorResult = {
   ok: boolean;
   checks: DoctorCheck[];
+  preflight?: PipelinePreflightResult;
+};
+
+export type DoctorCommandIo = {
+  log: (line: string) => void;
+  error: (line: string) => void;
+};
+
+const defaultIo: DoctorCommandIo = {
+  log: (line) => console.log(line),
+  error: (line) => console.error(line),
 };
 
 const PROVIDER_KEY_RE = /^STAGEFLOW_PROVIDER_([A-Za-z0-9_]+)_API_KEY$/;
@@ -284,15 +300,50 @@ async function mcpCommandsCheck(cwd: string): Promise<DoctorCheck[]> {
   }
 }
 
+function preflightToDoctorChecks(
+  preflight: PipelinePreflightResult,
+  strict: boolean,
+): DoctorCheck[] {
+  return preflight.checks.map((c, i) => {
+    const id =
+      c.kind === "toolchain"
+        ? `toolchain:${c.tool ?? i}`
+        : c.kind === "secret"
+          ? `secret:${c.secret ?? i}`
+          : `mcp:${c.server ?? c.stageId ?? i}`;
+    let status: DoctorCheckStatus = "pass";
+    if (c.status === "ok") {
+      status = "pass";
+    } else if (c.status === "unknown_version" && !strict) {
+      status = "warn";
+    } else {
+      status = "fail";
+    }
+    return {
+      id,
+      status,
+      code: c.status === "ok" ? undefined : c.status,
+      message:
+        c.message ??
+        (c.kind === "toolchain"
+          ? `${c.tool}: ${c.status}${c.required ? ` (required ${c.required})` : ""}${c.found ? `; found ${c.found}` : ""}`
+          : c.status),
+    };
+  });
+}
+
 export async function runDoctorChecks(options?: {
   cwd?: string;
   homeDir?: string;
   store?: RunStore;
   env?: NodeJS.ProcessEnv;
+  pipeline?: string;
+  strict?: boolean;
 }): Promise<DoctorResult> {
   const cwd = options?.cwd ?? process.cwd();
   const home = options?.homeDir ?? globalStageflowHome();
   const env = options?.env ?? process.env;
+  const strict = options?.strict === true;
   const checks: DoctorCheck[] = [];
 
   let store = options?.store;
@@ -328,6 +379,26 @@ export async function runDoctorChecks(options?: {
   checks.push(await freeDiskCheck(home, env));
   checks.push(...(await mcpCommandsCheck(cwd)));
 
+  let preflight: PipelinePreflightResult | undefined;
+  if (options?.pipeline !== undefined) {
+    const outcome = await loadPipelineOutcome(options.pipeline, { cwd });
+    if (!outcome.ok) {
+      checks.push({
+        id: "pipeline_load",
+        status: "fail",
+        code: outcome.issues[0]?.code ?? "pipeline.load_error",
+        message: outcome.issues[0]?.message ?? "Failed to load pipeline",
+      });
+    } else {
+      preflight = await runPipelinePreflight(outcome.value, {
+        projectRoot: cwd,
+        hostEnv: env,
+        strict,
+      });
+      checks.push(...preflightToDoctorChecks(preflight, strict));
+    }
+  }
+
   if (closeStore && store !== undefined) {
     try {
       await store.close();
@@ -337,12 +408,91 @@ export async function runDoctorChecks(options?: {
   }
 
   const ok = !checks.some((c) => c.status === "fail");
-  return { ok, checks };
+  return { ok, checks, ...(preflight !== undefined ? { preflight } : {}) };
+}
+
+type ParsedDoctorArgs = {
+  help: boolean;
+  json: boolean;
+  strict: boolean;
+  pipeline?: string;
+};
+
+function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
+  let help = false;
+  let json = false;
+  let strict = false;
+  let pipeline: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--help" || arg === "-h") {
+      help = true;
+    } else if (arg === "--json") {
+      json = true;
+    } else if (arg === "--strict") {
+      strict = true;
+    } else if (arg === "--pipeline") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --pipeline");
+      }
+      pipeline = value;
+    } else if (arg.startsWith("-")) {
+      throw new Error(`Unknown flag: ${arg}`);
+    } else {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+  }
+  return { help, json, strict, pipeline };
+}
+
+export async function runDoctorCommand(
+  args: string[],
+  options: {
+    cwd?: string;
+    io?: Partial<DoctorCommandIo>;
+    runChecks?: typeof runDoctorChecks;
+  } = {},
+): Promise<number> {
+  const out: DoctorCommandIo = { ...defaultIo, ...options.io };
+  const runChecks = options.runChecks ?? runDoctorChecks;
+  try {
+    const parsed = parseDoctorArgs(args);
+    if (parsed.help) {
+      out.error(DOCTOR_USAGE);
+      return 0;
+    }
+    const result = await runChecks({
+      cwd: options.cwd,
+      pipeline: parsed.pipeline,
+      strict: parsed.strict,
+    });
+    if (parsed.json) {
+      out.log(JSON.stringify(result, null, 2));
+    } else {
+      for (const check of result.checks) {
+        out.log(`[${check.status}] ${check.id}: ${check.message}`);
+      }
+      if (!result.ok) {
+        out.error(
+          "sf doctor reported failures. Do not use doctor as a container HEALTHCHECK; use GET /livez.",
+        );
+      }
+    }
+    return result.ok ? 0 : 1;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    out.error(message);
+    out.error(DOCTOR_USAGE);
+    return 1;
+  }
 }
 
 export const DOCTOR_USAGE = `Usage:
-  sf doctor [--json]
+  sf doctor [--json] [--pipeline <path>] [--strict]
 
 Run Host preflight checks (shared /readyz store/home/migrations/git, plus bash, Node, credentials, TLS CA paths, free disk, MCP commands).
+With --pipeline, also checks pipeline requires:/secrets:/mcp against the toolchain manifest and curated stage env.
+--strict treats unknown_version as failure (default: warn/pass).
 Do not use sf doctor as a container HEALTHCHECK — use GET /livez instead.
 `;

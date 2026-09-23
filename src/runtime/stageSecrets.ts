@@ -108,6 +108,33 @@ export type ResolveStageSecretsResult = {
   credentialDirs: string[];
 };
 
+/** Presence-only check (no materialisation) for preflight / start gates. */
+export function assertSecretPresent(
+  name: string,
+  registry: SecretRegistry,
+  hostEnv: NodeJS.ProcessEnv,
+): void {
+  if (isForeverDeniedSecret(name)) {
+    throw new Error(`secret "${name}" is permanently denied`);
+  }
+  const entry = registry.get(name);
+  if (entry === undefined) {
+    throw new Error(`stage.unknown_secret: "${name}"`);
+  }
+  if (entry.kind === "file") {
+    try {
+      readFileSync(entry.source, "utf8");
+    } catch {
+      throw new SecretUnavailableError(name);
+    }
+    return;
+  }
+  const value = readEnvSecretValue(name, hostEnv);
+  if (value === undefined || value === "") {
+    throw new SecretUnavailableError(name);
+  }
+}
+
 export function resolveStageSecrets(
   input: ResolveStageSecretsInput,
 ): ResolveStageSecretsResult {

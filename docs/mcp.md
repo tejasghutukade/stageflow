@@ -401,34 +401,27 @@ Use `list_waiting` / nested `get_run` fields (`waiting_kind`, `feedback_loop_id`
 
 ### `get_health`
 
-Server health, soft-max run capacity, and on-demand durable-root disk breakdown.
+Server health, soft-max run capacity, toolchain map (from the image manifest with PATH fallback), and on-demand durable-root disk breakdown.
 
 **Input:** `{}`
 
-**Output:**
+**Output:** includes capacity fields, `version`, `build_sha`, `toolchain` (map of tool → version string), and `disk` breakdown.
 
-```json
-{
-  "ok": true,
-  "activeRunIds": [],
-  "activeCount": 0,
-  "maxConcurrent": 3,
-  "slotsAvailable": 3,
-  "activeStageProcesses": 0,
-  "maxActiveStageProcesses": null,
-  "version": "0.20.0",
-  "disk": {
-    "runs_bytes": 0,
-    "worktrees_bytes": 0,
-    "repos_bytes": 0,
-    "state_db_bytes": 0,
-    "a2a_artifacts_bytes": 0,
-    "free_bytes": 0
-  }
-}
-```
+### `preflight`
 
-`version` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
+Check a pipeline's `requires:`, declared `secrets:`, and stage MCP `${VAR}` resolution **before** `start_run`. Does not create a Run.
+
+**Input:**
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `pipeline` | string \| object | Catalog-relative path or inline `{ id, stages, … }` (same union as `start_run`) |
+| `project_root` | string | Optional catalog root |
+| `strict` | boolean | When true, `unknown_version` fails (default: pass) |
+
+**Output:** `{ ok, checks: [{ kind, status, tool?, required?, found?, … }], code? }` where toolchain `status` is `ok` \| `missing_tool` \| `tool_version_mismatch` \| `unknown_version`. `start_run` runs the same gate and fails with those codes before `createRun`.
+
+`version` on `get_health` is the running server's npm package version — compare it against the version you built your integration against to detect a behavior change that isn't visible as a tool being added or removed.
 
 `disk` is computed on demand: category byte totals under the durable root plus free space on that filesystem. When the walk fails, the Host still returns capacity fields and may omit or zero the breakdown.
 

@@ -17,6 +17,7 @@ import { validateCatalog, type ValidationResult } from "../config/validateCatalo
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
 import type { McpToolDeps } from "./deps.js";
 import { projectRunForMcp } from "./projectRun.js";
@@ -27,6 +28,15 @@ import {
   pickCheckoutOverride,
   tokenRejectedPayload,
 } from "../runtime/startPayload.js";
+import {
+  loadPipelineFromObjectOutcome,
+  loadPipelineOutcome,
+} from "../config/loadPipeline.js";
+import {
+  preflightFailureCode,
+  runPipelinePreflight,
+} from "../preflight/pipelinePreflight.js";
+import { toolchainHealthMap } from "../preflight/toolchain.js";
 
 const gitIdentitySchema = z
   .object({
@@ -62,6 +72,7 @@ const inlinePipelineSchema = z
     agent: z.unknown().optional(),
     model: z.unknown().optional(),
     schemas: z.unknown().optional(),
+    requires: z.unknown().optional(),
   })
   .strict();
 
@@ -253,7 +264,95 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         ...(await manager.getHealthWithDisk()),
         version: PACKAGE_VERSION,
         build_sha: BUILD_SHA,
+        toolchain: toolchainHealthMap(),
       }),
+  );
+
+  server.registerTool(
+    "preflight",
+    {
+      description:
+        "Check pipeline requires:/secrets:/mcp against the Host toolchain manifest and curated stage env before start_run. Accepts pipeline path or inline definition (same union as start_run). Returns { ok, checks } with status ok|missing_tool|tool_version_mismatch|unknown_version|secret_unavailable|unresolved_var. Does not create a Run. unknown_version is ok unless strict:true.",
+      inputSchema: z.object({
+        pipeline: z
+          .union([z.string(), inlinePipelineSchema])
+          .describe(
+            "Catalog-relative pipeline path, or an inline pipeline definition object",
+          ),
+        project_root: z.string().optional(),
+        strict: z
+          .boolean()
+          .optional()
+          .describe("When true, unknown_version fails (default false)"),
+      }),
+    },
+    async ({ pipeline, project_root, strict }) => {
+      const roots = await resolveCatalogRoots({
+        store: deps.store,
+        bootCwd: deps.cwd,
+      });
+      let projectRoot = project_root ?? deps.cwd;
+      let loaded;
+      try {
+        if (typeof pipeline === "string") {
+          const resolved = resolveCatalogRelativePath({
+            inputPath: pipeline,
+            projectRoot: project_root,
+            roots,
+            fieldName: "pipeline",
+          });
+          projectRoot = resolved.root.project_root;
+          const outcome = await loadPipelineOutcome(resolved.absolutePath, {
+            cwd: deps.cwd,
+            projectRoot,
+          });
+          if (!outcome.ok) {
+            return textResult(
+              {
+                ok: false,
+                error: outcome.issues[0]?.message ?? "pipeline load failed",
+                code: outcome.issues[0]?.code ?? "config_invalid",
+                issues: outcome.issues,
+              },
+              true,
+            );
+          }
+          loaded = outcome.value;
+        } else {
+          const outcome = await loadPipelineFromObjectOutcome(pipeline, {
+            cwd: deps.cwd,
+            projectRoot,
+          });
+          if (!outcome.ok) {
+            return textResult(
+              {
+                ok: false,
+                error: outcome.issues[0]?.message ?? "pipeline load failed",
+                code: outcome.issues[0]?.code ?? "config_invalid",
+                issues: outcome.issues,
+              },
+              true,
+            );
+          }
+          loaded = outcome.value;
+        }
+      } catch (err) {
+        if (err instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(err), true);
+        }
+        throw err;
+      }
+      const result = await runPipelinePreflight(loaded, {
+        projectRoot,
+        strict: strict === true,
+      });
+      const code = preflightFailureCode(result, { strict: strict === true });
+      return textResult({
+        ok: result.ok,
+        checks: result.checks,
+        ...(code !== undefined ? { code } : {}),
+      });
+    },
   );
 
   server.registerTool(
@@ -345,6 +444,9 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
             { error: "Pipeline validation failed", validation: err.result },
             true,
           );
+        }
+        if (err instanceof PipelinePreflightError) {
+          return textResult(err.toNetworkBody(), true);
         }
         throw err;
       }

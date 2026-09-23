@@ -5,6 +5,7 @@ import { listPipelinesMultiProject, listTasksMultiProject } from "../config/mult
 import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
+import { toolchainHealthMap } from "../preflight/toolchain.js";
 
 export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): void {
   server.registerTool(
@@ -50,7 +51,7 @@ export function registerGetStartedTool(server: McpServer, deps: McpToolDeps): vo
         providers: deps.providerAuthContext
           ? { note: "Use list_providers for status" }
           : { configured: [] },
-        toolchain: { node: process.version },
+        toolchain: toolchainHealthMap(),
         catalog_roots,
         next_steps: [
           {

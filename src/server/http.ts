@@ -60,6 +60,7 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
 import type {
   AbandonStageResult,
   CancelRunResult,
@@ -717,6 +718,10 @@ export function createOperatorRoutes(
                 error: "Pipeline validation failed",
                 validation: err.result,
               });
+              return true;
+            }
+            if (err instanceof PipelinePreflightError) {
+              json(res, 400, err.toNetworkBody());
               return true;
             }
             throw err;

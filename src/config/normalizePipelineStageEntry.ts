@@ -14,6 +14,7 @@ import type {
 import { loadFailure, loadSuccess, type LoadOutcome } from "./loadOutcome.js";
 import { parseStageMcp } from "./loadStage.js";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
+import { parseToolRequires } from "./toolRequires.js";
 import { legacyAuthoringRejected, presentLegacyKeys } from "./legacyYaml.js";
 import {
   compileTargetContract,
@@ -62,7 +63,8 @@ function hasBodyKey(raw: Record<string, unknown>): boolean {
       BODY_KEYS.has(key) &&
       key !== "skill" &&
       key !== "mcp" &&
-      key !== "secrets",
+      key !== "secrets" &&
+      key !== "requires",
   );
 }
 
@@ -159,6 +161,16 @@ export function normalizePipelineStageEntries(
     );
     if (!secretsOutcome.ok) return secretsOutcome;
     const secrets = secretsOutcome.value;
+    const requiresOutcome = parseToolRequires(
+      raw.requires,
+      `stage entry at index ${index} in ${declaringPath}`,
+      {
+        code: "stage.invalid_requires",
+        category: "stage",
+      },
+    );
+    if (!requiresOutcome.ok) return requiresOutcome;
+    const requires = requiresOutcome.value;
 
     if (uses && hasBody) {
       return loadFailure([
@@ -398,6 +410,7 @@ export function normalizePipelineStageEntries(
       ...(skill !== undefined ? { skill } : {}),
       ...(mcp !== undefined ? { mcp } : {}),
       ...(secrets !== undefined ? { secrets } : {}),
+      ...(requires !== undefined ? { requires } : {}),
       ...(cloneCap !== undefined ? { clone_cap: cloneCap } : {}),
       ...(cloneMode !== undefined ? { clone_mode: cloneMode } : {}),
     };
