@@ -19,6 +19,12 @@ import {
   listPipelinesMultiProject,
   listTasksMultiProject,
 } from "../config/multiProjectCatalog.js";
+import {
+  catalogPathErrorBody,
+  CatalogPathError,
+  resolveCatalogRelativePath,
+} from "../config/catalogRelativePath.js";
+import { resolveCatalogRoots } from "../config/resolveCatalogRoots.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
@@ -442,6 +448,7 @@ export function createOperatorRoutes(
           const typed = body as {
             task?: string | TaskFile;
             pipeline?: string;
+            project_root?: string;
             checkoutOverride?: string;
             skipGates?: boolean;
             gitSha?: string;
@@ -480,11 +487,36 @@ export function createOperatorRoutes(
               return true;
             }
           }
+          const roots = await resolveCatalogRoots({ store, bootCwd: cwd });
+          let pipelinePath = typed.pipeline.trim();
+          let taskInput: string | TaskFile = typed.task;
+          try {
+            pipelinePath = resolveCatalogRelativePath({
+              inputPath: pipelinePath,
+              projectRoot: typed.project_root,
+              roots,
+              fieldName: "pipeline",
+            }).absolutePath;
+            if (typeof typed.task === "string") {
+              taskInput = resolveCatalogRelativePath({
+                inputPath: typed.task,
+                projectRoot: typed.project_root,
+                roots,
+                fieldName: "task",
+              }).absolutePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           let result: Awaited<ReturnType<typeof manager.startRun>>;
           try {
             result = await manager.startRun({
-              task: typed.task,
-              pipeline: typed.pipeline.trim(),
+              task: taskInput,
+              pipeline: pipelinePath,
               ...(typed.checkoutOverride !== undefined
                 ? { checkoutOverride: typed.checkoutOverride }
                 : {}),

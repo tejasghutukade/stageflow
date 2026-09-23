@@ -2,10 +2,10 @@ import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
 import {
-  browseCatalog,
-  type PipelineListing,
-  type TaskListing,
-} from "../config/browseCatalog.js";
+  catalogPathErrorBody,
+  CatalogPathError,
+  resolveCatalogRelativePath,
+} from "../config/catalogRelativePath.js";
 import {
   listModelsMultiProject,
   listPipelinesMultiProject,
@@ -16,7 +16,6 @@ import { describePipeline } from "../config/describePipeline.js";
 import { loadPipeline } from "../config/loadPipeline.js";
 import { validateCatalog, type ValidationResult } from "../config/validateCatalog.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
-import { findProjectRoot } from "../project/findProjectRoot.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { mapStoreLookupError } from "../server/operatorResults.js";
@@ -28,12 +27,6 @@ import {
   findTokenShapedField,
   tokenRejectedPayload,
 } from "../runtime/startPayload.js";
-
-/** Resolve which project a given catalog path (pipeline/task) belongs to. */
-function projectRootForPath(deps: McpToolDeps, catalogPath: string): string {
-  const absDir = path.dirname(path.resolve(deps.cwd, catalogPath));
-  return findProjectRoot(absDir) ?? deps.cwd;
-}
 
 const gitIdentitySchema = z
   .object({
@@ -77,10 +70,11 @@ const startRunSchema = z
     pipeline: z
       .union([z.string(), inlinePipelineSchema])
       .describe(
-        "Filesystem path to a pipeline YAML file, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
+        "Catalog-relative pipeline path, or an inline pipeline definition object ({ id, stages: [...] }) authored directly in this call",
       ),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
+    project_root: z.string().optional(),
     checkout_override: z.string().optional(),
     skip_gates: z.boolean().optional(),
     git_sha: z.string().optional(),
@@ -265,6 +259,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         pipeline,
         task_path,
         task,
+        project_root,
         checkout_override,
         skip_gates,
         git_sha,
@@ -278,11 +273,40 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       if (taskInput === undefined) {
         return textResult({ error: "Exactly one of task_path or task is required" }, true);
       }
+      const roots = await resolveCatalogRoots({
+        store: deps.store,
+        bootCwd: deps.cwd,
+      });
+      let resolvedPipeline: typeof pipeline = pipeline;
+      let resolvedTask: typeof taskInput = taskInput;
+      try {
+        if (typeof pipeline === "string") {
+          resolvedPipeline = resolveCatalogRelativePath({
+            inputPath: pipeline,
+            projectRoot: project_root,
+            roots,
+            fieldName: "pipeline",
+          }).absolutePath;
+        }
+        if (typeof task_path === "string") {
+          resolvedTask = resolveCatalogRelativePath({
+            inputPath: task_path,
+            projectRoot: project_root,
+            roots,
+            fieldName: "task_path",
+          }).absolutePath;
+        }
+      } catch (err) {
+        if (err instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(err), true);
+        }
+        throw err;
+      }
       let result;
       try {
         result = await manager.startRun({
-          pipeline,
-          task: taskInput,
+          pipeline: resolvedPipeline,
+          task: resolvedTask,
           ...(checkout_override !== undefined
             ? { checkoutOverride: checkout_override }
             : {}),
@@ -427,13 +451,32 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
         }
 
         const target = scope === "pipeline" ? pipeline!.trim() : task!.trim();
-        const projectRoot = projectRootForPath(deps, target);
+        const roots = await resolveCatalogRoots({
+          store: deps.store,
+          bootCwd: deps.cwd,
+        });
+        let resolvedTarget = target;
+        let projectRoot = deps.cwd;
+        try {
+          const resolved = resolveCatalogRelativePath({
+            inputPath: target,
+            roots,
+            fieldName: scope === "pipeline" ? "pipeline" : "task",
+          });
+          resolvedTarget = resolved.absolutePath;
+          projectRoot = resolved.root.path;
+        } catch (err) {
+          if (err instanceof CatalogPathError) {
+            return textResult(catalogPathErrorBody(err), true);
+          }
+          throw err;
+        }
         const result = await validateCatalog({
           cwd: projectRoot,
           scope,
           projectRoot,
-          ...(scope === "pipeline" ? { pipeline: target } : {}),
-          ...(scope === "task" ? { task: target } : {}),
+          ...(scope === "pipeline" ? { pipeline: resolvedTarget } : {}),
+          ...(scope === "task" ? { task: resolvedTarget } : {}),
           strict: strict ?? false,
         });
         return textResult(result);
@@ -448,23 +491,37 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "describe_pipeline",
     {
       description:
-        "Describe a pipeline DAG from a filesystem path (same as start_run): stages with inbound needs (id, on, optional if), fork, gate_kinds, Clone Chain clone_cap and clone_mode, and feedback_loop, entry, and replay_safe when set.",
+        "Describe a pipeline DAG from a catalog-relative path (same path contract as start_run): stages with inbound needs (id, on, optional if), fork, gate_kinds, Clone Chain clone_cap and clone_mode, and feedback_loop, entry, and replay_safe when set.",
       inputSchema: z.object({
         pipeline: z.string(),
+        project_root: z.string().optional(),
       }),
     },
-    async ({ pipeline }) => {
+    async ({ pipeline, project_root }) => {
       if (!pipeline.trim()) {
         return textResult({ error: "pipeline is required", status: 400 }, true);
       }
       try {
-        const loaded = await loadPipeline(pipeline.trim(), {
-          cwd: projectRootForPath(deps, pipeline.trim()),
+        const roots = await resolveCatalogRoots({
+          store: deps.store,
+          bootCwd: deps.cwd,
+        });
+        const resolved = resolveCatalogRelativePath({
+          inputPath: pipeline.trim(),
+          projectRoot: project_root,
+          roots,
+          fieldName: "pipeline",
+        });
+        const loaded = await loadPipeline(resolved.absolutePath, {
+          projectRoot: resolved.root.path,
         });
         return textResult(describePipeline(loaded));
       } catch (err) {
+        if (err instanceof CatalogPathError) {
+          return textResult(catalogPathErrorBody(err), true);
+        }
         const message = err instanceof Error ? err.message : String(err);
-        return textResult({ error: message, status: 404 }, true);
+        return textResult({ error: message, status: 400 }, true);
       }
     },
   );
