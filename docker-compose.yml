@@ -1,0 +1,18 @@
+services:
+  stageflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/tejasghutukade/stageflow:local
+    ports:
+      - "3847:3847"
+    environment:
+      STAGEFLOW_HOME: /data
+      TMPDIR: /data/tmp
+      STAGEFLOW_CONTROL_TOKEN: ${STAGEFLOW_CONTROL_TOKEN:?set STAGEFLOW_CONTROL_TOKEN to a 32+ character secret}
+    volumes:
+      - stageflow-data:/data
+    restart: unless-stopped
+
+volumes:
+  stageflow-data:

@@ -5,9 +5,78 @@ title: Docker and self-hosting
 
 # Docker and self-hosting
 
-This page describes Stageflow’s **finished** data-safety and ops contracts for self-hosted Hosts (including containers). The Dockerfile / GHCR publish job consume these values; they are not shipped in this slot.
+This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. Multi-arch GHCR publish (`ghcr.io/tejasghutukade/stageflow`) lands with the release workflow (Slot 10 unit U3); until then, build locally with Compose or `docker build`.
 
 See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
+
+## Never mount the Docker socket
+
+**Never mount `/var/run/docker.sock` (or any Docker API socket) into a Stageflow container.** Mounting the socket is a host-root escape: the process inside the container can control the Docker daemon as root on the host. Stageflow does not need Docker-in-Docker; do not use `--privileged` or grant extra capabilities for that purpose either.
+
+The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mount, no `privileged`, and no extra caps. The [hardened egress reference](#hardened-egress-reference-compose) below is documentation only — it is not a second product compose file.
+
+## Local try (Compose)
+
+From the repo root, generate a drive token (≥32 characters, no whitespace), then start the Host. The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data` and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). This is a **local try** surface — not the hardened egress sandbox.
+
+```bash
+# Generate a 32+ character control token (required: image binds 0.0.0.0)
+export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
+# or: python3 -c 'import secrets; print(secrets.token_hex(32))'
+
+docker compose up --build -d
+
+# Health probe (no bearer; Host/Origin from localhost is fine)
+curl -fsS http://127.0.0.1:3847/livez
+# → {"ok":true,"status":"live",…}
+```
+
+Prefer a file secret when the token must not appear in the process environment on the host:
+
+```bash
+openssl rand -hex 32 > .stageflow-control-token
+chmod 600 .stageflow-control-token
+# Point STAGEFLOW_CONTROL_TOKEN_FILE at that path inside the container
+# (e.g. bind-mount the file and set STAGEFLOW_CONTROL_TOKEN_FILE=/run/secrets/…),
+# or pass STAGEFLOW_CONTROL_TOKEN from the env as above.
+```
+
+Override the default `sf mcp` command only when you need the operator console (`sf ui`); MCP-first remains the container default.
+
+## Pull and run (GHCR)
+
+Intended image name: **`ghcr.io/tejasghutukade/stageflow`**. After GHCR publish ships (U3), pull a digest-pinned tag and run with a named volume + control token:
+
+```bash
+export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
+docker pull ghcr.io/tejasghutukade/stageflow:x.y.z   # or @sha256:<digest>
+docker run --rm \
+  -e STAGEFLOW_HOME=/data \
+  -e TMPDIR=/data/tmp \
+  -e STAGEFLOW_CONTROL_TOKEN \
+  -v stageflow-data:/data \
+  -p 3847:3847 \
+  ghcr.io/tejasghutukade/stageflow:x.y.z
+```
+
+Verify cosign attestations with the [snippet below](#provenance) once digests are published. Prefer digest pins (`@sha256:…`) over floating tags for production.
+
+To use a published image with the shipped compose file instead of a local build, set `image: ghcr.io/tejasghutukade/stageflow:x.y.z` (or a digest) and omit or skip `build:`.
+
+## Derived images
+
+The base image does **not** install `gh` or other pipeline-specific CLIs. When a catalog’s `requires:` needs extra tools, derive:
+
+```dockerfile
+FROM ghcr.io/tejasghutukade/stageflow:x.y.z
+USER root
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends <your-tools> \
+  && rm -rf /var/lib/apt/lists/*
+USER stageflow:stageflow
+```
+
+Stageflow does not build derived images from `requires:` automatically — `requires` tells operators (and `sf doctor` / preflight) what the image must provide.
 
 ## Precious vs disposable
 
@@ -102,7 +171,9 @@ Stages run with shell tools and inherit curated proxy/CA variables. Stageflow do
 
 Reference posture: Host on an `internal: true` network behind a domain-allowlisting forward proxy; `NO_PROXY` must include loopback for Host self-probes.
 
-### Reference compose (documentation only — not a shipped file)
+### Hardened egress reference compose {#hardened-egress-reference-compose}
+
+Documentation only — **not** a shipped root file. Do not replace [`docker-compose.yml`](../docker-compose.yml) with this unmarked. Adapt for your proxy image and secrets store; still never mount `docker.sock`.
 
 ```yaml
 services:

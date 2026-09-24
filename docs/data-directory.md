@@ -40,7 +40,7 @@ Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is
 
 ## Container image user and volumes
 
-The published image runs as **`1000:1000`**. Named volumes are the default mount for the durable root. The process never recursively changes ownership of the data root on boot — if the volume is not writable by that uid/gid, startup fails with a message that includes the live uid and a `chown` hint.
+The published image runs as **`10001:10001`** (`stageflow`). Named volumes are the default mount for the durable root. The process never recursively changes ownership of the data root on boot — if the volume is not writable by that uid/gid, startup fails with a message that includes the live uid and a `chown` hint.
 
 ## Version support
 
