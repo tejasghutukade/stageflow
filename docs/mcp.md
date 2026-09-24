@@ -36,9 +36,11 @@ Sessions enable run **resource subscribe** and `notifications/resources/updated`
 
 ### Backup, export, and restore
 
-Slot 8 does **not** add MCP tools for backup/export/restore. While a Host is running, agents should use the HTTP API (drive token for backup/restore; read token for export):
+Backup and whole-store restore stay on the HTTP API (drive token). Per-run export is available over MCP and HTTP; whole-instance export remains HTTP-only:
 
 - `POST /api/backup` / `GET /api/backup/<name>` — drive scope (archives may contain credentials)
+- MCP `export_run` / `GET /api/runs/<id>/export` — read scope (single-run `projectRun` + `run_manifest`)
+- `GET /api/runs/<id>/debug-bundle` — read scope (capped redacted post-mortem; CLI `sf debug-run`; no MCP tool)
 - `GET /api/export` — read scope (NDJSON whole-instance export)
 - `POST /api/restore` — drive scope; stages a restore and drains the Host
 
@@ -262,6 +264,14 @@ List catalog model ids from the same browse source as `GET /api/models`. Optiona
 ```
 
 `models` is the deduped id list; `entries` tags each id with the `project_root` it came from. There is no model-write or provider-login tool.
+
+### `list_skills`
+
+List skills with `name`, `description`, and `origin` (`run` | `checkout` | `host`). Optional `runId` scopes to that run's resolution view (run-tier skills first, then checkout `.pi/skills`, then host).
+
+**Input:** `{ "runId": "string (optional)" }`
+
+**Output:** `{ "skills": […], "diagnostics": […] }`
 
 ### `list_project_mcp`
 
@@ -539,7 +549,7 @@ Exactly one of `task_path` or `task` is required. Accepted start params:
 | `checkout_override` | Temporary alias of `checkout` |
 | `skip_gates` | Skip HITL gates for unattended starts |
 | `git_sha` / `ci_pr_url` / `ci_job_url` | CI provenance metadata |
-| `skills` | Not accepted yet — run-scoped skills land in a later unit; do not send them |
+| `skills` | Run-scoped skills: `name → { relativePath: utf-8 contents }`. Requires `SKILL.md` per name; materialised under the run workspace skills dir (never the worktree). See `list_skills`. |
 
 `repository`/`ref` on the task XOR `checkout` / `checkout_override` (and REST `checkoutOverride`) share code `task.binding_conflict` with REST and the CLI.
 
@@ -645,6 +655,14 @@ Poll run status without loading the full event stream.
 
 Use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detailed
 stage records.
+
+Returns `404`-style error JSON when the run is not found.
+
+### `export_run`
+
+Export a single run as the `projectRun` projection plus `run_manifest`. Works for running, cancelled, and terminal runs. Prefer this over CLI `sf export-run` when the Host is reachable. Same payload as `GET /api/runs/<id>/export` (read scope).
+
+**Input:** `{ "runId": "…" }`
 
 Returns `404`-style error JSON when the run is not found.
 
@@ -968,22 +986,22 @@ In a container, anything that is CLI-only means `docker exec`. A remote harness 
 |------------|----------|---------------------|
 | `sf graph` | **Not MCP.** Use `describe_pipeline` (definition DAG) or `get_run` / `pipeline_track` (per-run shape). | `sf graph` is a human terminal ASCII render of the same resolved DAG. A second rendering tool would spend MCP context on data the harness already has as JSON. |
 | `sf migrate-yaml` | **`docker exec` / laptop only.** | Rewrites checkout YAML in place and shells `git status` to refuse dirty trees. An API that mutates a caller's repository from a request crosses the "repository content is untrusted input" line. Authors migrate before commit. |
-| `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` for harnesses (Slot 9; see `start_run` params). | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call once that param lands — not install into the container. |
+| `sf skills install` | **`docker exec` / image bake only** for durable host skills. Prefer **run-scoped skills** on `start_run` (`skills` param) for harnesses. | Install copies into `.pi/skills` on disk (operator or derived-image path). Harnesses should ship skill bytes with the start call — not install into the container. Use `list_skills` to inspect resolution (run \| checkout \| host). |
 | `sf a2a validate` / `list` / `add-caller` | **`docker exec` only** for mutate/validate. Read surface: `GET /api/a2a/status` (`read` scope). | A2A config is read once at Host boot by design (no hot reload). A mutating API for config that only applies after restart is a trap; `add-caller` writes deployment config (`a2a.yaml`), not a runtime call. |
 | Provider login — API key | **No MCP login tool.** Configure at Host boot via `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` ([Providers](providers.md#non-interactive-host-boot-credentials)). | Container path is env/file at boot (Slot 7), not an interactive MCP call. `list_providers` remains read-only inspect. |
 | Provider login — OAuth | **`docker exec` only.** | Terminal- or browser-driven flow; no headless paste-code API. Once-per-deployment operator action. |
-| `sf export-run` / post-mortem debug | **CLI today** (`sf export-run`). Whole-instance export is already remote: `GET /api/export` (read). Per-run MCP `export_run` and HTTP `GET /api/runs/<id>/export`, plus `sf debug-run` / debug-bundle, land in Slot 9 — do not invent those tools yet. | Until they ship, use CLI/`docker exec` for a single-run export, or the whole-instance HTTP export while the Host is up. |
+| `sf export-run` / `sf debug-run` | **Remote when Host is up:** MCP `export_run` and HTTP `GET /api/runs/<id>/export` (read) for a single-run export. Debug bundle: HTTP `GET /api/runs/<id>/debug-bundle` (read) or CLI `sf debug-run` (no MCP tool). Whole-instance: `GET /api/export`. | CLI/`docker exec` remains available for scripts or when the Host is down. |
 
 There is no MCP `exec`, web terminal, or shell tool — `docker exec` is the supported operator escape hatch ([Docker](docker.md#cli-via-docker-exec)).
 
 ## Limitations
 
 - Cancel signals workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included; use `cancel_run` for run-level cancel (`wait_run` abort cancels only the wait; `abandon_stage` is per running stage only)
-- `start_run` has no skip-gates, CI identity flags, or `--checkout` override (HITL always parks; checkout only via `task.checkout`)
 - `run_stage` access is unrestricted for any authenticated caller of this host (no publish/allowlist step); it has no `rerun` support (no stored `pipeline_path`, the same constraint an inline `start_run` pipeline has)
 - REST `POST /api/runs` is path-pipeline-only; inline pipelines are MCP-only (see `start_run` REST asymmetry)
 - No catalog listing resource in v1 (use `list_pipelines` / `list_tasks` / `list_models`)
 - No provider login/logout/OAuth, settings-write, catalog-write, or Stage MCP attach MCP tools (`list_providers`, `list_models`, `list_project_mcp`, and `probe_project_mcp` are read-only inspect). See [CLI-only capabilities](#cli-only-capabilities-decision-table)
+- No MCP tool for debug-bundle / `sf debug-run` (use HTTP `GET /api/runs/<id>/debug-bundle` or CLI)
 - Default `get_run` / run resource read stay lean (no stage event streams or verification evidence) and include `total_cost_usd` plus per-stage `cost_usd` / `definition_id` when the store has them; use `list_stage_events`, `get_envelope`, or `get_stage_verification` for detail
 - Tools return JSON text content blocks, except `read_artifact`, which may return an MCP image content block for known image extensions
 - One MCP/UI host per project root (do not run `sf ui` and `sf mcp` as peer writers)

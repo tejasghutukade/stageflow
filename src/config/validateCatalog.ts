@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import {
   INLINE_PIPELINE_PATH,
   loadPipelineFromObjectOutcome,
@@ -87,7 +88,8 @@ export type ValidationFindingCode =
   | "catalog.invalid_mcp"
   | "catalog.mcp_command_missing"
   | "catalog.mixed_yaml_dialect"
-  | "catalog.legacy_yaml";
+  | "catalog.legacy_yaml"
+  | "catalog.stageflow_home_absolute_path";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -496,6 +498,118 @@ function findingsForStageSecrets(
   return findings;
 }
 
+const ABSOLUTE_PATH_IN_TEXT_RE =
+  /(?:^|[\s"'`=:(])(\/(?:[^\s"'`;|&<>()]+))/g;
+
+const TRAILING_PATH_PUNCT_RE = /[.,:;!?)\]]+$/;
+
+export function collectAbsolutePathCandidates(text: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  ABSOLUTE_PATH_IN_TEXT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ABSOLUTE_PATH_IN_TEXT_RE.exec(text)) !== null) {
+    const raw = match[1]?.replace(TRAILING_PATH_PUNCT_RE, "") ?? "";
+    if (!raw || !path.isAbsolute(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    found.push(raw);
+  }
+  return found;
+}
+
+export function isPathUnderStageflowHome(candidate: string, home: string): boolean {
+  if (!path.isAbsolute(candidate)) return false;
+  const resolved = path.resolve(candidate);
+  const homeResolved = path.resolve(home);
+  return (
+    resolved === homeResolved || resolved.startsWith(`${homeResolved}${path.sep}`)
+  );
+}
+
+function stageSourcePath(loaded: LoadedPipeline, stageId: string): string {
+  const source = loaded.stageSources?.[stageId];
+  if (source?.kind === "file") return source.path;
+  return loaded.pipelinePath;
+}
+
+function stageflowHomeAbsolutePathMessage(
+  stageId: string,
+  location: string,
+  absolutePath: string,
+): string {
+  return (
+    `Stage "${stageId}" ${location} contains absolute path under STAGEFLOW_HOME ` +
+    `("${absolutePath}"). Use STAGEFLOW_CHECKOUT / STAGEFLOW_RUN_WORKSPACE ` +
+    `(and related binding env vars) instead of durable-home paths`
+  );
+}
+
+function findingsForStageflowHomeAbsolutePaths(
+  cwd: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const home = globalStageflowHome();
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+
+  const pushFinding = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    absolutePath: string,
+  ): void => {
+    const key = `${stageId}\0${location}\0${absolutePath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push(
+      baseFinding(
+        {
+          cwd,
+          absPath,
+          message: stageflowHomeAbsolutePathMessage(stageId, location, absolutePath),
+          code: "catalog.stageflow_home_absolute_path",
+          category: "catalog",
+          pipelineId: loaded.pipeline.id,
+          stageId,
+        },
+        "error",
+      ),
+    );
+  };
+
+  const scanText = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    text: string,
+  ): void => {
+    for (const candidate of collectAbsolutePathCandidates(text)) {
+      if (isPathUnderStageflowHome(candidate, home)) {
+        pushFinding(stageId, absPath, location, candidate);
+      }
+    }
+  };
+
+  for (const stage of loaded.stages) {
+    const absPath = stageSourcePath(loaded, stage.id);
+    scanText(stage.id, absPath, "system_prompt", stage.system_prompt);
+  }
+
+  for (const node of loaded.dag.nodes) {
+    const checks = node.completion?.checks ?? [];
+    for (const check of checks) {
+      if (check.type !== "command") continue;
+      const absPath = stageSourcePath(loaded, node.id);
+      scanText(node.id, absPath, `verify command "${check.id}" run`, check.run);
+      if (typeof check.cwd === "string") {
+        scanText(node.id, absPath, `verify command "${check.id}" cwd`, check.cwd);
+      }
+    }
+  }
+
+  return findings;
+}
+
 async function findingsForStageMcpCatalog(
   cwd: string,
   loaded: LoadedPipeline,
@@ -609,6 +723,7 @@ async function runPipelineValidation(
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
   findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
+  findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {
