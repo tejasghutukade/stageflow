@@ -8,7 +8,7 @@ import {
 import {
   ensureGlobalService,
 } from "../server/ensureGlobalService.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
+import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const ARTIFACT_USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
@@ -79,21 +79,6 @@ function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   }
 
   return { help, subcommand, runId, artifactPath, outPath };
-}
-
-function resolveSafeOutPath(outPath: string, cwd: string): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new Error("path must not contain .. segments");
-  }
-  const resolved = path.resolve(cwd, outPath);
-  const cwdResolved = path.resolve(cwd);
-  if (!isInsideDir(resolved, cwdResolved)) {
-    throw new Error(
-      "output path must resolve under the current working directory",
-    );
-  }
-  return resolved;
 }
 
 export async function runArtifactCommand(

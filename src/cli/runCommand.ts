@@ -12,7 +12,7 @@ import {
   hostBaseUrl,
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
-import { httpEnsureProject, httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
+import { httpEnsureProject, httpStartRun, httpStoreReader } from "./hostClient.js";
 import {
   reportCliRun,
   writeQueuedAdmissionLine,
@@ -239,13 +239,15 @@ function defaultStartRun(
     }
     const ensuredProject = await httpEnsureProject(base, projectRoot);
     if (!ensuredProject.ok) return ensuredProject;
+    const checkoutOverride =
+      input.checkoutOverride !== undefined
+        ? relativizeLocalPathForNetwork(cwd, input.checkoutOverride).path
+        : undefined;
     return httpStartRun(base, {
       pipeline: pipelineRef.path,
       task,
       project_root: ensuredProject.project_root,
-      ...(input.checkoutOverride !== undefined
-        ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
-        : {}),
+      ...(checkoutOverride !== undefined ? { checkoutOverride } : {}),
       ...(input.skipGates !== undefined ? { skipGates: input.skipGates } : {}),
       ...(input.gitSha !== undefined ? { gitSha: input.gitSha } : {}),
       ...(input.ciPrUrl !== undefined ? { ciPrUrl: input.ciPrUrl } : {}),

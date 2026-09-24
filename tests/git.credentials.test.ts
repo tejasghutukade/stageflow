@@ -123,6 +123,8 @@ describe("git credentials", () => {
       expect(error).toMatchObject({
         name: "GitError",
         code: "auth_failed",
+        stderr:
+          "GITHUB_TOKEN (or GH_TOKEN / GITHUB_TOKEN_FILE / GH_TOKEN_FILE) is required for repository binding (clone/fetch and later push/PR). Set it on the Host process environment before start.",
       });
     }
   });

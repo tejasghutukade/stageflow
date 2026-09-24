@@ -285,7 +285,7 @@ async function mcpCommandsCheck(cwd: string): Promise<DoctorCheck[]> {
     }
     return missing.map((m) => ({
       id: `mcp_command:${m.serverName}`,
-      status: "fail" as const,
+      status: "warn" as const,
       code: "command_not_on_path",
       message: `MCP server "${m.serverName}" command "${m.command}" is not on PATH`,
     }));

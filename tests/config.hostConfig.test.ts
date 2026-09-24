@@ -74,6 +74,16 @@ describe("loadHostConfig", () => {
     );
   });
 
+  it("accepts STAGEFLOW_SECRET_REGISTRY as a known env key", () => {
+    const home = tempHome();
+    expect(() =>
+      loadHostConfig({
+        homeDir: home,
+        env: { STAGEFLOW_SECRET_REGISTRY: "DUMMY_SECRET" },
+      }),
+    ).not.toThrow();
+  });
+
   it("fails boot on STAGEFLOW_MAX_CONCURRENT_RUNS=banana", () => {
     const home = tempHome();
     expect(() =>

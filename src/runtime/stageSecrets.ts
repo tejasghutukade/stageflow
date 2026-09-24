@@ -169,6 +169,12 @@ export function resolveStageSecrets(
       if (shouldRegisterValue(contents)) {
         knownValues.push({ name: decl.name, value: contents });
       }
+      if (decl.as === "env") {
+        warnings.push(
+          `secrets: ${decl.name} granted as: env (value present in stage environment)`,
+        );
+        grantEnv[decl.name] = contents;
+      }
       continue;
     }
 

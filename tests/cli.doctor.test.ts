@@ -141,4 +141,32 @@ describe("runDoctorChecks", () => {
       await store.close();
     }
   });
+
+  it("warns (does not fail) when .mcp.json references a command not on PATH", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-doctor-mcp-"));
+    temps.push(home);
+    writeFileSync(
+      path.join(home, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          dead: { command: "sf-doctor-definitely-not-on-path-xyz" },
+        },
+      }),
+    );
+    const store = createRunStore({ rootDir: home, openerMode: "migrate" });
+    try {
+      const result = await runDoctorChecks({
+        cwd: home,
+        homeDir: home,
+        store,
+        env: {},
+      });
+      const mcp = result.checks.find((c) => c.id === "mcp_command:dead");
+      expect(mcp?.status).toBe("warn");
+      expect(mcp?.code).toBe("command_not_on_path");
+      expect(result.ok).toBe(true);
+    } finally {
+      await store.close();
+    }
+  });
 });

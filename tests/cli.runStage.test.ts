@@ -136,11 +136,12 @@ describe("sf run-stage arg validation", () => {
 });
 
 describe("sf run-stage call shapes", () => {
-  it("async mode (default): passes stage/task through, resolved to absolute paths, and prints runId", async () => {
+  it("async mode (default): passes catalog-relative stage/task and project_root", async () => {
     const cap = captureIo();
     const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
-      expect(args.stage).toBe(path.resolve("/proj", "stages/check.yaml"));
-      expect(args.task_path).toBe(path.resolve("/proj", "tasks/sample.task.yaml"));
+      expect(args.stage).toBe("stages/check.yaml");
+      expect(args.task_path).toBe("tasks/sample.task.yaml");
+      expect(args.project_root).toBe(path.resolve("/proj"));
       expect(args.blocking).toBeUndefined();
       return { isError: false, payload: { runId: "run-1", stageId: "check" } };
     });
@@ -361,9 +362,11 @@ describe("sf run-stage call shapes", () => {
     expect(code).toBe(0);
   });
 
-  it("--checkout is resolved to an absolute path and passed through", async () => {
+  it("--checkout is catalog-relativized and passed through with project_root", async () => {
     const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
-      expect(args.checkout).toBe(path.resolve("/proj", "../elsewhere"));
+      expect(args.checkout).toBe("checkouts/elsewhere");
+      expect(args.stage).toBe("stages/summarize.yaml");
+      expect(args.project_root).toBe(path.resolve("/proj"));
       return { isError: false, payload: { runId: "run-10", stageId: "summarize" } };
     });
     const code = await runRunStageCommand(
@@ -373,11 +376,28 @@ describe("sf run-stage call shapes", () => {
         "--envelope-ref",
         "prior-run:research",
         "--checkout",
-        "../elsewhere",
+        "checkouts/elsewhere",
       ],
       { cwd: "/proj", callTool },
     );
     expect(code).toBe(0);
+  });
+
+  it("with path-based stage/task, packs project_root from CLI cwd for multi-root hosts", async () => {
+    const callTool: RunStageCallFn = vi.fn(async (args: RunStageToolArgs) => {
+      expect(args).toMatchObject({
+        stage: "stages/check.yaml",
+        task_path: "tasks/sample.task.yaml",
+        project_root: path.resolve("/proj-a"),
+      });
+      return { isError: false, payload: { runId: "run-multi", stageId: "check" } };
+    });
+    const code = await runRunStageCommand(
+      ["--stage", "stages/check.yaml", "--task", "tasks/sample.task.yaml"],
+      { cwd: "/proj-a", callTool },
+    );
+    expect(code).toBe(0);
+    expect(callTool).toHaveBeenCalledOnce();
   });
 
   it("a tool-level error result (isError:true) prints the error and exits 1", async () => {

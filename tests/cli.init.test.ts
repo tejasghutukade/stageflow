@@ -47,6 +47,11 @@ describe("runInitCommand", () => {
         expect(await readFile(path.join(repoRoot, "tasks/hello.task.yaml"), "utf8")).toBe(
           HELLO_TASK_YAML,
         );
+        const validated = runCli(
+          ["validate", "--pipeline", "pipelines/hello.pipeline.yaml", "--strict"],
+          repoRoot,
+        );
+        expect(validated.status).toBe(0);
         await access(path.join(home, ".stageflow", "agent"));
       } finally {
         await cleanup();

@@ -9,7 +9,7 @@ import {
 } from "../server/ensureGlobalService.js";
 import type { RunStatus } from "../runstore/port.js";
 import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
+import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const EXPORT_RUN_USAGE = `Usage:
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]`;
@@ -93,21 +93,6 @@ function resolveRunIdFromFile(fromPath: string, cwd: string): string {
     throw new Error("--from file must contain a JSON object with runId");
   }
   return runId;
-}
-
-function resolveSafeOutPath(outPath: string, cwd: string): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new Error("path must not contain .. segments");
-  }
-  const resolved = path.resolve(cwd, outPath);
-  const cwdResolved = path.resolve(cwd);
-  if (!isInsideDir(resolved, cwdResolved)) {
-    throw new Error(
-      "output path must resolve under the current working directory",
-    );
-  }
-  return resolved;
 }
 
 const EXPORTABLE_STATUSES = new Set<RunStatus>([

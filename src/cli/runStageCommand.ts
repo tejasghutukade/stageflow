@@ -1,10 +1,11 @@
+import { relativizeLocalPathForNetwork } from "../config/catalogRelativePath.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import {
   ensureGlobalService,
   hostBaseUrl,
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
-import { resolveAbsolute } from "./hostClient.js";
+import { httpEnsureProject } from "./hostClient.js";
 
 export const RUN_STAGE_USAGE = `Usage:
   sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>] [--envelope-ref ...]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
@@ -29,6 +30,7 @@ export type RunStageEnvelopeRef = {
 
 export type RunStageToolArgs = {
   stage: string | Record<string, unknown>;
+  project_root?: string;
   task_path?: string;
   task?: Record<string, unknown>;
   envelope_ref?: RunStageEnvelopeRef | RunStageEnvelopeRef[];
@@ -314,13 +316,21 @@ function defaultCallTool(
     if (!ensured.ok) {
       throw new Error(ensured.message);
     }
+    let toolArgs: RunStageToolArgs = args;
+    if (args.project_root !== undefined) {
+      const ensuredProject = await httpEnsureProject(base, args.project_root);
+      if (!ensuredProject.ok) {
+        throw new Error(ensuredProject.reason);
+      }
+      toolArgs = { ...args, project_root: ensuredProject.project_root };
+    }
     const sessionId = await mcpInitializeSession(base);
     try {
       return await mcpToolCall(
         base,
         sessionId,
         "run_stage",
-        args as unknown as Record<string, unknown>,
+        toolArgs as unknown as Record<string, unknown>,
       );
     } finally {
       await mcpCloseSession(base, sessionId);
@@ -436,33 +446,45 @@ export async function runRunStageCommand(
   }
 
   let stage: string | Record<string, unknown>;
-  if (parsed.stage !== undefined) {
-    stage = resolveAbsolute(cwd, parsed.stage);
-  } else {
-    try {
+  let projectRoot: string | undefined;
+  try {
+    if (parsed.stage !== undefined) {
+      const stageRef = relativizeLocalPathForNetwork(cwd, parsed.stage);
+      stage = stageRef.path;
+      projectRoot = stageRef.project_root;
+    } else {
       stage = parseJsonFlag(parsed.stageInline!, "--stage-inline");
-    } catch (err) {
-      out.error(err instanceof Error ? err.message : String(err));
-      return 1;
     }
+  } catch (err) {
+    out.error(err instanceof Error ? err.message : String(err));
+    return 1;
   }
 
   let taskPath: string | undefined;
   let task: Record<string, unknown> | undefined;
   let envelopeRef: RunStageEnvelopeRef | RunStageEnvelopeRef[] | undefined;
-  if (parsed.task !== undefined) {
-    taskPath = resolveAbsolute(cwd, parsed.task);
-  } else if (parsed.taskInline !== undefined) {
-    try {
+  try {
+    if (parsed.task !== undefined) {
+      const taskRef = relativizeLocalPathForNetwork(cwd, parsed.task);
+      taskPath = taskRef.path;
+      projectRoot = taskRef.project_root;
+    } else if (parsed.taskInline !== undefined) {
       task = parseJsonFlag(parsed.taskInline, "--task-inline");
-    } catch (err) {
-      out.error(err instanceof Error ? err.message : String(err));
-      return 1;
-    }
-  } else {
-    try {
+    } else {
       const refs = parsed.envelopeRef!.map(parseEnvelopeRefFlag);
       envelopeRef = refs.length === 1 ? refs[0] : refs;
+    }
+  } catch (err) {
+    out.error(err instanceof Error ? err.message : String(err));
+    return 1;
+  }
+
+  let checkout: string | undefined;
+  if (parsed.checkout !== undefined) {
+    try {
+      const checkoutRef = relativizeLocalPathForNetwork(cwd, parsed.checkout);
+      checkout = checkoutRef.path;
+      projectRoot = projectRoot ?? checkoutRef.project_root;
     } catch (err) {
       out.error(err instanceof Error ? err.message : String(err));
       return 1;
@@ -471,12 +493,11 @@ export async function runRunStageCommand(
 
   const toolArgs: RunStageToolArgs = {
     stage,
+    ...(projectRoot !== undefined ? { project_root: projectRoot } : {}),
     ...(taskPath !== undefined ? { task_path: taskPath } : {}),
     ...(task !== undefined ? { task } : {}),
     ...(envelopeRef !== undefined ? { envelope_ref: envelopeRef } : {}),
-    ...(parsed.checkout !== undefined
-      ? { checkout: resolveAbsolute(cwd, parsed.checkout) }
-      : {}),
+    ...(checkout !== undefined ? { checkout } : {}),
     ...(parsed.model !== undefined ? { model: parsed.model } : {}),
     ...(parsed.blocking ? { blocking: true } : {}),
     ...(parsed.timeoutMs !== undefined ? { timeout_ms: parsed.timeoutMs } : {}),

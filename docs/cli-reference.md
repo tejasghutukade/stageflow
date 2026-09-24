@@ -274,7 +274,7 @@ Do not treat `answer` `{ "ok": true }` as terminal — call `sf runs wait` / `wa
 | `--from` | Read `runId` from a prior `sf run --json` output file |
 | `--json` | Pretty-printed `projectRun` |
 
-Works for in-progress and parked runs. `sf export-run` still requires `succeeded` or `failed`. `--json` is the `projectRun` object, including `pipeline_track` (diamond joins show both inbound edges). `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
+Works for in-progress and parked runs. `sf export-run` writes the same `projectRun` object (including `pipeline_track`; diamond joins show both inbound edges) and does not take a separate `--json` flag. `--include stages` on `sf run --json` stays a flat `stages[]` list and does not carry that graph.
 
 When a feedback loop is active or waiting, `--json` includes `active_feedback_loop` and `feedback_loops` (history with replays / stage passes). On `on_max_replays: wait_for_human`, the loop source pass is `waiting` while parked, then `succeeded` after `extend`/`continue` or `failed` after `abandon`. See [YAML catalog — Feedback loops](yaml-catalog.md#feedback-loops).
 
@@ -474,9 +474,26 @@ sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
 |------|-------------|
 | `--run` | Run id (optional when `--from` provides `runId`) |
 | `--from` | Read `runId` from a prior `sf run --json` output file |
-| `--out` | Write JSON to a file under the current working directory (stdout when omitted). Path must stay under cwd (no `..`). |
+| `--out` | Write JSON to a file under the current working directory (stdout when omitted). Path must stay under cwd (no `..`); absolute paths are accepted when they realpath to the same directory (for example `/tmp` vs `/private/tmp` on macOS). |
 
-Writes the full `projectRun` projection (includes `pipeline_track` and waiting fields). The run must be complete (`succeeded` or `failed`). In-progress runs exit `1`.
+Writes the full `projectRun` projection (includes `pipeline_track` and waiting fields). Accepts any recorded run status. Does not take `--json` (the payload itself is JSON).
+
+**Exit codes:** `0` success, `1` error.
+
+## `sf debug-run`
+
+Write a capped, redacted post-mortem JSON bundle for a run (manifest, stage events, verification evidence, stream-log tails, and related debug fields).
+
+```bash
+sf debug-run <runId> [--out <file>]
+```
+
+| Flag | Description |
+|------|-------------|
+| `<runId>` | Run id (required) |
+| `--out` | Write JSON to a file under cwd (stdout when omitted). Same path rules as `sf export-run`. |
+
+Output is UTF-8 JSON (not a `.tgz`). Does not take `--json`.
 
 **Exit codes:** `0` success, `1` error.
 
@@ -515,7 +532,7 @@ HTTP: `POST /api/restore` with `{ "backup": "<name>" }` (drive) → `202` then d
 
 ## `sf export`
 
-Whole-instance NDJSON export (header + one `projectRun` line per run, including non-terminal). Not a backup; restore does not accept exports.
+Whole-instance NDJSON export (header + one `projectRun` line per run, including non-terminal). Not a backup; restore does not accept exports. Does not take `--json` (the stream itself is NDJSON).
 
 ```bash
 sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]

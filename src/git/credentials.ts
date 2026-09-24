@@ -81,7 +81,8 @@ export function hostGitAskpassEnv(options: HostGitAskpassEnvOptions = {}): NodeJ
     throw new GitError("git authentication failed", {
       code: "auth_failed",
       argv: [],
-      stderr: "terminal prompts disabled; no GITHUB_TOKEN or GH_TOKEN available",
+      stderr:
+        "GITHUB_TOKEN (or GH_TOKEN / GITHUB_TOKEN_FILE / GH_TOKEN_FILE) is required for repository binding (clone/fetch and later push/PR). Set it on the Host process environment before start.",
       exitCode: null,
     });
   }

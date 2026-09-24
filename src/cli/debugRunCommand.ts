@@ -4,8 +4,8 @@ import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStoreAfterHostEnsure } from "../runstore/createStore.js";
 import { buildDebugBundle } from "../runstore/debugBundle.js";
 import type { RunStatus } from "../runstore/port.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
 import { ensureGlobalService } from "../server/ensureGlobalService.js";
+import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const DEBUG_RUN_USAGE = `Usage:
   sf debug-run <runId> [--out <file>]`;
@@ -58,21 +58,6 @@ function parseDebugRunArgs(args: string[]): ParsedDebugRunArgs {
   }
 
   return { help, runId, outPath };
-}
-
-function resolveSafeOutPath(outPath: string, cwd: string): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new Error("path must not contain .. segments");
-  }
-  const resolved = path.resolve(cwd, outPath);
-  const cwdResolved = path.resolve(cwd);
-  if (!isInsideDir(resolved, cwdResolved)) {
-    throw new Error(
-      "output path must resolve under the current working directory",
-    );
-  }
-  return resolved;
 }
 
 const DEBUGABLE_STATUSES = new Set<RunStatus>([

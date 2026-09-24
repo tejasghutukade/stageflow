@@ -163,4 +163,37 @@ describe("resolveStageSecrets", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("file-kind with as: env injects contents and warns", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sec-file-env-"));
+    try {
+      const home = path.join(root, "home");
+      const secretsDir = path.join(home, "secrets");
+      mkdirSync(secretsDir, { recursive: true });
+      const source = path.join(secretsDir, "dummy-secret");
+      const contents = "dummy-file-secret-value-xx";
+      writeFileSync(source, contents, { mode: 0o600 });
+      writeFileSync(
+        path.join(secretsDir, "file-credentials.json"),
+        JSON.stringify({
+          DUMMY_SECRET: { source, pointerVar: "DUMMY_SECRET_FILE" },
+        }),
+      );
+      const registry = loadSecretRegistry({}, home);
+      const result = resolveStageSecrets({
+        decls: [{ name: "DUMMY_SECRET", as: "env" }],
+        registry,
+        hostEnv: {},
+        attemptDir: root,
+        home,
+      });
+      expect(result.grants.env.DUMMY_SECRET_FILE).toBeTruthy();
+      expect(result.grants.env.DUMMY_SECRET).toBe(contents);
+      expect(result.warnings.some((w) => w.includes("DUMMY_SECRET") && w.includes("as: env"))).toBe(
+        true,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
