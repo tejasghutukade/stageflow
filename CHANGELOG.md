@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Container image delivery (Slot 10): multi-stage `Dockerfile` (digest-pinned Node 22 slim, non-root `10001`, tini + `sf mcp`, `HEALTHCHECK` on `/livez`, toolchain at `/etc/stageflow/toolchain.json`); root `docker-compose.yml` for local try; `scripts/docker-smoke.sh` + CI job; GHCR multi-arch publish + cosign keyless sign-by-digest on the npm version gate. See `docs/docker.md`.
+- `sf doctor` `store_integrity` check runs full `PRAGMA integrity_check` (boot/readyz stay on `quick_check`).
+- `sf validate` flags absolute paths under `$STAGEFLOW_HOME` in stage prompts and verify commands (`catalog.stageflow_home_absolute_path`).
+
+### Changed
+
+- `docs/mcp.md` Limitations / CLI-only table refreshed to match shipped Slot 9 surfaces (`skills`, `export_run`, debug-bundle).
 ## [0.26.0] - 2026-09-24
 
 ### Added

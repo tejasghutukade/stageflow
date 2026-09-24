@@ -5,7 +5,7 @@ title: Docker and self-hosting
 
 # Docker and self-hosting
 
-This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. Multi-arch GHCR publish (`ghcr.io/tejasghutukade/stageflow`) lands with the release workflow (Slot 10 unit U3); until then, build locally with Compose or `docker build`.
+This page describes Stageflow’s data-safety and ops contracts for self-hosted Hosts (including containers). A multi-stage `Dockerfile` at the repo root builds the image. On each unpublished `package.json` version published from `main`, `.github/workflows/publish.yml` pushes a multi-arch image to **`ghcr.io/tejasghutukade/stageflow`** (amd64 + arm64), then cosign-signs the digest keylessly. Local try still works with Compose or `docker build`.
 
 See also [Data directory](data-directory.md), [CLI reference](cli-reference.md), and [MCP](mcp.md) (including [CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table) and [docker exec commands](#cli-via-docker-exec) below).
 
@@ -58,21 +58,25 @@ Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--chec
 
 ## Pull and run (GHCR)
 
-Intended image name: **`ghcr.io/tejasghutukade/stageflow`**. After GHCR publish ships (U3), pull a digest-pinned tag and run with a named volume + control token:
+Published image: **`ghcr.io/tejasghutukade/stageflow`**. Tags per release: semver `x.y.z` and major.minor `x.y` (same digest). Prefer a digest pin for production:
 
 ```bash
 export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
-docker pull ghcr.io/tejasghutukade/stageflow:x.y.z   # or @sha256:<digest>
+# Prefer digest after pull, or pin directly:
+#   docker pull ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+docker pull ghcr.io/tejasghutukade/stageflow:x.y.z
+DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/tejasghutukade/stageflow:x.y.z)"
+# DIGEST looks like ghcr.io/tejasghutukade/stageflow@sha256:…
 docker run --rm \
   -e STAGEFLOW_HOME=/data \
   -e TMPDIR=/data/tmp \
   -e STAGEFLOW_CONTROL_TOKEN \
   -v stageflow-data:/data \
   -p 3847:3847 \
-  ghcr.io/tejasghutukade/stageflow:x.y.z
+  "${DIGEST}"
 ```
 
-Verify cosign attestations with the [snippet below](#provenance) once digests are published. Prefer digest pins (`@sha256:…`) over floating tags for production.
+Verify cosign attestations with the [snippet below](#provenance). Prefer digest pins (`@sha256:…`) over floating tags for production.
 
 To use a published image with the shipped compose file instead of a local build, set `image: ghcr.io/tejasghutukade/stageflow:x.y.z` (or a digest) and omit or skip `build:`.
 
@@ -167,15 +171,19 @@ Stdout is lifecycle-oriented. Per-line bytes are capped (`STAGEFLOW_LOG_MAX_LINE
 | `org.opencontainers.image.title` | `Stageflow` |
 | `org.opencontainers.image.base.name` / `.base.digest` | pinned base |
 
-`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`.
+`BUILD_SHA` is `process.env.STAGEFLOW_BUILD_SHA ?? "unknown"` and appears on `/api/health`, MCP `get_health`, and `sf --version --json`. Publish sets build-arg `STAGEFLOW_BUILD_SHA=${{ github.sha }}` so `revision`, the baked SHA, and health `build_sha` agree.
 
-**Labels are hints; attestations are evidence.** Anyone with push access can set labels. Verify digests with cosign:
+Buildx also emits provenance and SBOM (`--provenance=true --sbom=true`). Cosign keyless-signs the **manifest-list digest** after push (not tag-only).
+
+**Labels are hints; attestations are evidence.** Anyone with push access can set labels. Verify the signed digest with cosign (identity is any workflow under this repo’s GitHub Actions OIDC issuer):
 
 ```bash
+# Resolve digest from a tag, or paste the sha256 from the Actions log / GHCR UI:
+DIGEST=sha256:<digest>
 cosign verify \
   --certificate-identity-regexp '^https://github\.com/tejasghutukade/stageflow/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+  "ghcr.io/tejasghutukade/stageflow@${DIGEST}"
 ```
 
 ## Egress threat model (report-only)
