@@ -43,6 +43,19 @@ chmod 600 .stageflow-control-token
 
 Override the default `sf mcp` command only when you need the operator console (`sf ui`); MCP-first remains the container default.
 
+## Image smoke (CI / local)
+
+Automated gate that the image boots and becomes live — **not** `sf doctor`. From the repo root (Docker daemon required):
+
+```bash
+./scripts/docker-smoke.sh
+# → builds with STAGEFLOW_BUILD_SHA from git, runs with a temp volume +
+#   32+ char control token, polls http://127.0.0.1:<port>/livez until 200,
+#   tears down container/volume, exits 0
+```
+
+Mandatory bar: `GET /livez` → 200. Optional stretch flags: `--readyz`, `--check-build-sha` (asserts `/api/health` `build_sha` matches the baked SHA when the control token is sent). CI runs the same script from the `docker-smoke` job in `.github/workflows/ci.yml` when packaging-related paths change on a PR (always on `main`).
+
 ## Pull and run (GHCR)
 
 Intended image name: **`ghcr.io/tejasghutukade/stageflow`**. After GHCR publish ships (U3), pull a digest-pinned tag and run with a named volume + control token:
