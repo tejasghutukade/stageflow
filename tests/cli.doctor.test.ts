@@ -60,12 +60,61 @@ describe("runDoctorChecks", () => {
         );
       }
       expect(result.checks.some((c) => c.id === "store_openable")).toBe(true);
+      expect(result.checks.some((c) => c.id === "store_integrity")).toBe(true);
       expect(result.checks.some((c) => c.id === "git")).toBe(true);
       expect(result.checks.some((c) => c.id === "bash")).toBe(true);
       expect(result.checks.some((c) => c.id === "free_disk")).toBe(true);
     } finally {
       await store.close();
     }
+  });
+
+  it("passes store_integrity on a healthy store", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-doctor-integrity-ok-"));
+    temps.push(home);
+    const store = createRunStore({ rootDir: home, openerMode: "migrate" });
+    try {
+      const result = await runDoctorChecks({
+        cwd: home,
+        homeDir: home,
+        store,
+        env: {},
+      });
+      const integrity = result.checks.find((c) => c.id === "store_integrity");
+      expect(integrity?.status).toBe("pass");
+      expect(integrity?.message).toMatch(/integrity_check/);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it("fails store_integrity when integrity_check does not return ok", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-doctor-integrity-fail-"));
+    temps.push(home);
+    const badStore = {
+      listRuns: async () => [],
+      connection: {
+        pragma: (q: string, _opts?: { simple?: boolean }) => {
+          if (q === "user_version") return 7;
+          if (q === "integrity_check") return "database disk image is malformed";
+          return "ok";
+        },
+      },
+    } as unknown as RunStore;
+
+    const result = await runDoctorChecks({
+      cwd: home,
+      homeDir: home,
+      store: badStore,
+      env: {},
+    });
+
+    expect(result.ok).toBe(false);
+    const integrity = result.checks.find((c) => c.id === "store_integrity");
+    expect(integrity?.status).toBe("fail");
+    expect(integrity?.code).toBe("store_integrity_failed");
+    expect(integrity?.message).toMatch(/store_integrity_failed/);
+    expect(integrity?.message).toMatch(/sf restore/);
   });
 
   it("fails when store is not openable", async () => {

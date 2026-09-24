@@ -23,6 +23,7 @@ import {
   resolveMinFreeDiskFloor,
 } from "../runstore/diskUsage.js";
 import type { RunStore } from "../runstore/port.js";
+import { runStoreIntegrityCheck } from "../runstore/sqlite/applyStorePragmas.js";
 
 export type DoctorCheckStatus = "pass" | "warn" | "fail" | "skipped";
 
@@ -104,6 +105,39 @@ function mapReadyzChecks(result: ReadyzResult, home: string): DoctorCheck[] {
   }
 
   return out;
+}
+
+function storeIntegrityDoctorCheck(store: RunStore): DoctorCheck {
+  const connection = (
+    store as {
+      connection?: {
+        pragma?: (q: string, opts?: { simple?: boolean }) => unknown;
+      };
+    }
+  ).connection;
+  if (connection === undefined || typeof connection.pragma !== "function") {
+    return {
+      id: "store_integrity",
+      status: "skipped",
+      message: "Store has no sqlite connection for integrity_check",
+    };
+  }
+  const outcome = runStoreIntegrityCheck({
+    pragma: (source, options) => connection.pragma!(source, options),
+  });
+  if (outcome.ok) {
+    return {
+      id: "store_integrity",
+      status: "pass",
+      message: "PRAGMA integrity_check passed",
+    };
+  }
+  return {
+    id: "store_integrity",
+    status: "fail",
+    code: "store_integrity_failed",
+    message: `store_integrity_failed: integrity_check returned ${outcome.detail}. Refuse to serve; restore with sf restore.`,
+  };
 }
 
 async function gitDoctorCheck(gitPresent: boolean): Promise<DoctorCheck> {
@@ -369,6 +403,7 @@ export async function runDoctorChecks(options?: {
       bypassCache: true,
     });
     checks.push(...mapReadyzChecks(readyz, home));
+    checks.push(storeIntegrityDoctorCheck(store));
     checks.push(await gitDoctorCheck(readyz.checks.git_present));
   }
 
@@ -491,7 +526,7 @@ export async function runDoctorCommand(
 export const DOCTOR_USAGE = `Usage:
   sf doctor [--json] [--pipeline <path>] [--strict]
 
-Run Host preflight checks (shared /readyz store/home/migrations/git, plus bash, Node, credentials, TLS CA paths, free disk, MCP commands).
+Run Host preflight checks (shared /readyz store/home/migrations/git, full PRAGMA integrity_check, plus bash, Node, credentials, TLS CA paths, free disk, MCP commands).
 With --pipeline, also checks pipeline requires:/secrets:/mcp against the toolchain manifest and curated stage env.
 --strict treats unknown_version as failure (default: warn/pass).
 Do not use sf doctor as a container HEALTHCHECK — use GET /livez instead.

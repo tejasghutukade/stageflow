@@ -83,6 +83,26 @@ export function assertStoreQuickCheck(db: Database.Database): void {
   }
 }
 
+export type StoreIntegrityCheckOutcome =
+  | { ok: true }
+  | { ok: false; detail: string };
+
+export function runStoreIntegrityCheck(db: {
+  pragma: (source: string, options?: { simple?: boolean }) => unknown;
+}): StoreIntegrityCheckOutcome {
+  let result: unknown;
+  try {
+    result = db.pragma("integrity_check", { simple: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, detail: message };
+  }
+  if (result === "ok") {
+    return { ok: true };
+  }
+  return { ok: false, detail: String(result) };
+}
+
 export function isSqliteCorruptError(err: unknown): boolean {
   if (err instanceof StoreOpenError && err.code === "store_integrity_failed") {
     return true;
