@@ -115,6 +115,7 @@ services:
       STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
       STAGEFLOW_BUILD_SHA: "<git sha>"
       TMPDIR: /data/tmp
+      # GITHUB_TOKEN: "${GITHUB_TOKEN}"  # Host-only (checkout/clone); stages need secrets: grant
       HTTPS_PROXY: http://egress-proxy:3128
       HTTP_PROXY: http://egress-proxy:3128
       NO_PROXY: 127.0.0.1,localhost,egress-proxy
@@ -139,9 +140,21 @@ volumes:
   stageflow-data:
 ```
 
+## Stage environment and secrets
+
+Stages run in a **curated environment** (Slot 6): Host process environment variables do **not** pass through automatically. Pipelines and stages must explicitly declare `secrets:` to grant access to credentials.
+
+**Key implication for Docker users:**
+
+- Setting `GITHUB_TOKEN` (or any other credential) in your compose `environment:` makes it available to the Host process for checkout/clone operations.
+- **Stages do NOT inherit it** unless the pipeline or stage declares `secrets: [{ name: GITHUB_TOKEN, as: env }]` (when the tool requires the env var) or leaves the default askpass grant.
+- Stage `bash` / `verify` commands calling `gh` will fail with "not logged in" errors unless you explicitly grant the secret.
+
+See [Migration: curated stage environment (Slot 6)](migration-stage-environment.md) for full semantics, including `STAGEFLOW_STAGE_ENV_ALLOW` for non-secret Host vars and the temporary `STAGEFLOW_STAGE_ENV_PASSTHROUGH=all` stopgap.
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
 
-A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
+A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does. 
 
 ### Exec-only commands
 
