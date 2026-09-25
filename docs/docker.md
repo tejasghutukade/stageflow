@@ -139,6 +139,40 @@ volumes:
   stageflow-data:
 ```
 
+
+## Stage environment and secrets
+
+Stages run with a **curated environment** (Slot 6) — they do **not** inherit the raw Host process environment. The stage child receives an exact-name allowlist (PATH, locale, proxy/CA, `STAGEFLOW_HOME`, computed cache vars, Slot 2 binding vars) plus **only secrets you declare** on the stage or pipeline.
+
+### Common pitfall: Host GITHUB_TOKEN does not reach stages by default
+
+If you pass `GITHUB_TOKEN` via compose `environment:` (or Host boot env), it stays **Host-only** and will **not** be available in stage `bash` / `verify` / `gh` commands unless you declare it in the pipeline or stage YAML:
+
+```yaml
+stages:
+  - id: raise-pr
+    uses: ./raise-pr.yaml
+    secrets:
+      - GITHUB_TOKEN                 # default: GIT_ASKPASS helper + materialised token file
+      - { name: NPM_TOKEN, as: env } # raw env var (emits WARN)
+```
+
+Without the `secrets:` declaration, git operations fail with auth errors and `gh` commands cannot authenticate, even though `GITHUB_TOKEN` is set on the Host container.
+
+**Why:** Stageflow blocks ambient credentials by default (control/read tokens, provider API keys, undeclared registry secrets, `GITHUB_TOKEN`/`GH_TOKEN` as raw env) to prevent accidental leaks. Stages must opt in by name.
+
+**Default grant behavior:**
+- `secrets: [GITHUB_TOKEN]` materialises the token as a temp file and sets `GIT_ASKPASS` to a helper script — most git operations and some tools work this way
+- `secrets: [{ name: GITHUB_TOKEN, as: env }]` grants the raw `GITHUB_TOKEN` env var (required when a tool only reads the env var; emits a security WARN)
+
+**GitHub CLI (`gh`) availability:** The base image does **not** ship the GitHub CLI. If your stage needs `gh`, declare `requires: [{ tool: gh }]` on the stage or pipeline, and ensure your deployment includes it via a derived Dockerfile or bind-mount. See [YAML catalog — requires](yaml-catalog.md#requires).
+
+**Host stopgaps (discouraged):**
+- `STAGEFLOW_STAGE_ENV_ALLOW=FOO,BAR` on the Host allows specific non-secret vars through
+- `STAGEFLOW_STAGE_ENV_PASSTHROUGH=all` restores ambient vars minus the permanent denylist (WARN logs every launch; deprecated; removed after two minor releases)
+
+Full migration guide and stage environment reference: [migration-stage-environment.md](migration-stage-environment.md). Health reports whether `stage_env_passthrough` is enabled.
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.
