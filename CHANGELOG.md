@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-25
+
 ### Added
 
 - Container image delivery (Slot 10): multi-stage `Dockerfile` (digest-pinned Node 22 slim, non-root `10001`, tini + `sf mcp`, `HEALTHCHECK` on `/livez`, toolchain at `/etc/stageflow/toolchain.json`); root `docker-compose.yml` for local try; `scripts/docker-smoke.sh` + CI job; GHCR multi-arch publish + cosign keyless sign-by-digest on the npm version gate. See `docs/docker.md`.
@@ -27,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stage-env migration / YAML catalog docs clarify that GitHub `{ as: env }` keeps askpass for HTTPS git.
 - Docker Local try docs rewritten as a Compose first-run checklist; add root `.env.example` and align `docker-compose.yml` with `STAGEFLOW_PROVIDER_*` boot keys.
 - Harness skills suite updated for Compose local try, drive-token MCP calls, `$STAGEFLOW_HOME` run store, repository/`ref` binding, and Slot 6 `secrets:` authoring.
+
 ## [0.26.0] - 2026-09-24
 
 ### Added
