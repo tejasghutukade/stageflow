@@ -67,28 +67,7 @@ jobs:
 
       - name: Install Stageflow from npm
         if: steps.gate.outputs.release == 'true'
-        run: |
-          VERSION="${{ steps.gate.outputs.version }}"
-          ok=0
-          for i in $(seq 1 24); do
-            if npm i -g "stageflow@${VERSION}"; then
-              ok=1
-              break
-            fi
-            echo "waiting for npm (${i}/24)"
-            sleep 10
-          done
-          if [ "${ok}" != 1 ]; then
-            echo "failed to install stageflow@${VERSION} from npm" >&2
-            exit 1
-          fi
-          INSTALLED="$(node -p "require(require('child_process').execSync('npm root -g',{encoding:'utf8'}).trim() + '/stageflow/package.json').version")"
-          echo "installed stageflow@${INSTALLED}"
-          if [ "${INSTALLED}" != "${VERSION}" ]; then
-            echo "expected stageflow@${VERSION}" >&2
-            exit 1
-          fi
-          command -v sf
+        run: bash scripts/wait-install-npm-stageflow.sh "${{ steps.gate.outputs.version }}"
 
       - name: Install pi-cursor-sdk
         if: steps.gate.outputs.release == 'true'
