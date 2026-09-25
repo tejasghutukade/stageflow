@@ -139,6 +139,97 @@ volumes:
   stageflow-data:
 ```
 
+## Stage environment and secrets visibility {#stage-env-secrets}
+
+Stages run in a **curated environment**, not the full Host process environment. The stage child process sees:
+
+- An exact-name allowlist: `PATH`, locale, proxy/CA, `STAGEFLOW_HOME`, computed cache vars, Slot 2 binding vars
+- **Only secrets you declare** on the pipeline or stage via `secrets:`
+
+Ambient Host environment variables (including those passed in compose) do **not** automatically reach stage `bash`, `verify` commands, or `.mcp.json` `${VAR}` interpolation unless explicitly granted.
+
+### GitHub tokens and the default grant
+
+`GITHUB_TOKEN` in the compose environment makes the token available to the Host for repository operations (clone, fetch). By default, **it does not reach stage bash or `gh` CLI** unless the pipeline/stage declares:
+
+```yaml
+secrets:
+  - name: GITHUB_TOKEN
+```
+
+When declared without modifiers, Stageflow materializes the token as a **file** and sets `GIT_ASKPASS` to a helper script. This is the recommended approach for git operations.
+
+If a stage tool requires `$GITHUB_TOKEN` as an **environment variable** directly (e.g., `gh` CLI in some contexts), use:
+
+```yaml
+secrets:
+  - name: GITHUB_TOKEN
+    as: env
+```
+
+This emits a `WARN` log and places the secret in the stage's environment. The `as: env` form works for `.mcp.json` `${TOKEN}` interpolation; the default askpass grant does not.
+
+### Declaring secrets on stages
+
+Example pipeline with a GitHub token grant:
+
+```yaml
+id: release-automation
+entry: true
+stages:
+  - id: draft-release
+    system_prompt: Draft a GitHub release
+    model: anthropic/claude-sonnet-4-5
+    secrets:
+      - name: GITHUB_TOKEN
+        as: env  # only if gh CLI needs the env var
+    io:
+      input:
+        schema:
+          type: object
+          properties:
+            version: { type: string }
+      output:
+        includes_artifacts: true
+```
+
+### Compose example with GITHUB_TOKEN
+
+Host environment (compose or k8s):
+
+```yaml
+services:
+  stageflow:
+    image: ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+    environment:
+      STAGEFLOW_HOME: /data
+      STAGEFLOW_CONTROL_TOKEN_FILE: /run/secrets/control_token
+      GITHUB_TOKEN: ${GITHUB_TOKEN}  # Host-only until secrets: declares it
+    secrets:
+      - control_token
+```
+
+The `GITHUB_TOKEN` above is available to the Host process for repository binding, but **stages must declare** `secrets: [{ name: GITHUB_TOKEN }]` to access it.
+
+### Non-secret Host variables
+
+For non-secret environment variables that stages should see (e.g., `CI`, `NPM_REGISTRY`), prefer the Host-level allowlist:
+
+```yaml
+environment:
+  STAGEFLOW_STAGE_ENV_ALLOW: CI,NPM_REGISTRY,MY_API_BASE
+```
+
+### Temporary stopgap: passthrough-all
+
+`STAGEFLOW_STAGE_ENV_PASSTHROUGH=all` restores ambient variables (minus control/read tokens, provider keys, and undeclared registry secrets). It emits a `WARN` on every stage launch and is **deprecated** — it will be removed in a future release. Use explicit `secrets:` declarations or `STAGE_ENV_ALLOW` instead.
+
+### Health and preflight
+
+`GET /api/health` includes `stage_env_passthrough` in the response when enabled. MCP `preflight` and `start_run` diff declared `secrets:` against the Host's available grants and warn about mismatches.
+
+Full reference: [Migration: curated stage environment (Slot 6)](migration-stage-environment.md).
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.

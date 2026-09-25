@@ -71,6 +71,14 @@ npm i -g ./stageflow-*.tgz
 
 `better-sqlite3` ships prebuilds for common platforms. `--ignore-scripts` is fine when a prebuild exists. Benign `node-gyp` warnings during install can be ignored if `require("better-sqlite3")` works.
 
+**Docker / self-hosted:**
+
+```bash
+docker pull ghcr.io/tejasghutukade/stageflow@sha256:<digest>
+```
+
+Prefer **digest pins** for production. Control token ≥32 chars required for non-loopback bind. See [Docker and self-hosting](docs/docker.md) for compose examples, backup/restore, volume requirements, and **stage environment / secrets visibility**.
+
 **Harness skills** (Cursor, Claude Code, Codex, Pi, OpenCode) — from a consumer project:
 
 ```bash
