@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-09-25
+
+### Added
+
+- Container image delivery (Slot 10): multi-stage `Dockerfile` (digest-pinned Node 22 slim, non-root `10001`, tini + `sf mcp`, `HEALTHCHECK` on `/livez`, toolchain at `/etc/stageflow/toolchain.json`); root `docker-compose.yml` for local try; `scripts/docker-smoke.sh` + CI job; GHCR multi-arch publish + cosign keyless sign-by-digest on the npm version gate. See `docs/docker.md`.
+- `sf doctor` `store_integrity` check runs full `PRAGMA integrity_check` (boot/readyz stay on `quick_check`).
+- `sf validate` flags absolute paths under `$STAGEFLOW_HOME` in stage prompts and verify commands (`catalog.stageflow_home_absolute_path`).
+
+### Fixed
+
+- `STAGEFLOW_BUILD_SHA` is an allowed Host env (image provenance / `/api/health` `build_sha`) so container boot no longer rejects the Dockerfile-baked value.
+- Bound-run Pi `read`/`write`/`edit` allow the stage `checkoutRoot` (still deny other durable-root paths such as `state.db`, `agent/`, sibling worktrees).
+- Bare repo cache uses `git clone --bare` with remotes-style fetch (`+refs/heads/*:refs/remotes/origin/*` and `+refs/tags/*:refs/tags/*`, no `remote.origin.mirror`); existing mirrored or `+refs/*:refs/*` caches are healed under the cache lock, short refs resolve via remotes tips, and non-`stageflow/` local heads are pruned so linked-worktree `git push` keeps working.
+- For `GITHUB_TOKEN` / `GH_TOKEN`, `{ as: env }` is additive with askpass: curated env keeps the value and `GIT_ASKPASS` + token file are still materialised for plain HTTPS git.
+- When a repository-bound run reaches `succeeded`, Stageflow reclaims the Host worktree (keeps `run_branch`; leaves `checkout_root` recorded; does not set `slimmed_at`). Fail/cancel and mid-pipeline checkouts are unchanged; retry after succeed soft-fails `checkout_reclaimed` when the path is gone.
+
+### Changed
+
+- `docs/mcp.md` Limitations / CLI-only table refreshed to match shipped Slot 9 surfaces (`skills`, `export_run`, debug-bundle).
+- Stage-env migration / YAML catalog docs clarify that GitHub `{ as: env }` keeps askpass for HTTPS git.
+- Docker Local try docs rewritten as a Compose first-run checklist; add root `.env.example` and align `docker-compose.yml` with `STAGEFLOW_PROVIDER_*` boot keys.
+- Harness skills suite updated for Compose local try, drive-token MCP calls, `$STAGEFLOW_HOME` run store, repository/`ref` binding, and Slot 6 `secrets:` authoring.
+
+## [0.26.0] - 2026-09-24
+
+### Added
+
+- Host-global project registry under `$STAGEFLOW_HOME`: durable `ensure` of absolute project roots; `sf run` ensure-then-starts before `start_run`; remotes may only use registered ∪ seeded catalog roots (no invent of unknown absolute `project_root`; Host boot cwd is not a catalog root). See `docs/mcp.md`, `docs/cli-reference.md`, `docs/data-directory.md`.
+- Curated stage environment (Slot 6): stages no longer inherit Host ambient env; declare `secrets:`; file-backed git askpass; value redaction; proxy/CA passthrough; shared `$STAGEFLOW_HOME/cache`; MCP connect default 30s; finite stage-process/heap caps; Claude-as-root refusal. See `docs/migration-stage-environment.md`.
+
+### Changed
+
+- Catalog start/write path selection is shared (`resolveCatalogStartInput` / `resolveWritableCatalogRoot`); MCP `run_stage` and A2A string stage paths honor the same catalog containment as `start_run`.
+- Operator-terminal run statuses (`cancelled` / `queued`) are preserved inside `deriveStatusFromStages` so recovery and projection cannot overwrite them.
+- Host shutdown drains through a required `DrainableHost` adapter (single drain path).
+- Stage worker builds / preserves curated env explicitly (forked workers keep launcher-granted secrets; in-process path filters via `buildStageEnvironment`).
+- Path-checkout lease (`busy_checkout`) applies only to path-bound runs. Repository-bound runs each get their own worktree and may run in parallel on the same repository; attach/resume no longer re-lease worktree paths.
+- `verify` commands run under `bash -c` (not `/bin/sh`).
+- Stage MCP `${VAR}` interpolation resolves against the curated stage env only.
+
+### Removed
+
+- Dead `RunStore.listProjectRoots` (superseded by `listRegisteredProjects`) and unused `isMutatingApi` predicate (superseded by `requiredScopeFor`).
+
 ## [0.25.0] - 2026-09-21
 
 ### Added

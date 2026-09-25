@@ -18,6 +18,10 @@ export function readinessDetail(input: {
   if (readiness === "waiting" && status === "waiting_for_input") {
     return undefined;
   }
+  if (readiness === "interrupted" && status === "interrupted") {
+    return undefined;
+  }
+  if (readiness === "interrupted") return statusCopy("interrupted");
   if (readiness === "succeeded") return statusCopy("succeeded");
   if (readiness === "failed") return statusCopy("failed");
   if (readiness === "running") return statusCopy("running");

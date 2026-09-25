@@ -56,7 +56,7 @@ The envelope is the control-plane handoff; artifacts are the data-plane handoff.
 
 ## Persistence and recovery
 
-SQLite is the active `RunStore` adapter. Run state is **global**, not per-project: it lives under the single shared home `~/.stageflow/`, with per-run and per-attempt workspaces under its `runs/` directory. One `RunStore` instance backs every project on the machine; each run still records the `project_root` it came from, so views can be scoped back to one project. Pipeline/task catalog resolution (`stageflow.yaml`, `pipelines/`, `tasks/`) is unaffected by this and stays project-local, resolved from the invoking git root.
+SQLite is the active `RunStore` adapter. Run state is **global**, not per-project: it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), with per-run and per-attempt workspaces under `runs/`. One `RunStore` instance backs every project on the machine; each run still records the `project_root` it came from, so views can be scoped back to one project. The same store holds a durable **projects registry**: catalog membership is seeded roots ∪ registered absolute folders — Host boot cwd is not a catalog root. Local CLI ensure-then-starts against its resolved cwd; remotes may only target registered or seeded roots (unknown absolute `project_root` is refused). Per-project settings remain at `<git-root>/.stageflow/settings.json`. Pipeline/task files stay project-local under each registered (or seeded) root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 Stageflow persists:
 
@@ -105,7 +105,7 @@ The CLI, local console, and MCP server operate on the same run model. This keeps
 
 ### Single global auto-starting service
 
-There is one Stageflow background service per machine, not one per project. `sf ui` and `sf mcp` start it explicitly; `sf run` and mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients that probe the well-known local port and auto-start the service headlessly (`<entry> mcp`, detached) the first time anything needs it. This replaced an earlier one-process-per-project model that collided on port binding whenever more than one project or git worktree tried to run `sf ui`/`sf mcp` at once. Read-only `sf runs` verbs (`list`, `show`, `verify`, `waiting`) read the global store directly and don't require the service to be running.
+There is one Stageflow background service per machine, not one per project. Where the Host process was started does not define the project set. `sf ui` and `sf mcp` start it explicitly; `sf run` and mutating `sf runs` verbs (`answer`, `retry`, `resume`, `abandon`, `rerun`, `recover`) are HTTP clients that probe the well-known local port and auto-start the service headlessly (`<entry> mcp`, detached) the first time anything needs it. Before `start_run`, `sf run` registers its resolved project folder with the Host (`POST /api/projects` on trusted loopback). This replaced an earlier one-process-per-project model that collided on port binding whenever more than one project or git worktree tried to run `sf ui`/`sf mcp` at once. Read-only `sf runs` verbs (`list`, `show`, `verify`, `waiting`) read the global store directly and don't require the service to be running.
 
 ## Runtime invariants
 

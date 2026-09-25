@@ -16,9 +16,12 @@ import { RunManager } from "../src/runtime/runManager.js";
 import { buildStageRoots } from "../src/runtime/stageRoots.js";
 import type { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 import {
-  failStageAsInterrupted,
+  markStageInterrupted,
+  OPERATOR_CANCEL_REASON,
   syncRunStatusFromStages,
 } from "../src/runtime/stageRecovery.js";
+import { attemptContext } from "../src/runtime/stageAttemptContext.js";
+import { deriveExecutionPatchFromEvent } from "../src/runstore/stageExecution.js";
 
 const fixtures = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,8 +35,7 @@ const successEnvelope = {
   payload: {},
 };
 
-const STARTUP_RECONCILE_REASON =
-  "process_interrupted: no active worker (server restart)";
+const STARTUP_RECONCILE_REASON = "orphaned_no_worker";
 
 const OPERATOR_ABANDON_REASON =
   "process_interrupted: operator abandoned stage";
@@ -186,7 +188,7 @@ function reconcileAgent() {
 const kinds = ["sqlite"] as const;
 
 describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
-  it("failStageAsInterrupted appends failed after started", async () => {
+  it("markStageInterrupted with interrupted appends interrupted after started", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-recovery-fail-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
@@ -195,19 +197,20 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
     });
 
     await store.appendStageEvent(run.runId, "build", { event: "started" });
-    await failStageAsInterrupted({
+    await markStageInterrupted({
       store,
       runId: run.runId,
       stageId: "build",
-      reason: "process_interrupted: no active worker (server restart)",
+      reason: STARTUP_RECONCILE_REASON,
+      status: "interrupted",
     });
 
     const events = await store.listStageEvents(run.runId, "build");
-    expect(stageStatusFromEvents(events)).toBe("failed");
-    expect(events.some((e) => e.event === "failed")).toBe(true);
+    expect(stageStatusFromEvents(events)).toBe("interrupted");
+    expect(events.some((e) => e.event === "interrupted")).toBe(true);
   });
 
-  it("failStageAsInterrupted patches execution row finished_at", async () => {
+  it("markStageInterrupted interrupted leaves execution finished_at unset", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-recovery-exec-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
@@ -222,11 +225,43 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
       { event: "started" },
       { attempt: 1 },
     );
-    await failStageAsInterrupted({
+    await markStageInterrupted({
       store,
       runId: run.runId,
       stageId: "build",
-      reason: "process_interrupted: no active worker (server restart)",
+      reason: STARTUP_RECONCILE_REASON,
+      status: "interrupted",
+    });
+
+    const execution = await store.getStageExecution(run.runId, "build", 1);
+    expect(execution.status).toBe("interrupted");
+    expect(execution.finished_at).toBeUndefined();
+    expect(execution.attempt).toBe(1);
+  });
+
+  it("markStageInterrupted with failed still sets finished_at", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-exec-failed-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(
+      run.runId,
+      "build",
+      { event: "started" },
+      { attempt: 1 },
+    );
+    await markStageInterrupted({
+      store,
+      runId: run.runId,
+      stageId: "build",
+      reason: OPERATOR_ABANDON_REASON,
+      status: "failed",
     });
 
     const execution = await store.getStageExecution(run.runId, "build", 1);
@@ -234,7 +269,7 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
     expect(execution.finished_at).toBeDefined();
   });
 
-  it("syncRunStatusFromStages sets run failed when stage failed", async () => {
+  it("syncRunStatusFromStages keeps run running when stage is interrupted", async () => {
     const root = await mkdtemp(path.join(tmpdir(), `sf-recovery-sync-${kind}-`));
     const store = createRunStore({ rootDir: root, kind });
     const run = await store.createRun({
@@ -243,11 +278,40 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
     });
 
     await store.appendStageEvent(run.runId, "build", { event: "started" });
-    await failStageAsInterrupted({
+    await markStageInterrupted({
       store,
       runId: run.runId,
       stageId: "build",
-      reason: "process_interrupted: no active worker (server restart)",
+      reason: STARTUP_RECONCILE_REASON,
+      status: "interrupted",
+    });
+    await store.updateRunStatus(run.runId, "running");
+
+    await syncRunStatusFromStages(store, run.runId);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("running");
+    const detail = await store.readRun(run.runId);
+    expect(detail.status).toBe("running");
+  });
+
+  it("syncRunStatusFromStages sets run failed when stage failed via mark helper", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-sync-failed-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await markStageInterrupted({
+      store,
+      runId: run.runId,
+      stageId: "build",
+      reason: OPERATOR_ABANDON_REASON,
+      status: "failed",
     });
     await store.updateRunStatus(run.runId, "running");
 
@@ -255,8 +319,6 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
 
     const meta = await store.readRunMeta(run.runId);
     expect(meta.status).toBe("failed");
-    const detail = await store.readRun(run.runId);
-    expect(detail.status).toBe("failed");
   });
 
   it("syncRunStatusFromStages settles mixed retry outcomes to failed run status", async () => {
@@ -299,10 +361,47 @@ describe.each(kinds)("runtime stage recovery (%s)", (kind) => {
     const detail = await store.readRun(run.runId);
     expect(detail.status).toBe("failed");
   });
+
+  it("syncRunStatusFromStages does not rewrite a cancelled run", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-cancelled-sync-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await markStageInterrupted({
+      store,
+      runId: run.runId,
+      stageId: "build",
+      reason: OPERATOR_CANCEL_REASON,
+      status: "failed",
+    });
+    await store.updateRunStatus(run.runId, "cancelled");
+
+    await syncRunStatusFromStages(store, run.runId);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("cancelled");
+    const detail = await store.readRun(run.runId);
+    expect(detail.status).toBe("cancelled");
+  });
+
+  it("deriveExecutionPatchFromEvent interrupted is non-terminal", () => {
+    const patch = deriveExecutionPatchFromEvent(
+      { event: "interrupted", reason: "orphaned_no_worker" },
+      { status: "running", started_at: "2026-01-01T00:00:00.000Z" },
+    );
+    expect(patch).toEqual({ status: "interrupted" });
+    expect(patch.finished_at).toBeUndefined();
+  });
 });
 
 describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
-  it("AE1: started without terminal reconciles to failed run", async () => {
+  it("AE1: started without terminal reconciles to interrupted, run stays running", async () => {
     const root = await mkdtemp(
       path.join(tmpdir(), `sf-recovery-ae1-${kind}-`),
     );
@@ -312,7 +411,13 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
       taskYaml: "id: t\ngoal: g\n",
     });
 
-    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await store.createStageExecution(run.runId, "build");
+    await store.appendStageEvent(
+      run.runId,
+      "build",
+      { event: "started" },
+      { attempt: 1 },
+    );
     await store.updateRunStatus(run.runId, "running");
 
     const manager = new RunManager({
@@ -331,9 +436,214 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     ]);
 
     const detail = await store.readRun(run.runId);
-    expect(detail.status).toBe("failed");
+    expect(detail.status).toBe("running");
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.status).toBe("interrupted");
+    expect(build?.attempt_count).toBe(1);
+    const execution = await store.getStageExecution(run.runId, "build", 1);
+    expect(execution.status).toBe("interrupted");
+    expect(execution.finished_at).toBeUndefined();
+  });
+
+  it("auto-resume env unset leaves reconciled interrupted stages alone", async () => {
+    const previousAuto = process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    try {
+      const root = await mkdtemp(
+        path.join(tmpdir(), `sf-recovery-auto-off-${kind}-`),
+      );
+      const store = createRunStore({ rootDir: root, kind });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      await store.createStageExecution(run.runId, "build");
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 1 },
+      );
+      await store.updateRunStatus(run.runId, "running");
+
+      const manager = new RunManager({
+        agent: reconcileAgent(),
+        store,
+        cwd: fixtures,
+      });
+      await manager.reconcileOrphanedStages();
+      const auto = await manager.autoResumeInterruptedStages();
+      expect(auto).toEqual({ resumed: [], capped: [], skipped: [] });
+
+      const detail = await store.readRun(run.runId);
+      expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+        "interrupted",
+      );
+      const execution = await store.getStageExecution(run.runId, "build", 1);
+      expect(execution.auto_resume_count).toBe(0);
+    } finally {
+      if (previousAuto === undefined) {
+        delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+      } else {
+        process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = previousAuto;
+      }
+    }
+  });
+
+  it("auto-resume ignores stale interrupted attempts and does not flip succeeded latest", async () => {
+    const previousAuto = process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+    const previousMax = process.env.STAGEFLOW_MAX_AUTO_RESUMES;
+    process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = "1";
+    process.env.STAGEFLOW_MAX_AUTO_RESUMES = "0";
+    try {
+      const root = await mkdtemp(
+        path.join(tmpdir(), `sf-recovery-stale-auto-${kind}-`),
+      );
+      const store = createRunStore({ rootDir: root, kind });
+      const run = await store.createRun({
+        pipelineId: "docs-only",
+        taskYaml: "id: t\ngoal: g\n",
+      });
+
+      await store.createStageExecution(run.runId, "build");
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 1 },
+      );
+      await markStageInterrupted({
+        store,
+        runId: run.runId,
+        stageId: "build",
+        reason: STARTUP_RECONCILE_REASON,
+        status: "interrupted",
+        attemptCtx: attemptContext(1),
+      });
+      await store.updateStageExecution(run.runId, "build", 1, {
+        auto_resume_count: 3,
+      });
+
+      const attempt2 = await store.createStageExecution(run.runId, "build");
+      expect(attempt2.attempt).toBe(2);
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "started" },
+        { attempt: 2 },
+      );
+      await store.appendStageEvent(
+        run.runId,
+        "build",
+        { event: "succeeded" },
+        { attempt: 2 },
+      );
+      await store.updateStageExecution(run.runId, "build", 2, {
+        status: "succeeded",
+      });
+      await store.updateRunStatus(run.runId, "succeeded");
+
+      const listed = await store.listInterruptedStageExecutions();
+      expect(listed).toEqual([]);
+
+      const manager = new RunManager({
+        agent: reconcileAgent(),
+        store,
+        cwd: fixtures,
+      });
+      const auto = await manager.autoResumeInterruptedStages();
+      expect(auto.capped).toEqual([]);
+      expect(auto.resumed).toEqual([]);
+
+      const detail = await store.readRun(run.runId);
+      expect(detail.status).toBe("succeeded");
+      expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
+        "succeeded",
+      );
+      const latest = await store.getLatestStageExecution(run.runId, "build");
+      expect(latest?.attempt).toBe(2);
+      expect(latest?.status).toBe("succeeded");
+      const events = await store.listStageEvents(run.runId, "build", 2);
+      expect(events.some((e) => e.event === "interrupted")).toBe(false);
+    } finally {
+      if (previousAuto === undefined) {
+        delete process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED;
+      } else {
+        process.env.STAGEFLOW_AUTO_RESUME_INTERRUPTED = previousAuto;
+      }
+      if (previousMax === undefined) {
+        delete process.env.STAGEFLOW_MAX_AUTO_RESUMES;
+      } else {
+        process.env.STAGEFLOW_MAX_AUTO_RESUMES = previousMax;
+      }
+    }
+  });
+
+  it("reconcileOrphanedStages on cancelled run terminalizes orphans without rewriting run status", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-cancelled-reconcile-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+    await store.updateRunStatus(run.runId, "cancelled");
+
+    const manager = new RunManager({
+      agent: reconcileAgent(),
+      store,
+      cwd: fixtures,
+    });
+    const result = await manager.reconcileOrphanedStages();
+
+    expect(result.reconciled).toEqual([
+      {
+        runId: run.runId,
+        stageId: "build",
+        reason: OPERATOR_CANCEL_REASON,
+      },
+    ]);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("cancelled");
+    const detail = await store.readRun(run.runId);
+    expect(detail.status).toBe("cancelled");
+    const build = detail.stages.find((s) => s.stage_id === "build");
+    expect(build?.status).toBe("failed");
+    expect(
+      build?.events.filter((e) => e.event === "failed").at(-1)?.reason,
+    ).toBe(OPERATOR_CANCEL_REASON);
+  });
+
+  it("reconcileOrphanedStages skips queued runs entirely", async () => {
+    const root = await mkdtemp(
+      path.join(tmpdir(), `sf-recovery-queued-reconcile-${kind}-`),
+    );
+    const store = createRunStore({ rootDir: root, kind });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      status: "queued",
+    });
+    await store.appendStageEvent(run.runId, "build", { event: "started" });
+
+    const manager = new RunManager({
+      agent: reconcileAgent(),
+      store,
+      cwd: fixtures,
+    });
+    const result = await manager.reconcileOrphanedStages();
+    expect(result.reconciled).toEqual([]);
+
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.status).toBe("queued");
+    const detail = await store.readRun(run.runId);
     expect(detail.stages.find((s) => s.stage_id === "build")?.status).toBe(
-      "failed",
+      "running",
     );
   });
 
@@ -379,7 +689,7 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     expect(detail.status).toBe("running");
   });
 
-  it("AE3: parallel sibling succeeded; only running stage fails", async () => {
+  it("AE3: parallel sibling succeeded; only running stage interrupted, run stays running", async () => {
     const root = await mkdtemp(
       path.join(tmpdir(), `sf-recovery-ae3-${kind}-`),
     );
@@ -419,8 +729,8 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     );
     expect(
       detail.stages.find((s) => s.stage_id === "implementation-plan")?.status,
-    ).toBe("failed");
-    expect(detail.status).toBe("failed");
+    ).toBe("interrupted");
+    expect(detail.status).toBe("running");
   });
 
   it("attachWaitingStages still works when reconcile follows", async () => {
@@ -533,8 +843,8 @@ describe.each(kinds)("runtime stage recovery reconcile (%s)", (kind) => {
     ).toBe("waiting_for_input");
     expect(
       detail.stages.find((s) => s.stage_id === "implementation-plan")?.status,
-    ).toBe("failed");
-    expect(detail.status).toBe("failed");
+    ).toBe("interrupted");
+    expect(detail.status).toBe("running");
 
     const retryWaiting = await manager.retryStage(run.runId, "design-doc");
     expect(retryWaiting.ok).toBe(false);

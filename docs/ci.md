@@ -47,12 +47,14 @@ Provider login stores credentials in the job environment (prefer `--api-key-env`
 | Code | `outcome` | When |
 |------|-----------|------|
 | `0` | `succeeded` | Pipeline completed |
-| `1` | `failed` or `busy` | Stage error, validation at start, concurrency conflict |
+| `1` | `failed`, `cancelled`, or `busy` | Stage error, validation at start, operator/API cancel, concurrency or queue conflict |
 | `2` | `waiting` | Stage blocked on HITL |
 
 A listed successor skipped by Route `if` (or skip-cascade from a skipped parent) is `skipped`, not `failed`; a run where all non-failed stages are `succeeded` or `skipped` exits `0`. A failed parent still fails the run: a [generic fan-in](yaml-catalog.md#generic-fan-in) Join stays pending even if that parent's `on` lists `failed`. Skipped siblings do not block a Join that has a succeeded parent.
 
 For unattended CI, either use pipelines **without** `ask_operator`, or pass **`--skip-gates`** (fails the stage with exit `1` instead of parking). See [HITL](hitl.md). The CI guest uses `sf run --json` / `--skip-gates` only — it does not wait or answer with `sf runs`. Outside CI, humans and agents can continue a parked run with [`sf runs`](cli-reference.md#sf-runs).
+
+Blocking `sf run` treats `cancelled` as terminal (exit `1`) the same way as `failed` — a cancel during the poll returns promptly instead of hanging.
 
 ### JSON stdout
 
@@ -70,6 +72,8 @@ One document per invocation with `--json`:
 ```
 
 When start-run pairing produces warnings (for example `pipeline.model_applies`), the same document includes optional `findings[]` (`severity`, `code`, `file`, `message`, `category` — `path` remapped to `file`, matching `sf validate --json`). Warnings do not fail the run (`ok` / `outcome` / exit stay as today). Omitted `task.input` is treated as `{}` against each entry `io.input.schema`; a mismatch fails start-run as validate-shaped JSON (`task.invalid_shape`).
+
+When concurrency slots are full but the admission queue still has room, start succeeds and the Host may admit the run as `queued`. Blocking `sf run` prints `queued at position N` on stderr, then waits until the run leaves the queue and reaches a terminal outcome. MCP `start_run` returns `{ "runId", "queued": true, "queuePosition" }` for that case — still a success, just slower to start.
 
 **Waiting:**
 
@@ -94,6 +98,20 @@ When start-run pairing produces warnings (for example `pipeline.model_applies`),
 }
 ```
 
+**Cancelled** (run created, then cancelled — exit `1`):
+
+```json
+{
+  "ok": false,
+  "outcome": "cancelled",
+  "runId": "…",
+  "runDir": "…",
+  "reason": "…"
+}
+```
+
+`reason` is the cancel text stored as `cancel_reason` when present. Cancel signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included in the tree.
+
 **Busy** (`outcome: "busy"`, no `runId`):
 
 ```json
@@ -108,7 +126,22 @@ When start-run pairing produces warnings (for example `pipeline.model_applies`),
 }
 ```
 
-`code` is `busy_capacity` or `busy_checkout`. Capacity includes `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`.
+`code` is `busy_capacity`, `busy_checkout`, or `busy_caller_quota`. **`busy_capacity` means the admission queue is full** (or concurrency is full when queuing cannot accept the run) — not merely “active slots are full,” which now queues instead. Capacity fields include `activeCount` / `maxConcurrent` / `activeRunIds`; checkout conflict includes `conflictingRunId` / `conflictingCheckout`. `busy_checkout` never queues. `busy_caller_quota` is for named-caller concurrency limits (queues while the global queue has room; rejects when that queue is full) — distinct from per-project `busy_capacity` rejects.
+
+**Insufficient disk** (`outcome: "failed"`, no `runId`, exit `1`):
+
+```json
+{
+  "ok": false,
+  "outcome": "failed",
+  "code": "insufficient_disk",
+  "reason": "…",
+  "freeBytes": 12000000,
+  "minFreeBytes": 50000000
+}
+```
+
+Distinct from `busy_capacity`. The run is not queued. The same floor is re-checked when a queued run would dequeue; a dequeue-time miss cancels that queued row with `cancel_reason: "insufficient_disk"`.
 
 **Start failed without a run** (`outcome: "failed"`, no `runId`):
 
@@ -268,15 +301,54 @@ Adjust task, pipeline, and secrets for your project. Dogfood release automation 
 
 | Variable | Effect |
 |----------|--------|
-| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel runs (busy exit if full) |
+| `STAGEFLOW_MAX_CONCURRENT_RUNS` | Soft cap on parallel **active** runs; when full, new starts enter the admission queue instead of failing immediately |
+| `STAGEFLOW_MAX_QUEUED` | Cap on persisted `queued` runs (default `32`). When this queue is also full, start returns `busy_capacity` |
+| `STAGEFLOW_MIN_FREE_DISK_BYTES` | Free-space floor for start and dequeue (integer bytes or `N%` of the durable-root filesystem). Below the floor → `insufficient_disk` (not queued) |
+| `STAGEFLOW_DISK_WARN_BYTES` | Boot warn threshold for free space (bytes or `N%`); one-shot log at Host start, not an admission gate |
+| `STAGEFLOW_GC_INTERVAL_MS` | Periodic retention sweep interval (default 1h); `0` disables. First sweep fires one interval after boot |
+| `STAGEFLOW_SLIM_ARTIFACT_MAX_BYTES` | Artifact size above which SLIM may reclaim (default 1 MiB) |
+| `STAGEFLOW_BARE_CACHE_TTL_MS` | Bare clone cache TTL before eviction eligibility (default 30d) |
+| `STAGEFLOW_SLIM_SUCCEEDED_MS` | SLIM window for `succeeded` runs (default 3d) |
+| `STAGEFLOW_PURGE_SUCCEEDED_MS` | PURGE window for `succeeded` runs (default 30d) |
+| `STAGEFLOW_SLIM_FAILED_MS` | SLIM window for `failed` runs (default 30d) |
+| `STAGEFLOW_PURGE_FAILED_MS` | PURGE window for `failed` runs (default 90d) |
+| `STAGEFLOW_SLIM_CANCELLED_MS` | SLIM window for `cancelled` runs (default 30d) |
+| `STAGEFLOW_PURGE_CANCELLED_MS` | PURGE window for `cancelled` runs (default 90d) |
 | `STAGEFLOW_MAX_ACTIVE_STAGES_PER_RUN` | Parallel stages within one run |
 | `STAGEFLOW_MAX_ACTIVE_STAGE_PROCESSES` | Stage worker process cap |
 | `STAGEFLOW_OPERATOR_CWD` | Operator checkout root for skill resolution (see [Skills in CI](#skills-in-ci)) |
 | `STAGEFLOW_OPERATOR_AGENT_DIR` | Pi agent directory for user/runner skills |
 
+## Host lifecycle (sf ui / sf mcp)
+
+`sf run`'s exit codes `0` / `1` / `2` above are unchanged. The long-lived Host (`sf ui` / `sf mcp`) uses a separate exit table.
+
+### Host exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean shutdown. Signal received, drain completed within the grace period, stages finished or recorded `interrupted`, SQLite checkpointed and closed |
+| `1` | Unhandled crash; state may not be checkpointed |
+| `2` | Reserved — never used by the Host (`sf run` uses `2` for waiting) |
+| `3` | Refused to start: invalid configuration (bad bind, malformed env, unwritable `$STAGEFLOW_HOME`) |
+| `4` | Refused to start: on-disk store schema is newer than this binary |
+| `5` | Forced shutdown. Grace period expired; workers were SIGKILLed. `interrupted` records were attempted and may be incomplete |
+| `6` | Escalated shutdown. A second SIGTERM/SIGINT arrived during the drain |
+
+### Host env vars
+
+| Variable | Effect |
+|----------|--------|
+| `STAGEFLOW_SHUTDOWN_GRACE_MS` | SIGTERM/SIGINT drain budget in ms (default `8000`). Workers get grace − 2000 ms; the final 2 s are reserved for `interrupted` writes and WAL close. Pair with compose `stop_grace_period` — raising grace without raising `stop_grace_period` truncates the drain under `docker stop`'s default 10 s window |
+| `STAGEFLOW_LOG_FORMAT` | `json` or `pretty`. Default: `pretty` on a TTY, `json` otherwise (container / piped logs) |
+| `STAGEFLOW_LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` (default `info`) |
+| `STAGEFLOW_NO_AUTOSTART` | When set (truthy, not `0`/`false`), CLI verbs that would spawn a detached Host refuse with `autostart_disabled` instead — required for container images where the entrypoint already runs the Host |
+| `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off). Reconciliation still writes `interrupted` unconditionally |
+| `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per stage attempt (default `3`). Past the cap the stage stays `interrupted` with reason `auto_resume_capped`; explicit `resume_stage` / `sf runs resume` still works and resets the counter |
+
 ## State in CI
 
-Runs write under **`<repo>/.stageflow/`** at the git root. Cache or artifact this directory if you need post-job inspection; ephemeral runners can discard it.
+Runs write under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/` on the runner). Set `STAGEFLOW_HOME` to a job-local path and cache or artifact that directory if you need post-job inspection; ephemeral runners can discard it. See [Data directory](data-directory.md).
 
 ## PR diagrams (Archify) {#pr-diagrams-archify}
 

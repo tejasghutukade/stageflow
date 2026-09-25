@@ -264,6 +264,7 @@ function nodeChromeStatus(
   abandoned: boolean,
 ): string {
   if (abandoned) return "abandoned";
+  if (status === "interrupted") return "waiting_for_input";
   return status;
 }
 
@@ -887,7 +888,7 @@ function NodeStatusColumn({
           />
         </>
       ) : null}
-      {status === "waiting_for_input" ? (
+      {status === "waiting_for_input" || status === "interrupted" ? (
         <>
           <circle
             cx={cx}

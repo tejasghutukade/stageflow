@@ -9,7 +9,7 @@ The operator console is a local web UI started by `sf ui`. Default URL: **`http:
 
 It is the primary surface for triaging runs, connecting providers, answering HITL gates, and inspecting stage transcripts and envelopes. The same process also serves MCP at `/mcp`.
 
-The run store is **global**, not project-scoped — it lives under `~/.stageflow/` and is shared by every project on the machine, whichever directory you start `sf ui` from. Catalog browse (pipelines, tasks, skills, extensions) still resolves to the **project git root**: starting `sf ui` from a subdirectory uses `<git-root>/stageflow.yaml` and its declared catalog roots. `sf ui` is one of two ways to start the shared background service (`sf mcp` is the other, headless); `sf run`/mutating `sf runs` commands auto-start the same service if neither is already running.
+The run store is **global**, not project-scoped — it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) and is shared by every project on the machine, whichever directory you start `sf ui` from. Catalog browse (pipelines, tasks, skills, extensions) still resolves to the **project git root**: starting `sf ui` from a subdirectory uses `<git-root>/stageflow.yaml` and its declared catalog roots. See [Data directory](data-directory.md). `sf ui` is one of two ways to start the shared background service (`sf mcp` is the other, headless); `sf run` / `sf run-stage` / mutating `sf runs` commands auto-start the same service if neither is already running.
 
 ## Starting the console
 

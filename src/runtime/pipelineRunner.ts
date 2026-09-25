@@ -9,7 +9,10 @@ import {
 } from "../config/validateCatalog.js";
 import { loadTaskFromYaml } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
-import { resolveAndValidateCheckout } from "./stageRoots.js";
+import {
+  resolveAndValidateCheckout,
+  resolveEffectiveGitIdentity,
+} from "./stageRoots.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageHitlController } from "./stageHitl.js";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
@@ -26,10 +29,85 @@ import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { PipelineValidationError } from "./pipelineValidationError.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { checkTaskEntryInput } from "./taskInput.js";
+import { pipelinePersistenceForStart } from "./startPayload.js";
+import {
+  materializeRunSkills,
+  type SkillsPayload,
+} from "./runSkills.js";
+import {
+  preflightFailureCode,
+  runPipelinePreflight,
+} from "../preflight/pipelinePreflight.js";
+import { networkError } from "../errors/codes.js";
+import { newRunId } from "../runstore/paths.js";
+import {
+  bindingFromFields,
+  buildInitialRunManifest,
+  collectDeclaredSecretValues,
+  finaliseStoredRunManifest,
+} from "../runstore/runManifest.js";
+import {
+  getRequestAuth,
+} from "../server/requestAuthContext.js";
+import { registerNamedSecrets } from "../logging/namedSecrets.js";
+import { shouldRegisterValue } from "../logging/redact.js";
 
 export { PipelineValidationError } from "./pipelineValidationError.js";
 
-export type PipelineRunOutcome = "succeeded" | "failed" | "waiting";
+export class PipelinePreflightError extends Error {
+  readonly code: string;
+  readonly preflight: Awaited<ReturnType<typeof runPipelinePreflight>>;
+
+  constructor(
+    code: string,
+    preflight: Awaited<ReturnType<typeof runPipelinePreflight>>,
+  ) {
+    super(`Pipeline preflight failed: ${code}`);
+    this.name = "PipelinePreflightError";
+    this.code = code;
+    this.preflight = preflight;
+  }
+
+  toNetworkBody() {
+    return networkError(this.code, this.message, {
+      checks: this.preflight.checks,
+    });
+  }
+}
+
+export type PipelineRunOutcome = "succeeded" | "failed" | "waiting" | "cancelled";
+
+export class InlinePipelineTooLargeError extends Error {
+  readonly code = "inline_pipeline_too_large" as const;
+  readonly bytes: number;
+  readonly maxBytes: number;
+
+  constructor(bytes: number, maxBytes: number) {
+    super(
+      `Inline pipeline body is ${bytes} bytes; max is ${maxBytes} (inline_pipeline_too_large)`,
+    );
+    this.name = "InlinePipelineTooLargeError";
+    this.bytes = bytes;
+    this.maxBytes = maxBytes;
+  }
+}
+
+/** Thrown when queued→running CAS fails (e.g. cancel won the race). */
+export class QueuedRunActivationAborted extends Error {
+  readonly runId: string;
+  readonly currentStatus?: string;
+
+  constructor(runId: string, currentStatus?: string) {
+    super(
+      currentStatus === undefined
+        ? `Queued run ${runId} could not be activated`
+        : `Queued run ${runId} could not be activated (status=${currentStatus})`,
+    );
+    this.name = "QueuedRunActivationAborted";
+    this.runId = runId;
+    this.currentStatus = currentStatus;
+  }
+}
 
 export type PipelineRunResult = {
   ok: boolean;
@@ -91,6 +169,18 @@ async function preparePipeline(options: {
   cwd: string;
   projectRoot?: string;
   checkoutOverride?: string;
+  /** Preallocated run id + binding fields from Host materialize (KTD1). */
+  runId?: string;
+  /**
+   * When true with `runId`, activate an existing `queued` row instead of createRun
+   * (admission-queue dequeue path — KTD2).
+   */
+  reuseExistingRun?: boolean;
+  checkoutRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
@@ -99,6 +189,8 @@ async function preparePipeline(options: {
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  callerId?: string | null;
+  skills?: SkillsPayload;
 }): Promise<PreparedPipeline> {
   const loadResult = await loadPipelineValidated(options.pipeline, {
     cwd: options.cwd,
@@ -111,6 +203,16 @@ async function preparePipeline(options: {
     );
   }
   const loaded = loadResult.loaded;
+
+  const preflight = await runPipelinePreflight(loaded, {
+    projectRoot: options.projectRoot ?? options.cwd,
+    forStart: true,
+  });
+  if (!preflight.ok) {
+    const code =
+      preflightFailureCode(preflight, { forStart: true }) ?? "missing_tool";
+    throw new PipelinePreflightError(code, preflight);
+  }
 
   const taskYaml =
     options.taskYaml ??
@@ -138,16 +240,28 @@ async function preparePipeline(options: {
     console.error(`${finding.code}: ${finding.message}`);
   }
 
-  const checkoutRoot = await resolveAndValidateCheckout(
-    task,
-    options.checkoutOverride,
-    options.cwd,
-  );
+  // Materialization is owned by RunManager (KTD1). When checkoutRoot is supplied,
+  // do not re-resolve or fetch here.
+  const checkoutRoot =
+    options.checkoutRoot !== undefined
+      ? options.checkoutRoot
+      : await resolveAndValidateCheckout(
+          task,
+          options.checkoutOverride,
+          options.cwd,
+        );
 
   const pipelinePath =
     typeof options.pipeline === "string"
       ? normalizeCatalogPath(loaded.pipelinePath)
       : undefined;
+  const persistence = pipelinePersistenceForStart(options.pipeline);
+  if (!persistence.ok) {
+    throw new InlinePipelineTooLargeError(
+      persistence.bytes,
+      persistence.maxBytes,
+    );
+  }
   const taskPath = options.taskPath
     ? normalizeCatalogPath(path.resolve(options.cwd, options.taskPath))
     : undefined;
@@ -155,21 +269,117 @@ async function preparePipeline(options: {
     options.projectRoot ?? options.cwd,
   );
 
-  const run = await options.store.createRun({
-    submission: options.submission,
-    pipelineId: loaded.pipeline.id,
-    taskYaml,
-    taskId: task.id,
-    checkoutRoot,
-    gitSha: options.gitSha,
-    ciPrUrl: options.ciPrUrl,
-    ciJobUrl: options.ciJobUrl,
-    pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
-    pipelinePath,
-    taskPath,
-    projectRoot,
-    inlinePipeline: typeof options.pipeline === "string" ? undefined : options.pipeline,
-  });
+  const gitIdentity = resolveEffectiveGitIdentity(
+    process.env,
+    task.git_identity,
+  );
+
+  let run: { runId: string; workspaceDir: string };
+  if (options.reuseExistingRun === true) {
+    const runId = options.runId;
+    if (runId === undefined || runId.trim() === "") {
+      throw new Error("reuseExistingRun requires a preallocated runId");
+    }
+    await options.store.patchRunWorkspaceBinding(runId, {
+      ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
+      ...(options.repository !== undefined
+        ? { repository: options.repository }
+        : {}),
+      ...(options.ref !== undefined ? { ref: options.ref } : {}),
+      ...(options.resolvedSha !== undefined
+        ? { resolvedSha: options.resolvedSha }
+        : {}),
+      ...(options.runBranch !== undefined
+        ? { runBranch: options.runBranch }
+        : {}),
+    });
+    const activated = await options.store.tryUpdateRunStatus(
+      runId,
+      "running",
+      "queued",
+    );
+    if (!activated) {
+      let currentStatus: string | undefined;
+      try {
+        currentStatus = (await options.store.readRunMeta(runId)).status;
+      } catch {
+        currentStatus = undefined;
+      }
+      throw new QueuedRunActivationAborted(runId, currentStatus);
+    }
+    run = { runId, workspaceDir: options.store.getWorkspaceDir(runId) };
+  } else {
+    const runId = options.runId ?? newRunId();
+    const createdAt = new Date().toISOString();
+    const auth = getRequestAuth();
+    const surface = auth?.surface ?? "cli";
+    const callerId =
+      options.callerId !== undefined && options.callerId !== null
+        ? options.callerId
+        : null;
+    const secretNames = loaded.stages.flatMap((s) =>
+      (s.secrets ?? []).map((d) => d.name),
+    );
+    const namedSecrets = collectDeclaredSecretValues(secretNames).filter((s) =>
+      shouldRegisterValue(s.value),
+    );
+    if (namedSecrets.length > 0) {
+      registerNamedSecrets(namedSecrets);
+    }
+    const runManifest = buildInitialRunManifest({
+      runId,
+      createdAt,
+      callerId,
+      surface,
+      binding: bindingFromFields({
+        repository: options.repository,
+        ref: options.ref,
+        resolvedSha: options.resolvedSha,
+        runBranch: options.runBranch,
+        checkoutRoot,
+      }),
+      pipelineSource: persistence.fields.pipelineSource,
+      pipelinePath,
+      pipelineBody: persistence.fields.pipelineBody ?? null,
+      taskYaml,
+      taskPath,
+      skills: options.skills,
+      stages: loaded.stages,
+      toolchain: preflight.toolchain.checks,
+      namedSecrets,
+    });
+    run = await options.store.createRun({
+      submission: options.submission,
+      runId,
+      pipelineId: loaded.pipeline.id,
+      taskYaml,
+      taskId: task.id,
+      checkoutRoot,
+      gitSha: options.gitSha,
+      ciPrUrl: options.ciPrUrl,
+      ciJobUrl: options.ciJobUrl,
+      pipelineDag: buildPipelineDagSnapshotFromLoaded(loaded),
+      pipelinePath,
+      taskPath,
+      projectRoot,
+      repository: options.repository,
+      ref: options.ref,
+      resolvedSha: options.resolvedSha,
+      runBranch: options.runBranch,
+      gitAuthorName: gitIdentity.name,
+      gitAuthorEmail: gitIdentity.email,
+      pipelineSource: persistence.fields.pipelineSource,
+      ...(persistence.fields.pipelineBody !== undefined
+        ? { pipelineBody: persistence.fields.pipelineBody }
+        : {}),
+      ...(callerId !== null ? { callerId } : {}),
+      runManifest,
+      skipGates: options.skipGates,
+    });
+  }
+  if (options.skills !== undefined && Object.keys(options.skills).length > 0) {
+    await materializeRunSkills(run.workspaceDir, options.skills);
+  }
   const executionMode = readStageExecutionMode(
     process.env,
     options.executionMode,
@@ -204,6 +414,7 @@ export type ExecuteStagesOptions = {
   startAtStageIndex?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean };
 };
 
 export async function executeStages(
@@ -230,6 +441,7 @@ export async function executeStages(
     startAtStageIndex: options?.startAtStageIndex,
     executionMode,
     stageProcessLauncher,
+    schedulingHalt: options?.schedulingHalt,
   });
   if (prepared.findings !== undefined && prepared.findings.length > 0) {
     return { ...result, findings: prepared.findings };
@@ -288,15 +500,25 @@ export async function startPipeline(options: {
   cwd?: string;
   projectRoot?: string;
   checkoutOverride?: string;
+  runId?: string;
+  checkoutRoot?: string;
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
+  reuseExistingRun?: boolean;
   hitl?: StageHitlController;
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  schedulingHalt?: { halted: boolean };
+  callerId?: string | null;
+  skills?: SkillsPayload;
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const projectRoot = options.projectRoot ?? cwd;
@@ -310,6 +532,13 @@ export async function startPipeline(options: {
     cwd,
     projectRoot,
     checkoutOverride: options.checkoutOverride,
+    runId: options.runId,
+    reuseExistingRun: options.reuseExistingRun,
+    checkoutRoot: options.checkoutRoot,
+    repository: options.repository,
+    ref: options.ref,
+    resolvedSha: options.resolvedSha,
+    runBranch: options.runBranch,
     gitSha: options.gitSha,
     ciPrUrl: options.ciPrUrl,
     ciJobUrl: options.ciJobUrl,
@@ -318,13 +547,19 @@ export async function startPipeline(options: {
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
+    callerId: options.callerId,
+    ...(options.skills !== undefined ? { skills: options.skills } : {}),
   });
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
     executionMode: prepared.executionMode,
     stageProcessLauncher: prepared.stageProcessLauncher,
+    schedulingHalt: options.schedulingHalt,
   }).catch(async (err) => {
     await prepared.store.updateRunStatus(prepared.run.runId, "failed").catch(() => undefined);
+    await finaliseStoredRunManifest(prepared.store, prepared.run.runId).catch(
+      () => undefined,
+    );
     return {
       ok: false as const,
       outcome: "failed" as const,

@@ -1,6 +1,7 @@
 import type {
   FeedbackLoopHistory,
   FeedbackLoopRecord,
+  RunBindingDetail,
   RunDetail,
   StageSnapshot,
 } from "../runstore/port.js";
@@ -39,6 +40,7 @@ export type RunProjection = {
   status: RunDetail["status"];
   created_at: string;
   updated_at?: string;
+  binding: RunBindingDetail;
   stages: StageProjection[];
   pipeline_track: PipelineTrackProjection;
   waiting_stage_id?: RunSummary["waiting_stage_id"];
@@ -70,6 +72,7 @@ export function projectRun(detail: RunDetail): RunProjection {
     status: detail.status,
     created_at: detail.created_at,
     updated_at: detail.updated_at,
+    binding: detail.binding,
     pipeline_track: detail.pipeline_track,
     ...(detail.waiting_stage_id !== undefined
       ? { waiting_stage_id: detail.waiting_stage_id }

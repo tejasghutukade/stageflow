@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { cp, mkdtemp, readFile, realpath, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -20,10 +20,11 @@ import { readRunArtifact } from "../src/mcp/readArtifact.js";
 import { runResourceUri } from "../src/mcp/resources.js";
 import type { RunPipelineDagSnapshot, RunStore } from "../src/runstore/port.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { RunManager } from "../src/runtime/runManager.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { mcpCall } from "./helpers/mcpCall.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -33,7 +34,7 @@ let cleanupCatalogRoot: () => Promise<void>;
 
 beforeAll(async () => {
   const setup = await initTempGitRepo();
-  catalogRoot = setup.root;
+  catalogRoot = await realpath(setup.root);
   cleanupCatalogRoot = setup.cleanup;
   await cp(path.join(fixtures, "pipelines"), path.join(catalogRoot, "pipelines"), {
     recursive: true,
@@ -182,6 +183,7 @@ describe("MCP tools and HTTP inline task", () => {
       })),
     );
 
+    await store.ensureProject(repoRoot);
     const { server, mcpUrl } = await startUiServer({
       agent,
       cwd: repoRoot,
@@ -213,21 +215,35 @@ describe("MCP tools and HTTP inline task", () => {
       expect(tasks.payload.tasks).toEqual(expect.any(Array));
 
       const health = await mcpCall(base, "get_health");
-      expect(health.payload).toEqual({
+      expect(health.payload).toMatchObject({
         ok: true,
         activeRunIds: [],
         activeCount: 0,
         maxConcurrent: expect.any(Number),
         slotsAvailable: expect.any(Number),
         activeStageProcesses: 0,
-        maxActiveStageProcesses: null,
+        maxActiveStageProcesses: expect.any(Number),
         version: PACKAGE_VERSION,
+        disk: {
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        },
       });
       expect(health.payload).not.toHaveProperty("inFlight");
       expect(health.payload.slotsAvailable).toBe(health.payload.maxConcurrent);
+      for (const key of Object.keys(health.payload.disk) as Array<
+        keyof typeof health.payload.disk
+      >) {
+        expect(health.payload.disk[key]).toBeGreaterThanOrEqual(0);
+      }
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("docs-only"),
+        pipeline: netPipeline("docs-only"),
         task: { id: "mcp-inline", goal: "from mcp" },
       });
       expect(started.isError).toBe(false);
@@ -247,7 +263,7 @@ describe("MCP tools and HTTP inline task", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
           task: { id: "rest-inline", goal: "from rest" },
         }),
       });
@@ -346,9 +362,11 @@ describe("MCP tools and HTTP inline task", () => {
       { type: "emit", envelope: { status: "success", summary: "b", artifacts: [] } },
     ]);
 
-    // Host is launched pointed at repoA; repoB is only ever reached via an
-    // absolute pipeline path in start_run — proves list_pipelines/list_tasks
-    // pick it up from the run store alone, not from the host's own cwd.
+    // Host is launched pointed at repoA. Both roots are registered via ensure;
+    // start_run then uses catalog-relative paths + project_root (absolute wire
+    // paths are refused on network surfaces).
+    await store.ensureProject(repoA);
+    await store.ensureProject(repoB);
     const { server } = await startUiServer({
       agent,
       cwd: repoA,
@@ -364,23 +382,24 @@ describe("MCP tools and HTTP inline task", () => {
         throw new Error("expected TCP address");
       }
       const base = `http://127.0.0.1:${address.port}`;
+      const realRepoA = await realpath(repoA);
+      const realRepoB = await realpath(repoB);
 
       const startedA = await mcpCall(base, "start_run", {
-        pipeline: path.join(repoA, "pipelines", "single.pipeline.yaml"),
+        pipeline: netPipeline("single"),
         task: { id: "a-task", goal: "project a" },
+        project_root: realRepoA,
       });
       expect(startedA.isError).toBe(false);
       await waitUntilIdleHealth(base);
 
       const startedB = await mcpCall(base, "start_run", {
-        pipeline: path.join(repoB, "pipelines", "single.pipeline.yaml"),
+        pipeline: netPipeline("single"),
+        project_root: realRepoB,
         task: { id: "b-task", goal: "project b" },
       });
       expect(startedB.isError).toBe(false);
       await waitUntilIdleHealth(base);
-
-      const realRepoA = await realpath(repoA);
-      const realRepoB = await realpath(repoB);
 
       const pipelines = await mcpCall(base, "list_pipelines");
       expect(pipelines.isError).toBe(false);
@@ -408,105 +427,125 @@ describe("MCP tools and HTTP inline task", () => {
   }, 15000);
 
   it("get_health / start_run expose soft-max capacity (AE5; not exclusive inFlight)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cap-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-mcp-co-"));
-    const store = createRunStore({ rootDir: root });
-    const agent = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [
-          {
-            kind: "free_text",
-            id: "prompt-1",
-            message: "hold",
-          },
-        ],
-        envelope: {
-          status: "success",
-          summary: "hold",
-          artifacts: [],
-        },
-      },
-      {
-        type: "wait_then_emit",
-        waitRequests: [
-          {
-            kind: "free_text",
-            id: "prompt-1",
-            message: "hold2",
-          },
-        ],
-        envelope: {
-          status: "success",
-          summary: "hold2",
-          artifacts: [],
-        },
-      },
-    ]);
-
-    const { server } = await startUiServer({
-      agent,
-      cwd: catalogRoot,
-      store,
-      port: 0,
-      uiDistDir: path.join(root, "missing-ui"),
-      maxConcurrent: 1,
-      mcpStateless: true,
-    });
-
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected TCP address");
-      }
-      const base = `http://127.0.0.1:${address.port}`;
+      const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-cap-"));
+      const checkout = await mkdtemp(path.join(tmpdir(), "sf-mcp-co-"));
+      const store = createRunStore({ rootDir: root });
+      const agent = scriptedFakeAgent([
+        {
+          type: "wait_then_emit",
+          waitRequests: [
+            {
+              kind: "free_text",
+              id: "prompt-1",
+              message: "hold",
+            },
+          ],
+          envelope: {
+            status: "success",
+            summary: "hold",
+            artifacts: [],
+          },
+        },
+        {
+          type: "wait_then_emit",
+          waitRequests: [
+            {
+              kind: "free_text",
+              id: "prompt-1",
+              message: "hold2",
+            },
+          ],
+          envelope: {
+            status: "success",
+            summary: "hold2",
+            artifacts: [],
+          },
+        },
+      ]);
 
-      const tools = await mcpListTools(base);
-      const getHealth = tools.find((t) => t.name === "get_health");
-      const startRun = tools.find((t) => t.name === "start_run");
-      expect(getHealth?.description ?? "").not.toMatch(/inFlight/i);
-      expect(getHealth?.description ?? "").not.toMatch(/exclusive/i);
-      expect(getHealth?.description ?? "").toMatch(/soft max|capacity|active/i);
-      expect(startRun?.description ?? "").not.toMatch(/inFlight/i);
-      expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
-
-      const first = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
-        task: { id: "holder", goal: "hold", checkout },
-      });
-      expect(first.isError).toBe(false);
-      const holderId = first.payload.runId as string;
-
-      for (let i = 0; i < 80; i++) {
-        const h = await mcpCall(base, "get_health");
-        if (h.payload.activeRunIds?.includes(holderId)) break;
-        await new Promise((r) => setTimeout(r, 25));
-      }
-
-      const health = await mcpCall(base, "get_health");
-      expect(health.payload).toMatchObject({
-        ok: true,
-        activeCount: 1,
+      await store.ensureProject(catalogRoot);
+      const { server } = await startUiServer({
+        agent,
+        cwd: catalogRoot,
+        store,
+        port: 0,
+        uiDistDir: path.join(root, "missing-ui"),
         maxConcurrent: 1,
-        slotsAvailable: 0,
+        mcpStateless: true,
       });
-      expect(health.payload.activeRunIds).toEqual([holderId]);
-      expect(health.payload).not.toHaveProperty("inFlight");
 
-      const overCap = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
-        task: { id: "over", goal: "no slot" },
-      });
-      expect(overCap.isError).toBe(true);
-      expect(overCap.payload.code).toBe("busy_capacity");
-      expect(overCap.payload.status).toBe(409);
-      expect(overCap.payload.activeCount).toBe(1);
-      expect(overCap.payload.maxConcurrent).toBe(1);
-      expect(overCap.payload.activeRunIds).toEqual([holderId]);
+      try {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected TCP address");
+        }
+        const base = `http://127.0.0.1:${address.port}`;
+
+        const tools = await mcpListTools(base);
+        const getHealth = tools.find((t) => t.name === "get_health");
+        const startRun = tools.find((t) => t.name === "start_run");
+        expect(getHealth?.description ?? "").not.toMatch(/inFlight/i);
+        expect(getHealth?.description ?? "").not.toMatch(/exclusive/i);
+        expect(getHealth?.description ?? "").toMatch(/soft max|capacity|active/i);
+        expect(startRun?.description ?? "").not.toMatch(/inFlight/i);
+        expect(startRun?.description ?? "").toMatch(/busy_capacity|busy_checkout|checkout/i);
+
+        const first = await mcpCall(base, "start_run", {
+          pipeline: netPipeline("single"),
+          task: { id: "holder", goal: "hold", checkout },
+        });
+        expect(first.isError).toBe(false);
+        const holderId = first.payload.runId as string;
+
+        for (let i = 0; i < 80; i++) {
+          const h = await mcpCall(base, "get_health");
+          if (h.payload.activeRunIds?.includes(holderId)) break;
+          await new Promise((r) => setTimeout(r, 25));
+        }
+
+        const health = await mcpCall(base, "get_health");
+        expect(health.payload).toMatchObject({
+          ok: true,
+          activeCount: 1,
+          maxConcurrent: 1,
+          slotsAvailable: 0,
+        });
+        expect(health.payload.activeRunIds).toEqual([holderId]);
+        expect(health.payload).not.toHaveProperty("inFlight");
+        expect(health.payload.disk).toEqual({
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        });
+
+        const overCap = await mcpCall(base, "start_run", {
+          pipeline: netPipeline("single"),
+          task: { id: "over", goal: "no slot" },
+        });
+        expect(overCap.isError).toBe(true);
+        expect(overCap.payload.code).toBe("busy_capacity");
+        expect(overCap.payload.status).toBe(409);
+        expect(overCap.payload.activeCount).toBe(1);
+        expect(overCap.payload.maxConcurrent).toBe(1);
+        expect(overCap.payload.activeRunIds).toEqual([holderId]);
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        });
+      }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
@@ -546,6 +585,7 @@ describe("MCP tools and HTTP inline task", () => {
       },
     ]);
 
+    await store.ensureProject(catalogRoot);
     const { server } = await startUiServer({
       agent,
       cwd: catalogRoot,
@@ -564,7 +604,7 @@ describe("MCP tools and HTTP inline task", () => {
       const base = `http://127.0.0.1:${address.port}`;
 
       const first = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "a", goal: "first", checkout },
       });
       expect(first.isError).toBe(false);
@@ -577,7 +617,7 @@ describe("MCP tools and HTTP inline task", () => {
       }
 
       const conflict = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "b", goal: "same", checkout },
       });
       expect(conflict.isError).toBe(true);
@@ -806,9 +846,11 @@ async function withMcpServer(
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; mcpStateless?: boolean } = {},
 ) {
+  const cwd = opts.cwd ?? catalogRoot;
+  await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? catalogRoot,
+    cwd,
     rootDir: root,
     store,
     port: 0,
@@ -890,7 +932,7 @@ describe("MCP Tier 1 operator parity", () => {
       expect(empty.payload.waiting).toEqual([]);
 
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -988,7 +1030,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("feedback-loop-wait-human"),
+        pipeline: netPipeline("feedback-loop-wait-human"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -1141,7 +1183,7 @@ describe("MCP Tier 1 operator parity", () => {
       const { server, base, store } = await withMcpServer(root, agent);
       try {
         const started = await mcpCall(base, "start_run", {
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "t", goal: "g" },
         });
         const runId = started.payload.runId as string;
@@ -1182,7 +1224,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1254,7 +1296,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1404,7 +1446,7 @@ describe("MCP Tier 1 operator parity", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("linear-explicit"),
+        pipeline: netPipeline("linear-explicit"),
         task_path: "tasks/sample.task.yaml",
       });
       expect(started.isError).toBe(false);
@@ -1513,7 +1555,7 @@ describe("MCP Tier 1 operator parity", () => {
     const { server, base, store } = await withMcpServer(root, agent);
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -1551,15 +1593,15 @@ describe("MCP Tier 1 operator parity", () => {
       });
 
       const scoped = await mcpCall(base, "validate", {
-        pipeline: pipelinePath("broken"),
+        pipeline: netPipeline("broken"),
       });
       expect(scoped.isError).toBe(false);
       expect(scoped.payload.ok).toBe(false);
       expect(scoped.payload.findings.length).toBeGreaterThan(0);
 
-      const diamondPath = pipelinePath("diamond-fan-in");
+      const diamondPath = path.join(catalogRoot, "pipelines", "diamond-fan-in.pipeline.yaml");
       const described = await mcpCall(base, "describe_pipeline", {
-        pipeline: diamondPath,
+        pipeline: netPipeline("diamond-fan-in"),
       });
       expect(described.isError).toBe(false);
       expect(described.payload).toEqual(
@@ -1598,8 +1640,10 @@ describe("MCP Tier 1 operator parity", () => {
         "route-if-eq",
         "route-loop-basic",
       ]) {
-        const pipeline = pipelinePath(name);
-        const described = await mcpCall(base, "describe_pipeline", { pipeline });
+        const pipeline = path.join(catalogRoot, "pipelines", `${name}.pipeline.yaml`);
+        const described = await mcpCall(base, "describe_pipeline", {
+          pipeline: netPipeline(name),
+        });
         expect(described.isError).toBe(false);
         expect(described.payload).toEqual(
           describePipeline(await loadPipeline(pipeline, { cwd: catalogRoot })),
@@ -2080,7 +2124,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -2135,7 +2179,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2172,7 +2216,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2234,7 +2278,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2339,7 +2383,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2411,7 +2455,7 @@ describe("MCP Tier 2 wait_run", () => {
 
     try {
       const started = await mcpCall(base, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -2553,6 +2597,118 @@ describe("MCP lean run projection fields", () => {
       expect(resourceUnused.stages[0]?.events).toBeUndefined();
       expect(getUnused.payload.task_yaml).toBeUndefined();
     } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+
+describe("MCP start_run repository binding (U7)", () => {
+  it("accepts repository task, rejects token fields, and forwards skip_gates/checkout_override", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-u7-"));
+    const store = createRunStore({ rootDir: root });
+    const agent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          }),
+        });
+      },
+      async runStage() {
+        return {
+          ok: true as const,
+          envelope: {
+            status: "success" as const,
+            summary: "ok",
+            artifacts: [],
+            payload: {},
+          },
+        };
+      },
+    };
+    await store.ensureProject(catalogRoot);
+    const { server } = await startUiServer({
+      agent,
+      cwd: catalogRoot,
+      rootDir: root,
+      store,
+      port: 0,
+      uiDistDir: path.join(root, "missing-ui"),
+      mcpStateless: true,
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("expected TCP");
+    const url = `http://127.0.0.1:${address.port}`;
+
+    const spy = vi.spyOn(RunManager.prototype, "startRun");
+    try {
+      const tokenReject = await mcpCall(url, "start_run", {
+        pipeline: netPipeline("docs-only"),
+        task: { id: "tok", goal: "nope" },
+        github_token: "should-not-work",
+      });
+      expect(tokenReject.isError).toBe(true);
+      expect(tokenReject.payload.code).toBe("start.token_rejected");
+      expect(tokenReject.payload.field).toBe("github_token");
+
+      const conflict = await mcpCall(url, "start_run", {
+        pipeline: netPipeline("docs-only"),
+        task: {
+          id: "conflict",
+          goal: "both",
+          repository: "acme/api",
+          ref: "main",
+        },
+        checkout: "pipelines",
+      });
+      expect(conflict.isError).toBe(true);
+      expect(conflict.payload.code).toBe("task.binding_conflict");
+
+      const skipCall = await mcpCall(url, "start_run", {
+        pipeline: netPipeline("docs-only"),
+        task: { id: "skip", goal: "gates" },
+        skip_gates: true,
+        git_sha: "abc",
+        ci_pr_url: "https://example.com/pr/1",
+        ci_job_url: "https://example.com/job/1",
+      });
+      expect(skipCall.isError).toBe(false);
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          skipGates: true,
+          gitSha: "abc",
+          ciPrUrl: "https://example.com/pr/1",
+          ciJobUrl: "https://example.com/job/1",
+        }),
+      );
+      await waitUntilIdleHealth(url);
+
+      const tools = await mcpListTools(url);
+      const start = tools.find((t) => t.name === "start_run");
+      expect(start?.description).toMatch(/checkout|skip_gates|ci_pr_url|task\.binding_conflict/i);
+
+      const rerunSpy = vi.spyOn(RunManager.prototype, "rerun").mockResolvedValue({
+        ok: false,
+        reason: "stopped",
+        status: 400,
+      });
+      await mcpCall(url, "rerun", { runId: "missing", pinned: true });
+      expect(rerunSpy).toHaveBeenCalledWith("missing", {
+        pinned: true,
+        callerId: null,
+      });
+      rerunSpy.mockRestore();
+    } finally {
+      spy.mockRestore();
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
       });

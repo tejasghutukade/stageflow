@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createRunStore } from "../src/runstore/createStore.js";
-import { storeRootFor } from "../src/runstore/paths.js";
+import { storeRootFor, resolveStoreRoot } from "../src/runstore/paths.js";
 import { resolveProjectContext } from "../src/project/resolveProjectContext.js";
 import { bootstrapStageflowHost } from "../src/server/bootstrap.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
@@ -110,7 +110,7 @@ describe("runtime store resolution", () => {
         await bootB.mcpHandler.close();
 
         const globalHome = path.join(home, ".stageflow");
-        await access(path.join(storeRootFor(globalHome), "state.db"));
+        await access(path.join(resolveStoreRoot(globalHome), "state.db"));
         await expect(
           access(path.join(storeRootFor(repoA.root), "state.db")),
         ).rejects.toThrow();

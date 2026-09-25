@@ -55,6 +55,8 @@ export function formatActivityLabel(event: StageLogEvent): string {
       return "Stage succeeded";
     case "failed":
       return "Stage failed";
+    case "interrupted":
+      return "Stage interrupted";
     case "agent_start":
       return "Agent started";
     case "agent_end":
@@ -110,6 +112,7 @@ export function formatActivityDescription(event: StageLogEvent): string | undefi
   if (event.event === "tool_end" && event.resultPreview) return event.resultPreview;
   if (event.event === "tool_progress" && event.textPreview) return event.textPreview;
   if (event.event === "failed" && event.reason) return event.reason;
+  if (event.event === "interrupted" && event.reason) return event.reason;
   if (event.event === "turn_start" && event.reason) return event.reason;
   if (event.event === "operator_prompt") return describeOperatorPrompt(event);
   if (event.event === "operator_answer") return describeOperatorAnswer(event);

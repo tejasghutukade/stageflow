@@ -12,7 +12,7 @@ import { startUiServer } from "../src/server/http.js";
 import { startMcpServer, DEFAULT_PORT } from "../src/server/mcpHost.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
-import { pipelinePath } from "./helpers/fixturePaths.js";
+import { netPipeline, pipelinePath } from "./helpers/fixturePaths.js";
 import { resolveMcpStateless } from "../src/mcp/server.js";
 import { runResourceUri } from "../src/mcp/resources.js";
 
@@ -266,6 +266,7 @@ describe("MCP Tier 3 run resources", () => {
   it("list/read run resource; no catalog URI; tool and resource agree", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-res-"));
     const store = createRunStore({ rootDir: root });
+    await store.ensureProject(catalogRoot);
     const agent = scriptedFakeAgent([
       {
         type: "emit",
@@ -291,7 +292,7 @@ describe("MCP Tier 3 run resources", () => {
     try {
       const sessionId = await mcpInitialize(base);
       const started = await mcpToolCall(base, sessionId, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       expect(started.isError).toBe(false);
@@ -345,6 +346,7 @@ describe("MCP Tier 3 run resources", () => {
     async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-mcp-sub-"));
     const store = createRunStore({ rootDir: root });
+    await store.ensureProject(catalogRoot);
     const freeTextPrompt = {
       kind: "free_text" as const,
       id: "prompt-1",
@@ -408,7 +410,7 @@ describe("MCP Tier 3 run resources", () => {
       })();
 
       const started = await mcpToolCall(base, sessionId, "start_run", {
-        pipeline: pipelinePath("single"),
+        pipeline: netPipeline("single"),
         task: { id: "t", goal: "g" },
       });
       const runId = started.payload.runId as string;
@@ -449,7 +451,7 @@ describe("MCP Tier 3 sf mcp host", () => {
         mcpStateless: true,
       });
     expect(mcpStateless).toBe(true);
-    expect(server.requestTimeout).toBe(0);
+    expect(server.requestTimeout).toBe(60_000);
     expect(runChangeBus).toBeTruthy();
     expect(manager).toBeTruthy();
     expect(hostStore).toBeTruthy();

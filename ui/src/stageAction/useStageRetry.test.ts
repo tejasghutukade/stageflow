@@ -17,7 +17,13 @@ describe("canRetry eligibility", () => {
 });
 
 describe("canResumeTimedOut eligibility", () => {
-  it("is true only for timeout failures", () => {
+  it("is true for interrupted stages and timeout failures", () => {
+    expect(
+      canResumeTimedOut({
+        status: "interrupted",
+        events: [{ event: "interrupted", reason: "host_shutdown" }],
+      }),
+    ).toBe(true);
     expect(
       canResumeTimedOut({
         status: "failed",

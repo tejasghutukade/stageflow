@@ -66,6 +66,23 @@ describe("A2A publication registry", () => {
     await expect(loadPublicationRegistry(config, {})).rejects.toThrow("requires a token");
     await expect(loadPublicationRegistry(config, { ...env, OTHER_TOKEN: env.PROCUREMENT_TOKEN })).rejects.toThrow("Duplicate caller credential");
   });
+
+  it("round-trips optional publication repository/ref (U7)", async () => {
+    const root = await copyFixture();
+    const configPath = path.join(root, "a2a.yaml");
+    const config = parse(await readFile(configPath, "utf8"));
+    config.publications[0].repository = "acme/api";
+    config.publications[0].ref = "main";
+    await writeFile(configPath, stringify(config));
+    const registry = await loadPublicationRegistry(configPath, env);
+    const pub = registry.get("procurement", "supplier_assessment");
+    expect(pub?.repository).toBe("acme/api");
+    expect(pub?.ref).toBe("main");
+
+    delete config.publications[0].ref;
+    await writeFile(configPath, stringify(config));
+    await expect(loadPublicationRegistry(configPath, env)).rejects.toThrow(/repository requires ref/i);
+  });
 });
 
 describe("A2A config auto-discovery", () => {

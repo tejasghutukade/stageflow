@@ -120,6 +120,7 @@ export type StageLifecycleEvent =
   | { event: "resumed" }
   | { event: "succeeded"; usage?: StageUsage }
   | { event: "failed"; reason: string; usage?: StageUsage }
+  | { event: "interrupted"; reason: string }
   | { event: "skipped" }
   /** A previously skipped stage is runnable again (parent succeeded). */
   | { event: "reopened" }

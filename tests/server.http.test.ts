@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as piIsolatedMcp from "../src/agent/piIsolatedMcp.js";
 import * as resolveStageMcpServers from "../src/config/resolveStageMcpServers.js";
-import { access, cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,8 +18,15 @@ import type { AskOperatorPrompt } from "../src/tools/askOperator.js";
 import type { StageEnvelope } from "../src/types/envelope.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
-import { FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+import { FIXTURES_ROOT, pipelinePath, netPipeline, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
 import { seedDiamondRun } from "./helpers/seedDiamondRun.js";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import {
+  resetBareCacheStateForTests,
+  setBareCacheRemoteUrlOverrideForTests,
+} from "../src/git/cache.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -211,9 +218,11 @@ async function withServer(
   store = createRunStore({ rootDir: root }),
   opts: { maxConcurrent?: number; cwd?: string; agentDir?: string; providerAuthContext?: Parameters<typeof startUiServer>[0]["providerAuthContext"] } = {},
 ) {
+  const cwd = opts.cwd ?? catalogRoot;
+  await store.ensureProject(cwd);
   const started = await startUiServer({
     agent,
-    cwd: opts.cwd ?? catalogRoot,
+    cwd,
     rootDir: root,
     agentDir: opts.agentDir,
     store,
@@ -686,6 +695,225 @@ describe("localhost HTTP API", () => {
     }
   });
 
+  it("POST /api/pipelines respects project_root write target and read_only aliases", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-pipeline-root-"));
+    const { root: repoA, cleanup: cleanupA } = await initTempGitRepo();
+    const { root: repoB, cleanup: cleanupB } = await initTempGitRepo();
+    const manifestCatalog = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "fixtures/manifest-catalog",
+    );
+    await cp(manifestCatalog, repoA, { recursive: true });
+    await cp(manifestCatalog, repoB, { recursive: true });
+    clearFindProjectRootCacheForTests();
+    await mkdir(path.join(repoA, "pipelines"), { recursive: true });
+    await mkdir(path.join(repoB, "pipelines"), { recursive: true });
+    for (const repo of [repoA, repoB]) {
+      await writeFile(
+        path.join(repo, "pipelines", "alpha.yaml"),
+        ["id: alpha", "system_prompt: Alpha.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+      await writeFile(
+        path.join(repo, "pipelines", "beta.yaml"),
+        ["id: beta", "system_prompt: Beta.", "model: cursor/auto", "io:", "  input:", "    schema:", "      type: object", "  output:", "    schema:", "      type: object", ""].join("\n"),
+      );
+    }
+
+    const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoB);
+
+    const { server, base } = await withServer(storeRoot, scriptedFakeAgent([]), store, {
+      cwd: repoA,
+    });
+
+    try {
+      const omitted = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directory: "pipelines",
+          id: "needs-root",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(omitted.status).toBe(400);
+      expect(omitted.body.code).toBe("unknown_project_root");
+
+      const unknown = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: "/no/such/root",
+          directory: "pipelines",
+          id: "should-fail",
+          stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+        }),
+      });
+      expect(unknown.status).toBe(400);
+      expect(unknown.body.code).toBe("unknown_project_root");
+
+      const created = await jsonFetch(`${base}/api/pipelines`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: await realpath(repoB),
+          directory: "pipelines",
+          id: "in-repo-b",
+          stages: [
+            { id: "alpha", uses: "./alpha.yaml" },
+            { id: "beta", uses: "./beta.yaml" },
+          ],
+        }),
+      });
+      expect(created.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).resolves.toBeUndefined();
+      await expect(
+        access(path.join(repoA, "pipelines", "in-repo-b.pipeline.yaml")),
+      ).rejects.toThrow();
+
+      const stageCreated = await jsonFetch(`${base}/api/stages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_root: await realpath(repoB),
+          pipeline_directory: "pipelines",
+          filename: "stage-in-b.yaml",
+          id: "stage-in-b",
+          system_prompt: "Write in B.",
+          model: "cursor/auto",
+        }),
+      });
+      expect(stageCreated.status).toBe(201);
+      await expect(
+        access(path.join(repoB, "pipelines", "stage-in-b.yaml")),
+      ).resolves.toBeUndefined();
+
+      const { resolveSeededExamplesPath } = await import(
+        "../src/config/seededCatalog.js"
+      );
+      const seededPath = resolveSeededExamplesPath();
+      if (seededPath !== undefined) {
+        const byId = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            directory: "pipelines",
+            id: "seeded-refuse",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byId.status).toBe(403);
+        expect(byId.body.code).toBe("catalog_root_read_only");
+
+        const byAbs = await jsonFetch(`${base}/api/pipelines`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: seededPath,
+            directory: "pipelines",
+            id: "seeded-refuse-abs",
+            stages: [{ id: "alpha", uses: "./alpha.yaml" }],
+          }),
+        });
+        expect(byAbs.status).toBe(403);
+        expect(byAbs.body.code).toBe("catalog_root_read_only");
+
+        const stageSeeded = await jsonFetch(`${base}/api/stages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project_root: "examples",
+            pipeline_directory: "pipelines",
+            filename: "seeded-stage.yaml",
+            id: "seeded-stage",
+            system_prompt: "Refuse.",
+            model: "cursor/auto",
+          }),
+        });
+        expect(stageSeeded.status).toBe(403);
+        expect(stageSeeded.body.code).toBe("catalog_root_read_only");
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupA();
+      await cleanupB();
+    }
+  });
+
+  it("POST /api/runs persists wire project_root when Host boot differs", async () => {
+    const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-http-wire-root-"));
+    const { root: bootRoot, cleanup: cleanupBoot } = await initTempGitRepo();
+    const { root: wireRoot, cleanup: cleanupWire } = await initTempGitRepo();
+    await cp(path.join(fixtures, "pipelines"), path.join(wireRoot, "pipelines"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "tasks"), path.join(wireRoot, "tasks"), {
+      recursive: true,
+    });
+    await cp(path.join(fixtures, "stages"), path.join(wireRoot, "stages"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(wireRoot, "stageflow.yaml"),
+      [
+        "version: 1",
+        "catalog:",
+        "  pipelines:",
+        "    - pipelines",
+        "  tasks:",
+        "    - tasks",
+        "  patterns:",
+        '    pipeline: "*.yaml"',
+        '    task: "*.yaml"',
+        "",
+      ].join("\n"),
+    );
+    clearFindProjectRootCacheForTests();
+
+    const store = createRunStore({ rootDir: storeRoot });
+    const wireAbs = await store.ensureProject(wireRoot);
+    const agent = scriptedFakeAgent([
+      {
+        type: "emit" as const,
+        envelope: { status: "success" as const, summary: "ok", artifacts: [] },
+      },
+    ]);
+    const { server, base } = await withServer(storeRoot, agent, store, {
+      cwd: bootRoot,
+    });
+    const bootAbs = path.resolve(bootRoot);
+    expect(wireAbs).not.toBe(bootAbs);
+
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: { id: "wire", goal: "persist wire root" },
+          project_root: wireAbs,
+        }),
+      });
+      expect(started.status).toBe(202);
+      const meta = await store.readRunMeta(started.body.runId as string);
+      expect(meta.project_root).toBe(wireAbs);
+      expect(meta.project_root).not.toBe(bootAbs);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+      await cleanupBoot();
+      await cleanupWire();
+    }
+  });
+
   it("lists runs, returns detail, starts and re-runs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-"));
     const store = createRunStore({ rootDir: root });
@@ -758,7 +986,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("docs-only"),
+          pipeline: netPipeline("docs-only"),
         }),
       });
       expect(started.status).toBe(202);
@@ -806,7 +1034,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -961,7 +1189,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("parallel-hitl-multi-wait"),
+          pipeline: netPipeline("parallel-hitl-multi-wait"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1084,7 +1312,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("parallel-track-fanout"),
+          pipeline: netPipeline("parallel-track-fanout"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1266,7 +1494,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1347,7 +1575,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1403,7 +1631,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1459,7 +1687,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("feedback-loop-wait-human"),
+          pipeline: netPipeline("feedback-loop-wait-human"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1551,7 +1779,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("feedback-loop-wait-human"),
+          pipeline: netPipeline("feedback-loop-wait-human"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1624,7 +1852,7 @@ describe("localhost HTTP API", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           task: "tasks/sample.task.yaml",
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
         }),
       });
       expect(started.status).toBe(202);
@@ -1737,22 +1965,40 @@ describe("localhost HTTP API", () => {
     try {
       const idle = await jsonFetch(`${base}/api/health`);
       expect(idle.status).toBe(200);
-      expect(idle.body).toEqual({
+      expect(idle.body).toMatchObject({
         ok: true,
         activeRunIds: [],
         activeCount: 0,
         maxConcurrent: 2,
         slotsAvailable: 2,
         activeStageProcesses: 0,
-        maxActiveStageProcesses: null,
+        maxActiveStageProcesses: expect.any(Number),
+        stage_env_passthrough: expect.any(Boolean),
+        disk: {
+          runs_bytes: expect.any(Number),
+          worktrees_bytes: expect.any(Number),
+          repos_bytes: expect.any(Number),
+          state_db_bytes: expect.any(Number),
+          a2a_artifacts_bytes: expect.any(Number),
+          cache_bytes: expect.any(Number),
+          free_bytes: expect.any(Number),
+        },
+        proxy: expect.any(Object),
+        container: expect.any(Object),
+        cache: expect.any(Object),
       });
       expect(idle.body).not.toHaveProperty("inFlight");
+      for (const key of Object.keys(idle.body.disk) as Array<
+        keyof typeof idle.body.disk
+      >) {
+        expect(idle.body.disk[key]).toBeGreaterThanOrEqual(0);
+      }
 
       const first = await jsonFetch(`${base}/api/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "a", goal: "first" },
         }),
       });
@@ -1760,7 +2006,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "b", goal: "second" },
         }),
       });
@@ -1799,110 +2045,120 @@ describe("localhost HTTP API", () => {
   });
 
   it("POST /api/runs returns structured busy_capacity vs busy_checkout", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
-    const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
-    const agent = scriptedFakeAgent([
-      {
-        type: "wait_then_emit",
-        waitRequests: [freeTextPrompt],
-        envelope: {
-          status: "success",
-          summary: "hold",
-          artifacts: [],
-        },
-      },
-    ]);
-    const { server, base } = await withServer(root, agent, undefined, {
-      maxConcurrent: 1,
-    });
-
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     try {
-      const first = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: pipelinePath("single"),
-          task: { id: "holder", goal: "hold slot", checkout },
-        }),
-      });
-      expect(first.status).toBe(202);
-      const holderId = first.body.runId as string;
-
-      await waitFor(async () => {
-        const health = await jsonFetch(`${base}/api/health`);
-        return health.body.activeRunIds?.includes(holderId);
-      });
-
-      const capacity = await jsonFetch(`${base}/api/runs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pipeline: pipelinePath("single"),
-          task: { id: "cap", goal: "over max" },
-        }),
-      });
-      expect(capacity.status).toBe(409);
-      expect(capacity.body.code).toBe("busy_capacity");
-      expect(capacity.body.error).toBeTruthy();
-      expect(capacity.body.activeCount).toBe(1);
-      expect(capacity.body.maxConcurrent).toBe(1);
-      expect(capacity.body.activeRunIds).toEqual([holderId]);
-      expect(capacity.body).not.toHaveProperty("conflictingRunId");
-
-      const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
-      const otherAgent = scriptedFakeAgent([
+      const root = await mkdtemp(path.join(tmpdir(), "sf-http-busy-"));
+      const checkout = await mkdtemp(path.join(tmpdir(), "sf-http-co-"));
+      const agent = scriptedFakeAgent([
         {
           type: "wait_then_emit",
           waitRequests: [freeTextPrompt],
           envelope: {
             status: "success",
-            summary: "hold2",
+            summary: "hold",
             artifacts: [],
           },
         },
       ]);
-      const other = await withServer(otherRoot, otherAgent, undefined, {
-        maxConcurrent: 3,
+      const { server, base } = await withServer(root, agent, undefined, {
+        maxConcurrent: 1,
       });
+
       try {
-        const bound = await jsonFetch(`${other.base}/api/runs`, {
+        const first = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: pipelinePath("single"),
-            task: { id: "a", goal: "first", checkout },
+            pipeline: netPipeline("single"),
+            task: { id: "holder", goal: "hold slot", checkout },
           }),
         });
-        expect(bound.status).toBe(202);
-        const conflictId = bound.body.runId as string;
+        expect(first.status).toBe(202);
+        const holderId = first.body.runId as string;
+
         await waitFor(async () => {
-          const health = await jsonFetch(`${other.base}/api/health`);
-          return health.body.activeRunIds?.includes(conflictId);
+          const health = await jsonFetch(`${base}/api/health`);
+          return health.body.activeRunIds?.includes(holderId);
         });
 
-        const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+        const capacity = await jsonFetch(`${base}/api/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            pipeline: pipelinePath("single"),
-            task: { id: "b", goal: "same checkout", checkout },
+            pipeline: netPipeline("single"),
+            task: { id: "cap", goal: "over max" },
           }),
         });
-        expect(checkoutBusy.status).toBe(409);
-        expect(checkoutBusy.body.code).toBe("busy_checkout");
-        expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
-        expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
-        expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
-        expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        expect(capacity.status).toBe(409);
+        expect(capacity.body.code).toBe("busy_capacity");
+        expect(capacity.body.error).toBeTruthy();
+        expect(capacity.body.activeCount).toBe(1);
+        expect(capacity.body.maxConcurrent).toBe(1);
+        expect(capacity.body.activeRunIds).toEqual([holderId]);
+        expect(capacity.body).not.toHaveProperty("conflictingRunId");
+
+        const otherRoot = await mkdtemp(path.join(tmpdir(), "sf-http-busy2-"));
+        const otherAgent = scriptedFakeAgent([
+          {
+            type: "wait_then_emit",
+            waitRequests: [freeTextPrompt],
+            envelope: {
+              status: "success",
+              summary: "hold2",
+              artifacts: [],
+            },
+          },
+        ]);
+        const other = await withServer(otherRoot, otherAgent, undefined, {
+          maxConcurrent: 3,
+        });
+        try {
+          const bound = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: netPipeline("single"),
+              task: { id: "a", goal: "first", checkout },
+            }),
+          });
+          expect(bound.status).toBe(202);
+          const conflictId = bound.body.runId as string;
+          await waitFor(async () => {
+            const health = await jsonFetch(`${other.base}/api/health`);
+            return health.body.activeRunIds?.includes(conflictId);
+          });
+
+          const checkoutBusy = await jsonFetch(`${other.base}/api/runs`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              pipeline: netPipeline("single"),
+              task: { id: "b", goal: "same checkout", checkout },
+            }),
+          });
+          expect(checkoutBusy.status).toBe(409);
+          expect(checkoutBusy.body.code).toBe("busy_checkout");
+          expect(checkoutBusy.body.conflictingRunId).toBe(conflictId);
+          expect(checkoutBusy.body.conflictingCheckout).toBeTruthy();
+          expect(checkoutBusy.body.activeRunIds).toEqual([conflictId]);
+          expect(checkoutBusy.body.maxConcurrent).toBe(3);
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            other.server.close((err) => (err ? reject(err) : resolve()));
+          });
+        }
       } finally {
         await new Promise<void>((resolve, reject) => {
-          other.server.close((err) => (err ? reject(err) : resolve()));
+          server.close((err) => (err ? reject(err) : resolve()));
         });
       }
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+      }
     }
   });
 
@@ -2047,6 +2303,8 @@ describe("localhost HTTP API", () => {
 
   it("POST /api/settings lowering the cap does not evict active runs", async () => {
     const previousHome = process.env.HOME;
+    const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
     const home = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-home-"));
     process.env.HOME = home;
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-settings-lower-"));
@@ -2070,7 +2328,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "holder", goal: "hold slot" },
         }),
       });
@@ -2118,7 +2376,7 @@ describe("localhost HTTP API", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          pipeline: pipelinePath("single"),
+          pipeline: netPipeline("single"),
           task: { id: "blocked", goal: "should 409" },
         }),
       });
@@ -2132,6 +2390,11 @@ describe("localhost HTTP API", () => {
         delete process.env.HOME;
       } else {
         process.env.HOME = previousHome;
+      }
+      if (previousMaxQueued === undefined) {
+        delete process.env.STAGEFLOW_MAX_QUEUED;
+      } else {
+        process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
       }
     }
   });
@@ -2312,7 +2575,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         expect(started.status).toBe(202);
@@ -2397,7 +2660,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2459,7 +2722,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2521,7 +2784,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2568,7 +2831,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2601,7 +2864,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2667,7 +2930,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2704,7 +2967,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2754,7 +3017,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2809,7 +3072,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("linear-explicit"),
+            pipeline: netPipeline("linear-explicit"),
           }),
         });
         const runId = started.body.runId as string;
@@ -2958,7 +3221,7 @@ describe("localhost HTTP API", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             task: "tasks/sample.task.yaml",
-            pipeline: pipelinePath("parallel-retry-fanout"),
+            pipeline: netPipeline("parallel-retry-fanout"),
           }),
         });
         const runId = started.body.runId as string;
@@ -3021,6 +3284,29 @@ describe("localhost HTTP API", () => {
 
   describe("provider auth HTTP shell", () => {
     const marker = "sk-test-secret-marker-HTTP-AE3-9f3c2b1a";
+    const previousHome = process.env.HOME;
+    const previousStageflowHome = process.env.STAGEFLOW_HOME;
+
+    beforeEach(async () => {
+      resetGlobalStageflowHomeForTests();
+      const home = await mkdtemp(path.join(tmpdir(), "sf-http-auth-home-"));
+      process.env.HOME = home;
+      process.env.STAGEFLOW_HOME = path.join(home, ".stageflow");
+    });
+
+    afterEach(() => {
+      resetGlobalStageflowHomeForTests();
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+      if (previousStageflowHome === undefined) {
+        delete process.env.STAGEFLOW_HOME;
+      } else {
+        process.env.STAGEFLOW_HOME = previousStageflowHome;
+      }
+    });
 
     it("lists live providers without changing GET /api/models", async () => {
       const root = await mkdtemp(path.join(tmpdir(), "sf-http-providers-list-"));
@@ -4057,3 +4343,137 @@ describe("project MCP probe HTTP", () => {
     }
   });
 });
+
+describe("HTTP repository binding surfaces (U7)", () => {
+  afterAll(() => {
+    setBareCacheRemoteUrlOverrideForTests(null);
+    resetBareCacheStateForTests();
+    resetGlobalStageflowHomeForTests();
+  });
+
+  it("rejects token-shaped start fields and body-level binding stays on task", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-token-"));
+    const { server, base } = await withServer(root, scriptedFakeAgent([]));
+    try {
+      const token = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: { id: "t", goal: "g" },
+          github_token: "nope",
+        }),
+      });
+      expect(token.status).toBe(400);
+      expect(token.body.code).toBe("start.token_rejected");
+      expect(token.body.field).toBe("github_token");
+
+      const conflict = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: {
+            id: "t",
+            goal: "g",
+            repository: "acme/api",
+            ref: "main",
+            checkout: "/tmp/x",
+          },
+        }),
+      });
+      expect(conflict.status).toBe(400);
+      expect(conflict.body.code).toBe("task.binding_conflict");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+
+  it("starts a repository task and get_run shows binding", async () => {
+    const home = await mkdtemp(path.join(tmpdir(), "sf-http-u7-home-"));
+    process.env.STAGEFLOW_HOME = home;
+    resetGlobalStageflowHomeForTests();
+    resetBareCacheStateForTests();
+
+    const source = await mkdtemp(path.join(tmpdir(), "sf-http-u7-src-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: source });
+    execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: source });
+    execFileSync("git", ["config", "user.name", "T"], { cwd: source });
+    await writeFile(path.join(source, "README"), "hi\n");
+    execFileSync("git", ["add", "README"], { cwd: source });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: source });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: source,
+      encoding: "utf8",
+    }).trim();
+    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
+
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-u7-run-"));
+    const agent = {
+      openStage(input: { stage: { id: string } }) {
+        return createCompletedOnlyStageHandle({
+          stageId: input.stage.id,
+          run: async () => ({
+            ok: true as const,
+            envelope: {
+              status: "success" as const,
+              summary: "ok",
+              artifacts: [],
+              payload: {},
+            },
+          }),
+        });
+      },
+      async runStage() {
+        return {
+          ok: true as const,
+          envelope: {
+            status: "success" as const,
+            summary: "ok",
+            artifacts: [],
+            payload: {},
+          },
+        };
+      },
+    };
+    const { server, base } = await withServer(root, agent);
+    try {
+      const started = await jsonFetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pipeline: netPipeline("docs-only"),
+          task: {
+            id: "repo-task",
+            goal: "edit",
+            repository: "acme/api",
+            ref: "main",
+          },
+        }),
+      });
+      expect(started.status).toBe(202);
+      const runId = started.body.runId as string;
+      await waitUntilIdleHealth(base);
+      const detail = await jsonFetch(
+        `${base}/api/runs/${encodeURIComponent(runId)}`,
+      );
+      expect(detail.status).toBe(200);
+      expect(detail.body.binding).toMatchObject({
+        kind: "repository",
+        repository: "acme/api",
+        ref: "main",
+        resolved_sha: sha,
+      });
+      expect(detail.body.binding.run_branch).toMatch(/^stageflow\/run-/);
+      expect(detail.body.binding.checkout_root).toContain("worktrees");
+    } finally {
+      setBareCacheRemoteUrlOverrideForTests(null);
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
+  });
+});
+

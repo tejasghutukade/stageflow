@@ -86,8 +86,10 @@ export function createVerifiedStageExecution(options: {
   stage: StageConfig;
   dag?: ResolvedPipelineDag;
   roots: StageRoots;
+  commandEnv?: NodeJS.ProcessEnv;
 }): VerifiedStageExecution {
-  const { store, runId, stageId, attempt, stage, dag, roots } = options;
+  const { store, runId, stageId, attempt, stage, dag, roots, commandEnv } =
+    options;
   const contract = dag?.nodes.find((node) => node.id === stageId)?.completion;
   let checkout: CheckoutCapability | undefined;
   let checkoutBefore: CheckoutSnapshot | undefined;
@@ -148,6 +150,7 @@ export function createVerifiedStageExecution(options: {
           payloadSchema: stage.payload_schema,
           artifactsDir,
           commandWorkingDirectory: roots.cwd,
+          ...(commandEnv !== undefined ? { commandEnv } : {}),
           gates: gateDecisionsForAttempt({ store, runId, stageId, attempt }),
           checkout,
           checkoutBefore,

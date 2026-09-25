@@ -19,8 +19,10 @@ my-project/
     hello.pipeline.yaml       # inline or uses: stage entries
   tasks/
     hello.task.yaml
-  .stageflow/                 # runtime state at git root
+  .stageflow/                 # per-project settings only
 ```
+
+Run state (SQLite and workspaces) lives under the global durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), not under the git root. See [Data directory](data-directory.md).
 
 **Flat layout** — pipeline and task files may also live at the repo root (e.g. `hello.pipeline.yaml`, `my-task.task.yaml`) beside `stageflow.yaml`; validation and CLI accept any filesystem path. This repo uses a flat root for some pipelines under `tests/fixtures/`.
 
@@ -52,6 +54,7 @@ Optional top-level fields:
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
 | `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
+| `requires` | array | Toolchain declarations `{ tool, version? }` checked before start (see [Toolchain requires](#toolchain-requires)) |
 
 Bare string stage refs are rejected.
 
@@ -66,11 +69,11 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill` and `mcp` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding) and [Stage MCP](#stage-mcp). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
-**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
+**Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
-`uses:` plus any body key except `skill` and `mcp` is rejected (`pipeline.stage_uses_inline_conflict`). `skill` and `mcp` may sit on the `uses:` wrapper.
+`uses:` plus any body key except `skill`, `mcp`, `secrets`, and `requires` is rejected (`pipeline.stage_uses_inline_conflict`). `skill`, `mcp`, `secrets`, and `requires` may sit on the `uses:` wrapper.
 
 `on_verify_fail` is pipeline-stage wiring. It may sit beside `uses:` because a reusable stage can recover differently in different pipelines. `verify` belongs on the body (the `uses:` target or the inline entry), not on the wrapper.
 
@@ -210,6 +213,8 @@ Canonical fixtures:
 | `[after]` | `command`, `checkout_changes`, `checklist`, `payload_schema` (verify check type — not the legacy `payload_schema:` field; see [Upgrading older catalogs](#upgrading-older-catalogs)) |
 
 Emit-phase checks run in-session during `emit_stage_envelope` (soft reject: `isError`, no `terminate`). After-phase checks are Verified Stage Execution — hard proof after a candidate envelope is captured. See [Envelopes — emit-phase verify](envelopes.md#verify-emit) and [Verified Stage Execution](verified-stage-execution.md).
+
+`type: command` checks run as `bash -c <run>` with the stage's curated environment (not `/bin/sh`). Install `bash` on `PATH`. Pipefail is not added implicitly — authors may `set -eo pipefail` themselves.
 
 ```yaml
 verify:
@@ -709,11 +714,33 @@ stages:
 
 | Behavior | Detail |
 |----------|--------|
-| Resolution | Looks up `.pi/skills/NAME/SKILL.md` under the operator checkout (`--operator-cwd` / `STAGEFLOW_OPERATOR_CWD`) and the Pi agent skills dir |
+| Resolution | Looks up the skill name in order (first match wins) — see precedence table below |
 | Startup | Stage fails before the agent session if the skill is not installed |
 | Agent prompt | Skill instructions are injected for the stage attempt |
 
-Install skills before `sf run` in CI:
+#### Skill precedence
+
+| Order | Origin | Location |
+|------:|--------|----------|
+| 1 | `run` | `$STAGEFLOW_HOME/runs/<runId>/skills/<name>/` — materialised from `start_run.skills` (MCP/REST); never written into the checkout/worktree |
+| 2 | `checkout` | `<checkoutRoot>/.pi/skills/<name>/` — gated by `trust_workspace_config` for repository bindings |
+| 3 | `host` | Pi agent skills dir (`agentDir/skills`) / operator image skills |
+
+Same name: run wins. Checkout-sourced skills still require trust for repository bindings; run-scoped skills bypass that gate. MCP `list_skills` (optional `runId`) reports `name`, `description`, and `origin`.
+
+Ship skills with the run (harness):
+
+```json
+{
+  "skills": {
+    "archify": {
+      "SKILL.md": "---\nname: archify\ndescription: …\n---\n"
+    }
+  }
+}
+```
+
+Install durable host skills before `sf run` in CI (operator/image path):
 
 ```bash
 sf skills install --from-zip https://example.com/skill.zip --skill-name archify
@@ -724,6 +751,8 @@ Walkthrough: [`examples/archify-on-pr/`](../examples/archify-on-pr/) — GHA pro
 ### Stage MCP {#stage-mcp}
 
 Pass project MCP servers to a stage on the **pipeline stage entry** (alongside `uses:` or inline body). The loader also accepts `mcp:` in external stage files; a pipeline-entry `mcp` overrides the file value on merge, including `mcp: []` to clear a file list. Prefer the pipeline entry. Omit the field or set `mcp: []` for no author-declared MCP.
+
+Interpolation resolves against the **stage's curated environment** (not the Host ambient env). Default MCP connect timeout is **30s**. Missing catalog `command` binaries on `PATH` fail validate with a distinct error. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ```yaml
 stages:
@@ -751,10 +780,10 @@ Project `.mcp.json` lives at the same root as `stageflow.yaml`:
 | Behavior | Detail |
 |----------|--------|
 | Catalog | `.mcp.json` `{ "mcpServers": { "NAME": { … } } }` at the project root that holds `stageflow.yaml` |
-| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
+| Interpolation | `${VAR}` and `${VAR:-default}` in `command`, `args`, `env` values, `url`, `headers` values, and `cwd`. Resolves against the curated stage env only. Stage attach sets `STAGEFLOW_STAGE_ARTIFACTS_DIR` to the attempt artifacts directory and substitutes `${STAGEFLOW_STAGE_ARTIFACTS_DIR}` in the stage `system_prompt` (Settings Check does not). |
 | Spawn root | stdio servers stamp `cwd` to the catalog project root. Relative `command`/`args` paths resolve against that root. A catalog `cwd` must already be an absolute path inside the project root. |
-| Validate | `sf validate` checks names, shape, and reserved-name collision. It does not require env vars to be set or a live connect. |
-| Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. |
+| Validate | `sf validate` checks names, shape, reserved-name collision, and that each catalog `command` is on `PATH`. It does not require env vars to be set or a live connect. |
+| Run | A required var that is still unset, and a passed server that will not connect, fail the stage at run time before the agent is treated as having those tools. Connect default is 30s. |
 | Reserved | The server name `stageflow` is reserved. Stageflow stage tools (`emit_stage_envelope`, `write_stage_artifact`, and `ask_operator` when the stage allows it) stay available without being listed in `mcp`. |
 | Settings inspect | Operator console Settings lists git-root `.mcp.json` names and Check connect without a run. Inspect is not attach. |
 
@@ -776,6 +805,52 @@ MCP elicitation is unsupported — a passed server cannot ask the operator a que
 Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
+### Toolchain requires {#toolchain-requires}
+
+`requires:` declares binaries the Host must provide before a run starts. Allowed on the **pipeline root** and on a **stage body** (or `uses:` wrapper). Shape: a list of `{ tool: string, version?: string }`. `tool` is a PATH binary name; `version` is an npm-style semver range (omit to mean “must exist”). Unknown sub-keys fail load (`pipeline.invalid_requires` / `stage.invalid_requires`).
+
+When pipeline and stage name the same tool, ranges are **intersected** (stricter) at load; non-intersecting ranges fail with `pipeline.requires_conflict`.
+
+```yaml
+id: checkout-verify
+requires:
+  - tool: node
+    version: ">=22"
+  - tool: pnpm
+    version: ">=9"
+stages:
+  - id: verify-build
+    uses: stages/verify-build.stage.yaml
+    requires:
+      - tool: pnpm
+        version: ">=9.5"
+```
+
+Preflight surfaces (`sf doctor --pipeline`, MCP `preflight`, and `start_run` before `createRun`) check against the image toolchain manifest (`/etc/stageflow/toolchain.json`, override with `STAGEFLOW_TOOLCHAIN_MANIFEST`) with live PATH fallback under the curated stage env. Statuses: `ok` | `missing_tool` | `tool_version_mismatch` | `unknown_version`. `unknown_version` passes by default; `sf doctor --strict` / MCP `preflight` with `strict: true` fails it. Stageflow never installs tools from `requires:`.
+
+### Stage environment and secrets {#stage-secrets}
+
+Stages receive a **constructed** environment (exact-name allowlist + computed vars + declared grants) — never a raw spread of the Host env. Full migration: [migration-stage-environment.md](migration-stage-environment.md).
+
+| Blocked by default | Always included | Declared per stage |
+|---|---|---|
+| Provider API keys, `GITHUB_TOKEN`/`GH_TOKEN` as raw env (unless `as: env`), control/read tokens (never grantable), cloud/`NPM_TOKEN`/`SSH_AUTH_SOCK` | `PATH`, locale/`TZ`/`TERM`/`TMPDIR`, proxy + CA vars, `STAGEFLOW_HOME`, `SF_STAGE_WORKER`, Slot 2 `STAGEFLOW_*` binding vars, cache vars under `$STAGEFLOW_HOME/cache` | `secrets:` names from the Host registry |
+
+```yaml
+stages:
+  - id: raise-pr
+    uses: ./raise-pr.yaml
+    secrets:
+      - GITHUB_TOKEN                 # GIT_ASKPASS + materialised token file (no raw env)
+      - { name: NPM_TOKEN, as: env } # raw env (WARN); no askpass
+# Prefer { name: GITHUB_TOKEN, as: env } when gh/MCP need the env var:
+# that form still sets GIT_ASKPASS + token file for plain HTTPS git (WARN).
+```
+
+For `GITHUB_TOKEN` / `GH_TOKEN`, `{ as: env }` is **additive** with askpass: the value is in the curated env (for `gh` / MCP) and `GIT_ASKPASS` plus a materialised token file are still set for plain HTTPS `git`. Other secrets with `as: env` stay env-only. Askpass/env grants apply only to secrets declared on the stage.
+
+`verify` `command` checks run as `bash -c <command>` with the same curated env. Host stopgaps: `STAGEFLOW_STAGE_ENV_ALLOW` and deprecated `STAGEFLOW_STAGE_ENV_PASSTHROUGH=all`.
 
 ## External stage files
 
@@ -804,8 +879,12 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 | `goal` | yes | What the run should accomplish |
 | `context` | no | Background for agents |
 | `constraints` | no | Boundaries |
-| `checkout` | no | Relative or absolute path to working tree |
+| `checkout` | no | Relative or absolute path to working tree (path binding; conflicts with `repository`) |
+| `repository` | no | GitHub `owner/repo` for a Host-owned worktree binding (requires `ref`) |
+| `ref` | no | Branch, tag, or SHA for `repository` binding (required when `repository` is set) |
 | `input` | no | Structured object matched against each entry stage's `io.input`; omitted is `{}` |
+
+Do not set both `checkout` and `repository` on the same task. CLI overrides: [`sf run --repository` / `--ref`](cli-reference.md#sf-run) / `--checkout`. Repo-bound Docker notes: [Docker — Repo-bound run](docker.md#repo-bound-run).
 
 Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `io.input.schema` and the task omits `input`, start-run / `preparePipeline` treat it as `{}` and fail with `task.invalid_shape` when that does not match. `sf validate` of the task file alone still succeeds. Non-entry stages still receive the full task in the agent prompt.
 
@@ -860,4 +939,4 @@ sf run \
   --task examples/hello-world/my-task.task.yaml
 ```
 
-Run state is stored under **`GIT_ROOT/.stageflow/`** regardless of which subdirectory you start `sf ui` from.
+Run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — see [Data directory](data-directory.md). Catalog browse still uses the project git root regardless of which subdirectory you start `sf ui` from.

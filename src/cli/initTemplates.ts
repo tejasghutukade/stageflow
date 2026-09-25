@@ -10,10 +10,17 @@ catalog:
 `;
 
 export const HELLO_PIPELINE_YAML = `id: hello
-model: anthropic/claude-sonnet-4-5
 stages:
   - id: hello
+    model: anthropic/claude-sonnet-4-5
     system_prompt: Say hello and emit a success envelope.
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
 `;
 
 export const HELLO_TASK_YAML = `id: hello

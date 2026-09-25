@@ -47,13 +47,18 @@ async function assertCatalogFileExists(
 export async function reloadPipelineForRun(
   meta: RunMeta,
 ): Promise<LoadedPipeline> {
-  const projectRoot = requireProjectRoot(meta);
   // An inline-pipeline run (no pipeline_path — nothing was ever written to a
   // catalog file) carries its own pipeline body in meta.inline_pipeline
   // instead, the same way a task without task_path reloads from task_yaml.
+  // Prefer this before requiring path locators; project_root is optional and
+  // falls back to cwd (same as loadPipelineFromObject).
   if (meta.inline_pipeline) {
+    const projectRoot = meta.project_root
+      ? normalizeCatalogPath(meta.project_root)
+      : process.cwd();
     return loadPipelineFromObject(meta.inline_pipeline, { projectRoot });
   }
+  const projectRoot = requireProjectRoot(meta);
   const pipelinePath = requirePipelinePath(meta);
   await assertCatalogFileExists(pipelinePath, "Pipeline");
   return loadPipeline(pipelinePath, { cwd: projectRoot });

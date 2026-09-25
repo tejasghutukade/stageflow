@@ -102,7 +102,7 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 `--pipeline` and `--task` require **filesystem paths** — there is no bare-id fallback.
 
-`sf run` is an HTTP client of a single **global** Stageflow service shared by every project on the machine — it auto-starts that service (headless, no browser) the first time anything needs it, and reuses it if `sf ui`/`sf mcp` is already running. Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under **`~/.stageflow/`** — one shared store for every project, not a per-project `.stageflow/` folder. Pipeline/task catalog resolution (`stageflow.yaml`, `pipelines/`, `tasks/`) still stays project-local, resolved from whichever git root you're running in.
+`sf run` is an HTTP client of a single **global** Stageflow service shared by every project on the machine — it auto-starts that service (headless, no browser) the first time anything needs it, and reuses it if `sf ui`/`sf mcp` is already running. Each stage runs in a **fresh Pi session**. When the stage agent finishes, it must call `emit_stage_envelope` once (see [Envelopes](envelopes.md)). On success the pipeline completes and run state is stored under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`) — one shared store for every project, not a per-project `.stageflow/` folder. See [Data directory](data-directory.md). Pipeline/task catalog resolution (`stageflow.yaml`, `pipelines/`, `tasks/`) still stays project-local, resolved from whichever git root you're running in.
 
 ## 5. Operate via the console
 
@@ -155,6 +155,7 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [CLI reference](cli-reference.md) — all `sf` commands and selected env vars
 - [Operator console](operator-console.md) — console navigation and settings
 - [MCP](mcp.md) — Streamable HTTP tools (`sf ui` or `sf mcp`)
+- [Docker and self-hosting](docker.md#local-try-compose) — Compose first-run (`.env.example`, control token, `STAGEFLOW_PROVIDER_*`); never mount docker.sock
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
 

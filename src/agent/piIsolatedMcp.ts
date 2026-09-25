@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   type EventBus,
   type ExtensionFactory,
@@ -8,13 +9,22 @@ import {
   StageMcpError,
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 
 export const STAGEFLOW_PI_MCP_EXTENSION_NAME = "stageflow-mcp";
 
 const MCP_STATUS_EVENT = "pi-mcp-adapter/status/v1";
-const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_ISOLATED_MCP_CONNECT_TIMEOUT_MS = 30_000;
 const STATUS_POLL_MS = 50;
 const PI_MCP_ADAPTER_SPEC: string = "pi-mcp-adapter";
+
+export function jitiFsCacheDir(): string {
+  return path.join(globalStageflowHome(), "cache", "jiti");
+}
+
+export function resetCreateMcpAdapterCacheForTests(): void {
+  cachedCreateMcpAdapter = undefined;
+}
 
 type IsolatedMcpSettings = {
   directTools: true;
@@ -138,7 +148,7 @@ async function loadCreateMcpAdapter(): Promise<CreateMcpAdapter> {
     // Node does not type-strip .ts under node_modules.
   }
   const { createJiti } = await import("jiti/static");
-  const jiti = createJiti(import.meta.url);
+  const jiti = createJiti(import.meta.url, { fsCache: jitiFsCacheDir() });
   const mod = (await jiti.import(PI_MCP_ADAPTER_SPEC)) as {
     createMcpAdapter: CreateMcpAdapter;
   };

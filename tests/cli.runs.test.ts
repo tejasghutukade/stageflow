@@ -434,7 +434,7 @@ describe("runRunsCommand inspect/wait", () => {
     expect(after.status).toBe(before.status);
   });
 
-  it("export-run still rejects the in-progress id that show accepts", async () => {
+  it("export-run accepts the in-progress id that show accepts", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-runs-export-"));
     const { runId, store } = await seedRun(projectRoot, {
       completeStages: false,
@@ -455,8 +455,14 @@ describe("runRunsCommand inspect/wait", () => {
       projectRoot,
       io: exportCap.io,
     });
-    expect(exportCode).toBe(1);
-    expect(exportCap.stderr.join("\n")).toMatch(/run is not complete/);
+    expect(exportCode).toBe(0);
+    expect(exportCap.stderr.join("\n")).not.toMatch(/run is not complete/);
+    const exported = JSON.parse(exportCap.stdout.join("\n")) as {
+      status: string;
+      run_manifest: unknown;
+    };
+    expect(exported.status).toBe("running");
+    expect(exported).toHaveProperty("run_manifest");
   });
 
   it("unknown subcommand prints USAGE and exits 1", async () => {

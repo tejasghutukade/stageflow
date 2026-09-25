@@ -171,27 +171,78 @@ describe("runExportRunCommand", () => {
     expect(parsed.status).toBe("succeeded");
   });
 
-  it("rejects in-progress runs", async () => {
-    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-inprog-"));
-    const { runId } = await seedRun(projectRoot, { completeStages: false });
+  it("exports running and cancelled runs with run_manifest", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-running-"));
+    const { runId } = await seedRun(projectRoot, {
+      completeStages: false,
+      runStatus: "running",
+    });
+    const store = createRunStore({ rootDir: globalStageflowHome() });
+    await store.updateRunManifest(runId, {
+      manifest_version: 1,
+      run_id: runId,
+      created_at: new Date().toISOString(),
+      host: {
+        stageflow_version: "0.24.0",
+        build_sha: "test",
+        image_digest: null,
+        schema_version: 6,
+      },
+      caller: { caller_id: null, surface: "cli" },
+      binding: { kind: "unbound" },
+      pipeline: {
+        source: "path",
+        path: null,
+        bytes_sha256: "a",
+        body: null,
+      },
+      task: {
+        source: "inline",
+        path: null,
+        bytes_sha256: "b",
+        body: "id: a\n",
+      },
+      skills: [],
+      stages: [],
+      toolchain: [],
+    });
 
-    const stderr: string[] = [];
+    const stdout: string[] = [];
     const code = await runExportRunCommand(["--run", runId], {
       cwd: projectRoot,
       projectRoot,
       io: {
-        log: () => undefined,
-        error: (line) => stderr.push(line),
+        log: (line) => stdout.push(line),
+        error: () => undefined,
       },
     });
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout.join("\n")) as {
+      run_id: string;
+      status: string;
+      run_manifest: { manifest_version: number; run_id: string } | null;
+    };
+    expect(parsed.run_id).toBe(runId);
+    expect(parsed.status).toBe("running");
+    expect(parsed.run_manifest?.manifest_version).toBe(1);
+    expect(parsed.run_manifest?.run_id).toBe(runId);
 
-    expect(code).toBe(1);
-    expect(stderr.join("\n")).toMatch(
-      new RegExp(`run is not complete: ${runId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\(status: running\\)`),
-    );
+    await store.updateRunStatus(runId, "cancelled");
+    const stdout2: string[] = [];
+    const code2 = await runExportRunCommand(["--run", runId], {
+      cwd: projectRoot,
+      projectRoot,
+      io: {
+        log: (line) => stdout2.push(line),
+        error: () => undefined,
+      },
+    });
+    expect(code2).toBe(0);
+    const cancelled = JSON.parse(stdout2.join("\n")) as { status: string };
+    expect(cancelled.status).toBe("cancelled");
   });
 
-  it("rejects created runs", async () => {
+  it("exports created runs", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-created-"));
     const store = createRunStore({ rootDir: globalStageflowHome() });
     const created = await store.createRun({
@@ -201,19 +252,27 @@ describe("runExportRunCommand", () => {
       pipelineDag: linearCompatDagSnapshot(["stage-a", "stage-b"]),
     });
 
-    const stderr: string[] = [];
+    const stdout: string[] = [];
     const code = await runExportRunCommand(["--run", created.runId], {
       cwd: projectRoot,
       projectRoot,
       io: {
-        log: () => undefined,
-        error: (line) => stderr.push(line),
+        log: (line) => stdout.push(line),
+        error: () => undefined,
       },
     });
 
-    expect(code).toBe(1);
-    expect(stderr.join("\n")).toMatch(/run is not complete.*status: created/);
+    expect(code).toBe(0);
+    const parsed = JSON.parse(stdout.join("\n")) as {
+      run_id: string;
+      status: string;
+      run_manifest: unknown;
+    };
+    expect(parsed.run_id).toBe(created.runId);
+    expect(parsed.status).toBe("created");
+    expect(parsed).toHaveProperty("run_manifest");
   });
+
 
   it("exits 1 for unknown run", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "sf-export-unknown-"));

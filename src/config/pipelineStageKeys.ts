@@ -38,6 +38,8 @@ export const BODY_KEYS = new Set([
   "timeout_ms",
   "skill",
   "mcp",
+  "secrets",
+  "requires",
   "io",
   "verify",
 ]);

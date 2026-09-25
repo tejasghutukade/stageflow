@@ -15,6 +15,8 @@ const publicationSchema = z.object({
   project_root: z.string().min(1),
   pipeline: z.string().min(1),
   goal: z.string().trim().min(1),
+  repository: z.string().trim().min(1).optional(),
+  ref: z.string().trim().min(1).optional(),
   allowed_callers: z.array(identifier).min(1),
   input_schema: z.string().min(1),
   results: z.object({
@@ -23,7 +25,24 @@ const publicationSchema = z.object({
     artifacts: z.array(z.string().regex(/^[^/\\.][^/\\]*$/)).default([]),
   }).strict(),
   caller_answerable_stages: z.array(identifier).default([]),
-}).strict();
+}).strict().superRefine((data, ctx) => {
+  const hasRepo = data.repository !== undefined;
+  const hasRef = data.ref !== undefined;
+  if (hasRepo && !hasRef) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "repository requires ref",
+      path: ["ref"],
+    });
+  }
+  if (hasRef && !hasRepo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "ref requires repository",
+      path: ["repository"],
+    });
+  }
+});
 
 const configSchema = z.object({
   version: z.literal(1),

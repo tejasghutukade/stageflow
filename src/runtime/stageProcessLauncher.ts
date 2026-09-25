@@ -1,14 +1,36 @@
-import { fork, type ChildProcess } from "node:child_process";
+import * as childProcess from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import {
+  logger as rootLogger,
+  resolveLogMaxLineBytes,
+  type Logger,
+} from "../logging/logger.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
+import { redactString } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
   readMaxActiveStageProcesses,
 } from "./stageConcurrency.js";
+import { getContainerLimits } from "./containerLimits.js";
+import {
+  buildStageEnvironment,
+  isAmbientBlockedEnv,
+  isForeverDeniedSecret,
+  type ResolvedStageGrants,
+} from "./stageEnvironment.js";
+import { ensureStageCacheDirs } from "./stageCacheEnv.js";
 import {
   SF_STAGE_WORKER,
   STAGE_WORKER_EXIT,
   type StageWorkerResult,
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import {
+  overlayStageBindingEnv,
+  type DerivedBindingKind,
+} from "./stageRoots.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -20,6 +42,10 @@ export type StageLaunchInput = {
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  env?: Record<string, string>;
+  bindingKind?: DerivedBindingKind;
+  grants?: ResolvedStageGrants;
+  attemptHome?: string;
 };
 
 export type StageLaunchResult =
@@ -35,13 +61,70 @@ export type ActiveStageProcess = {
 
 type TrackedChild = ActiveStageProcess & {
   child: ChildProcess;
+  hostInitiatedKill: boolean;
+};
+
+type WaitQueueEntry = {
+  runId: string;
+  resolve: (cancelled: boolean) => void;
 };
 
 export type StageProcessLauncherOptions = {
   maxActiveStageProcesses?: number;
   env?: Record<string, string | undefined>;
   cliEntry?: string;
+  logger?: Logger;
+  /** Test seam: override child_process.fork. */
+  forkFn?: typeof childProcess.fork;
 };
+
+function flushCappedPartial(
+  log: Logger,
+  event: "stage.stdout" | "stage.stderr",
+  text: string,
+  maxLineBytes: number,
+): string {
+  let remaining = redactString(text, { namedSecrets: getNamedSecrets() });
+  while (Buffer.byteLength(remaining, "utf8") > maxLineBytes) {
+    const bytes = Buffer.from(remaining, "utf8");
+    const originalBytes = bytes.byteLength;
+    const piece = bytes.subarray(0, maxLineBytes).toString("utf8");
+    log.info(event, piece, {
+      truncated: true,
+      original_bytes: originalBytes,
+    });
+    remaining = bytes.subarray(maxLineBytes).toString("utf8");
+  }
+  return remaining;
+}
+
+function attachStreamLineLogger(
+  stream: Readable | null,
+  log: Logger,
+  event: "stage.stdout" | "stage.stderr",
+  maxLineBytes: number,
+): void {
+  if (!stream) return;
+  let buffer = "";
+  stream.on("data", (chunk: Buffer | string) => {
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      log.info(event, line);
+    }
+    buffer = flushCappedPartial(log, event, buffer, maxLineBytes);
+  });
+  stream.on("end", () => {
+    if (buffer.length > 0) {
+      buffer = flushCappedPartial(log, event, buffer, maxLineBytes);
+      if (buffer.length > 0) {
+        log.info(event, buffer);
+      }
+      buffer = "";
+    }
+  });
+}
 
 function activeKey(runId: string, stageId: string): string {
   return `${runId}\0${stageId}`;
@@ -53,7 +136,11 @@ function isStageWorkerResult(value: unknown): value is StageWorkerResult {
   return type === "succeeded" || type === "failed" || type === "waiting";
 }
 
-function resultFromExitCode(code: number | null): StageLaunchResult {
+function resultFromExitCode(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  hostInitiatedKill: boolean,
+): StageLaunchResult {
   if (code === STAGE_WORKER_EXIT.SUCCEEDED) {
     return { type: "succeeded" };
   }
@@ -63,9 +150,17 @@ function resultFromExitCode(code: number | null): StageLaunchResult {
   if (code === STAGE_WORKER_EXIT.FAILED) {
     return { type: "failed", reason: "stage failed" };
   }
+  if (signal === "SIGKILL" && !hostInitiatedKill) {
+    return { type: "failed", reason: "worker_oom_killed" };
+  }
   return {
     type: "failed",
-    reason: code === null ? "stage process exited" : `stage process exit ${code}`,
+    reason:
+      code === null
+        ? signal
+          ? `stage process exited (${signal})`
+          : "stage process exited"
+        : `stage process exit ${code}`,
   };
 }
 
@@ -79,23 +174,62 @@ function resultFromWorkerMessage(msg: StageWorkerResult): StageLaunchResult {
   return { type: "failed", reason: msg.reason };
 }
 
+export function signalProcessGroup(
+  pid: number | undefined,
+  signal: NodeJS.Signals,
+): void {
+  if (pid === undefined) return;
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ESRCH" && code !== "EPERM") {
+      throw error;
+    }
+  }
+}
+
 export class StageProcessLauncher {
   private readonly maxActive: number;
   private readonly env: Record<string, string | undefined>;
+  private readonly explicitChildExtras: Record<string, string> | undefined;
   private readonly cliEntry: string;
+  private readonly logger: Logger;
+  private readonly forkFn: typeof childProcess.fork;
   private readonly active = new Map<string, TrackedChild>();
-  private readonly waitQueue: Array<() => void> = [];
+  private readonly waitQueue: WaitQueueEntry[] = [];
+  private readonly cancelledRuns = new Set<string>();
   private slotsHeld = 0;
+  private readonly heapMb: number;
 
   constructor(options: StageProcessLauncherOptions = {}) {
     this.env = options.env ?? process.env;
+    this.explicitChildExtras =
+      options.env !== undefined && options.env !== process.env
+        ? Object.fromEntries(
+            Object.entries(options.env).filter(
+              (entry): entry is [string, string] =>
+                entry[1] !== undefined &&
+                !isForeverDeniedSecret(entry[0]) &&
+                !isAmbientBlockedEnv(entry[0]),
+            ),
+          )
+        : undefined;
     this.maxActive = readMaxActiveStageProcesses(
       this.env,
       options.maxActiveStageProcesses,
     );
+    this.heapMb = getContainerLimits().maxOldSpaceSizeMb;
     this.cliEntry =
       options.cliEntry ??
       fileURLToPath(new URL("../cli.js", import.meta.url));
+    this.logger =
+      options.logger ?? rootLogger.child({ component: "runtime" });
+    this.forkFn = options.forkFn ?? childProcess.fork;
   }
 
   activeCount(): number {
@@ -110,17 +244,56 @@ export class StageProcessLauncher {
     }));
   }
 
+  signalAllActive(signal: NodeJS.Signals): void {
+    for (const entry of this.active.values()) {
+      entry.hostInitiatedKill = true;
+      signalProcessGroup(entry.child.pid, signal);
+    }
+  }
+
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
-    await this.waitForCapacity();
-    return this.spawnAndWait(input);
+    const acquired = await this.waitForCapacity(input.runId);
+    if (!acquired) {
+      return { type: "failed", reason: "cancelled" };
+    }
+    let slotOwnedBySpawn = false;
+    try {
+      if (this.cancelledRuns.has(input.runId)) {
+        return { type: "failed", reason: "cancelled" };
+      }
+      const resultPromise = this.spawnAndWait(input);
+      slotOwnedBySpawn = true;
+      return await resultPromise;
+    } finally {
+      if (!slotOwnedBySpawn) {
+        this.releaseCapacity();
+      }
+    }
   }
 
   async cancelRun(runId: string, killAfterMs = 5000): Promise<void> {
+    this.cancelledRuns.add(runId);
+    const remaining: WaitQueueEntry[] = [];
+    for (const entry of this.waitQueue) {
+      if (entry.runId === runId) {
+        entry.resolve(true);
+      } else {
+        remaining.push(entry);
+      }
+    }
+    this.waitQueue.length = 0;
+    this.waitQueue.push(...remaining);
+
     const children = [...this.active.values()].filter(
       (entry) => entry.runId === runId,
     );
     if (children.length === 0) {
+      this.cancelledRuns.delete(runId);
       return;
+    }
+
+    for (const entry of children) {
+      entry.hostInitiatedKill = true;
     }
 
     await Promise.all(
@@ -128,38 +301,54 @@ export class StageProcessLauncher {
         (entry) =>
           new Promise<void>((resolve) => {
             const child = entry.child;
+            const pid = child.pid;
             let settled = false;
+            let exited = false;
+            let escalateTimer: NodeJS.Timeout | undefined;
             const finish = () => {
               if (settled) return;
               settled = true;
+              if (escalateTimer !== undefined) clearTimeout(escalateTimer);
               resolve();
             };
-            child.once("exit", finish);
-            child.kill("SIGTERM");
+            child.once("exit", () => {
+              exited = true;
+              // Parent may exit on SIGTERM while SIGTERM-proof grandchildren remain.
+              signalProcessGroup(pid, "SIGKILL");
+              finish();
+            });
+            signalProcessGroup(pid, "SIGTERM");
             if (killAfterMs > 0) {
-              setTimeout(() => {
-                if (!child.killed) {
-                  child.kill("SIGKILL");
+              escalateTimer = setTimeout(() => {
+                if (!exited) {
+                  signalProcessGroup(pid, "SIGKILL");
                 }
               }, killAfterMs);
             }
           }),
       ),
     );
+    this.cancelledRuns.delete(runId);
   }
 
-  private async waitForCapacity(): Promise<void> {
+  private async waitForCapacity(runId: string): Promise<boolean> {
+    if (this.cancelledRuns.has(runId)) {
+      return false;
+    }
     if (!Number.isFinite(this.maxActive)) {
-      return;
+      return true;
     }
     if (this.slotsHeld < this.maxActive) {
       this.slotsHeld += 1;
-      return;
+      return true;
     }
-    await new Promise<void>((resolve) => {
-      this.waitQueue.push(resolve);
+    const cancelled = await new Promise<boolean>((resolve) => {
+      this.waitQueue.push({ runId, resolve });
     });
-    return this.waitForCapacity();
+    if (cancelled) {
+      return false;
+    }
+    return this.waitForCapacity(runId);
   }
 
   private releaseCapacity(): void {
@@ -169,7 +358,7 @@ export class StageProcessLauncher {
     this.slotsHeld -= 1;
     if (this.waitQueue.length > 0) {
       const next = this.waitQueue.shift();
-      next?.();
+      next?.resolve(false);
     }
   }
 
@@ -205,10 +394,42 @@ export class StageProcessLauncher {
       args.push("--skip-gates");
     }
 
-    const child = fork(this.cliEntry, args, {
+    if (this.cancelledRuns.has(input.runId)) {
+      this.releaseCapacity();
+      return Promise.resolve({ type: "failed", reason: "cancelled" });
+    }
+
+    const hostEnv: NodeJS.ProcessEnv = { ...process.env, ...this.env };
+    const built = buildStageEnvironment({
+      hostEnv,
+      cacheVars: ensureStageCacheDirs(),
+      grants: input.grants,
+      attemptHome: input.attemptHome,
+      packageVersion: PACKAGE_VERSION,
+    });
+    for (const warning of built.warnings) {
+      this.logger.warn("stage.env.passthrough", warning, {
+        run_id: input.runId,
+        stage_id: input.stageId,
+      });
+    }
+    const withExtras =
+      this.explicitChildExtras !== undefined
+        ? { ...built.env, ...this.explicitChildExtras }
+        : built.env;
+    const childEnv = overlayStageBindingEnv(
+      withExtras,
+      input.env ?? {},
+      input.bindingKind ?? "unbound",
+    );
+
+    const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,
-      env: { ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" },
+      env: { ...childEnv, [SF_STAGE_WORKER]: "1" },
       stdio: ["pipe", "pipe", "pipe", "ipc"],
+      detached: true,
+      // Explicit: do not inherit Host execArgv; set heap from cgroup budget.
+      execArgv: [`--max-old-space-size=${this.heapMb}`],
     });
 
     const key = activeKey(input.runId, input.stageId);
@@ -217,26 +438,18 @@ export class StageProcessLauncher {
       runId: input.runId,
       stageId: input.stageId,
       startedAt: Date.now(),
+      hostInitiatedKill: false,
     };
     this.active.set(key, tracked);
 
-    if (child.stderr) {
-      let stderrBuffer = "";
-      child.stderr.on("data", (chunk: Buffer | string) => {
-        stderrBuffer += chunk.toString();
-        const lines = stderrBuffer.split("\n");
-        stderrBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          process.stderr.write(`[stage:${input.stageId}] ${line}\n`);
-        }
-      });
-      child.stderr.on("end", () => {
-        if (stderrBuffer.length > 0) {
-          process.stderr.write(`[stage:${input.stageId}] ${stderrBuffer}\n`);
-          stderrBuffer = "";
-        }
-      });
-    }
+    const stageLog = this.logger.child({
+      run_id: input.runId,
+      stage_id: input.stageId,
+      ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
+    });
+    const maxLineBytes = resolveLogMaxLineBytes(this.env);
+    attachStreamLineLogger(child.stdout, stageLog, "stage.stdout", maxLineBytes);
+    attachStreamLineLogger(child.stderr, stageLog, "stage.stderr", maxLineBytes);
 
     return new Promise<StageLaunchResult>((resolve) => {
       let settled = false;
@@ -258,9 +471,11 @@ export class StageProcessLauncher {
         finish(resultFromWorkerMessage(message));
       });
 
-      child.on("exit", (code) => {
+      child.on("exit", (code, signal) => {
         if (settled) return;
-        finish(resultFromExitCode(code));
+        finish(
+          resultFromExitCode(code, signal, tracked.hostInitiatedKill),
+        );
       });
 
       child.on("error", (err) => {

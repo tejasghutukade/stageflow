@@ -14,7 +14,7 @@ Install the suite into a consumer project with `npx skills add tejasghutukade/st
 | Directory | Role |
 |-----------|------|
 | [`stageflow`](../skills/stageflow/SKILL.md) | Router — the one name to remember. Names each job and when to reach it. |
-| `stageflow-setup` | Install Stageflow, a catalog, and provider login |
+| `stageflow-setup` | Install Stageflow, a catalog, and provider login. Optional [Docker Compose local try](docker.md#local-try-compose) for a standing Host (UI + MCP). |
 | `stageflow-session-capture` | Turn a past session or this chat into a pipeline |
 | `stageflow-author` | Author a pipeline from a loop the human can explain |
 | `stageflow-run` | Start, watch, or answer a run. HITL uses the host native question UI when the gate maps; otherwise chat. Submit HITL with MCP `answer_gate` when the host is up, or `sf runs answer` when it is down. A `feedback_loop_decision` uses `decide_feedback_loop` / `sf runs feedback-decide`. |
@@ -82,6 +82,6 @@ Those paths are **install output** copied from the published `skills/` tree — 
 This suite does **not**:
 
 - Publish to a skill marketplace
-- Auto-start a standing MCP host. Setup (`stageflow-setup`) does not start `sf ui` or `sf mcp`. Host-down HITL uses `sf runs waiting` / `answer` / `wait` instead of a disposable MCP process. See [CLI reference — `sf runs`](cli-reference.md#sf-runs), [MCP](mcp.md), and [Quick start](quickstart.md).
+- Auto-start a standing MCP host. Setup (`stageflow-setup`) does not start `sf ui` or `sf mcp`. For a local standing Host (UI + MCP), use Docker Compose local try — see [Docker — Local try (Compose)](docker.md#local-try-compose). Host-down HITL uses `sf runs waiting` / `answer` / `wait` instead of a disposable MCP process. See [CLI reference — `sf runs`](cli-reference.md#sf-runs), [MCP](mcp.md), and [Quick start](quickstart.md).
 - Add new MCP HITL tools
 - Replace `sf skills` / `.pi/skills/` for pipeline stage skill binding

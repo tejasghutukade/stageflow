@@ -21,6 +21,8 @@ import { openStageAttempt } from "../src/runtime/stageAttemptBootstrap.js";
 import { exitForOutcome, runStageWorker } from "../src/runtime/stageWorker.js";
 import {
   outcomeToWorkerResult,
+  PROCESS_EXIT_FORCE_MS,
+  scheduleExitWithDrain,
   STAGE_WORKER_EXIT,
 } from "../src/runtime/stageWorkerProtocol.js";
 import { parseRunStageArgs } from "../src/cli.js";
@@ -73,25 +75,70 @@ async function writeNamedSkillPipeline(
 }
 
 describe("stage worker protocol", () => {
-  it("maps outcomes to exit codes", () => {
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new Error("exit");
-    }) as never);
+  it("maps outcomes to exit codes after IPC flush", async () => {
+    expect(
+      await exitForOutcome({
+        ok: true,
+        envelope: { status: "success", summary: "x", artifacts: [] },
+      }),
+    ).toBe(STAGE_WORKER_EXIT.SUCCEEDED);
 
-    expect(() =>
-      exitForOutcome({ ok: true, envelope: { status: "success", summary: "x", artifacts: [] } }),
-    ).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.SUCCEEDED);
+    expect(await exitForOutcome({ ok: false, reason: "boom" })).toBe(
+      STAGE_WORKER_EXIT.FAILED,
+    );
 
-    exit.mockClear();
-    expect(() => exitForOutcome({ ok: false, reason: "boom" })).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.FAILED);
+    expect(await exitForOutcome({ waiting: true })).toBe(STAGE_WORKER_EXIT.WAITING);
+  });
 
-    exit.mockClear();
-    expect(() => exitForOutcome({ waiting: true })).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.WAITING);
+  it("waits for process.send callback before returning", async () => {
+    let resolveSend: ((err?: Error | null) => void) | undefined;
+    const sendImpl = ((_msg: unknown, cb?: (error: Error | null) => void) => {
+      if (typeof cb === "function") {
+        resolveSend = cb;
+      }
+      return true;
+    }) as typeof process.send;
+    const previousSend = process.send;
+    Object.defineProperty(process, "send", {
+      configurable: true,
+      writable: true,
+      value: sendImpl,
+    });
 
+    let settled: number | undefined;
+    const pending = exitForOutcome({ ok: false, reason: "diag" }).then((code) => {
+      settled = code;
+    });
+    await Promise.resolve();
+    expect(settled).toBeUndefined();
+    expect(resolveSend).toBeTypeOf("function");
+    resolveSend?.(null);
+    await pending;
+    expect(settled).toBe(STAGE_WORKER_EXIT.FAILED);
+
+    if (previousSend === undefined) {
+      delete (process as { send?: typeof process.send }).send;
+    } else {
+      Object.defineProperty(process, "send", {
+        configurable: true,
+        writable: true,
+        value: previousSend,
+      });
+    }
+  });
+
+  it("scheduleExitWithDrain sets exitCode and force-exits after the safety net", () => {
+    vi.useFakeTimers();
+    const prev = process.exitCode;
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    scheduleExitWithDrain(2);
+    expect(process.exitCode).toBe(2);
+    expect(exit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(PROCESS_EXIT_FORCE_MS);
+    expect(exit).toHaveBeenCalledWith(2);
+    process.exitCode = prev;
     exit.mockRestore();
+    vi.useRealTimers();
   });
 
   it("maps outcomes to IPC result messages", () => {

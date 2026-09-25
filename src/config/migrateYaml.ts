@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { runGitSync } from "../git/exec.js";
+import { statusPorcelain } from "../git/operations.js";
 import { loadPipelineOutcome } from "./loadPipeline.js";
 import { afterCompletionForStage, loadStageOutcome } from "./loadStage.js";
 import { withLegacyYamlAllowedAsync } from "./legacyYaml.js";
@@ -141,11 +142,10 @@ type UsesCompile = {
 
 function gitToplevel(cwd: string): string | null {
   try {
-    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    return runGitSync({
       cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+      args: ["rev-parse", "--show-toplevel"],
+    }).stdout.trim();
   } catch {
     return null;
   }
@@ -155,12 +155,7 @@ export function fileDirtyVsHead(absPath: string): boolean {
   const top = gitToplevel(path.dirname(absPath));
   if (top === null) return true;
   try {
-    const status = execFileSync("git", ["status", "--porcelain", "--", absPath], {
-      cwd: top,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return status.trim().length > 0;
+    return statusPorcelain(top, absPath).trim().length > 0;
   } catch {
     return true;
   }

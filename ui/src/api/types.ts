@@ -1,4 +1,10 @@
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type StageLogEvent = {
   event: string;
@@ -33,6 +39,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -175,6 +182,18 @@ export type FeedbackDecisionResult =
     }
   | { ok: false; error: string; status?: number };
 
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
+};
+
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
@@ -185,6 +204,7 @@ export type RunSummary = {
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding?: RunBindingCompact;
   stages: CompactStage[];
   waiting_stage_id?: string;
   waiting_stage_ids?: string[];
@@ -197,6 +217,11 @@ export type RunSummary = {
   failed_reason?: string;
   active_feedback_loop?: FeedbackLoopRecord;
   total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
 export type StageEnvelopeView = {
@@ -267,6 +292,7 @@ export type StageSnapshot = {
     | "pending"
     | "running"
     | "waiting_for_input"
+    | "interrupted"
     | "succeeded"
     | "failed"
     | "skipped";
@@ -325,17 +351,24 @@ export type StageVerificationHistory = {
   };
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding?: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
   feedback_loops: FeedbackLoopHistory[];
+  config_origins?: Array<{
+    name: string;
+    origin: "catalog" | "inline" | "workspace" | "seeded";
+    path?: string;
+  }>;
 };
 
 export type TaskListing = {
   path: string;
   id: string;
   goal: string;
+  project_root?: string;
 };
 
 export type PipelineStageListing = {
@@ -349,6 +382,7 @@ export type PipelineListing = {
   path: string;
   id: string;
   stages: PipelineStageListing[];
+  project_root?: string;
 };
 
 export type ValidStageListing = {
@@ -452,6 +486,16 @@ export type CapacityHealth = {
   activeCount: number;
   maxConcurrent: number;
   slotsAvailable: number;
+  activeStageProcesses?: number;
+  maxActiveStageProcesses?: number | null;
+  disk?: {
+    runs_bytes: number;
+    worktrees_bytes: number;
+    repos_bytes: number;
+    state_db_bytes: number;
+    a2a_artifacts_bytes: number;
+    free_bytes: number;
+  };
 };
 
 export type CredentialSource = "pi_home" | "sf_owned";

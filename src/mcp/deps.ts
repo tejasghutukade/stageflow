@@ -7,6 +7,7 @@ export type McpToolDeps = {
   manager: RunManager;
   store: RunStore;
   cwd: string;
+  agentDir?: string;
   providerAuthContext?: ProviderAuthContext;
   projectRoot?: string;
 };

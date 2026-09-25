@@ -4,8 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
+import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 import {
   buildValidationResult,
+  collectAbsolutePathCandidates,
+  isPathUnderStageflowHome,
   loadPipelineValidated,
   validateCatalog,
   validatePipeline,
@@ -14,6 +17,24 @@ import {
 import * as validateCatalogModule from "../src/config/validateCatalog.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 import { REPO_ROOT, FIXTURES_ROOT, pipelinePath, SAMPLE_TASK, SINGLE_PIPELINE, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE, BROKEN_PIPELINE, CYCLE_PIPELINE } from "./helpers/fixturePaths.js";
+
+const U7_HOME_SENTINEL = "/tmp/sf-u7-home-lint";
+
+async function withStageflowHome<T>(
+  home: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = process.env.STAGEFLOW_HOME;
+  process.env.STAGEFLOW_HOME = home;
+  resetGlobalStageflowHomeForTests();
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.STAGEFLOW_HOME;
+    else process.env.STAGEFLOW_HOME = prev;
+    resetGlobalStageflowHomeForTests();
+  }
+}
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const manifestCatalog = path.join(fixtures, "manifest-catalog");
@@ -685,5 +706,83 @@ describe("loadPipelineValidated — inline pipeline objects", () => {
     clearFindProjectRootCacheForTests();
     const result = await loadPipelineValidated(SINGLE_PIPELINE, { cwd: REPO_ROOT });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("validateCatalog STAGEFLOW_HOME absolute path lint (§2.6)", () => {
+  it("collectAbsolutePathCandidates finds POSIX absolute tokens", () => {
+    expect(
+      collectAbsolutePathCandidates(
+        'edit /tmp/sf-u7-home-lint/worktrees/r1/a.ts and /usr/bin/git.',
+      ),
+    ).toEqual(["/tmp/sf-u7-home-lint/worktrees/r1/a.ts", "/usr/bin/git"]);
+  });
+
+  it("isPathUnderStageflowHome requires home prefix with separator", () => {
+    expect(isPathUnderStageflowHome("/tmp/sf-u7-home-lint", U7_HOME_SENTINEL)).toBe(
+      true,
+    );
+    expect(
+      isPathUnderStageflowHome("/tmp/sf-u7-home-lint/worktrees/r1", U7_HOME_SENTINEL),
+    ).toBe(true);
+    expect(isPathUnderStageflowHome("/tmp/sf-u7-home-lint-evil", U7_HOME_SENTINEL)).toBe(
+      false,
+    );
+    expect(isPathUnderStageflowHome("/usr/bin/git", U7_HOME_SENTINEL)).toBe(false);
+  });
+
+  it("flags absolute STAGEFLOW_HOME path in system_prompt", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-absolute-prompt"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(result.ok).toBe(false);
+      const hit = result.findings.find(
+        (f) => f.code === "catalog.stageflow_home_absolute_path",
+      );
+      expect(hit).toBeDefined();
+      expect(hit?.message).toContain("STAGEFLOW_CHECKOUT");
+      expect(hit?.stageId).toBe("home-path-prompt");
+    });
+  });
+
+  it("flags absolute STAGEFLOW_HOME path in verify command run", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-absolute-verify"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.findings.some(
+          (f) =>
+            f.code === "catalog.stageflow_home_absolute_path" &&
+            f.message.includes("verify command"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("passes when prompts and verify use STAGEFLOW_CHECKOUT only", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-checkout-env"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(
+        result.findings.filter((f) => f.code === "catalog.stageflow_home_absolute_path"),
+      ).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  it("does not ban absolute paths outside STAGEFLOW_HOME", async () => {
+    await withStageflowHome(U7_HOME_SENTINEL, async () => {
+      const result = await validatePipeline(pipelinePath("home-path-other-absolute"), {
+        cwd: FIXTURES_ROOT,
+      });
+      expect(
+        result.findings.filter((f) => f.code === "catalog.stageflow_home_absolute_path"),
+      ).toEqual([]);
+      expect(result.ok).toBe(true);
+    });
   });
 });

@@ -73,6 +73,7 @@ const runStageDataPart = z
     operation: z.literal("run_stage"),
     stage: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
     pipeline: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
+    project_root: z.string().optional(),
     task_path: z.string().optional(),
     task: taskFileSchema.optional(),
     envelope_ref: z.union([envelopeRefSchema, z.array(envelopeRefSchema).min(1)]).optional(),
@@ -123,6 +124,7 @@ export type RunStageCommand = {
   contextId?: string;
   stage?: string | Record<string, unknown>;
   pipeline?: string | Record<string, unknown>;
+  project_root?: string;
   task_path?: string;
   task?: TaskFileInput;
   envelope_ref?: EnvelopeRefInput | EnvelopeRefInput[];

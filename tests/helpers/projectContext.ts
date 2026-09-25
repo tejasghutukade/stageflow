@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resetGlobalStageflowHomeForTests } from "../../src/project/globalHome.js";
 
 export async function withIsolatedHome<T>(
   fn: (home: string) => Promise<T>,
@@ -8,8 +9,11 @@ export async function withIsolatedHome<T>(
   const home = await mkdtemp(path.join(tmpdir(), "sf-home-"));
   const prevHome = process.env.HOME;
   const prevUserProfile = process.env.USERPROFILE;
+  const prevStageflowHome = process.env.STAGEFLOW_HOME;
   process.env.HOME = home;
   process.env.USERPROFILE = home;
+  delete process.env.STAGEFLOW_HOME;
+  resetGlobalStageflowHomeForTests();
   try {
     return await fn(home);
   } finally {
@@ -23,6 +27,12 @@ export async function withIsolatedHome<T>(
     } else {
       process.env.USERPROFILE = prevUserProfile;
     }
+    if (prevStageflowHome === undefined) {
+      delete process.env.STAGEFLOW_HOME;
+    } else {
+      process.env.STAGEFLOW_HOME = prevStageflowHome;
+    }
+    resetGlobalStageflowHomeForTests();
     await rm(home, { recursive: true, force: true });
   }
 }

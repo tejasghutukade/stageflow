@@ -2,11 +2,12 @@
 name: stageflow-setup
 description: >-
   Installs Stageflow, scaffolds a starter catalog with sf init, then hard-stops
-  for provider login. Use when this project has no Stageflow install, sf is not
-  found, there is no catalog, first time running Stageflow here, the user asks
-  to set up Stageflow, or a provider is not logged in. Install, scaffold, and
-  provider-gate only — does not author pipelines or stages, capture a session,
-  or manage an MCP host.
+  for provider login. Optional Docker Compose path for a standing Host (UI+MCP).
+  Use when this project has no Stageflow install, sf is not found, there is no
+  catalog, first time running Stageflow here, the user asks to set up Stageflow,
+  a provider is not logged in, or the operator wants Compose local try. Install,
+  scaffold, and provider-gate only — does not author pipelines or stages, capture
+  a session, or auto-start an MCP host.
 disable-model-invocation: true
 ---
 
@@ -16,7 +17,7 @@ Install the CLI, scaffold a catalog, then hard-stop until a provider is configur
 
 Author pipelines and stages with `stageflow-author`. Capture a chat or past session with `stageflow-session-capture`. Start, watch, or answer a run with `stageflow-run`. Codify a repeating pattern with `stageflow-delegate`.
 
-This job does not author catalog YAML, capture a session, or manage an MCP host. Its surface is the `sf` CLI. Talking jobs cite [`../stageflow/references/control-surface.md`](../stageflow/references/control-surface.md) for MCP-vs-CLI; do not run the host probe in that file from this job.
+This job does not author catalog YAML, capture a session, or auto-start an MCP host. Its default surface is the `sf` CLI; Compose local try (below) is the optional standing-Host path. Talking jobs cite [`../stageflow/references/control-surface.md`](../stageflow/references/control-surface.md) for MCP-vs-CLI; do not run the host probe in that file from this job.
 
 ## Detect-before-mutate
 
@@ -68,9 +69,14 @@ Skip `$SF init` when probe 2 passed.
 
 Run this phase only after Install and Scaffold have succeeded or were already satisfied. Never print `ready to author` while no provider is `configured`.
 
+**Credential surface (do not mix):**
+
+- **Local CLI** (this job's default path): `providers login --api-key-env` / bare `<ID>_API_KEY` (e.g. `ANTHROPIC_API_KEY`). See Stageflow docs: Providers.
+- **Host / Compose boot:** `STAGEFLOW_PROVIDER_<ID>_API_KEY` or `STAGEFLOW_PROVIDER_<ID>_API_KEY_FILE`. Bare `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` alone does **not** configure Host boot. See Stageflow docs: Providers — Non-interactive Host boot credentials; Docker and self-hosting — Local try.
+
 1. Run `$SF providers status`. **Done when** any row is `configured` — go to Completion. If a non-interactive login just succeeded, name that provider id.
 
-2. If none are configured, run `$SF providers list`. For each id (first column), test whether the environment has `<ID>_API_KEY` with `ID` uppercased (`anthropic` → `ANTHROPIC_API_KEY`). Test presence only — do not read or print the value.
+2. If none are configured, run `$SF providers list`. For each id (first column), test whether the environment has `<ID>_API_KEY` with `ID` uppercased (`anthropic` → `ANTHROPIC_API_KEY`). Test presence only — do not read or print the value. Do not treat `STAGEFLOW_PROVIDER_*` as satisfying this local CLI gate.
 
 3. On the first match, run:
 
@@ -90,7 +96,7 @@ Run this phase only after Install and Scaffold have succeeded or were already sa
    $SF providers login <id> --type oauth
    ```
 
-   Point at `docs/providers.md` for `pi_home` vs `sf_owned`. Leave the storage mode to the human.
+   Point at Stageflow docs: Providers (`pi_home` vs `sf_owned`). Leave the storage mode to the human. If the operator will use Compose instead, point them at the Docker Compose section below and `STAGEFLOW_PROVIDER_<ID>_API_KEY(_FILE)`.
 
 ## Completion
 
@@ -108,3 +114,29 @@ If this invocation used the `npx` fallback, add a following line:
 `CLI: npx stageflow (EACCES on npm i -g stageflow; this session only — a later invocation will re-check the global install)`
 
 A later job calls this skill as preflight. It does not re-implement the provider gate.
+
+## Optional: Docker Compose (standing Host)
+
+This job does **not** auto-start `sf ui` or `sf mcp`. Compose local try is the path to a standing Host (operator console **and** MCP on port **3847**). Keep the npm / `sf init` / local provider path above for CLI authoring; use Compose when the operator wants a container Host.
+
+Do not invent compose flags or env names. See Stageflow docs: Docker and self-hosting — Local try (checkout: `docs/docker.md`; also `.env.example`).
+
+1. From a Stageflow checkout (or image + compose that matches shipped contracts), copy `.env.example` → `.env`. Do not commit `.env`.
+
+2. Set `STAGEFLOW_CONTROL_TOKEN` to ≥32 characters, no whitespace (e.g. `openssl rand -hex 32`). Required when the image binds non-loopback.
+
+3. Set Host boot providers as `STAGEFLOW_PROVIDER_<ID>_API_KEY` or `_FILE` (e.g. `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY`). Not bare `OPENROUTER_API_KEY` alone.
+
+4. Optional: `GITHUB_TOKEN` (or `GH_TOKEN`) for Host clone/fetch askpass — needed even for public repos.
+
+5. **Shell env overrides Compose `.env`.** Empty exported `GITHUB_TOKEN` / `GH_TOKEN` blanks the container value. Prefer:
+
+   ```bash
+   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
+   ```
+
+6. Wait for live: `curl -fsS http://127.0.0.1:3847/livez` → `{"ok":true,"status":"live",…}`.
+
+7. Open `http://127.0.0.1:3847` and paste the same control token under **Settings** (drive bearer for API/MCP).
+
+After Compose is up, talking jobs use MCP with `Authorization: Bearer <drive-token>` — see [`../stageflow/references/control-surface.md`](../stageflow/references/control-surface.md). `/api/health` is ungated; a health 200 is not authenticated MCP.

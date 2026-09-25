@@ -89,6 +89,7 @@ async function writeHostCatalog(
 
 async function withInspectServer(root: string) {
   const store = createRunStore({ rootDir: root });
+  await store.ensureProject(catalogRoot);
   const agent = scriptedFakeAgent([]);
   const openStage = vi.spyOn(agent, "openStage");
   const started = await startUiServer({
@@ -140,10 +141,12 @@ describe("MCP catalog inspect", () => {
       const catalog = await browseCatalog(catalogRoot);
       expect(http.status).toBe(200);
       expect(mcp.isError).toBe(false);
-      expect(mcp.payload).toEqual({ models: catalog.models });
       expect(mcp.payload).toEqual(http.body);
+      expect(mcp.payload.models).toEqual(expect.arrayContaining(catalog.models));
       expect(mcp.payload.models).toContain("cursor/auto");
       expect(mcp.payload.models).toContain("anthropic/claude-sonnet-4-5");
+      expect(Array.isArray(mcp.payload.entries)).toBe(true);
+      expect(Array.isArray(mcp.payload.root_errors)).toBe(true);
     } finally {
       await closeServer(server);
     }

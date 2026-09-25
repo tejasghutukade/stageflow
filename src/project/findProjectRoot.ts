@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { runGitSync } from "../git/exec.js";
 
 const cache = new Map<string, string | null>();
 
@@ -21,10 +21,9 @@ export function findProjectRoot(startDir: string): string | null {
   let result: string | null = null;
 
   try {
-    const stdout = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    const { stdout } = runGitSync({
       cwd: normalized,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
+      args: ["rev-parse", "--show-toplevel"],
     });
     const trimmed = stdout.trim();
     if (trimmed.length > 0) {

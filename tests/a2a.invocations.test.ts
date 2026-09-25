@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cp, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { parse, stringify } from "yaml";
 import { createA2aInvocations } from "../src/a2a/service.js";
 import { loadPublicationRegistry } from "../src/a2a/registry.js";
 import { RateLimiter } from "../src/a2a/limits.js";
@@ -93,5 +94,47 @@ describe("A2aInvocations (direct interface)", () => {
     await expect(invocations.send(caller, invoke("does_not_exist", {}, "m-1"))).rejects.toMatchObject({ category: "unknown-capability" });
     await expect(invocations.send(caller, invoke("supplier_assessment", {}, "m-2"))).rejects.toMatchObject({ category: "invalid-input" });
     expect(manager.getActiveCount()).toBe(0);
+  });
+
+  it("forwards publication repository/ref onto the inline start task (U7)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-a2a-u7-"));
+    roots.push(root);
+    await cp(path.resolve("tests/fixtures/a2a"), root, { recursive: true });
+    const configPath = path.join(root, "a2a.yaml");
+    const config = parse(await readFile(configPath, "utf8"));
+    config.publications[0].repository = "acme/api";
+    config.publications[0].ref = "main";
+    await writeFile(configPath, stringify(config));
+
+    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
+    const manager = new RunManager({ agent: supplierAgent(), store, cwd: root });
+    const spy = vi.spyOn(manager, "startRunOnce").mockResolvedValue({
+      ok: false,
+      reason: "stopped for assertion",
+      status: 500,
+    });
+    const registry = await loadPublicationRegistry(configPath, env);
+    const invocations = createA2aInvocations(
+      registry,
+      manager,
+      store,
+      root,
+      connection,
+      new RateLimiter(),
+    );
+    await expect(
+      invocations.send(caller, invoke("supplier_assessment", { supplier: "Northstar" }, "m-u7")),
+    ).rejects.toBeTruthy();
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: expect.objectContaining({
+          repository: "acme/api",
+          ref: "main",
+          goal: "Produce an evidence-backed supplier assessment.",
+        }),
+      }),
+      expect.any(Object),
+    );
+    spy.mockRestore();
   });
 });

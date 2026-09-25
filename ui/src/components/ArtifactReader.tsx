@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { fetchRunArtifact } from "../api";
+import { authorizationHeaders } from "../api/controlToken";
 
 export type ArtifactReaderProps = {
   runId: string;
@@ -53,6 +54,10 @@ function sniffLanguage(path: string): string {
   return "plaintext";
 }
 
+function artifactUrl(runId: string, path: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
+}
+
 export function ArtifactReader({
   runId,
   path,
@@ -66,6 +71,7 @@ export function ArtifactReader({
     markdown || image ? "rendered" : "raw",
   );
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
 
   useEffect(() => {
     setMode(isMarkdown(path) || isImageArtifactPath(path) ? "rendered" : "raw");
@@ -73,11 +79,47 @@ export function ArtifactReader({
 
   useEffect(() => {
     if (isImageArtifactPath(path)) {
-      setLoad({ status: "ready", content: "" });
-      return;
+      let cancelled = false;
+      let objectUrl: string | null = null;
+      setLoad({ status: "loading" });
+      setImageSrc(null);
+      void fetch(artifactUrl(runId, path), {
+        headers: { ...authorizationHeaders() },
+      })
+        .then(async (res) => {
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            throw new Error(body.error ?? `Request failed (${res.status})`);
+          }
+          return res.blob();
+        })
+        .then((blob) => {
+          const url = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          objectUrl = url;
+          setImageSrc(url);
+          setLoad({ status: "ready", content: "" });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setLoad({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        });
+      return () => {
+        cancelled = true;
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+      };
     }
     let cancelled = false;
     setLoad({ status: "loading" });
+    setImageSrc(null);
     void fetchRunArtifact(runId, path)
       .then((content) => {
         if (cancelled) return;
@@ -146,15 +188,17 @@ export function ArtifactReader({
         {load.status === "ready" ? (
           <div className="page">
             {image ? (
-              <img
-                src={`/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`}
-                alt={fileName(path)}
-                style={{
-                  maxWidth: "100%",
-                  height: "auto",
-                  display: "block",
-                }}
-              />
+              imageSrc ? (
+                <img
+                  src={imageSrc}
+                  alt={fileName(path)}
+                  style={{
+                    maxWidth: "100%",
+                    height: "auto",
+                    display: "block",
+                  }}
+                />
+              ) : null
             ) : mode === "rendered" && markdown ? (
               load.content.trim().length === 0 ? (
                 <p className="muted">Empty file.</p>

@@ -3,6 +3,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createLogger } from "../src/logging/logger.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 
 const mockWorker = fileURLToPath(
@@ -69,10 +70,44 @@ describe("StageProcessLauncher", () => {
     expect(launcher.activeCount()).toBe(0);
   });
 
-  it("prefixes stderr with stage id", async () => {
-    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
+  it("cancelRun escalates to SIGKILL when worker ignores SIGTERM", async () => {
+    if (process.platform === "win32") return;
+
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-escalate-"));
     const launcher = new StageProcessLauncher({
       cliEntry: mockWorker,
+      env: {
+        MOCK_IGNORE_SIGTERM: "1",
+        MOCK_DELAY: "60000",
+      },
+    });
+
+    const launchPromise = launcher.launch({
+      runId: "run-escalate",
+      stageId: "wedged",
+      rootDir,
+    });
+
+    await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
+      timeout: 2000,
+    });
+
+    await expect(launcher.cancelRun("run-escalate", 100)).resolves.toBeUndefined();
+    await launchPromise;
+    expect(launcher.activeCount()).toBe(0);
+  });
+
+  it("emits stderr as structured stage.stderr events", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
+    const lines: string[] = [];
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      logger: createLogger({
+        format: "json",
+        write: (line) => {
+          lines.push(line);
+        },
+      }),
       env: {
         MOCK_STDERR: "worker-error",
         MOCK_DELAY: "10",
@@ -80,19 +115,18 @@ describe("StageProcessLauncher", () => {
       },
     });
 
-    const stderrSpy = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true);
-
     await launcher.launch({ runId: "r1", stageId: "stderr-stage", rootDir });
 
-    expect(stderrSpy).toHaveBeenCalled();
-    const combined = stderrSpy.mock.calls
-      .map((call) => String(call[0]))
-      .join("");
-    expect(combined).toContain("[stage:stderr-stage] worker-error");
-
-    stderrSpy.mockRestore();
+    const stderr = lines
+      .map((line) => JSON.parse(line))
+      .filter((r) => r.event === "stage.stderr");
+    expect(stderr).toHaveLength(1);
+    expect(stderr[0]).toMatchObject({
+      event: "stage.stderr",
+      msg: "worker-error",
+      run_id: "r1",
+      stage_id: "stderr-stage",
+    });
   });
 
   it("holds two clone instance ids as distinct activeKeys", async () => {
@@ -128,5 +162,80 @@ describe("StageProcessLauncher", () => {
 
     await Promise.all([p1, p2]);
     expect(launcher.activeCount()).toBe(0);
+  });
+
+  it("releases capacity when fork throws before child exit cleanup", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-fork-throw-"));
+    const childProcess = await import("node:child_process");
+    let shouldThrow = true;
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 1,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "50" },
+      forkFn: ((...args: Parameters<typeof childProcess.fork>) => {
+        if (shouldThrow) {
+          throw new Error("fork failed");
+        }
+        return childProcess.fork(...args);
+      }) as typeof childProcess.fork,
+    });
+
+    await expect(
+      launcher.launch({ runId: "r-fork", stageId: "boom", rootDir }),
+    ).rejects.toThrow("fork failed");
+
+    shouldThrow = false;
+    const recovered = await launcher.launch({
+      runId: "r-fork",
+      stageId: "ok",
+      rootDir,
+    });
+    expect(recovered).toEqual({ type: "succeeded" });
+    expect(launcher.activeCount()).toBe(0);
+  });
+
+  it("cancelRun drains queued waiters so they do not fork", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-cancel-queue-"));
+    const launcher = new StageProcessLauncher({
+      maxActiveStageProcesses: 1,
+      cliEntry: mockWorker,
+      env: { MOCK_DELAY: "400" },
+    });
+
+    const holding = launcher.launch({
+      runId: "run-hold",
+      stageId: "holder",
+      rootDir,
+    });
+    await vi.waitFor(() => expect(launcher.activeCount()).toBe(1), {
+      timeout: 2000,
+    });
+
+    const queued = launcher.launch({
+      runId: "run-queued",
+      stageId: "queued",
+      rootDir,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      launcher.getActiveStageProcesses().some((e) => e.stageId === "queued"),
+    ).toBe(false);
+
+    await launcher.cancelRun("run-queued", 50);
+    const queuedResult = await queued;
+    expect(queuedResult).toEqual({ type: "failed", reason: "cancelled" });
+    expect(
+      launcher.getActiveStageProcesses().some((e) => e.stageId === "queued"),
+    ).toBe(false);
+
+    await holding;
+    expect(launcher.activeCount()).toBe(0);
+
+    const after = await launcher.launch({
+      runId: "run-after",
+      stageId: "after",
+      rootDir,
+    });
+    expect(after).toEqual({ type: "succeeded" });
   });
 });

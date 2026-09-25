@@ -2,57 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot } from "../runstore/paths.js";
 import { MESSAGE_TOMBSTONE_RETENTION_MS, TERMINAL_RETENTION_MS } from "./limits.js";
 
-const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS a2a_contexts (
-  context_id TEXT PRIMARY KEY,
-  caller_id TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS a2a_tasks (
-  task_id TEXT PRIMARY KEY,
-  context_id TEXT NOT NULL,
-  caller_id TEXT NOT NULL,
-  publication_id TEXT NOT NULL,
-  publication_revision TEXT NOT NULL,
-  submission_key TEXT NOT NULL UNIQUE,
-  run_id TEXT,
-  state TEXT NOT NULL,
-  result_json TEXT,
-  kind TEXT NOT NULL DEFAULT 'invoke',
-  result_stage_id TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS a2a_tasks_context ON a2a_tasks(context_id);
-CREATE INDEX IF NOT EXISTS a2a_tasks_caller ON a2a_tasks(caller_id);
-
-CREATE TABLE IF NOT EXISTS a2a_messages (
-  caller_id TEXT NOT NULL,
-  message_id TEXT NOT NULL,
-  task_id TEXT NOT NULL,
-  operation TEXT NOT NULL,
-  request_hash TEXT NOT NULL,
-  outcome_json TEXT,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (caller_id, message_id)
-);
-
-CREATE TABLE IF NOT EXISTS a2a_artifacts (
-  artifact_id TEXT PRIMARY KEY,
-  task_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  media_type TEXT,
-  size INTEGER NOT NULL,
-  content_path TEXT NOT NULL,
-  hash TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS a2a_artifacts_task ON a2a_artifacts(task_id);
-`;
 
 export type TaskState = "submitted" | "working" | "input-required" | "completed" | "failed";
 
@@ -113,25 +65,15 @@ export class A2aStore {
   private readonly ownsConnection: boolean;
 
   /**
-   * `connection`, when passed, is the SqliteRunStore's own connection to the same `state.db` file
-   * (see `createRunStoreWithConnection`) so the two stores share one transaction domain. Falls
-   * back to opening its own connection when no shared one is available (e.g. a caller-supplied
-   * non-SQLite `RunStore` in bootstrap).
+   * Uses the SqliteRunStore connection to the same `state.db` file so the two stores share one
+   * transaction domain. The Host must open the run store in migrate mode before constructing
+   * A2aStore. Additive `kind` / `result_stage_id` columns for run_stage are applied here.
    */
-  constructor(rootDir: string, connection?: Database.Database) {
-    const storeRoot = storeRootFor(rootDir);
-    if (connection) {
-      this.db = connection;
-      this.ownsConnection = false;
-    } else {
-      this.db = new Database(path.join(storeRoot, "state.db"));
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("busy_timeout = 5000");
-      this.ownsConnection = true;
-    }
-    this.db.exec(SCHEMA_SQL);
+  constructor(rootDir: string, connection: Database.Database) {
+    this.db = connection;
+    this.ownsConnection = false;
     this.migrateAddStandaloneColumns();
-    this.artifactsRoot = path.join(storeRoot, "a2a-artifacts");
+    this.artifactsRoot = path.join(resolveStoreRoot(rootDir), "a2a-artifacts");
   }
 
   /**
@@ -353,5 +295,22 @@ export class A2aStore {
     }
     const removedMessages = this.db.prepare("DELETE FROM a2a_messages WHERE created_at < ?").run(messageCutoff).changes;
     return { removedTasks: expiredTasks.length, removedMessages };
+  }
+  /** Deletes every A2A task (and frozen artifact files) bound to a Stageflow run. */
+  async deleteByRunId(runId: string): Promise<{ removedTasks: number }> {
+    const tasks = this.db
+      .prepare("SELECT task_id FROM a2a_tasks WHERE run_id = ?")
+      .all(runId) as Array<{ task_id: string }>;
+    for (const { task_id: taskId } of tasks) {
+      for (const artifact of this.listArtifacts(taskId)) {
+        await unlink(artifact.content_path).catch(() => undefined);
+      }
+      this.db.transaction(() => {
+        this.db.prepare("DELETE FROM a2a_artifacts WHERE task_id = ?").run(taskId);
+        this.db.prepare("DELETE FROM a2a_messages WHERE task_id = ?").run(taskId);
+        this.db.prepare("DELETE FROM a2a_tasks WHERE task_id = ?").run(taskId);
+      })();
+    }
+    return { removedTasks: tasks.length };
   }
 }

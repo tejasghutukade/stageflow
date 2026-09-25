@@ -1,10 +1,15 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { projectRun } from "../projection/projectRun.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStore } from "../runstore/createStore.js";
+import {
+  createRunStoreAfterHostEnsure,
+} from "../runstore/createStore.js";
+import {
+  ensureGlobalService,
+} from "../server/ensureGlobalService.js";
 import type { RunStatus } from "../runstore/port.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
+import { buildRunExportPayload } from "../runstore/exportRunPayload.js";
+import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const EXPORT_RUN_USAGE = `Usage:
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]`;
@@ -90,26 +95,20 @@ function resolveRunIdFromFile(fromPath: string, cwd: string): string {
   return runId;
 }
 
-function resolveSafeOutPath(outPath: string, cwd: string): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new Error("path must not contain .. segments");
-  }
-  const resolved = path.resolve(cwd, outPath);
-  const cwdResolved = path.resolve(cwd);
-  if (!isInsideDir(resolved, cwdResolved)) {
-    throw new Error(
-      "output path must resolve under the current working directory",
-    );
-  }
-  return resolved;
-}
+const EXPORTABLE_STATUSES = new Set<RunStatus>([
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "queued",
+  "created",
+]);
 
-function assertRunComplete(status: RunStatus, runId: string): void {
-  if (status === "succeeded" || status === "failed") {
+function assertRunExportable(status: RunStatus, runId: string): void {
+  if (EXPORTABLE_STATUSES.has(status)) {
     return;
   }
-  throw new Error(`run is not complete: ${runId} (status: ${status})`);
+  throw new Error(`run cannot be exported: ${runId} (status: ${status})`);
 }
 
 export async function runExportRunCommand(
@@ -155,12 +154,20 @@ export async function runExportRunCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: globalStageflowHome() });
+  const opened = await createRunStoreAfterHostEnsure(
+    { rootDir: globalStageflowHome() },
+    () => ensureGlobalService(),
+  );
+  if (!opened.ok) {
+    out.error(opened.message);
+    return 1;
+  }
+  const store = opened.store;
 
   try {
     const detail = await store.readRun(runId);
-    assertRunComplete(detail.status, runId);
-    const projection = projectRun(detail);
+    assertRunExportable(detail.status, runId);
+    const projection = buildRunExportPayload(detail);
     const json = JSON.stringify(projection, null, 2);
 
     if (parsed.outPath !== undefined) {

@@ -5,14 +5,20 @@ import type { PipelineRunResult } from "../runtime/pipelineRunner.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import type {
   AbandonStageResult,
+  CancelRunResult,
   DecideFeedbackLoopResult,
+  DeleteRunResult,
+  GcRunsResult,
   StartRunResult,
   StopManualRecoveryResult,
 } from "../runtime/runManager.js";
+import type { RetentionSweepReport } from "../runtime/runRetentionSweep.js";
 import type { DeliverAnswerResult } from "../runtime/stageHitl.js";
 import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
-import { runWorkspaceDir, storeRootFor } from "../runstore/paths.js";
+import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
+import { clientAuthorizationHeaders } from "../server/controlToken.js";
+import type { TaskFile } from "../types/task.js";
 
 async function postJson(
   base: string,
@@ -21,7 +27,10 @@ async function postJson(
 ): Promise<{ status: number; body: unknown }> {
   const res = await fetch(`${base}${urlPath}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...clientAuthorizationHeaders("POST"),
+    },
     body: JSON.stringify(body ?? {}),
   });
   return { status: res.status, body: await parseJsonBody(res) };
@@ -31,7 +40,9 @@ async function getJson(
   base: string,
   urlPath: string,
 ): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(`${base}${urlPath}`);
+  const res = await fetch(`${base}${urlPath}`, {
+    headers: { ...clientAuthorizationHeaders("GET") },
+  });
   return { status: res.status, body: await parseJsonBody(res) };
 }
 
@@ -57,7 +68,7 @@ function enc(value: string): string {
 }
 
 export function computeRunDir(runId: string): string {
-  return runWorkspaceDir(storeRootFor(globalStageflowHome()), runId);
+  return runWorkspaceDir(resolveStoreRoot(globalStageflowHome()), runId);
 }
 
 export async function httpReadRun(base: string, runId: string): Promise<RunDetail> {
@@ -77,6 +88,7 @@ function isRunTerminal(detail: RunDetail): boolean {
   return (
     detail.status === "succeeded" ||
     detail.status === "failed" ||
+    detail.status === "cancelled" ||
     (detail.status === "running" && detail.waiting_stage_id !== undefined)
   );
 }
@@ -104,15 +116,21 @@ export function runDetailToPipelineRunResult(detail: RunDetail): PipelineRunResu
       ? "succeeded"
       : detail.status === "failed"
         ? "failed"
-        : "waiting";
+        : detail.status === "cancelled"
+          ? "cancelled"
+          : "waiting";
+  const reason =
+    outcome === "cancelled"
+      ? (detail.cancel_reason ?? detail.failed_reason)
+      : outcome === "failed"
+        ? detail.failed_reason
+        : undefined;
   return {
     ok: outcome === "succeeded",
     outcome,
     runId: detail.run_id,
     runDir: computeRunDir(detail.run_id),
-    ...(outcome === "failed" && detail.failed_reason !== undefined
-      ? { reason: detail.failed_reason }
-      : {}),
+    ...(reason !== undefined ? { reason } : {}),
   };
 }
 
@@ -134,7 +152,8 @@ function toStartFailure(
 
 export type HttpStartRunInput = {
   pipeline: string;
-  task: string;
+  task: string | TaskFile;
+  project_root?: string;
   checkoutOverride?: string;
   skipGates?: boolean;
   gitSha?: string;
@@ -159,16 +178,57 @@ export async function httpStartRun(
     if (validation !== undefined) throw new PipelineValidationError(validation);
   }
   if (status !== 202) return toStartFailure(status, body);
-  const runId = (body as { runId: string }).runId;
+  const parsed = body as {
+    runId: string;
+    queued?: boolean;
+    queuePosition?: number;
+  };
+  const runId = parsed.runId;
   return {
     ok: true,
     runId,
+    ...(parsed.queued === true
+      ? { queued: true, queuePosition: parsed.queuePosition }
+      : {}),
     done: pollRunUntilTerminal(base, runId).then(runDetailToPipelineRunResult),
   };
 }
 
-export async function httpRerun(base: string, runId: string): Promise<StartRunResult> {
-  const { status, body } = await postJson(base, `/api/runs/${enc(runId)}/rerun`, {});
+export type HttpEnsureProjectResult =
+  | { ok: true; project_root: string }
+  | Extract<StartRunResult, { ok: false }>;
+
+export async function httpEnsureProject(
+  base: string,
+  projectRoot: string,
+): Promise<HttpEnsureProjectResult> {
+  const { status, body } = await postJson(base, "/api/projects", {
+    project_root: projectRoot,
+  });
+  if (status === 200) {
+    const parsed = body as { project_root?: unknown };
+    if (typeof parsed.project_root === "string" && parsed.project_root.length > 0) {
+      return { ok: true, project_root: parsed.project_root };
+    }
+    return {
+      ok: false,
+      reason: "ensure_project response missing project_root",
+      status,
+    };
+  }
+  return toStartFailure(status, body);
+}
+
+export async function httpRerun(
+  base: string,
+  runId: string,
+  options?: { pinned?: boolean },
+): Promise<StartRunResult> {
+  const { status, body } = await postJson(
+    base,
+    `/api/runs/${enc(runId)}/rerun`,
+    options?.pinned !== undefined ? { pinned: options.pinned } : {},
+  );
   if (status !== 202) return toStartFailure(status, body);
   const newRunId = (body as { runId: string }).runId;
   return {
@@ -226,7 +286,16 @@ export async function httpRetryStageUntilStop(
     {},
   );
   if (status !== 202) {
-    return { ok: false, reason: extractError(body, status), status };
+    const code =
+      body && typeof body === "object" && typeof (body as { code?: unknown }).code === "string"
+        ? (body as { code: string }).code
+        : undefined;
+    return {
+      ok: false,
+      reason: extractError(body, status),
+      status,
+      ...(code !== undefined ? { code } : {}),
+    };
   }
   const detail = await pollRunUntilTerminal(base, runId);
   return { ok: true, pipeline: runDetailToPipelineRunResult(detail) };
@@ -294,6 +363,64 @@ export async function httpAbandonStage(
   if (status === 202) {
     const parsed = body as { runId: string; stageId: string };
     return { ok: true, runId: parsed.runId, stageId: parsed.stageId };
+  }
+  return { ok: false, reason: extractError(body, status), status };
+}
+
+export async function httpCancelRun(
+  base: string,
+  runId: string,
+  reason: string,
+): Promise<CancelRunResult> {
+  const { status, body } = await postJson(
+    base,
+    `/api/runs/${enc(runId)}/cancel`,
+    { reason },
+  );
+  if (status === 202) {
+    const parsed = body as { runId: string };
+    return { ok: true, runId: parsed.runId };
+  }
+  return { ok: false, reason: extractError(body, status), status };
+}
+
+export async function httpDeleteRun(
+  base: string,
+  runId: string,
+  options?: { force?: boolean },
+): Promise<DeleteRunResult> {
+  const forceQs = options?.force ? "?force=true" : "";
+  const res = await fetch(`${base}/api/runs/${enc(runId)}${forceQs}`, {
+    method: "DELETE",
+    headers: { ...clientAuthorizationHeaders("DELETE") },
+  });
+  const body = await parseJsonBody(res);
+  if (res.status === 200) {
+    const parsed = body as { runId: string };
+    return { ok: true, runId: parsed.runId };
+  }
+  return {
+    ok: false,
+    reason: extractError(body, res.status),
+    status: res.status,
+  };
+}
+
+export async function httpGcRuns(
+  base: string,
+  options?: { execute?: boolean },
+): Promise<GcRunsResult> {
+  const { status, body } = await postJson(base, "/api/runs/gc", {
+    execute: options?.execute === true,
+  });
+  if (status === 200) {
+    const parsed = body as RetentionSweepReport;
+    return {
+      ok: true,
+      slimmed: parsed.slimmed ?? [],
+      purged: parsed.purged ?? [],
+      bareCachesEvicted: parsed.bareCachesEvicted ?? [],
+    };
   }
   return { ok: false, reason: extractError(body, status), status };
 }

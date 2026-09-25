@@ -1,6 +1,12 @@
 import type { ValidationFindingCode } from "./validateCatalog.js";
 
-export type TaskLoadCode = "task.invalid_shape" | "task.load_error";
+export type TaskLoadCode =
+  | "task.invalid_shape"
+  | "task.load_error"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid";
 
 export type LoadIssue =
   | {

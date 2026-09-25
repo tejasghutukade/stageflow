@@ -1,13 +1,24 @@
 import path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/server";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
-import type { AbandonStageResult } from "../runtime/runManager.js";
+import type {
+  AbandonStageResult,
+  CancelRunResult,
+  DeleteRunResult,
+  GcRunsResult,
+} from "../runtime/runManager.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
   mapStoreLookupError,
 } from "../server/operatorResults.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+} from "../server/requestAuthContext.js";
 import { attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { McpToolDeps } from "./deps.js";
@@ -15,6 +26,8 @@ import { readStreamLogTail } from "./tailStreamLog.js";
 import { textResult } from "./toolResults.js";
 import { projectWaitingGates } from "./waitingGates.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
 
 export function registerControlTools(server: McpServer, deps: McpToolDeps): void {
   const { manager, store, cwd } = deps;
@@ -76,15 +89,36 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         parsed = parseAskOperatorAnswer(answer);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "answer_gate",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult({ error: message, status: 400 }, true);
       }
       const result = await manager.deliverAnswer(runId, stageId, parsed);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "answer_gate",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: result.reason, status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "answer_gate",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({ ok: true });
     },
   );
@@ -339,11 +373,26 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId, stageId }) => {
       const result = await manager.retryStage(runId, stageId);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "retry_stage",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           { ...mapRetryStageFailure(result), status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "retry_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         runId: result.runId,
         stageId: result.stageId,
@@ -356,7 +405,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "resume_stage",
     {
       description:
-        "Resume a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
+        "Resume an interrupted stage or a stage that failed because it timed out, continuing the same attempt/session (same as POST .../resume). Does not start a new attempt — use retry_stage to start over.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
@@ -365,11 +414,26 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     async ({ runId, stageId }) => {
       const result = await manager.resumeTimedOutStage(runId, stageId);
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "resume_stage",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           { ...mapRetryStageFailure(result), status: result.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "resume_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         runId: result.runId,
         stageId: result.stageId,
@@ -382,7 +446,7 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
     "abandon_stage",
     {
       description:
-        "Abandon a running stage (marks it failed/interrupted). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. There is no run-level cancel tool.",
+        "Abandon a running stage (marks it failed). Does not dismiss HITL — waiting stages return 409; answer them with answer_gate. Prefer cancel_run to stop an entire run.",
       inputSchema: z.object({
         runId: z.string(),
         stageId: z.string(),
@@ -392,11 +456,25 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
       const result = await manager.abandonStage(runId, stageId);
       if (!result.ok) {
         const fail = result as Extract<AbandonStageResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "abandon_stage",
+          target_run_id: runId,
+          outcome: "error",
+        });
         return textResult(
           { error: fail.reason, status: fail.status },
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "abandon_stage",
+        target_run_id: runId,
+        outcome: "ok",
+      });
       return textResult({
         ok: true,
         runId: result.runId,
@@ -406,17 +484,142 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
   );
 
   server.registerTool(
+    "cancel_run",
+    {
+      description:
+        "Cancel a non-terminal run (marks it cancelled, terminalizes pending/running/waiting stages, releases the checkout lease). Signals live stage workers via process-group kill (SIGTERM, then SIGKILL escalation) so agent grandchildren are included. Reason is required free-text and stored on the run as cancel_reason.",
+      inputSchema: z.object({
+        runId: z.string(),
+        reason: z.string().min(1),
+      }),
+    },
+    async ({ runId, reason }) => {
+      const result = await manager.cancelRun(runId, reason);
+      if (!result.ok) {
+        const fail = result as Extract<CancelRunResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "cancel_run",
+          target_run_id: runId,
+          outcome: "error",
+        });
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "cancel_run",
+        target_run_id: runId,
+        outcome: "ok",
+      });
+      return textResult({
+        ok: true,
+        runId: result.runId,
+      });
+    },
+  );
+
+  server.registerTool(
+    "delete_run",
+    {
+      description:
+        "Hard-delete a terminal run (store rows, workspace, worktree, run branch, and A2A tasks/artifacts). Active runs (created/queued/running) require force: true, which cancels first then deletes. Irreversible.",
+      inputSchema: z.object({
+        runId: z.string(),
+        force: z.boolean().optional(),
+      }),
+    },
+    async ({ runId, force }) => {
+      const result = await manager.deleteRun(runId, {
+        force,
+        channel: "mcp",
+      });
+      if (!result.ok) {
+        const fail = result as Extract<DeleteRunResult, { ok: false }>;
+        writeAudit(auditLog, {
+          caller_id: callerIdFromRequestAuth(),
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "delete_run",
+          target_run_id: runId,
+          outcome: "error",
+        });
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      writeAudit(auditLog, {
+        caller_id: callerIdFromRequestAuth(),
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "delete_run",
+        target_run_id: runId,
+        outcome: "ok",
+      });
+      return textResult({
+        ok: true,
+        runId: result.runId,
+      });
+    },
+  );
+
+  server.registerTool(
+    "gc_runs",
+    {
+      description:
+        "Run retention GC (SLIM then PURGE then bare-cache eviction). Default execute: false is dry-run (report candidates only). execute: true is irreversible bulk reclaim — slimmed/purged runIds and evicted bare caches are returned in the report.",
+      inputSchema: z.object({
+        execute: z.boolean().optional(),
+      }),
+    },
+    async ({ execute }) => {
+      const result = await manager.gcRuns({
+        execute: execute === true,
+        channel: "mcp",
+      });
+      if (!result.ok) {
+        const fail = result as Extract<GcRunsResult, { ok: false }>;
+        return textResult(
+          { error: fail.reason, status: fail.status },
+          true,
+        );
+      }
+      return textResult({
+        slimmed: result.slimmed,
+        purged: result.purged,
+        bareCachesEvicted: result.bareCachesEvicted,
+      });
+    },
+  );
+
+  server.registerTool(
     "rerun",
     {
       description:
-        "Start a new run from a completed or failed run's pipeline/task locators. Returns { runId } for the new run.",
+        "Start a new run from a completed or failed run's pipeline/task locators. Optional pinned: true replays the prior resolved_sha for repository bindings. Returns { runId } for the new run.",
       inputSchema: z.object({
         runId: z.string(),
+        pinned: z.boolean().optional(),
       }),
     },
-    async ({ runId }) => {
-      const result = await manager.rerun(runId);
+    async ({ runId, pinned }) => {
+      const callerId = callerIdFromRequestAuth();
+      const result = await manager.rerun(runId, {
+        ...(pinned !== undefined ? { pinned } : {}),
+        callerId,
+      });
       if (!result.ok) {
+        writeAudit(auditLog, {
+          caller_id: callerId,
+          surface: getRequestAuth()?.surface ?? "mcp",
+          action: "rerun",
+          target_run_id: runId,
+          outcome: "error",
+          ...(result.code !== undefined ? { error_code: result.code } : {}),
+        });
         return textResult(
           {
             ...mapStartFailure(result),
@@ -425,6 +628,13 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
           true,
         );
       }
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: getRequestAuth()?.surface ?? "mcp",
+        action: "rerun",
+        target_run_id: result.runId,
+        outcome: "ok",
+      });
       return textResult({ runId: result.runId });
     },
   );

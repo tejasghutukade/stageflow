@@ -77,7 +77,7 @@ export type RetryStageResult =
       attemptIndex: number;
       done?: Promise<PipelineRunResult>;
     }
-  | { ok: false; reason: string; status?: number };
+  | { ok: false; reason: string; status?: number; code?: string };
 
 export type RetryTrackingPort = {
   ensureResumeTracked(runId: string): Promise<
@@ -138,13 +138,16 @@ export function assertStageRetryEligible(
     persistedStatus?: RunStatus;
     dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null;
   },
-): { ok: true } | { ok: false; reason: string; status: number } {
+): {
+  ok: true;
+} | { ok: false; reason: string; status: number; code: string } {
   const stageSnap = detail.stages.find((s) => s.stage_id === stageId);
   if (!stageSnap) {
     return {
       ok: false,
       reason: `Stage not found: ${stageId}`,
       status: 404,
+      code: "stage_not_found",
     };
   }
 
@@ -153,6 +156,7 @@ export function assertStageRetryEligible(
       ok: false,
       reason: `Stage is waiting for input and cannot be retried`,
       status: 409,
+      code: "hitl_not_retriable",
     };
   }
 
@@ -169,6 +173,7 @@ export function assertStageRetryEligible(
         ok: false,
         reason: `Run is not failed or succeeded (status=${runStatus})`,
         status: 409,
+        code: "run_not_retryable",
       };
     }
   }
@@ -178,13 +183,19 @@ export function assertStageRetryEligible(
       ok: false,
       reason: `Stage is not failed or succeeded (status=${stageSnap.status})`,
       status: 409,
+      code: "stage_not_failed",
     };
   }
 
   if (stageSnap.status === "succeeded") {
     const blocker = succeededStageRetryBlocker(stageSnap);
     if (blocker !== undefined) {
-      return { ok: false, reason: blocker, status: 409 };
+      return {
+        ok: false,
+        reason: blocker,
+        status: 409,
+        code: "run_not_retryable",
+      };
     }
   }
 
@@ -397,7 +408,12 @@ export class RunRetryCoordinator {
       metaStatus = meta.status ?? detail.status;
       dag = meta.pipeline_dag;
     } catch {
-      return { ok: false, reason: `Run not found: ${runId}`, status: 404 };
+      return {
+        ok: false,
+        reason: `Run not found: ${runId}`,
+        status: 404,
+        code: "run_not_found",
+      };
     }
 
     const recoveryActive = this.isActive(runId);
@@ -412,6 +428,7 @@ export class RunRetryCoordinator {
         ok: false,
         reason: eligibility.reason,
         status: eligibility.status,
+        code: eligibility.code,
       };
     }
 
@@ -421,6 +438,7 @@ export class RunRetryCoordinator {
           ok: false,
           reason: `Retry already in progress for run ${runId} stage ${stageId}`,
           status: 409,
+          code: "retry_in_progress",
         };
       }
     }
@@ -430,6 +448,7 @@ export class RunRetryCoordinator {
         ok: false,
         reason: `Run ${runId} already has active orchestration`,
         status: 409,
+        code: "run_not_retryable",
       };
     }
 

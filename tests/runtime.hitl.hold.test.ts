@@ -650,7 +650,7 @@ describe("runtime HITL hold/resume (U4)", () => {
       {
         runId: run.runId,
         stageId: "implementation-plan",
-        reason: "process_interrupted: no active worker (server restart)",
+        reason: "orphaned_no_worker",
       },
     ]);
 
@@ -660,7 +660,7 @@ describe("runtime HITL hold/resume (U4)", () => {
     ).toBe("waiting_for_input");
     expect(
       mid.stages.find((s) => s.stage_id === "implementation-plan")?.status,
-    ).toBe("failed");
+    ).toBe("interrupted");
 
     const delivered = await manager2.deliverAnswer(
       run.runId,
@@ -685,7 +685,7 @@ describe("runtime HITL hold/resume (U4)", () => {
     );
     expect(
       done.stages.find((s) => s.stage_id === "implementation-plan")?.status,
-    ).toBe("failed");
-    expect(done.status).toBe("failed");
+    ).toBe("interrupted");
+    expect(done.status).toBe("running");
   });
 });

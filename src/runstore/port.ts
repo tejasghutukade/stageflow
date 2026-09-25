@@ -1,4 +1,5 @@
 import type { StageLogLine } from "../agent/activity.js";
+import type { ConfigOriginRecord } from "../config/configOrigin.js";
 import type { RunSubmission, RunSubmissionRecord } from "./submission.js";
 import { predecessorEdges } from "../config/pipelineNeeds.js";
 import type { AskOperatorPrompt } from "../tools/askOperator.js";
@@ -12,7 +13,15 @@ import type { CompletionCheck } from "../types/completion.js";
 import type { StageGateKind } from "../types/stage.js";
 import type { StageUsage } from "../types/usage.js";
 
-export type RunStatus = "created" | "running" | "succeeded" | "failed";
+export type { ConfigOriginRecord };
+
+export type RunStatus =
+  | "created"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
 
 export type RunPipelineDagSnapshot = ResolvedPipelineDag & {
   stage_ids: string[];
@@ -26,6 +35,7 @@ export type StageReadiness =
   | "ready"
   | "running"
   | "waiting"
+  | "interrupted"
   | "succeeded"
   | "failed"
   | "skipped";
@@ -69,12 +79,25 @@ export type RunMeta = {
   pipeline_path?: string;
   task_path?: string;
   project_root?: string;
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+  run_branch?: string;
+  git_author_name?: string;
+  git_author_email?: string;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
+  config_origins?: ConfigOriginRecord[];
+  pipeline_source?: "inline" | "path";
+  caller_id?: string;
+  run_manifest?: unknown;
+  skip_gates?: boolean;
   /**
-   * The raw pipeline body for a run started from an inline pipeline
-   * (no pipeline_path). Lets a fresh stage-worker process — which has no
-   * memory of the original in-process call — reconstruct the pipeline
-   * without needing a catalog file, mirroring how task_yaml already lets
-   * task reconstruction work without a task_path.
+   * Parsed inline pipeline body for stage-worker reload when there is no
+   * pipeline_path. Derived from stored pipeline_body.
    */
   inline_pipeline?: InlinePipelineDefinition;
 };
@@ -97,6 +120,7 @@ export type StageSnapshot = {
     | "pending"
     | "running"
     | "waiting_for_input"
+    | "interrupted"
     | "succeeded"
     | "failed"
     | "skipped";
@@ -121,6 +145,7 @@ export type StageExecution = {
   envelope: StageEnvelope | null;
   cost_usd?: number;
   usage?: StageUsage;
+  auto_resume_count: number;
 };
 
 export type StageExecutionPatch = {
@@ -131,6 +156,7 @@ export type StageExecutionPatch = {
   envelope?: StageEnvelope | null;
   cost_usd?: number;
   usage?: StageUsage;
+  auto_resume_count?: number;
 };
 
 /** The durable disposition of completion verification for one stage attempt. */
@@ -333,6 +359,18 @@ export type CompactStage = {
   cost_usd?: number;
 };
 
+export type RunBindingCompact = {
+  kind: "repository" | "checkout" | "unbound";
+  repository?: string;
+  ref?: string;
+  resolved_sha?: string;
+};
+
+export type RunBindingDetail = RunBindingCompact & {
+  run_branch?: string;
+  checkout_root?: string;
+};
+
 export type RunSummary = {
   run_id: string;
   pipeline_id: string;
@@ -340,9 +378,11 @@ export type RunSummary = {
   pipeline_path?: string;
   task_path?: string;
   project_root?: string;
+  pipeline_source?: "inline" | "path";
   status: RunStatus;
   created_at: string;
   updated_at?: string;
+  binding: RunBindingCompact;
   stages: CompactStage[];
   /** Present when a stage is waiting_for_input (first such stage). */
   waiting_stage_id?: string;
@@ -360,14 +400,23 @@ export type RunSummary = {
   active_feedback_loop?: FeedbackLoopRecord;
   /** Sum of every stage's cost_usd; omitted when no stage reported usage. */
   total_cost_usd?: number;
+  cancel_reason?: string;
+  finished_at?: string;
+  slimmed_at?: string;
+  disk_bytes?: number;
+  disk_measured_at?: string;
 };
 
-export type RunDetail = Omit<RunSummary, "stages"> & {
+export type RunDetail = Omit<RunSummary, "stages" | "binding"> & {
+  binding: RunBindingDetail;
   task_yaml: string;
   stages: StageSnapshot[];
   pipeline_track: PipelineTrackProjection;
   /** Append-only feedback-loop and replay history, ordered by creation. */
   feedback_loops: FeedbackLoopHistory[];
+  config_origins?: ConfigOriginRecord[];
+  caller_id?: string;
+  run_manifest?: unknown;
 };
 
 export type FeedbackLoopHistory = {
@@ -383,6 +432,7 @@ export type FeedbackLoopHistory = {
 
 export type CreateRunInput = {
   submission?: RunSubmission;
+  runId?: string;
   pipelineId: string;
   taskYaml: string;
   taskId?: string;
@@ -394,8 +444,24 @@ export type CreateRunInput = {
   pipelinePath?: string;
   taskPath?: string;
   projectRoot?: string;
-  /** Raw inline pipeline body, persisted only when pipelinePath is absent. */
+  repository?: string;
+  ref?: string;
+  resolvedSha?: string;
+  runBranch?: string;
+  gitAuthorName?: string;
+  gitAuthorEmail?: string;
+  status?: RunStatus;
+  pipelineSource?: "inline" | "path";
+  /** Durable JSON string stored in pipeline_body. Prefer this for slots writers. */
+  pipelineBody?: string;
+  /**
+   * Convenience for callers/tests that have a parsed inline pipeline.
+   * Stored as pipeline_body JSON; surfaced back as meta.inline_pipeline on read.
+   */
   inlinePipeline?: InlinePipelineDefinition;
+  callerId?: string;
+  runManifest?: unknown;
+  skipGates?: boolean;
 };
 
 export type ListRunsFilter = {
@@ -404,6 +470,7 @@ export type ListRunsFilter = {
   since?: string;
   /** Match pipeline_id or pipeline_path */
   pipeline?: string;
+  caller_id?: string;
 };
 
 /**
@@ -413,11 +480,61 @@ export type ListRunsFilter = {
  * run id is all you have (catalog / rehydrate).
  */
 export interface RunStore {
+  /** Checkpoint WAL (when applicable) and release the store connection. */
+  close(): Promise<void>;
+  /**
+   * Consistent compacted snapshot of the live DB via `VACUUM INTO`.
+   * Only SqliteRunStore implements this; callers must not open a second raw connection.
+   */
+  snapshotInto(destPath: string): Promise<{ userVersion: number }>;
   getRunBySubmission(key: string): Promise<RunSubmissionRecord | null>;
   createRun(input: CreateRunInput): Promise<CreatedRun>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
+  /**
+   * Conditional status update (CAS): sets `status` only when the row currently
+   * has `expectedStatus`. Returns false when the run exists but status differs;
+   * throws when the run is missing.
+   */
+  tryUpdateRunStatus(
+    runId: string,
+    status: RunStatus,
+    expectedStatus: RunStatus,
+  ): Promise<boolean>;
+  /** Patch workspace-binding columns on an existing run (queued → materialize). */
+  patchRunWorkspaceBinding(
+    runId: string,
+    patch: {
+      checkoutRoot?: string;
+      repository?: string;
+      ref?: string;
+      resolvedSha?: string;
+      runBranch?: string;
+    },
+  ): Promise<void>;
+  /** Append resolved config origin records (MCP / skill / verify). Dedupes by name+origin+path. */
+  appendConfigOrigins(
+    runId: string,
+    origins: ConfigOriginRecord[],
+  ): Promise<void>;
+  setCancelReason(runId: string, reason: string): Promise<void>;
+  /** Persist cached disk usage for `listRuns` (never measured inside listRuns). */
+  setRunDiskUsage(
+    runId: string,
+    diskBytes: number,
+    measuredAt: string,
+  ): Promise<void>;
+  /** Record that SLIM reclaim completed for this run (R18 idempotency gate). */
+  setSlimmedAt(runId: string, slimmedAt: string): Promise<void>;
+  /** Hard-delete every run-scoped row. Throws `Run not found: …` when missing. */
+  deleteRun(runId: string): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;
+  readPipelineBody(runId: string): Promise<string | null>;
+  /**
+   * Atomic replace of the `run_manifest` JSON blob (build → redact → write).
+   * Pass `null` to clear.
+   */
+  updateRunManifest(runId: string, manifest: unknown): Promise<void>;
   /** Opaque run workspace root for agents and artifact tools. */
   getWorkspaceDir(runId: string): string;
   ensureStageWorkspace(runId: string, stageId: string): Promise<void>;
@@ -438,6 +555,8 @@ export interface RunStore {
     stageId: string,
     attempt: number,
   ): Promise<StageExecution>;
+  /** Latest attempt rows whose status is `interrupted` (targeted scan; not listRuns). */
+  listInterruptedStageExecutions(): Promise<StageExecution[]>;
   updateStageExecution(
     runId: string,
     stageId: string,
@@ -483,8 +602,10 @@ export interface RunStore {
     attempt?: number,
   ): Promise<StageLogEvent[]>;
   listRuns(filter?: ListRunsFilter): Promise<RunSummary[]>;
-  /** Every distinct non-empty project_root recorded across all runs. */
-  listProjectRoots(): Promise<string[]>;
+  /** Idempotent upsert; returns the realpath/resolve-normalized absolute key. */
+  ensureProject(absPath: string): Promise<string>;
+  /** Absolute roots from the durable projects registry. */
+  listRegisteredProjects(): Promise<string[]>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
   createFeedbackLoop(
@@ -551,6 +672,7 @@ export function stageStatusFromEvents(
   for (const ev of events) {
     if (ev.event === "started" || ev.event === "resumed") status = "running";
     if (ev.event === "waiting_for_input") status = "waiting_for_input";
+    if (ev.event === "interrupted") status = "interrupted";
     if (ev.event === "succeeded") status = "succeeded";
     if (ev.event === "failed") status = "failed";
     if (ev.event === "skipped") status = "skipped";
@@ -611,10 +733,16 @@ function stageResolvedForSuccess(
   return false;
 }
 
+const OPERATOR_TERMINAL_STATUSES = new Set<RunStatus>(["cancelled", "queued"]);
+
 export function deriveStatusFromStages(
   stages: StageSnapshot[],
   dag?: Pick<RunPipelineDagSnapshot, "nodes"> | null,
+  currentStatus?: RunStatus,
 ): RunStatus {
+  if (currentStatus !== undefined && OPERATOR_TERMINAL_STATUSES.has(currentStatus)) {
+    return currentStatus;
+  }
   if (stages.length === 0) return "created";
   if (findUnhandledFailedStage(stages, dag)) return "failed";
   const byId = new Map(stages.map((s) => [s.stage_id, s]));
@@ -626,6 +754,7 @@ export function deriveStatusFromStages(
       (s) =>
         s.status === "running" ||
         s.status === "waiting_for_input" ||
+        s.status === "interrupted" ||
         s.status === "succeeded",
     )
   ) {

@@ -1,19 +1,26 @@
 import type { RunStore, StageLogEvent } from "../runstore/port.js";
 import { deriveStatusFromStages } from "../runstore/port.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
+import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 import { deriveExecutionPatchFromEvent } from "../runstore/stageExecution.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
 import {
   attemptContext,
   type StageAttemptContext,
 } from "./stageAttemptContext.js";
 
-export async function failStageAsInterrupted(options: {
+export const OPERATOR_CANCEL_REASON =
+  "process_interrupted: operator cancelled run";
+
+export async function markStageInterrupted(options: {
   store: RunStore;
   runId: string;
   stageId: string;
   reason: string;
+  status: "failed" | "interrupted";
   attemptCtx?: StageAttemptContext;
 }): Promise<void> {
-  const { store, runId, stageId, reason, attemptCtx } = options;
+  const { store, runId, stageId, reason, status, attemptCtx } = options;
 
   let attemptNum: number;
   let attemptOpt: { attempt: number } | undefined;
@@ -32,7 +39,10 @@ export async function failStageAsInterrupted(options: {
     }
   }
 
-  const event: StageLogEvent = { event: "failed", reason };
+  const event: StageLogEvent =
+    status === "interrupted"
+      ? { event: "interrupted", reason }
+      : { event: "failed", reason };
   await store.appendStageEvent(runId, stageId, event, attemptOpt);
 
   try {
@@ -51,9 +61,20 @@ export async function syncRunStatusFromStages(
 ): Promise<void> {
   const meta = await store.readRunMeta(runId);
   const run = await store.readRun(runId);
-  const derived = deriveStatusFromStages(run.stages, meta.pipeline_dag);
+  const derived = deriveStatusFromStages(run.stages, meta.pipeline_dag, meta.status);
   if (meta.status === "succeeded" && derived !== "running") return;
   if ((meta.status ?? "created") !== derived) {
     await store.updateRunStatus(runId, derived);
+    if (
+      derived === "succeeded" ||
+      derived === "failed" ||
+      derived === "cancelled"
+    ) {
+      await finaliseStoredRunManifest(store, runId).catch(() => undefined);
+      await refreshRunDiskUsage(store, runId).catch(() => undefined);
+    }
+    if (derived === "succeeded") {
+      await reclaimWorkspaceOnRunSucceeded(store, runId);
+    }
   }
 }

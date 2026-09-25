@@ -112,6 +112,7 @@ describe("start_run — inline pipeline (MCP)", () => {
         envelope: { status: "success", summary: "checked", artifacts: [] },
       },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,
@@ -169,6 +170,7 @@ describe("start_run — inline pipeline (MCP)", () => {
   it("a structurally invalid inline pipeline returns the same ValidationFinding-shaped error a bad file would", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-inline-bad-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent: scriptedFakeAgent([]),
       cwd: projectRoot,
@@ -208,6 +210,7 @@ describe("start_run — inline pipeline (MCP)", () => {
   it("uses: on an inline stage is rejected, not treated as a file reference", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-inline-uses-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent: scriptedFakeAgent([]),
       cwd: projectRoot,
@@ -239,12 +242,14 @@ describe("start_run — inline pipeline (MCP)", () => {
     }
   });
 
-  it("rerun on an inline-pipeline run fails with the existing missing-pipeline_path error", async () => {
+  it("rerun on an inline-pipeline run succeeds with a new run id", async () => {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-inline-rerun-"));
     const store = createRunStore({ rootDir: storeRoot });
     const agent = scriptedFakeAgent([
       { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
+      { type: "emit", envelope: { status: "success", summary: "rerun ok", artifacts: [] } },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,
@@ -281,8 +286,10 @@ describe("start_run — inline pipeline (MCP)", () => {
       });
 
       const rerun = await mcpCall(base, "rerun", { runId });
-      expect(rerun.isError).toBe(true);
-      expect(rerun.payload.error).toMatch(/missing pipeline_path/);
+      expect(rerun.isError).toBe(false);
+      expect(typeof rerun.payload.runId).toBe("string");
+      expect(rerun.payload.runId).not.toBe(runId);
+      expect(JSON.stringify(rerun.payload)).not.toMatch(/missing pipeline_path/);
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -296,6 +303,7 @@ describe("start_run — inline pipeline (MCP)", () => {
     const agent = scriptedFakeAgent([
       { type: "emit", envelope: { status: "success", summary: "ok", artifacts: [] } },
     ]);
+    await store.ensureProject(projectRoot);
     const { server } = await startUiServer({
       agent,
       cwd: projectRoot,

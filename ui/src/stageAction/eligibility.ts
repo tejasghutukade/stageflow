@@ -10,6 +10,7 @@ export function canResumeTimedOut(stage: {
   status: string;
   events: ReadonlyArray<{ event: string; reason?: string }>;
 }): boolean {
+  if (stage.status === "interrupted") return true;
   if (stage.status !== "failed") return false;
   let reason: string | undefined;
   for (const event of stage.events) {

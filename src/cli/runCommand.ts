@@ -1,14 +1,21 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { parse as parseYaml } from "yaml";
+import { coerceTaskFile } from "../config/loadTask.js";
 import type { RunStore } from "../runstore/port.js";
-import { PipelineValidationError } from "../runtime/pipelineRunner.js";
+import { relativizeLocalPathForNetwork } from "../config/catalogRelativePath.js";
+import { PipelinePreflightError, PipelineValidationError } from "../runtime/pipelineRunner.js";
 import type { StartRunResult } from "../runtime/runManager.js";
+import type { TaskFile } from "../types/task.js";
 import {
   ensureGlobalService,
   hostBaseUrl,
   type EnsureGlobalServiceResult,
 } from "../server/ensureGlobalService.js";
-import { httpStartRun, httpStoreReader, resolveAbsolute } from "./hostClient.js";
+import { httpEnsureProject, httpStartRun, httpStoreReader } from "./hostClient.js";
 import {
   reportCliRun,
+  writeQueuedAdmissionLine,
   type CliRunReportIo,
 } from "./runOutput.js";
 import { resolveCiIdentity } from "./ciIdentity.js";
@@ -19,7 +26,7 @@ import {
 } from "./validateOutput.js";
 
 export const RUN_USAGE = `Usage:
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]`;
 
 export type RunCommandIo = CliRunReportIo;
 
@@ -36,6 +43,8 @@ type ParsedRunArgs = {
   task?: string;
   pipeline?: string;
   checkout?: string;
+  repository?: string;
+  ref?: string;
   gitSha?: string;
   ciPrUrl?: string;
   ciJobUrl?: string;
@@ -44,7 +53,7 @@ type ParsedRunArgs = {
 };
 
 export type StartRunFn = (input: {
-  task: string;
+  task: string | TaskFile;
   pipeline: string;
   checkoutOverride?: string;
   skipGates?: boolean;
@@ -64,6 +73,8 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
   let task: string | undefined;
   let pipeline: string | undefined;
   let checkout: string | undefined;
+  let repository: string | undefined;
+  let ref: string | undefined;
   let gitSha: string | undefined;
   let ciPrUrl: string | undefined;
   let ciJobUrl: string | undefined;
@@ -96,6 +107,18 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
         throw new Error("Missing value for --checkout");
       }
       checkout = value;
+    } else if (arg === "--repository") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --repository");
+      }
+      repository = value;
+    } else if (arg === "--ref") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --ref");
+      }
+      ref = value;
     } else if (arg === "--git-sha") {
       const value = args[++i];
       if (value === undefined || value.length === 0) {
@@ -155,12 +178,31 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
     task,
     pipeline,
     checkout,
+    repository,
+    ref,
     gitSha,
     ciPrUrl,
     ciJobUrl,
     operatorCwd,
     operatorAgentDir,
   };
+}
+
+async function loadTaskWithBindingOverrides(
+  taskPath: string,
+  cwd: string,
+  overrides: { repository?: string; ref?: string },
+): Promise<TaskFile> {
+  const absolute = path.resolve(cwd, taskPath);
+  const yamlText = await readFile(absolute, "utf8");
+  const raw = parseYaml(yamlText);
+  const task = coerceTaskFile(raw);
+  if (task === undefined) {
+    throw new Error(`Invalid task file ${absolute}: id and goal are required strings`);
+  }
+  if (overrides.repository !== undefined) task.repository = overrides.repository;
+  if (overrides.ref !== undefined) task.ref = overrides.ref;
+  return task;
 }
 
 function defaultStartRun(
@@ -171,14 +213,41 @@ function defaultStartRun(
   return async (input) => {
     const ensured = await ensureService();
     if (!ensured.ok) {
-      return { ok: false, reason: ensured.message, status: 503 };
+      return {
+        ok: false,
+        reason: ensured.message,
+        status: 503,
+        ...(ensured.reason === "autostart_disabled"
+          ? { code: "autostart_disabled" as const }
+          : {}),
+      };
     }
+    const pipelineRef = relativizeLocalPathForNetwork(cwd, input.pipeline);
+    let task: string | TaskFile = input.task;
+    let projectRoot = pipelineRef.project_root;
+    if (typeof input.task === "string") {
+      const absTask = path.resolve(cwd, input.task);
+      const cwdAbs = path.resolve(cwd);
+      const relTask = path.relative(cwdAbs, absTask);
+      if (relTask.startsWith("..") || path.isAbsolute(relTask)) {
+        task = await loadTaskWithBindingOverrides(input.task, cwd, {});
+      } else {
+        const taskRef = relativizeLocalPathForNetwork(cwd, input.task);
+        task = taskRef.path;
+        projectRoot = taskRef.project_root;
+      }
+    }
+    const ensuredProject = await httpEnsureProject(base, projectRoot);
+    if (!ensuredProject.ok) return ensuredProject;
+    const checkoutOverride =
+      input.checkoutOverride !== undefined
+        ? relativizeLocalPathForNetwork(cwd, input.checkoutOverride).path
+        : undefined;
     return httpStartRun(base, {
-      pipeline: resolveAbsolute(cwd, input.pipeline),
-      task: resolveAbsolute(cwd, input.task),
-      ...(input.checkoutOverride !== undefined
-        ? { checkoutOverride: resolveAbsolute(cwd, input.checkoutOverride) }
-        : {}),
+      pipeline: pipelineRef.path,
+      task,
+      project_root: ensuredProject.project_root,
+      ...(checkoutOverride !== undefined ? { checkoutOverride } : {}),
       ...(input.skipGates !== undefined ? { skipGates: input.skipGates } : {}),
       ...(input.gitSha !== undefined ? { gitSha: input.gitSha } : {}),
       ...(input.ciPrUrl !== undefined ? { ciPrUrl: input.ciPrUrl } : {}),
@@ -272,8 +341,17 @@ export async function runRunCommand(
     options.store ?? (parsed.includeStages ? httpStoreReader(base) : undefined);
 
   try {
+    const hasBindingOverride =
+      parsed.repository !== undefined || parsed.ref !== undefined;
+    const taskInput: string | TaskFile = hasBindingOverride
+      ? await loadTaskWithBindingOverrides(parsed.task, cwd, {
+          repository: parsed.repository,
+          ref: parsed.ref,
+        })
+      : parsed.task;
+
     const started = await startRun({
-      task: parsed.task,
+      task: taskInput,
       pipeline: parsed.pipeline,
       checkoutOverride: parsed.checkout,
       ...(parsed.skipGates ? { skipGates: true } : {}),
@@ -285,6 +363,7 @@ export async function runRunCommand(
         { json: parsed.json, io: out },
       );
     }
+    writeQueuedAdmissionLine(started, out);
     return completeCliRun(started, out, {
       json: parsed.json,
       includeStages: parsed.includeStages,
@@ -298,6 +377,14 @@ export async function runRunCommand(
         out.error(formatValidationHuman(err.result));
       }
       return exitCodeForValidation(err.result);
+    }
+    if (err instanceof PipelinePreflightError) {
+      if (parsed.json) {
+        out.log(JSON.stringify(err.toNetworkBody(), null, 2));
+      } else {
+        out.error(err.message);
+      }
+      return 1;
     }
     out.error(err instanceof Error ? err.message : String(err));
     return 1;

@@ -38,6 +38,16 @@ function isBusyCode(code: string | undefined): code is BusyCode {
   return code === "busy_capacity" || code === "busy_checkout";
 }
 
+/** Stderr line when start_run was admitted to the queue (origin transparency rule). */
+export function writeQueuedAdmissionLine(
+  started: Extract<StartRunResult, { ok: true }>,
+  io: Pick<CliRunReportIo, "error">,
+): void {
+  if (started.queued === true && started.queuePosition !== undefined) {
+    io.error(`queued at position ${started.queuePosition}`);
+  }
+}
+
 function formatRunBusyJson(
   started: Extract<StartRunResult, { ok: false }>,
 ): string {
@@ -72,6 +82,11 @@ function formatRunStartFailedJson(
     reason: started.reason,
   };
   if (started.code !== undefined) payload.code = started.code;
+  if (started.freeBytes !== undefined) payload.freeBytes = started.freeBytes;
+  if (started.minFreeBytes !== undefined) {
+    payload.minFreeBytes = started.minFreeBytes;
+  }
+  if (started.stderr !== undefined) payload.stderr = started.stderr;
   return stringify(payload);
 }
 
@@ -102,13 +117,23 @@ function baseRunCompletionPayload(
             runId: result.runId,
             runDir: result.runDir,
           }
-        : {
-            ok: false,
-            outcome: "failed",
-            runId: result.runId,
-            runDir: result.runDir,
-          };
-  if (result.outcome === "failed" && result.reason !== undefined) {
+        : result.outcome === "cancelled"
+          ? {
+              ok: false,
+              outcome: "cancelled",
+              runId: result.runId,
+              runDir: result.runDir,
+            }
+          : {
+              ok: false,
+              outcome: "failed",
+              runId: result.runId,
+              runDir: result.runDir,
+            };
+  if (
+    (result.outcome === "failed" || result.outcome === "cancelled") &&
+    result.reason !== undefined
+  ) {
     payload.reason = result.reason;
   }
   if (Array.isArray(result.findings) && result.findings.length > 0) {
@@ -176,6 +201,12 @@ function writeCompletionHuman(
       io.error(`Pipeline failed: ${result.reason}`);
       io.error(`Run folder: ${result.runDir}`);
       break;
+    case "cancelled":
+      io.error(
+        `Pipeline cancelled${result.reason ? `: ${result.reason}` : ""}`,
+      );
+      io.error(`Run folder: ${result.runDir}`);
+      break;
     case "succeeded":
       io.log(`Pipeline succeeded. Run folder: ${result.runDir}`);
       break;
@@ -192,6 +223,7 @@ function exitCodeForRunOutcome(outcome: PipelineRunResult["outcome"]): number {
     case "waiting":
       return 2;
     case "failed":
+    case "cancelled":
       return 1;
   }
 }

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile, access } from "node:fs/promises";
+import { createReadStream, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentPort } from "../agent/port.js";
@@ -14,20 +15,60 @@ import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
+import {
+  listModelsMultiProject,
+  listPipelinesMultiProject,
+  listTasksMultiProject,
+} from "../config/multiProjectCatalog.js";
+import {
+  catalogPathErrorBody,
+  CatalogPathError,
+  resolveCatalogRelativePath,
+  resolveCatalogStartInput,
+  resolveWritableCatalogRoot,
+} from "../config/catalogRelativePath.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
 import {
   artifactMediaType,
+  classifyArtifactContent,
   readRunArtifact,
   readRunArtifactBytes,
 } from "../mcp/readArtifact.js";
+import {
+  getRunDiff,
+  listCheckoutChanges,
+  readCheckoutFileBytes,
+} from "../mcp/checkoutTools.js";
 import { readStageVerificationHistory } from "../runstore/verificationHistory.js";
 import type { RunStoreKind } from "../runstore/createStore.js";
+import {
+  BackupError,
+  createBackup,
+  resolveBackupDownloadPath,
+} from "../runstore/backup.js";
+import {
+  RestoreError,
+  resolveBackupNameForRestore,
+  stageRestoreForBoot,
+} from "../runstore/restore.js";
+import { iterateExportNdjson } from "../cli/exportAllCommand.js";
+import {
+  buildRunExportPayload,
+  runDetailWithRedactedManifest,
+} from "../runstore/exportRunPayload.js";
+import { buildDebugBundle } from "../runstore/debugBundle.js";
+import { parseShutdownGraceMs } from "./shutdown.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
+import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
 import type {
   AbandonStageResult,
+  CancelRunResult,
+  DeleteRunResult,
+  GcRunsResult,
   RunManager,
 } from "../runtime/runManager.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -36,6 +77,10 @@ import {
   parseSlotCount,
 } from "../runtime/settingsFile.js";
 import { isTaskFile } from "../runtime/taskInput.js";
+import {
+  findTokenShapedField,
+  tokenRejectedPayload,
+} from "../runtime/startPayload.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
 import {
@@ -43,17 +88,46 @@ import {
   type StageflowHostOptions,
 } from "./bootstrap.js";
 import {
+  assertAllowedHttpAccess,
+  isTrustedLocalHttpRequest,
+  resolveAllowedHosts,
+  type AllowedHosts,
+} from "./allowedHosts.js";
+import {
+  enforceBearerAuth,
+  loadControlTokens,
+  requiredScopeFor,
+  type ControlTokens,
+} from "./controlToken.js";
+import {
   createHttpHost,
   DEFAULT_PORT,
   json,
   type HttpHostEnvelope,
   type HttpHostRouteContext,
 } from "./createHttpHost.js";
+import { handleApiHealth } from "./healthSurfaces.js";
 import {
   mapRetryStageFailure,
   mapStartFailure,
   mapStoreLookupError,
 } from "./operatorResults.js";
+import {
+  installShutdownController,
+  makeDrainableHostFromOptional,
+  type ShutdownController,
+} from "./shutdown.js";
+import { writeAudit } from "../logging/audit.js";
+import { logger as rootLogger } from "../logging/logger.js";
+import {
+  callerIdFromRequestAuth,
+  getRequestAuth,
+  requestAuthFromBearer,
+  runWithRequestAuth,
+} from "./requestAuthContext.js";
+import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
+
+const auditLog = rootLogger.child({ component: "audit" });
 
 export type UiServerOptions = {
   agent: AgentPort;
@@ -69,6 +143,8 @@ export type UiServerOptions = {
   providerAuthContext?: ProviderAuthContext;
   mcpStateless?: boolean;
   runChangeBus?: RunChangeBus;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -140,29 +216,6 @@ async function serveStatic(
   return true;
 }
 
-function isMutatingApi(method: string, pathname: string): boolean {
-  if (method !== "POST") return false;
-  return (
-    pathname === "/api/runs" ||
-    pathname === "/api/settings" ||
-    pathname === "/api/stages" ||
-    pathname === "/api/pipelines" ||
-    /^\/api\/runs\/[^/]+\/rerun$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/feedback-decision$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/retry$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/resume$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/recovery\/stop$/.test(pathname) ||
-    /^\/api\/runs\/[^/]+\/stages\/[^/]+\/abandon$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/answer$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
-    /^\/api\/providers\/[^/]+\/logout$/.test(pathname) ||
-    /^\/api\/project-mcp\/[^/]+\/probe$/.test(pathname)
-  );
-}
-
 function isCredentialMutatingApi(method: string, pathname: string): boolean {
   if (method !== "POST") return false;
   return (
@@ -171,76 +224,6 @@ function isCredentialMutatingApi(method: string, pathname: string): boolean {
     /^\/api\/providers\/[^/]+\/login\/[^/]+\/cancel$/.test(pathname) ||
     /^\/api\/providers\/[^/]+\/logout$/.test(pathname)
   );
-}
-
-/** Login/logout require a non-empty loopback Origin (stricter than other mutating APIs). */
-function assertCredentialMutatingOrigin(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const origin = req.headers.origin;
-  if (typeof origin !== "string" || origin.length === 0) {
-    json(res, 403, { error: "Origin required" });
-    return false;
-  }
-  try {
-    const originHost = new URL(origin).hostname;
-    if (!isLoopbackHostname(originHost)) {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  } catch {
-    json(res, 403, { error: "Forbidden origin" });
-    return false;
-  }
-  return true;
-}
-
-function hostnameFromHostHeader(hostHeader: string): string {
-  if (hostHeader.startsWith("[")) {
-    const end = hostHeader.indexOf("]");
-    return end === -1 ? hostHeader : hostHeader.slice(1, end);
-  }
-  const colon = hostHeader.lastIndexOf(":");
-  if (colon > 0 && /^\d+$/.test(hostHeader.slice(colon + 1))) {
-    return hostHeader.slice(0, colon);
-  }
-  return hostHeader;
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  const h = hostname.toLowerCase();
-  return h === "localhost" || h === "127.0.0.1" || h === "::1";
-}
-
-/** REST-friendly Host/Origin gate (plain JSON 403). Absent Origin is allowed. */
-function assertLoopbackHttpAccess(
-  req: IncomingMessage,
-  res: ServerResponse,
-): boolean {
-  const hostHeader = req.headers.host;
-  if (typeof hostHeader !== "string" || hostHeader.length === 0) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  if (!isLoopbackHostname(hostnameFromHostHeader(hostHeader))) {
-    json(res, 403, { error: "Forbidden host" });
-    return false;
-  }
-  const origin = req.headers.origin;
-  if (typeof origin === "string" && origin.length > 0) {
-    try {
-      const originHost = new URL(origin).hostname;
-      if (!isLoopbackHostname(originHost)) {
-        json(res, 403, { error: "Forbidden origin" });
-        return false;
-      }
-    } catch {
-      json(res, 403, { error: "Forbidden origin" });
-      return false;
-    }
-  }
-  return true;
 }
 
 export function defaultUiDistDir(): string {
@@ -260,6 +243,10 @@ export type OperatorRouteDeps = {
   providerAuthContext: ProviderAuthContext | undefined;
   /** Omit for a headless service (e.g. `sf mcp`) — GETs outside the API surface just 404. */
   uiDistDir?: string;
+  allowedHosts?: AllowedHosts;
+  controlTokens?: ControlTokens;
+  /** Live shutdown controller; set after listen so restore can beginDrain. */
+  getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
 };
 
 /**
@@ -273,22 +260,235 @@ export function createOperatorRoutes(
   deps: OperatorRouteDeps,
 ): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
   const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
-  return async ({ req, res, url, pathname, method }) => {
-      if (isMutatingApi(method, pathname)) {
-        if (!assertLoopbackHttpAccess(req, res)) {
-          return true;
-        }
+  const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = deps.controlTokens ?? loadControlTokens();
+  return async ({ req, res, url, pathname, method, boot }) => {
+      if (boot.serveBlocked !== undefined && pathname.startsWith("/api/")) {
+        json(res, 503, {
+          error: boot.serveBlocked.reason,
+          code: boot.serveBlocked.code,
+        });
+        return true;
+      }
+      if (pathname.startsWith("/api/")) {
         if (
-          isCredentialMutatingApi(method, pathname) &&
-          !assertCredentialMutatingOrigin(req, res)
+          !assertAllowedHttpAccess(allowedHosts, req, res, {
+            requireOrigin: isCredentialMutatingApi(method, pathname),
+          })
         ) {
           return true;
         }
+        const scope = requiredScopeFor(method, pathname);
+        if (scope !== null) {
+          const authResult = enforceBearerAuth(
+            controlTokens,
+            req,
+            res,
+            scope,
+          );
+          if (!authResult.ok) return true;
+          return runWithRequestAuth(
+            requestAuthFromBearer(authResult.auth, "rest"),
+            () => handleOperatorRequest(),
+          );
+        }
       }
 
+      return handleOperatorRequest();
+
+      async function handleOperatorRequest(): Promise<boolean> {
       try {
         if (method === "GET" && pathname === "/api/runs") {
-          json(res, 200, { runs: await store.listRuns() });
+          const filter: ListRunsFilter = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
+          if (status !== null) filter.status = status as RunStatus;
+          if (since !== null) filter.since = since;
+          if (pipeline !== null) filter.pipeline = pipeline;
+          if (callerId !== null) filter.caller_id = callerId;
+          json(res, 200, {
+            runs: await store.listRuns(
+              Object.keys(filter).length > 0 ? filter : undefined,
+            ),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/backup") {
+          const body = (await readJsonBody(req)) as {
+            out?: unknown;
+            db_only?: unknown;
+            no_credentials?: unknown;
+            include_a2a_artifacts?: unknown;
+          };
+          const callerId = callerIdFromRequestAuth();
+          try {
+            const result = await createBackup({
+              store,
+              homeDir: globalStageflowHome(),
+              outPath: typeof body.out === "string" ? body.out : undefined,
+              dbOnly: body.db_only === true,
+              noCredentials: body.no_credentials === true,
+              includeA2aArtifacts: body.include_a2a_artifacts === true,
+            });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "backup",
+              outcome: "ok",
+            });
+            json(res, 200, result);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "backup",
+                outcome: "error",
+                error_code: err.code,
+              });
+              const status =
+                err.code === "backup_insufficient_disk" ? 507 : 400;
+              json(res, status, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const backupGetMatch = pathname.match(/^\/api\/backup\/([^/]+)$/);
+        if (method === "GET" && backupGetMatch) {
+          const name = decodeURIComponent(backupGetMatch[1] ?? "");
+          try {
+            const filePath = await resolveBackupDownloadPath(
+              name,
+              globalStageflowHome(),
+            );
+            const st = statSync(filePath);
+            res.writeHead(200, {
+              "Content-Type": "application/octet-stream",
+              "Content-Length": st.size,
+              "Content-Disposition": `attachment; filename="${name}"`,
+            });
+            createReadStream(filePath).pipe(res);
+          } catch (err) {
+            if (err instanceof BackupError) {
+              json(res, 400, { error: err.message, code: err.code });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/restore") {
+          const body = (await readJsonBody(req)) as {
+            backup?: unknown;
+            path?: unknown;
+          };
+          const backupName =
+            typeof body.backup === "string"
+              ? body.backup
+              : typeof body.path === "string"
+                ? body.path
+                : undefined;
+          if (backupName === undefined) {
+            json(res, 400, {
+              error: "body.backup (backup name under backups/) is required",
+              code: "restore_not_found",
+            });
+            return true;
+          }
+          const callerId = callerIdFromRequestAuth();
+          try {
+            const archivePath = await resolveBackupNameForRestore(
+              path.basename(backupName),
+              globalStageflowHome(),
+            );
+            const graceMs = parseShutdownGraceMs();
+            const staged = await stageRestoreForBoot({
+              archivePath,
+              homeDir: globalStageflowHome(),
+              graceMs,
+            });
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "restore",
+              outcome: "ok",
+            });
+            json(res, 202, {
+              ok: true,
+              staged: staged.stagedPath,
+              drain_deadline: staged.marker.drain_deadline,
+            });
+            const shutdown = deps.getShutdown?.();
+            if (shutdown !== undefined) {
+              void shutdown.beginDrain();
+            }
+          } catch (err) {
+            if (err instanceof RestoreError || err instanceof BackupError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "restore",
+                outcome: "error",
+                error_code: err.code,
+              });
+              json(res, 400, {
+                error: err.message,
+                code: err.code,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/export") {
+          const filter: {
+            status?: import("../runstore/port.js").RunStatus;
+            since?: string;
+            pipeline?: string;
+            caller_id?: string;
+          } = {};
+          const status = url.searchParams.get("status");
+          const since = url.searchParams.get("since");
+          const pipeline = url.searchParams.get("pipeline");
+          const callerId = url.searchParams.get("caller_id");
+          if (status) filter.status = status as import("../runstore/port.js").RunStatus;
+          if (since) filter.since = since;
+          if (pipeline) filter.pipeline = pipeline;
+          if (callerId) filter.caller_id = callerId;
+          res.writeHead(200, {
+            "Content-Type": "application/x-ndjson; charset=utf-8",
+          });
+          try {
+            for await (const line of iterateExportNdjson({
+              store,
+              filter: Object.keys(filter).length > 0 ? filter : undefined,
+            })) {
+              if (req.aborted || res.writableEnded || res.destroyed) {
+                break;
+              }
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) => res.once("drain", resolve));
+              }
+            }
+            if (!res.writableEnded && !res.destroyed) {
+              res.end();
+            }
+          } catch (err) {
+            if (res.headersSent) {
+              res.destroy(err instanceof Error ? err : new Error(String(err)));
+            } else {
+              throw err;
+            }
+          }
           return true;
         }
 
@@ -321,6 +521,116 @@ export function createOperatorRoutes(
           return true;
         }
 
+        const changesMatch = pathname.match(/^\/api\/runs\/([^/]+)\/changes$/);
+        if (method === "GET" && changesMatch) {
+          const runId = decodeURIComponent(changesMatch[1] ?? "");
+          try {
+            const result = await listCheckoutChanges(store, runId);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            json(res, 200, {
+              runId,
+              changes: result.changes,
+              truncated: result.truncated,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const diffMatch = pathname.match(/^\/api\/runs\/([^/]+)\/diff$/);
+        if (method === "GET" && diffMatch) {
+          const runId = decodeURIComponent(diffMatch[1] ?? "");
+          const modeParam = url.searchParams.get("mode");
+          const mode =
+            modeParam === "patch" || modeParam === "stat" ? modeParam : undefined;
+          const filterPath = url.searchParams.get("path") ?? undefined;
+          const maxBytesRaw = url.searchParams.get("maxBytes");
+          const maxBytes =
+            maxBytesRaw !== null && maxBytesRaw.trim() !== ""
+              ? Number(maxBytesRaw)
+              : undefined;
+          try {
+            const result = await getRunDiff(store, runId, {
+              mode,
+              path: filterPath ?? undefined,
+              maxBytes:
+                maxBytes !== undefined && Number.isFinite(maxBytes)
+                  ? maxBytes
+                  : undefined,
+            });
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            json(res, 200, {
+              runId,
+              mode: result.mode,
+              base_sha: result.base_sha,
+              base_source: result.base_source,
+              content: result.content,
+              truncated: result.truncated,
+              untracked: result.untracked,
+            });
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const checkoutFileMatch = pathname.match(/^\/api\/runs\/([^/]+)\/file$/);
+        if (method === "GET" && checkoutFileMatch) {
+          const runId = decodeURIComponent(checkoutFileMatch[1] ?? "");
+          const filePath = url.searchParams.get("path");
+          if (filePath === null || filePath.trim().length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          try {
+            const result = await readCheckoutFileBytes(store, runId, filePath);
+            if (!result.ok) {
+              json(res, result.status, {
+                error: result.error,
+                code: result.code,
+              });
+              return true;
+            }
+            const mediaType = artifactMediaType(filePath);
+            if (mediaType !== undefined) {
+              res.writeHead(200, {
+                "Content-Type": mediaType,
+                "Content-Length": result.bytes.length,
+              });
+              res.end(result.bytes);
+            } else {
+              const classified = classifyArtifactContent(filePath, result.bytes);
+              if (classified.kind !== "utf8") {
+                json(res, 400, {
+                  error: "Checkout file is not valid UTF-8 text",
+                });
+                return true;
+              }
+              textPlain(res, 200, result.bytes.toString("utf8"));
+            }
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "artifact" });
+            const status = mapped.kind === "denied" ? 403 : mapped.status;
+            json(res, status, { error: mapped.error });
+          }
+          return true;
+        }
+
         const verificationMatch = pathname.match(
           /^\/api\/runs\/([^/]+)\/stages\/([^/]+)\/verification$/,
         );
@@ -336,11 +646,39 @@ export function createOperatorRoutes(
           return true;
         }
 
+        const exportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/export$/);
+        if (method === "GET" && exportMatch) {
+          const runId = decodeURIComponent(exportMatch[1] ?? "");
+          try {
+            const detail = await store.readRun(runId);
+            json(res, 200, buildRunExportPayload(detail));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
+        const debugBundleMatch = pathname.match(
+          /^\/api\/runs\/([^/]+)\/debug-bundle$/,
+        );
+        if (method === "GET" && debugBundleMatch) {
+          const runId = decodeURIComponent(debugBundleMatch[1] ?? "");
+          try {
+            json(res, 200, await buildDebugBundle(store, runId));
+          } catch (err) {
+            const mapped = mapStoreLookupError(err, { policy: "run" });
+            json(res, mapped.status, { error: mapped.error });
+          }
+          return true;
+        }
+
         if (method === "GET" && pathname.startsWith("/api/runs/")) {
           const rest = pathname.slice("/api/runs/".length);
           if (rest && !rest.includes("/")) {
             try {
-              json(res, 200, await store.readRun(decodeURIComponent(rest)));
+              const detail = await store.readRun(decodeURIComponent(rest));
+              json(res, 200, runDetailWithRedactedManifest(detail));
             } catch (err) {
               const mapped = mapStoreLookupError(err, { policy: "run" });
               json(res, 404, { error: mapped.error });
@@ -349,25 +687,79 @@ export function createOperatorRoutes(
           }
         }
 
+        if (method === "POST" && pathname === "/api/projects") {
+          if (!isTrustedLocalHttpRequest(req)) {
+            json(res, 403, {
+              error:
+                "ensure_project is only allowed from trusted local clients (loopback peer and Host)",
+              code: "ensure_project_not_allowed",
+            });
+            return true;
+          }
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const projectRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root.trim()
+              : "";
+          if (!projectRoot) {
+            json(res, 400, { error: "project_root is required" });
+            return true;
+          }
+          if (!path.isAbsolute(projectRoot)) {
+            json(res, 400, {
+              error: "project_root must be an absolute path",
+            });
+            return true;
+          }
+          try {
+            const registered = await store.ensureProject(projectRoot);
+            json(res, 200, { project_root: registered });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            json(res, 400, {
+              error: message,
+              code: "invalid_project_root",
+            });
+          }
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/runs") {
-          const body = (await readJsonBody(req)) as {
+          const body = (await readJsonBody(req)) as Record<string, unknown>;
+          const tokenField = findTokenShapedField(body);
+          if (tokenField !== undefined) {
+            json(res, 400, tokenRejectedPayload(tokenField));
+            return true;
+          }
+          const typed = body as {
             task?: string | TaskFile;
             pipeline?: string;
+            project_root?: string;
             checkoutOverride?: string;
             skipGates?: boolean;
             gitSha?: string;
             ciPrUrl?: string;
             ciJobUrl?: string;
+            skills?: Record<string, Record<string, string>>;
           };
           if (
-            typeof body.pipeline !== "string" ||
-            !body.pipeline.trim() ||
-            body.task === undefined
+            typeof typed.pipeline !== "string" ||
+            !typed.pipeline.trim() ||
+            typed.task === undefined
           ) {
             json(res, 400, { error: "task and pipeline are required" });
             return true;
           }
-          if (typeof body.task !== "string" && !isTaskFile(body.task)) {
+          if (typeof typed.task !== "string" && !isTaskFile(typed.task)) {
             json(res, 400, {
               error:
                 "task must be a path string or TaskFile object (id and goal required)",
@@ -375,60 +767,181 @@ export function createOperatorRoutes(
             return true;
           }
           if (
-            body.checkoutOverride !== undefined &&
-            typeof body.checkoutOverride !== "string"
+            typed.checkoutOverride !== undefined &&
+            typeof typed.checkoutOverride !== "string"
           ) {
             json(res, 400, { error: "checkoutOverride must be a string" });
             return true;
           }
-          if (body.skipGates !== undefined && typeof body.skipGates !== "boolean") {
+          if (typed.skipGates !== undefined && typeof typed.skipGates !== "boolean") {
             json(res, 400, { error: "skipGates must be a boolean" });
             return true;
           }
           for (const field of ["gitSha", "ciPrUrl", "ciJobUrl"] as const) {
-            if (body[field] !== undefined && typeof body[field] !== "string") {
+            if (typed[field] !== undefined && typeof typed[field] !== "string") {
               json(res, 400, { error: `${field} must be a string` });
               return true;
             }
           }
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              typed.project_root,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const wireProjectRoot = wireRoot.project_root;
+          let pipelinePath = typed.pipeline.trim();
+          let taskInput: string | TaskFile = typed.task;
+          let checkoutOverride: string | undefined;
+          try {
+            pipelinePath = resolveCatalogRelativePath({
+              inputPath: pipelinePath,
+              projectRoot: wireProjectRoot,
+              roots,
+              fieldName: "pipeline",
+            }).absolutePath;
+            if (typeof typed.task === "string") {
+              taskInput = resolveCatalogRelativePath({
+                inputPath: typed.task,
+                projectRoot: wireProjectRoot,
+                roots,
+                fieldName: "task",
+              }).absolutePath;
+            }
+            if (typed.checkoutOverride !== undefined) {
+              checkoutOverride = resolveCatalogRelativePath({
+                inputPath: typed.checkoutOverride,
+                projectRoot: wireProjectRoot,
+                roots,
+                fieldName: "checkout",
+              }).absolutePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           let result: Awaited<ReturnType<typeof manager.startRun>>;
+          const callerId = callerIdFromRequestAuth();
           try {
             result = await manager.startRun({
-              task: body.task,
-              pipeline: body.pipeline.trim(),
-              ...(body.checkoutOverride !== undefined
-                ? { checkoutOverride: body.checkoutOverride }
+              task: taskInput,
+              pipeline: pipelinePath,
+              projectRoot: wireRoot.path,
+              ...(checkoutOverride !== undefined
+                ? { checkoutOverride }
                 : {}),
-              ...(body.skipGates !== undefined ? { skipGates: body.skipGates } : {}),
-              ...(body.gitSha !== undefined ? { gitSha: body.gitSha } : {}),
-              ...(body.ciPrUrl !== undefined ? { ciPrUrl: body.ciPrUrl } : {}),
-              ...(body.ciJobUrl !== undefined ? { ciJobUrl: body.ciJobUrl } : {}),
+              ...(typed.skipGates !== undefined ? { skipGates: typed.skipGates } : {}),
+              ...(typed.gitSha !== undefined ? { gitSha: typed.gitSha } : {}),
+              ...(typed.ciPrUrl !== undefined ? { ciPrUrl: typed.ciPrUrl } : {}),
+              ...(typed.ciJobUrl !== undefined ? { ciJobUrl: typed.ciJobUrl } : {}),
+              ...(typed.skills !== undefined ? { skills: typed.skills } : {}),
+              callerId,
             });
           } catch (err) {
             if (err instanceof PipelineValidationError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: "pipeline_validation",
+              });
               json(res, 400, {
                 error: "Pipeline validation failed",
                 validation: err.result,
               });
               return true;
             }
+            if (err instanceof PipelinePreflightError) {
+              writeAudit(auditLog, {
+                caller_id: callerId,
+                surface: getRequestAuth()?.surface ?? "rest",
+                action: "start_run",
+                outcome: "error",
+                error_code: err.code,
+              });
+              json(res, 400, err.toNetworkBody());
+              return true;
+            }
             throw err;
           }
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "start_run",
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
-          json(res, 202, { runId: result.runId });
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "start_run",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
+          json(res, 202, {
+            runId: result.runId,
+            ...(result.queued === true
+              ? {
+                  queued: true,
+                  queuePosition: result.queuePosition,
+                  ...(result.queuedCode !== undefined
+                    ? { queuedCode: result.queuedCode }
+                    : {}),
+                }
+              : {}),
+          });
           return true;
         }
 
         if (method === "POST" && pathname.match(/^\/api\/runs\/[^/]+\/rerun$/)) {
           const runId = decodeURIComponent(pathname.split("/")[3] ?? "");
-          const result = await manager.rerun(runId);
+          const body = (await readJsonBody(req)) as {
+            pinned?: boolean;
+          };
+          if (body.pinned !== undefined && typeof body.pinned !== "boolean") {
+            json(res, 400, { error: "pinned must be a boolean" });
+            return true;
+          }
+          const callerId = callerIdFromRequestAuth();
+          const result = await manager.rerun(runId, {
+            ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+            callerId,
+          });
           if (!result.ok) {
+            writeAudit(auditLog, {
+              caller_id: callerId,
+              surface: getRequestAuth()?.surface ?? "rest",
+              action: "rerun",
+              target_run_id: runId,
+              outcome: "error",
+              error_code: result.code,
+            });
             json(res, result.status ?? 500, mapStartFailure(result));
             return true;
           }
+          writeAudit(auditLog, {
+            caller_id: callerId,
+            surface: getRequestAuth()?.surface ?? "rest",
+            action: "rerun",
+            target_run_id: result.runId,
+            outcome: "ok",
+          });
           json(res, 202, { runId: result.runId });
           return true;
         }
@@ -627,15 +1140,115 @@ export function createOperatorRoutes(
           return true;
         }
 
+        const cancelMatch = pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+        if (method === "POST" && cancelMatch) {
+          const body = (await readJsonBody(req)) as { reason?: unknown };
+          const runId = decodeURIComponent(cancelMatch[1] ?? "");
+          if (typeof body.reason !== "string" || body.reason.trim().length === 0) {
+            json(res, 400, { error: "Cancel reason is required" });
+            return true;
+          }
+          const result = await manager.cancelRun(runId, body.reason);
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<CancelRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 202, {
+            ok: true,
+            runId: result.runId,
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/runs/gc") {
+          const body = (await readJsonBody(req)) as { execute?: unknown };
+          const execute = body.execute === true;
+          const result = await manager.gcRuns({ execute, channel: "rest" });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<GcRunsResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
+            slimmed: result.slimmed,
+            purged: result.purged,
+            bareCachesEvicted: result.bareCachesEvicted,
+          });
+          return true;
+        }
+
+        const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/);
+        if (method === "DELETE" && deleteMatch) {
+          const runId = decodeURIComponent(deleteMatch[1] ?? "");
+          const forceParam = url.searchParams.get("force");
+          const force = forceParam === "true" || forceParam === "1";
+          const result = await manager.deleteRun(runId, {
+            force,
+            channel: "rest",
+          });
+          if (!result.ok) {
+            json(res, result.status ?? 500, {
+              error: (result as Extract<DeleteRunResult, { ok: false }>).reason,
+            });
+            return true;
+          }
+          json(res, 200, {
+            ok: true,
+            runId: result.runId,
+          });
+          return true;
+        }
+
         if (method === "GET" && pathname === "/api/tasks") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { tasks: catalog.tasks });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listTasksMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            tasks: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
         if (method === "GET" && pathname === "/api/pipelines") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { pipelines: catalog.pipelines });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipelines: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
@@ -654,12 +1267,33 @@ export function createOperatorRoutes(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let stageWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            stageWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           const parsed = parseCreateStageBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
+          const ctx = await resolveStageflowContext(stageWriteRoot);
           if (!ctx.isGitProject) {
             json(res, 400, {
               error:
@@ -684,12 +1318,33 @@ export function createOperatorRoutes(
             json(res, 400, { error: "Invalid JSON body" });
             return true;
           }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let pipelineWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            pipelineWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
           const parsed = parseCreatePipelineBody(body);
           if ("ok" in parsed) {
             json(res, parsed.status, { error: parsed.error });
             return true;
           }
-          const ctx = await resolveStageflowContext(cwd);
+          const ctx = await resolveStageflowContext(pipelineWriteRoot);
           if (!ctx.isGitProject) {
             json(res, 400, {
               error:
@@ -707,8 +1362,28 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/models") {
-          const catalog = await browseCatalog(cwd);
-          json(res, 200, { models: catalog.models });
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listModelsMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            models: result.models,
+            entries: result.items,
+            root_errors: result.root_errors,
+          });
           return true;
         }
 
@@ -743,7 +1418,7 @@ export function createOperatorRoutes(
         }
 
         if (method === "GET" && pathname === "/api/health") {
-          json(res, 200, manager.getHealth());
+          await handleApiHealth(req, res, boot);
           return true;
         }
 
@@ -831,33 +1506,56 @@ export function createOperatorRoutes(
         }
         return true;
       }
+      }
   };
 }
 
 export async function startUiServer(
   options: UiServerOptions,
-): Promise<HttpHostEnvelope> {
+): Promise<HttpHostEnvelope & { shutdown: ShutdownController }> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
-  const { manager, store, cwd, agentDir, rootDir } = boot;
+  const { cwd, agentDir, rootDir } = boot;
   const providerAuthContext = boot.providerAuthContext;
+  const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
+  const controlTokens = options.controlTokens ?? loadControlTokens();
 
-  return createHttpHost({
+  let shutdown: ShutdownController | undefined;
+  const routes =
+    boot.serveBlocked !== undefined ||
+    boot.manager === undefined ||
+    boot.store === undefined
+      ? async () => false
+      : createOperatorRoutes({
+          manager: boot.manager,
+          store: boot.store,
+          cwd,
+          agentDir,
+          rootDir,
+          providerAuthContext,
+          uiDistDir,
+          allowedHosts,
+          controlTokens,
+          getShutdown: () => shutdown,
+        });
+  const envelope = await createHttpHost({
     boot,
     host,
     port,
-    routes: createOperatorRoutes({
-      manager,
-      store,
-      cwd,
-      agentDir,
-      rootDir,
-      providerAuthContext,
-      uiDistDir,
-    }),
+    allowedHosts,
+    controlTokens,
+    routes,
   });
+  shutdown = installShutdownController({
+    server: envelope.server,
+    host: makeDrainableHostFromOptional(envelope.manager, envelope.store),
+  });
+  envelope.server.on("close", () => {
+    shutdown?.uninstall();
+  });
+  return { ...envelope, shutdown };
 }
 
 export { DEFAULT_PORT };

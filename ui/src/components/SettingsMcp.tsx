@@ -1,11 +1,18 @@
+import { useEffect, useState } from "react";
 import { CodeBlock } from "@astryxdesign/core/CodeBlock";
 import { cursorMcpConfigJson, mcpEndpointUrl } from "../mcpConnect";
+import { getControlToken, setControlToken } from "../api/controlToken";
 
 export function SettingsMcp() {
   const url = mcpEndpointUrl(window.location, {
     viteDev: import.meta.env.DEV,
   });
   const snippet = cursorMcpConfigJson(url);
+  const [token, setToken] = useState(() => getControlToken());
+
+  useEffect(() => {
+    setControlToken(token);
+  }, [token]);
 
   return (
     <section className="card">
@@ -13,7 +20,7 @@ export function SettingsMcp() {
         <h2>Operator-host MCP</h2>
       </div>
       <p style={{ margin: 0, color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}>
-        This console process also serves Streamable HTTP MCP on localhost.
+        This console process also serves Streamable HTTP MCP on the same origin.
         Cursor connects with a URL. There is no stdio command, and the
         endpoint dies when this process stops.
       </p>
@@ -23,12 +30,34 @@ export function SettingsMcp() {
           <strong>Endpoint</strong>
           <p>
             Same host as this console, path{" "}
-            <span className="mono">/mcp</span>. Loopback only. No API key.
+            <span className="mono">/mcp</span>. When the Host is bound off
+            loopback, send{" "}
+            <span className="mono">Authorization: Bearer</span> with the control
+            token below (drive scope).
           </p>
         </span>
         <span className="mono" style={{ wordBreak: "break-all" }}>
           {url}
         </span>
+      </div>
+
+      <div className="setting">
+        <span>
+          <strong>Control token</strong>
+          <p>
+            Stored in this browser only (<span className="mono">localStorage</span>).
+            Leave empty for local loopback Hosts that run without{" "}
+            <span className="mono">STAGEFLOW_CONTROL_TOKEN</span>.
+          </p>
+        </span>
+        <input
+          type="password"
+          autoComplete="off"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="STAGEFLOW_CONTROL_TOKEN"
+          style={{ minWidth: "16rem" }}
+        />
       </div>
 
       <ol className="steps">
@@ -44,7 +73,8 @@ export function SettingsMcp() {
         <li>
           <span>
             Paste the snippet below. Use <span className="mono">url</span>, not{" "}
-            <span className="mono">command</span>.
+            <span className="mono">command</span>. Remote clients also need the
+            bearer control token.
           </span>
         </li>
         <li>

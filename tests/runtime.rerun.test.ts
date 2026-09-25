@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { pipelinePath, catalogLocators, taskPath, SAMPLE_TASK, DOCS_ONLY_PIPELINE, LINEAR_EXPLICIT_PIPELINE } from "./helpers/fixturePaths.js";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +25,20 @@ function successEnvelope(summary: string) {
 }
 
 describe("run manager re-run", () => {
+  const previousMaxQueued = process.env.STAGEFLOW_MAX_QUEUED;
+
+  beforeEach(() => {
+    process.env.STAGEFLOW_MAX_QUEUED = "0";
+  });
+
+  afterEach(() => {
+    if (previousMaxQueued === undefined) {
+      delete process.env.STAGEFLOW_MAX_QUEUED;
+    } else {
+      process.env.STAGEFLOW_MAX_QUEUED = previousMaxQueued;
+    }
+  });
+
   it("re-run creates a new run id with the same task snapshot and pipeline", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-"));
     const store = createRunStore({ rootDir: root });
@@ -237,7 +251,7 @@ describe("run manager re-run", () => {
     }
   });
 
-  it("rerun does not copy CI identity onto the new run", async () => {
+  it("rerun replays CI identity from the source run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-rerun-ci-"));
     const store = createRunStore({ rootDir: root });
     const agent = scriptedFakeAgent([
@@ -277,9 +291,11 @@ describe("run manager re-run", () => {
     expect(result.runId).not.toBe(started.runId);
 
     const copy = await store.readRunMeta(result.runId);
-    expect(copy.git_sha).toBeUndefined();
-    expect(copy.ci_pr_url).toBeUndefined();
-    expect(copy.ci_job_url).toBeUndefined();
+    expect(copy.git_sha).toBe("deadbeef");
+    expect(copy.ci_pr_url).toBe("https://github.com/acme/repo/pull/42");
+    expect(copy.ci_job_url).toBe(
+      "https://github.com/acme/repo/actions/runs/99",
+    );
 
     while (manager.getActiveCount() > 0) {
       await new Promise((r) => setTimeout(r, 20));

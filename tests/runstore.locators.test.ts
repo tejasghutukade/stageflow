@@ -123,6 +123,6 @@ VALUES ('legacy-1', 'docs-only', 'id: t\ngoal: g\n', 'succeeded', '2026-01-01T00
     expect(names).toContain("pipeline_path");
     expect(names).toContain("task_path");
     expect(names).toContain("project_root");
-    expect(names).toContain("inline_pipeline_json");
+    expect(names).toContain("pipeline_body");
   });
 });

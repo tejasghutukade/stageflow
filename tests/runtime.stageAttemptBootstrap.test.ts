@@ -177,6 +177,44 @@ describe("openStageAttempt", () => {
     expect(opened[0]?.skillFilePath).toBe(filePath);
   });
 
+  it("resolves run-scoped skill under repository binding without trust_workspace_config", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-run-skill-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      repository: "https://github.com/example/repo.git",
+    });
+    const { materializeRunSkills } = await import("../src/runtime/runSkills.js");
+    const skillBody =
+      "---\nname: run-fixture\ndescription: Run-scoped fixture.\n---\n# Run\n";
+    await materializeRunSkills(run.workspaceDir, {
+      "run-fixture": { "SKILL.md": skillBody },
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: stage("clarify", "run-fixture"),
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      checkoutRoot: await mkdtemp(path.join(tmpdir(), "sf-boot-co-")),
+      bindingKind: "repository",
+      trustWorkspaceConfig: [],
+      operatorCatalog: { cwd: factoryCwd, agentDir: operatorAgentDir },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]?.skillFilePath).toContain(
+      path.join("skills", "run-fixture", "SKILL.md"),
+    );
+  });
+
   it("forwards stage.timeout_ms as timeoutMs to openStage", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-boot-timeout-"));
     const store = createRunStore({ rootDir: root });
@@ -800,6 +838,139 @@ describe("openStageAttempt", () => {
         cwd: path.resolve(factoryCwd),
       },
     });
+    const detail = await store.readRun(run.runId);
+    expect(detail.config_origins).toEqual([
+      {
+        name: "github",
+        origin: "catalog",
+        path: path.join(factoryCwd, ".mcp.json"),
+      },
+    ]);
+  });
+
+  it("AE5: refuses checkout-only .mcp.json for repository binding", async () => {
+    const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-co-"));
+    await writeMcpCatalog(checkout, {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-repo-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      projectRoot: factoryCwd,
+      checkoutRoot: checkout,
+      repository: "https://github.com/example/repo.git",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      checkoutRoot: checkout,
+      bindingKind: "repository",
+      trustWorkspaceConfig: [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("untrusted_config_origin");
+    expect(opened).toHaveLength(0);
+  });
+
+  it("AE5: allows checkout-only .mcp.json for checkout binding and records workspace origin", async () => {
+    const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-co-ok-"));
+    await writeMcpCatalog(checkout, {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-co-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      projectRoot: factoryCwd,
+      checkoutRoot: checkout,
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      checkoutRoot: checkout,
+      bindingKind: "checkout",
+      trustWorkspaceConfig: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.resolvedMcpServers?.github).toMatchObject({
+      command: "npx",
+      cwd: path.resolve(checkout),
+    });
+    const detail = await store.readRun(run.runId);
+    expect(detail.config_origins).toEqual([
+      {
+        name: "github",
+        origin: "workspace",
+        path: path.join(checkout, ".mcp.json"),
+      },
+    ]);
+  });
+
+  it("AE5: trust_workspace_config allowlists checkout .mcp.json for repository binding", async () => {
+    const checkout = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-trust-"));
+    await writeMcpCatalog(checkout, {
+      github: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-github"],
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-ae5-trust-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+      projectRoot: factoryCwd,
+      checkoutRoot: checkout,
+      repository: "https://github.com/example/repo.git",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      checkoutRoot: checkout,
+      bindingKind: "repository",
+      trustWorkspaceConfig: [factoryCwd],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened).toHaveLength(1);
+    const detail = await store.readRun(run.runId);
+    expect(detail.config_origins?.[0]?.origin).toBe("workspace");
   });
 
   it("stamps STAGEFLOW_STAGE_ARTIFACTS_DIR onto resolved MCP args", async () => {
@@ -896,16 +1067,17 @@ describe("openStageAttempt", () => {
         store,
         runId: run.runId,
         stage: { ...stage("clarify"), mcp: ["github"] },
+        stageId: "clarify",
         task,
         dag: rootDag("clarify"),
         workspaceDir: run.workspaceDir,
         factoryCwd,
       });
 
-      expect(result).toEqual({
-        ok: false,
-        reason: expect.stringContaining(envKey),
-      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toContain(envKey);
+      expect(result.reason).toContain('stage "clarify"');
       expect(opened).toHaveLength(0);
     } finally {
       if (previous === undefined) {
@@ -914,6 +1086,40 @@ describe("openStageAttempt", () => {
         process.env[envKey] = previous;
       }
     }
+  });
+
+  it("interpolates MCP catalog vars from curated stageEnv grants", async () => {
+    const envKey = "STAGEFLOW_TEST_MCP_GRANT";
+    await writeMcpCatalog(factoryCwd, {
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: `Bearer \${${envKey}}` },
+      },
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "sf-boot-mcp-grant-"));
+    const store = createRunStore({ rootDir: root });
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const { agent, opened } = recordingAgent();
+
+    const result = await openStageAttempt({
+      agent,
+      store,
+      runId: run.runId,
+      stage: { ...stage("clarify"), mcp: ["github"] },
+      task,
+      dag: rootDag("clarify"),
+      workspaceDir: run.workspaceDir,
+      factoryCwd,
+      stageEnv: { [envKey]: "grant-token-value-xx" },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(opened[0]?.resolvedMcpServers?.github).toMatchObject({
+      headers: { Authorization: "Bearer grant-token-value-xx" },
+    });
   });
 
   it("fails closed without openStage when the allowlisted server is unknown", async () => {

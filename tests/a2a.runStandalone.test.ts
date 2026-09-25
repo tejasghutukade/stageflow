@@ -288,6 +288,7 @@ describe("run_stage (A2A standalone stage/pipeline operation, ADR-0001)", () => 
     // used it by mistake, this would fail with ENOENT the same way the
     // original bug did against the real global home directory.
     const { store, connection } = createRunStoreWithConnection({ rootDir: projectRoot });
+    await store.ensureProject(projectRoot);
     const manager = new RunManager({ agent: supplierAgent(), store, cwd: projectRoot });
     const registry = await loadPublicationRegistry(supplierConfig, env);
     const invocations = createA2aInvocations(

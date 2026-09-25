@@ -14,7 +14,7 @@ Provider management is via `sf providers` and the console **Settings → Provide
 | Mode | Where credentials live |
 |------|------------------------|
 | `pi_home` | Pi's standard auth file under your Pi home directory (`~/.pi/agent/auth.json`) |
-| `sf_owned` | Stageflow global auth at `~/.stageflow/agent/auth.json` |
+| `sf_owned` | Stageflow global auth at `$STAGEFLOW_HOME/agent/auth.json` (default `~/.stageflow/agent/auth.json`) |
 
 Check current binding:
 
@@ -25,7 +25,7 @@ sf providers detect
 
 `detect` prints `piHomeUsable`, `credentialSource`, `provisional`, and `bindingSource`.
 
-If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/` settings can persist or override the source versus global `~/.stageflow`.
+If the credential source is unset, the binding is **provisional** — `pi_home` when that auth file is usable, otherwise `sf_owned`. Project `<git-root>/.stageflow/settings.json` can persist or override the source versus global `$STAGEFLOW_HOME/settings.json`.
 
 Set explicitly:
 
@@ -37,9 +37,22 @@ sf providers source set sf_owned
 **When to use which:**
 
 - **`pi_home`** — you already use Pi CLI elsewhere; one login for Pi and Stageflow
-- **`sf_owned`** — isolate Stageflow credentials in `~/.stageflow/` without touching Pi home
+- **`sf_owned`** — isolate Stageflow credentials under the durable root without touching Pi home
 
-Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth. Run state itself is **global** — `~/.stageflow/.stageflow/`, shared across every project — since Stageflow became a single auto-starting service.
+## Non-interactive Host boot credentials
+
+At Host boot (`sf ui` / `sf mcp`), Stageflow configures providers from:
+
+- `STAGEFLOW_PROVIDER_<ID>_API_KEY`
+- `STAGEFLOW_PROVIDER_<ID>_API_KEY_FILE` (trims one trailing newline)
+
+Do not set both. Unreadable files soft-fail by default (Host still starts). `STAGEFLOW_REQUIRE_PROVIDERS=id1,id2` makes missing providers fatal. OAuth remains interactive via `sf providers login … --type oauth`.
+
+The run store and Host Pi agent directory live under the **global durable root** (`$STAGEFLOW_HOME`, default `~/.stageflow/`). Project settings (`<git-root>/.stageflow/settings.json`) are separate from global auth and are not the run store. See [Data directory](data-directory.md).
+
+Provider API keys are **not** passed into stage process environments. Model auth continues via `authPath` (file binding). Claude backend refuses to start as root (`euid=0`) because the SDK requires `bypassPermissions`. See [migration-stage-environment.md](migration-stage-environment.md).
+
+**Docker Compose:** set `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` / `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY` (or `_FILE`) in `.env` — bare `OPENROUTER_API_KEY` alone does not configure Host boot. See [Docker — Local try](docker.md#local-try-compose) and [`.env.example`](../.env.example).
 
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 

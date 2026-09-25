@@ -1,5 +1,6 @@
 import type { AgentPort } from "../agent/port.js";
 import { normalizeForkChoice } from "../envelope/forkChoice.js";
+import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
@@ -62,12 +63,29 @@ import {
 } from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
+import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
 import { runStage, isRunStageWaiting } from "./stageRunner.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { attemptContext, resumeSessionFilePath } from "./stageAttemptContext.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { stageBindingEnvFromRun } from "./stageRoots.js";
+import { attemptWorkspaceDir } from "../runstore/workspaceLayout.js";
+import {
+  cleanupCredentialsDir,
+  loadSecretRegistry,
+  resolveStageSecrets,
+  SecretUnavailableError,
+} from "./stageSecrets.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  logger as rootLogger,
+} from "../logging/logger.js";
+import { registerNamedSecrets, REDACTION_SECRETS_FILENAME } from "../logging/namedSecrets.js";
+import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 
 type SchedulerPreparedPipeline = {
   task: TaskFile;
@@ -154,6 +172,8 @@ export function snapshotToScheduleState(
       return "active";
     case "waiting_for_input":
       return executionMode === "process" ? "waiting" : "active";
+    case "interrupted":
+      return "waiting";
     case "skipped":
       return "skipped";
     default:
@@ -311,7 +331,24 @@ export type ResumeRunOptions = {
   initialPrior?: StageEnvelope | null;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
+
+/** Refuses to overwrite a cancelled run (KTD7). */
+export async function writeTerminalRunStatus(
+  store: RunStore,
+  runId: string,
+  status: "succeeded" | "failed",
+): Promise<void> {
+  const meta = await store.readRunMeta(runId);
+  if (meta.status === "cancelled") return;
+  await store.updateRunStatus(runId, status);
+  await finaliseStoredRunManifest(store, runId).catch(() => undefined);
+  await refreshRunDiskUsage(store, runId).catch(() => undefined);
+  if (status === "succeeded") {
+    await reclaimWorkspaceOnRunSucceeded(store, runId);
+  }
+}
 
 export async function resumeRun(
   options: ResumeRunOptions,
@@ -354,7 +391,8 @@ export async function resumeRun(
 
   if (allTerminal) {
     const unhandledFailure = scheduleHasUnhandledFailure(dag, hydrated.states);
-    await prepared.store.updateRunStatus(
+    await writeTerminalRunStatus(
+      prepared.store,
       prepared.run.runId,
       unhandledFailure ? "failed" : "succeeded",
     );
@@ -398,6 +436,8 @@ export type RunPipelineDagOptions = {
       decision: FeedbackLoopDecisionInput,
     ) => Promise<ResolveFeedbackLoopDecisionResult>;
   }) => Promise<void>;
+  /** Live cancel flag — when set, launchStage/startStage stop. */
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export type RetryRunOptions = {
@@ -409,6 +449,7 @@ export type RetryRunOptions = {
   mutationQueue?: RetryMutationQueue;
   onLoopTick?: () => void | Promise<void>;
   onRetryRootTerminal?: OnRetryRootTerminal;
+  schedulingHalt?: { halted: boolean; hostShutdown?: boolean };
 };
 
 export async function retryRun(
@@ -431,6 +472,7 @@ export async function retryRun(
     mutationQueue: options.mutationQueue,
     onLoopTick: options.onLoopTick,
     onRetryRootTerminal: options.onRetryRootTerminal,
+    schedulingHalt: options.schedulingHalt,
   });
 }
 
@@ -671,10 +713,16 @@ export async function runPipelineDag(
     options.initialSchedule ??
     (await hydrateScheduleFromStore(store, run.runId, fallbackDag, executionMode));
   let dag: RunPipelineDagSnapshot = hydratedDag ?? fallbackDag;
+  const runMeta = await store.readRunMeta(run.runId);
   if (hydratedDag === undefined) {
-    const meta = await store.readRunMeta(run.runId);
-    dag = meta.pipeline_dag ?? fallbackDag;
+    dag = runMeta.pipeline_dag ?? fallbackDag;
   }
+  const stageBinding = stageBindingEnvFromRun({
+    meta: runMeta,
+    task,
+    runWorkspaceDir: run.workspaceDir,
+    hostEnv: process.env,
+  });
   const stageById = buildStageConfigById(loaded);
 
   const retryContext = options.retryContext;
@@ -1240,34 +1288,92 @@ export async function runPipelineDag(
       });
     }
 
+    const attemptDir = attemptWorkspaceDir(run.workspaceDir, stageId, attempt);
+    await mkdir(attemptDir, { recursive: true });
+    const attemptHome = path.join(attemptDir, "home");
+    await mkdir(attemptHome, { recursive: true });
+    let grants;
+    try {
+      const resolved = resolveStageSecrets({
+        decls: stage.secrets,
+        registry: loadSecretRegistry(process.env),
+        hostEnv: process.env,
+        attemptDir,
+      });
+      grants = resolved.grants;
+      registerNamedSecrets(resolved.knownValues);
+      await writeFile(
+        path.join(attemptDir, REDACTION_SECRETS_FILENAME),
+        `${JSON.stringify(resolved.knownValues)}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      for (const warning of resolved.warnings) {
+        rootLogger.warn("stage.secrets", warning, {
+          run_id: run.runId,
+          stage_id: stageId,
+        });
+      }
+      await writeFile(
+        path.join(attemptDir, "declared-secrets.json"),
+        `${JSON.stringify({ names: grants.declaredSecretNames }, null, 2)}\n`,
+        "utf8",
+      );
+    } catch (err) {
+      const reason =
+        err instanceof SecretUnavailableError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      await onStageFailure(stageId, reason);
+      return;
+    }
+
+    const cleanupAttemptCredentials = () => {
+      try {
+        cleanupCredentialsDir(attemptDir);
+      } catch {
+        // best-effort Host cleanup
+      }
+    };
+
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
+        cleanupAttemptCredentials();
         await onStageFailure(stageId, "stage process launcher is not configured");
         return;
       }
-      const launchResult = await launcher.launch({
-        runId: run.runId,
-        stageId,
-        rootDir: factoryCwd,
-        attempt,
-        ...(sessionMode !== undefined
-          ? {
-              mode:
-                sessionMode === "feedback_resume"
-                  ? "feedback_resume"
-                  : sessionMode === "new_session"
-                    ? "new_session"
-                    : "run",
-            }
-          : {}),
-        ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
-        ...(prepared.operatorCatalog !== undefined
-          ? { operatorCatalog: prepared.operatorCatalog }
-          : {}),
-        ...(prepared.skipGates ? { skipGates: true } : {}),
-      });
-      if (launchResult.type === "succeeded") {
+      let launchResult;
+      try {
+        launchResult = await launcher.launch({
+          runId: run.runId,
+          stageId,
+          rootDir: factoryCwd,
+          attempt,
+          env: stageBinding.env,
+          bindingKind: stageBinding.kind,
+          grants,
+          attemptHome,
+          ...(sessionMode !== undefined
+            ? {
+                mode:
+                  sessionMode === "feedback_resume"
+                    ? "feedback_resume"
+                    : sessionMode === "new_session"
+                      ? "new_session"
+                      : "run",
+              }
+            : {}),
+          ...(resumeToken !== undefined ? { sessionFilePath: resumeToken } : {}),
+          ...(prepared.operatorCatalog !== undefined
+            ? { operatorCatalog: prepared.operatorCatalog }
+            : {}),
+          ...(prepared.skipGates ? { skipGates: true } : {}),
+        });
+      } finally {
+        cleanupAttemptCredentials();
+      }      if (launchResult.type === "succeeded") {
         try {
           const envelope = await store.readEnvelope(run.runId, stageId);
           await onStageSuccess(stageId, envelope);
@@ -1278,6 +1384,10 @@ export async function runPipelineDag(
         return;
       }
       if (launchResult.type === "waiting") {
+        states.set(stageId, "waiting");
+        return;
+      }
+      if (options.schedulingHalt?.hostShutdown) {
         states.set(stageId, "waiting");
         return;
       }
@@ -1301,10 +1411,16 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      stageEnv: {
+        ...stageBinding.env,
+        ...grants.env,
+        HOME: attemptHome,
+      },
       ...(sessionMode !== undefined ? { sessionMode } : {}),
       ...(feedbackLoopContext !== undefined ? { feedbackLoopContext } : {}),
       ...(resumeToken !== undefined ? { resumeToken } : {}),
     });
+    cleanupAttemptCredentials();
 
     if (isRunStageWaiting(result)) {
       await onStageFailure(stageId, WAIT_WITHOUT_WORKER_DISPATCH);
@@ -1312,6 +1428,10 @@ export async function runPipelineDag(
     }
 
     if (!result.ok) {
+      if (options.schedulingHalt?.hostShutdown) {
+        states.set(stageId, "waiting");
+        return;
+      }
       await onStageFailure(
         stageId,
         result.reason ?? "stage failed",
@@ -1374,10 +1494,16 @@ export async function runPipelineDag(
   };
 
   while (!allTerminal()) {
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
+    }
     drainRetryMutations();
     await applyStalledJoinSkips();
     if (options.onLoopTick !== undefined) {
       await options.onLoopTick();
+    }
+    if (options.schedulingHalt?.halted) {
+      schedulingHalted = true;
     }
     if (!schedulingHalted) {
       const runnable = pickRunnable();
@@ -1426,11 +1552,15 @@ export async function runPipelineDag(
   if (schedulingHalted) {
     markSkippedPending();
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      if (options.schedulingHalt?.hostShutdown) {
+        await syncRunStatusFromStages(store, run.runId);
+      } else {
+        await writeTerminalRunStatus(store, run.runId, "failed");
+      }
     }
     return {
       ok: false,
-      outcome: "failed",
+      outcome: options.schedulingHalt?.hostShutdown ? "waiting" : "failed",
       runDir: run.workspaceDir,
       runId: run.runId,
       reason: firstFailureReason,
@@ -1439,7 +1569,7 @@ export async function runPipelineDag(
 
   if (scheduleHasUnhandledFailure(dag, states) || !allTerminal()) {
     if (retryContext === undefined) {
-      await store.updateRunStatus(run.runId, "failed");
+      await writeTerminalRunStatus(store, run.runId, "failed");
     }
     return {
       ok: false,
@@ -1450,7 +1580,7 @@ export async function runPipelineDag(
     };
   }
 
-  await store.updateRunStatus(run.runId, "succeeded");
+  await writeTerminalRunStatus(store, run.runId, "succeeded");
   return {
     ok: true,
     outcome: "succeeded",

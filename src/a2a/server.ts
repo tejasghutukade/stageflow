@@ -23,6 +23,7 @@ import { PACKAGE_VERSION } from "../package-meta.js";
 import { A2aApplicationError } from "./contracts.js";
 import { loadPublicationRegistry, type PublicationRegistry } from "./registry.js";
 import { createA2aInvocations, type A2aInvocations, type PublicTask } from "./service.js";
+import type { A2aStore } from "./store.js";
 
 export const A2A_BODY_LIMIT = 1024 * 1024;
 
@@ -230,12 +231,18 @@ export type A2aRuntime = {
   rootDir: string;
   /** The SqliteRunStore's own connection to `state.db`, when the caller constructed one via `createRunStoreWithConnection`. */
   connection?: Database.Database;
+  /** Shared A2A store when the Host composition root already opened one for delete_run. */
+  a2aStore?: A2aStore;
 };
 
 const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 
 export type A2aHost = {
-  status: { state: "disabled" | "enabled" | "configuration_error"; configPath?: string };
+  status: {
+    state: "disabled" | "enabled" | "configuration_error";
+    configPath?: string;
+    error?: { code: string; message: string };
+  };
   handle(req: HttpIncomingMessage, res: ServerResponse, pathname: string): Promise<boolean>;
   /** Deletes expired terminal tasks/artifacts and message tombstones. A no-op when A2A is not enabled. */
   pruneExpired(now?: Date): Promise<{ removedTasks: number; removedMessages: number }>;
@@ -256,9 +263,20 @@ export async function createA2aHost(
       registry = await loadPublicationRegistry(configPath, env);
       status.configPath = registry.configPath;
       status.state = "enabled";
-      invocations = createA2aInvocations(registry, runtime.manager, runtime.runStore, runtime.rootDir, runtime.connection);
-    } catch {
+      invocations = createA2aInvocations(
+        registry,
+        runtime.manager,
+        runtime.runStore,
+        runtime.rootDir,
+        runtime.connection,
+        undefined,
+        runtime.a2aStore,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       status.state = "configuration_error";
+      status.error = { code: "a2a_configuration_error", message };
+      console.error(`stageflow: A2A configuration error: ${message}`);
     }
   }
   const sweep = invocations

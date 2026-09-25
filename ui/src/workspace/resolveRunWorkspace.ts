@@ -645,6 +645,7 @@ function composerState(
     !status ||
     status === "succeeded" ||
     status === "failed" ||
+    status === "interrupted" ||
     status === "pending" ||
     status === "skipped"
   ) {
@@ -657,7 +658,13 @@ function sessionChipKind(
   status: StageSnapshot["status"] | undefined,
 ): SessionChipKind {
   if (status === "waiting_for_input") return "alive";
-  if (status === "succeeded" || status === "failed" || status === "pending" || status === "skipped") {
+  if (
+    status === "succeeded" ||
+    status === "failed" ||
+    status === "interrupted" ||
+    status === "pending" ||
+    status === "skipped"
+  ) {
     return "closed";
   }
   return null;

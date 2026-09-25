@@ -23,6 +23,7 @@ const STAGE_MCP_ERROR_CODES = [
   "reserved_name",
   "unresolved_var",
   "invalid_config",
+  "untrusted_config_origin",
   "connect_failed",
 ] as const;
 
@@ -241,6 +242,30 @@ describe("resolveStageMcpServers", () => {
       expect((err as StageMcpError).code).toBe("unresolved_var");
       expect((err as StageMcpError).message).toContain("GITHUB_TOKEN");
       expect((err as StageMcpError).message).not.toContain("s3cret-value-do-not-print");
+    }
+  });
+
+  it("unresolved_var names the stage when stageId is provided", async () => {
+    const root = await writeCatalog({
+      github: {
+        url: "https://api.github.com/mcp",
+        headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      },
+    });
+    try {
+      await resolveStageMcpServers({
+        projectRoot: root,
+        allowlist: ["github"],
+        env: {},
+        stageId: "publish-github-release",
+      });
+      expect.fail("expected StageMcpError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(StageMcpError);
+      expect((err as StageMcpError).code).toBe("unresolved_var");
+      expect((err as StageMcpError).message).toContain(
+        'stage "publish-github-release"',
+      );
     }
   });
 

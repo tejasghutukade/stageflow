@@ -8,6 +8,7 @@ export type StageMcpErrorCode =
   | "reserved_name"
   | "unresolved_var"
   | "invalid_config"
+  | "untrusted_config_origin"
   | "connect_failed";
 
 export class StageMcpError extends Error {
@@ -103,6 +104,17 @@ export function parseMcpCatalog(
   return servers;
 }
 
+export async function mcpCatalogExists(projectRoot: string): Promise<boolean> {
+  try {
+    await readFile(mcpCatalogPath(projectRoot), "utf8");
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 export async function loadMcpCatalog(projectRoot: string): Promise<InspectedMcpCatalog> {
   const catalogPath = mcpCatalogPath(projectRoot);
   let raw: string;
@@ -194,6 +206,7 @@ function interpolateString(
   value: string,
   env: NodeJS.ProcessEnv,
   serverName: string,
+  stageId?: string,
 ): string {
   return value.replace(INTERPOLATION_TOKEN, (_match, inner: string) => {
     const withDefault = ENV_VAR_WITH_DEFAULT.exec(inner);
@@ -206,8 +219,10 @@ function interpolateString(
       if (found !== undefined) {
         return found;
       }
+      const stagePart =
+        stageId !== undefined ? ` (stage "${stageId}")` : "";
       throw new StageMcpError(
-        `Unresolved MCP catalog variable "${inner}"`,
+        `Unresolved MCP catalog variable "${inner}" for server "${serverName}"${stagePart}. Declare it in secrets: (use as: env for tokens needed in MCP env) or use \${${inner}:-default}.`,
         "unresolved_var",
       );
     }
@@ -223,13 +238,16 @@ function interpolateField(
   value: unknown,
   env: NodeJS.ProcessEnv,
   serverName: string,
+  stageId?: string,
 ): unknown {
   if ((key === "command" || key === "url" || key === "cwd") && typeof value === "string") {
-    return interpolateString(value, env, serverName);
+    return interpolateString(value, env, serverName, stageId);
   }
   if (key === "args" && Array.isArray(value)) {
     return value.map((item) =>
-      typeof item === "string" ? interpolateString(item, env, serverName) : item,
+      typeof item === "string"
+        ? interpolateString(item, env, serverName, stageId)
+        : item,
     );
   }
   if ((key === "env" || key === "headers") && isPlainObject(value)) {
@@ -237,7 +255,7 @@ function interpolateField(
     for (const [field, fieldValue] of Object.entries(value)) {
       copied[field] =
         typeof fieldValue === "string"
-          ? interpolateString(fieldValue, env, serverName)
+          ? interpolateString(fieldValue, env, serverName, stageId)
           : fieldValue;
     }
     return copied;
@@ -307,10 +325,11 @@ function interpolateServer(
   env: NodeJS.ProcessEnv,
   serverName: string,
   projectRoot: string,
+  stageId?: string,
 ): ResolvedMcpServerConfig {
   const resolved: ResolvedMcpServerConfig = {};
   for (const [key, value] of Object.entries(entry)) {
-    resolved[key] = interpolateField(key, value, env, serverName);
+    resolved[key] = interpolateField(key, value, env, serverName, stageId);
   }
   return stampSpawnRoot(resolved, projectRoot, serverName);
 }
@@ -319,10 +338,32 @@ export async function resolveStageMcpServers(options: {
   projectRoot: string;
   allowlist?: readonly string[];
   env: NodeJS.ProcessEnv;
+  stageId?: string;
+  bindingKind?: "repository" | "checkout" | "none";
+  trustWorkspaceConfig?: string[];
+  /** Host project root used for trust_workspace_config allowlist matching. */
+  trustProjectRoot?: string;
+  /** When true, .mcp.json is treated as workspace-sourced. */
+  workspaceSourced?: boolean;
 }): Promise<ResolvedMcpServers> {
   const allowlist = options.allowlist ?? [];
   if (allowlist.length === 0) {
     return {};
+  }
+  if (options.workspaceSourced === true) {
+    const { decideWorkspaceConfigTrust } = await import("./configOrigin.js");
+    const decision = decideWorkspaceConfigTrust({
+      bindingKind: options.bindingKind ?? "none",
+      projectRoot: options.trustProjectRoot ?? options.projectRoot,
+      trustWorkspaceConfig: options.trustWorkspaceConfig,
+      source: "workspace",
+    });
+    if (!decision.allow) {
+      throw new StageMcpError(
+        decision.message ?? "untrusted_config_origin",
+        "untrusted_config_origin",
+      );
+    }
   }
   const catalog = await loadMcpCatalog(options.projectRoot);
   assertMcpAllowlistKnown(catalog.servers, allowlist);
@@ -333,6 +374,7 @@ export async function resolveStageMcpServers(options: {
       options.env,
       name,
       options.projectRoot,
+      options.stageId,
     );
   }
   return resolved;

@@ -1,5 +1,9 @@
-import path from "node:path";
 import { readRunArtifactBytes, artifactMediaType } from "../mcp/readArtifact.js";
+import {
+  CatalogPathError,
+  resolveCatalogRelativePath,
+  resolveCatalogStartInput,
+} from "../config/catalogRelativePath.js";
 import { waitRun } from "../mcp/waitRun.js";
 import { readYamlObject } from "../config/readYamlObject.js";
 import { payloadInstanceMismatch } from "../envelope/payloadSchema.js";
@@ -183,7 +187,18 @@ export class A2aInvocations {
     const taskId = existingTask?.task_id ?? newTaskId();
     const contextIdResolved = existingTask?.context_id ?? this.store.ensureContext(caller.id, contextId);
     const result = await this.manager.startRunOnce(
-      { pipeline: publication.pipeline, task: { id: taskId, goal: publication.goal, input: input as Record<string, unknown> } },
+      {
+        pipeline: publication.pipeline,
+        task: {
+          id: taskId,
+          goal: publication.goal,
+          input: input as Record<string, unknown>,
+          ...(publication.repository !== undefined
+            ? { repository: publication.repository }
+            : {}),
+          ...(publication.ref !== undefined ? { ref: publication.ref } : {}),
+        },
+      },
       { key: submissionKey, requestHash: hash },
     );
     if (!result.ok) {
@@ -202,7 +217,12 @@ export class A2aInvocations {
       if (result.done) {
         void result.done
           .catch(() => undefined)
-          .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+          .then(() => {
+            const row = this.store.getTask(taskId);
+            if (!row) return;
+            return this.maybeFinalize(row);
+          })
+          .catch(() => undefined);
       }
     }
     this.store.recordMessage({ callerId: caller.id, messageId, taskId, operation: "invoke", requestHash: hash, outcome: { ok: true } });
@@ -238,11 +258,30 @@ export class A2aInvocations {
 
     let pipelineArg: string | InlinePipelineDefinition;
     let resultStageId: string | undefined;
+    let runProjectRoot: string | undefined;
     if (cmd.stage !== undefined) {
       let stageBody: Record<string, unknown>;
       if (typeof cmd.stage === "string") {
         if (!cmd.stage.trim()) throw new A2aApplicationError("invalid-input", "stage is required");
-        const absPath = path.resolve(this.rootDir, cmd.stage);
+        let absPath = "";
+        try {
+          const { wireRoot, roots } = await resolveCatalogStartInput(
+            { store: this.runStore },
+            cmd.project_root,
+          );
+          runProjectRoot = wireRoot.path;
+          absPath = resolveCatalogRelativePath({
+            inputPath: cmd.stage,
+            projectRoot: wireRoot.project_root,
+            roots,
+            fieldName: "stage",
+          }).absolutePath;
+        } catch (err) {
+          if (err instanceof CatalogPathError) {
+            throw new A2aApplicationError("invalid-input", err.message);
+          }
+          throw err;
+        }
         try {
           stageBody = await readYamlObject(absPath);
         } catch (err) {
@@ -301,7 +340,11 @@ export class A2aInvocations {
     let result;
     try {
       result = await this.manager.startRunOnce(
-        { pipeline: pipelineArg, task: taskInput },
+        {
+          pipeline: pipelineArg,
+          task: taskInput,
+          ...(runProjectRoot !== undefined ? { projectRoot: runProjectRoot } : {}),
+        },
         { key: submissionKey, requestHash: hash },
       );
     } catch (err) {
@@ -332,7 +375,12 @@ export class A2aInvocations {
       if (result.done) {
         void result.done
           .catch(() => undefined)
-          .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+          .then(() => {
+            const row = this.store.getTask(taskId);
+            if (!row) return;
+            return this.maybeFinalize(row);
+          })
+          .catch(() => undefined);
       }
     }
     this.store.recordMessage({ callerId: caller.id, messageId: cmd.messageId, taskId, operation: "run_stage", requestHash: hash, outcome: { ok: true } });
@@ -563,6 +611,13 @@ export function createA2aInvocations(
   rootDir: string,
   connection?: Database.Database,
   rateLimiter?: RateLimiter,
+  a2aStore?: A2aStore,
 ): A2aInvocations {
-  return new A2aInvocations(registry, manager, runStore, rootDir, new A2aStore(rootDir, connection), rateLimiter);
+  const store =
+    a2aStore ??
+    (connection !== undefined ? new A2aStore(rootDir, connection) : undefined);
+  if (!store) {
+    throw new Error("A2A requires the Host SQLite connection");
+  }
+  return new A2aInvocations(registry, manager, runStore, rootDir, store, rateLimiter);
 }

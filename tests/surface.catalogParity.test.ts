@@ -29,6 +29,7 @@ describe("catalog surface parity", () => {
     clearFindProjectRootCacheForTests();
 
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(repoRoot);
     const agent = scriptedFakeAgent([
       {
         type: "emit",
@@ -50,28 +51,16 @@ describe("catalog surface parity", () => {
       if (!address || typeof address === "string") throw new Error("address");
       const base = `http://127.0.0.1:${address.port}`;
 
-      // MCP's list_pipelines/list_tasks intentionally diverge from the HTTP
-      // console API here: with the run store now global, MCP fans out across
-      // every project this host has ever recorded a run for (and tags each
-      // entry with project_root), so a host integration with no other anchor
-      // still sees everything. The console's /api/pipelines stays scoped to
-      // the single project it's browsing — that's a deliberate UX choice,
-      // not an oversight. Strip project_root before comparing the rest.
+      // REST and MCP share one multi-project catalog path; both tag entries with project_root.
       const httpPipelines = await jsonFetch(`${base}/api/pipelines`);
       const mcpPipelines = await mcpCall(base, "list_pipelines");
-      expect(
-        mcpPipelines.payload.pipelines.map(
-          ({ project_root: _projectRoot, ...rest }: Record<string, unknown>) => rest,
-        ),
-      ).toEqual(httpPipelines.body.pipelines);
+      expect(mcpPipelines.payload.pipelines).toEqual(
+        httpPipelines.body.pipelines,
+      );
 
       const httpTasks = await jsonFetch(`${base}/api/tasks`);
       const mcpTasks = await mcpCall(base, "list_tasks");
-      expect(
-        mcpTasks.payload.tasks.map(
-          ({ project_root: _projectRoot, ...rest }: Record<string, unknown>) => rest,
-        ),
-      ).toEqual(httpTasks.body.tasks);
+      expect(mcpTasks.payload.tasks).toEqual(httpTasks.body.tasks);
 
       const pipelinePath = "pipelines/demo.pipeline.yaml";
       const taskPath = "tasks/demo.task.yaml";

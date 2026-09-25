@@ -19,6 +19,8 @@ catalog:
     - examples/verify-tour
     - examples/retry-tour
     - examples/mcp-hitl-tour
+    - examples/feature-loop
+    - examples/ship-feature
   tasks:
     - examples/generic-fan-in
     - examples/stage-mcp
@@ -38,6 +40,8 @@ catalog:
     - examples/verify-tour
     - examples/retry-tour
     - examples/mcp-hitl-tour
+    - examples/feature-loop
+    - examples/ship-feature
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

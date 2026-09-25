@@ -433,10 +433,10 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
     const wrapped = {
       openStage(input: StageRunInput) {
         if (input.stage.id === "design-doc") {
+          priors[input.stage.id] = input.priorEnvelope?.summary;
           return createCompletedOnlyStageHandle({
             stageId: input.stage.id,
             run: async () => {
-              priors[input.stage.id] = input.priorEnvelope?.summary;
               await bGate;
               return {
                 ok: true as const,
@@ -471,7 +471,11 @@ describe("parallel pipeline scheduler (U3–U6)", () => {
       cwd: fixtures,
     });
 
-    await waitFor(async () => priors["implementation-plan"] !== undefined);
+    await waitFor(
+      async () =>
+        priors["implementation-plan"] !== undefined &&
+        priors["design-doc"] !== undefined,
+    );
     expect(priors["implementation-plan"]).toBe("ancestor");
     expect(priors["design-doc"]).toBe("ancestor");
 

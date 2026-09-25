@@ -222,6 +222,77 @@ describe("runstore catalog", () => {
     ).toBe("running");
   });
 
+  it("deriveStatusFromStages keeps interrupted-only runs running", () => {
+    expect(
+      deriveStatusFromStages([
+        {
+          stage_id: "a",
+          status: "interrupted",
+          events: [],
+          envelope: null,
+          artifacts: [],
+          attempt_count: 1,
+        },
+      ]),
+    ).toBe("running");
+    expect(
+      deriveStatusFromStages([
+        {
+          stage_id: "a",
+          status: "interrupted",
+          events: [],
+          envelope: null,
+          artifacts: [],
+          attempt_count: 1,
+        },
+        {
+          stage_id: "b",
+          status: "interrupted",
+          events: [],
+          envelope: null,
+          artifacts: [],
+          attempt_count: 1,
+        },
+      ]),
+    ).toBe("running");
+    expect(
+      deriveStatusFromStages([
+        {
+          stage_id: "a",
+          status: "succeeded",
+          events: [],
+          envelope: null,
+          artifacts: [],
+          attempt_count: 1,
+        },
+        {
+          stage_id: "b",
+          status: "interrupted",
+          events: [],
+          envelope: null,
+          artifacts: [],
+          attempt_count: 1,
+        },
+      ]),
+    ).toBe("running");
+  });
+
+  it("stageStatusFromEvents derives interrupted", () => {
+    expect(
+      stageStatusFromEvents([
+        { event: "started" },
+        { event: "interrupted", reason: "orphaned_no_worker" },
+      ]),
+    ).toBe("interrupted");
+    expect(
+      stageStatusFromEvents([
+        { event: "started" },
+        { event: "interrupted", reason: "orphaned_no_worker" },
+        { event: "resumed" },
+      ]),
+    ).toBe("running");
+  });
+
   it("listRuns includes waiting fields while a stage waits", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-cat-list-wait-"));
     const store = createRunStore({ rootDir: root });

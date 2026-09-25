@@ -15,6 +15,22 @@ import {
   EXPORT_RUN_USAGE,
   runExportRunCommand,
 } from "./cli/exportRunCommand.js";
+import {
+  DEBUG_RUN_USAGE,
+  runDebugRunCommand,
+} from "./cli/debugRunCommand.js";
+import {
+  BACKUP_USAGE,
+  runBackupCommand,
+} from "./cli/backupCommand.js";
+import {
+  RESTORE_USAGE,
+  runRestoreCommand,
+} from "./cli/restoreCommand.js";
+import {
+  EXPORT_ALL_USAGE,
+  runExportAllCommand,
+} from "./cli/exportAllCommand.js";
 import { INIT_USAGE, runInitCommand } from "./cli/initCommand.js";
 import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js";
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
@@ -25,26 +41,41 @@ import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
 import { GRAPH_USAGE, runGraphCommand } from "./cli/graphCommand.js";
 import { MIGRATE_YAML_USAGE, runMigrateYamlCommand } from "./cli/migrateYamlCommand.js";
-import { createRunStore } from "./runstore/createStore.js";
+import { DOCTOR_USAGE, runDoctorCommand } from "./cli/doctorCommand.js";
 import { resolveStageflowContext } from "./project/resolveStageflowContext.js";
 import { exitForOutcome, runStageWorker } from "./runtime/stageWorker.js";
+import { scheduleExitWithDrain } from "./runtime/stageWorkerProtocol.js";
 import { SF_STAGE_WORKER } from "./runtime/stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./runtime/stageAttemptBootstrap.js";
 import { DEFAULT_PORT, startUiServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcpHost.js";
+import { resolveListenHost } from "./server/listenHost.js";
+import {
+  assertBindAllowed,
+  BindRefusedError,
+  loadControlTokens,
+} from "./server/controlToken.js";
 import { resolveMcpStateless } from "./mcp/server.js";
-import { PACKAGE_VERSION } from "./package-meta.js";
+import { PACKAGE_VERSION, BUILD_SHA } from "./package-meta.js";
+import { installProxyDispatcher } from "./net/proxy.js";
+import { warnMissingCaPaths } from "./preflight/tls.js";
+import { logger as cliLogger } from "./logging/logger.js";
 
 const USAGE = `Usage:
   sf init
-  sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+  sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
   sf run-stage (--stage <path> | --stage-inline '<json>') (--task <path> | --task-inline '<json>' | --envelope-ref <runId>:<stageId>[:<attempt>]) [--checkout <path>] [--model <id>] [--blocking] [--timeout-ms <n>] [--json]
   sf validate [--pipeline <path>] [--task <path>] [--strict] [--json]
+  sf doctor [--json] [--pipeline <path>] [--strict]
   sf graph --pipeline <path> [--json]
   sf migrate-yaml [path] [--root <path>] [--write] [--json] [--force]
   sf artifact read --run <runId> --path <relPath> [--out <file>]
   sf envelope get --run <runId> --stage <stageId> [--json] [--from <sf-run.json>] [--detect-stage <id>] [--format envelope|handoff]
   sf export-run --run <runId> [--from <sf-run.json>] [--out <file>]
+  sf debug-run <runId> [--out <file>]
+  sf backup [--out <file>] [--db-only] [--no-credentials] [--include-a2a-artifacts] [--json]
+  sf restore <file> [--force] [--json]
+  sf export --all [--status <status>] [--since <iso>] [--pipeline <id-or-path>] [--out <file>]
   sf runs list [--status created|running|succeeded|failed] [--since <iso>] [--pipeline <id-or-path>] [--json]
   sf runs show --run <runId> [--from <sf-run.json>] [--json]
   sf runs verify --run <runId> --stage <stageId> [--json]
@@ -55,9 +86,9 @@ const USAGE = `Usage:
   sf runs retry --run <runId> --stage <stageId> [--json]
   sf runs resume --run <runId> --stage <stageId> [--json]
   sf runs abandon --run <runId> --stage <stageId> [--json]
-  sf runs rerun --run <runId> [--json]
-  sf ui [--port ${DEFAULT_PORT}] [--mcp-stateless]
-  sf mcp [--port ${DEFAULT_PORT}] [--mcp-stateless]
+  sf runs rerun --run <runId> [--pinned] [--json]
+  sf ui [--host <addr>] [--port ${DEFAULT_PORT}] [--no-open] [--mcp-stateless]
+  sf mcp [--host <addr>] [--port ${DEFAULT_PORT}] [--mcp-stateless]
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
@@ -85,6 +116,8 @@ ${RUN_STAGE_USAGE}
 
 ${VALIDATE_USAGE}
 
+${DOCTOR_USAGE}
+
 ${GRAPH_USAGE}
 
 ${A2A_USAGE}
@@ -97,6 +130,14 @@ ${ENVELOPE_USAGE}
 
 ${EXPORT_RUN_USAGE}
 
+${DEBUG_RUN_USAGE}
+
+${BACKUP_USAGE}
+
+${RESTORE_USAGE}
+
+${EXPORT_ALL_USAGE}
+
 ${RUNS_USAGE}
 
 ${PROVIDERS_USAGE}
@@ -106,11 +147,16 @@ ${SKILLS_USAGE}`;
 function parseArgs(argv: string[]): {
   help: boolean;
   version?: boolean;
+  versionJson?: boolean;
   command?: string;
   task?: string;
   pipeline?: string;
   port?: number;
+  host?: string;
+  noOpen?: boolean;
   checkout?: string;
+  repository?: string;
+  ref?: string;
   mcpStateless?: boolean;
 } {
   const args = argv.slice(2);
@@ -124,16 +170,19 @@ function parseArgs(argv: string[]): {
     return { help: true };
   }
   if (args[0] === "--version" || args[0] === "-V") {
-    if (args.length > 1) {
-      throw new Error(`Unexpected argument: ${args[1]}`);
+    const versionJson = args.includes("--json");
+    const rest = args.slice(1).filter((a) => a !== "--json");
+    if (rest.length > 0) {
+      throw new Error(`Unexpected argument: ${rest[0]}`);
     }
-    return { help: false, version: true };
+    return { help: false, version: true, versionJson };
   }
 
   const command = args[0];
   if (
     command === "providers" ||
     command === "validate" ||
+    command === "doctor" ||
     command === "graph" ||
     command === "a2a" ||
     command === "migrate-yaml" ||
@@ -143,6 +192,10 @@ function parseArgs(argv: string[]): {
     command === "artifact" ||
     command === "envelope" ||
     command === "export-run" ||
+    command === "debug-run" ||
+    command === "backup" ||
+    command === "restore" ||
+    command === "export" ||
     command === "runs" ||
     command === "skills"
   ) {
@@ -156,7 +209,11 @@ function parseArgs(argv: string[]): {
   let task: string | undefined;
   let pipeline: string | undefined;
   let port: number | undefined;
+  let host: string | undefined;
+  let noOpen = false;
   let checkout: string | undefined;
+  let repository: string | undefined;
+  let ref: string | undefined;
   let mcpStateless = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--task") {
@@ -169,17 +226,49 @@ function parseArgs(argv: string[]): {
         throw new Error("Missing value for --checkout");
       }
       checkout = raw;
+    } else if (args[i] === "--repository") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --repository");
+      }
+      repository = raw;
+    } else if (args[i] === "--ref") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --ref");
+      }
+      ref = raw;
     } else if (args[i] === "--port") {
       const raw = args[++i];
       port = Number(raw);
       if (!Number.isFinite(port) || port <= 0) {
         throw new Error(`Invalid --port: ${raw}`);
       }
+    } else if (args[i] === "--host") {
+      const raw = args[++i];
+      if (raw === undefined || raw.length === 0) {
+        throw new Error("Missing value for --host");
+      }
+      host = raw;
+    } else if (args[i] === "--no-open") {
+      noOpen = true;
     } else if (args[i] === "--mcp-stateless") {
       mcpStateless = true;
     }
   }
-  return { help: false, command, task, pipeline, port, checkout, mcpStateless };
+  return {
+    help: false,
+    command,
+    task,
+    pipeline,
+    port,
+    host,
+    noOpen,
+    checkout,
+    repository,
+    ref,
+    mcpStateless,
+  };
 }
 
 export function parseRunStageArgs(argv: string[]): {
@@ -282,6 +371,9 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
   if (process.env[SF_STAGE_WORKER] !== "1") {
     process.env[SF_STAGE_WORKER] = "1";
   }
+  installProxyDispatcher(process.env, {
+    log: (msg) => cliLogger.info("proxy.dispatcher", msg),
+  });
   const parsed = parseRunStageArgs(argv);
   const outcome = await runStageWorker({
     runId: parsed.runId,
@@ -296,29 +388,61 @@ async function handleInternalRunStage(argv: string[]): Promise<number> {
     operatorCatalog: parsed.operatorCatalog,
     skipGates: parsed.skipGates,
   });
-  exitForOutcome(outcome);
+  return exitForOutcome(outcome);
 }
 
 function openBrowser(url: string): void {
   const platform = process.platform;
+  let child;
   if (platform === "darwin") {
-    spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("open", [url], { detached: true, stdio: "ignore" });
   } else if (platform === "win32") {
-    spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("cmd", ["/c", "start", "", url], { detached: true, stdio: "ignore" });
   } else {
-    spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+    child = spawn("xdg-open", [url], { detached: true, stdio: "ignore" });
   }
+  child.on("error", () => {});
+  child.unref();
+}
+
+function isNoOpenEnabled(
+  flag: boolean | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (flag) return true;
+  const raw = env.STAGEFLOW_NO_OPEN;
+  if (raw === undefined || raw.trim() === "") return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false";
 }
 
 async function main(argv: string[]): Promise<number> {
   try {
+    installProxyDispatcher(process.env, {
+      log: (msg) => cliLogger.info("proxy.dispatcher", msg),
+    });
+    for (const warning of warnMissingCaPaths(process.env)) {
+      cliLogger.warn(
+        "tls.ca_missing",
+        `${warning.name} points to missing path: ${warning.path}`,
+      );
+    }
     const parsed = parseArgs(argv);
     if (parsed.help) {
       console.log(USAGE);
       return argv.slice(2).length === 0 ? 1 : 0;
     }
     if (parsed.version) {
-      console.log(PACKAGE_VERSION);
+      if (parsed.versionJson) {
+        console.log(
+          JSON.stringify({
+            version: PACKAGE_VERSION,
+            build_sha: BUILD_SHA,
+          }),
+        );
+      } else {
+        console.log(PACKAGE_VERSION);
+      }
       return 0;
     }
 
@@ -337,6 +461,10 @@ async function main(argv: string[]): Promise<number> {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });
+    }
+
+    if (parsed.command === "doctor") {
+      return runDoctorCommand(argv.slice(3), { cwd: ctx.invocationCwd });
     }
 
     if (parsed.command === "graph") {
@@ -386,6 +514,29 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
+    if (parsed.command === "debug-run") {
+      return runDebugRunCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+        projectRoot: ctx.projectRoot,
+      });
+    }
+
+    if (parsed.command === "backup") {
+      return runBackupCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
+    }
+
+    if (parsed.command === "restore") {
+      return runRestoreCommand(argv.slice(3));
+    }
+
+    if (parsed.command === "export") {
+      return runExportAllCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
+    }
+
     if (parsed.command === "runs") {
       return runRunsCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
@@ -403,43 +554,55 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
-    const store = createRunStore({ rootDir: ctx.globalHome });
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);
 
     if (parsed.command === "ui") {
+      const listenHost = resolveListenHost({ flag: parsed.host });
+      const tokens = loadControlTokens();
+      assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
-      const { url, mcpUrl } = await startUiServer({
+      const host = await startUiServer({
         agent: resolveAgentPort({ global: globalAgent }),
-        store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
+        host: listenHost,
         mcpStateless,
+        controlTokens: tokens,
       });
-      console.log(`Operator console: ${url}`);
-      console.log(`MCP endpoint: ${mcpUrl}`);
-      openBrowser(url);
-      await new Promise(() => undefined);
-      return 0;
+      console.log(`Operator console: ${host.url}`);
+      console.log(`MCP endpoint: ${host.mcpUrl}`);
+      if (!isNoOpenEnabled(parsed.noOpen)) {
+        openBrowser(host.url);
+      }
+      const outcome = await host.shutdown.whenDrained();
+      return outcome.exitCode;
     }
 
     if (parsed.command === "mcp") {
+      if (parsed.noOpen) {
+        throw new Error("--no-open is only valid with sf ui");
+      }
+      const listenHost = resolveListenHost({ flag: parsed.host });
+      const tokens = loadControlTokens();
+      assertBindAllowed(listenHost, tokens);
       const mcpStateless = resolveMcpStateless({
         mcpStateless: parsed.mcpStateless,
       });
-      const { mcpUrl } = await startMcpServer({
+      const host = await startMcpServer({
         agent: resolveAgentPort({ global: globalAgent }),
-        store,
         cwd: ctx.invocationCwd,
         rootDir: ctx.projectRoot,
         port: parsed.port,
+        host: listenHost,
         mcpStateless,
+        controlTokens: tokens,
       });
-      console.log(`MCP endpoint: ${mcpUrl}`);
-      await new Promise(() => undefined);
-      return 0;
+      console.log(`MCP endpoint: ${host.mcpUrl}`);
+      const outcome = await host.shutdown.whenDrained();
+      return outcome.exitCode;
     }
 
     if (parsed.command === "internal") {
@@ -456,6 +619,10 @@ async function main(argv: string[]): Promise<number> {
     console.error(USAGE);
     return 1;
   } catch (err) {
+    if (err instanceof BindRefusedError) {
+      console.error(err.message);
+      return err.exitCode;
+    }
     console.error(err instanceof Error ? err.message : String(err));
     return 1;
   }
@@ -483,9 +650,11 @@ function isDirectCliInvocation(): boolean {
 
 if (isDirectCliInvocation()) {
   main(process.argv)
-    .then((code) => process.exit(code))
+    .then((code) => {
+      scheduleExitWithDrain(code);
+    })
     .catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
-      process.exit(1);
+      scheduleExitWithDrain(1);
     });
 }

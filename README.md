@@ -98,6 +98,8 @@ sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 
 Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
+**Docker Compose** (UI + MCP in one Host): copy [`.env.example`](.env.example) → `.env`, set `STAGEFLOW_CONTROL_TOKEN`, then `docker compose up --build -d`. Checklist: [docs/docker.md](docs/docker.md#local-try-compose).
+
 ## Connect a model provider
 
 Each stage sets a **`model`** id in YAML (e.g. `anthropic/claude-sonnet-4-5`). The matching provider must be authenticated before runs succeed — `sf validate` does not check auth.
@@ -259,6 +261,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/mcp.md](docs/mcp.md) | MCP tool reference, including standalone `run_stage` |
 | [docs/a2a.md](docs/a2a.md) | Publish pipelines for other agents to call over JSON-RPC (A2A), plus the wildcard-access `run_stage` operation |
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
+| [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
 

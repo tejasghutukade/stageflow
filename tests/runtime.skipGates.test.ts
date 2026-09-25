@@ -232,7 +232,7 @@ describe("skip-gates yield-loop fail-before-park (U2)", () => {
     ).not.toContain("ask_operator");
   });
 
-  it("skip-gates wait maps to worker FAILED exit 1", () => {
+  it("skip-gates wait maps to worker FAILED exit 1", async () => {
     const mapped = outcomeToWorkerResult({
       ok: false,
       reason: "skip-gates: stage requested wait",
@@ -241,13 +241,8 @@ describe("skip-gates yield-loop fail-before-park (U2)", () => {
       type: "failed",
       reason: "skip-gates: stage requested wait",
     });
-    const exit = vi.spyOn(process, "exit").mockImplementation((() => {
-      throw new Error("exit");
-    }) as never);
-    expect(() =>
-      exitForOutcome({ ok: false, reason: "skip-gates: stage requested wait" }),
-    ).toThrow("exit");
-    expect(exit).toHaveBeenLastCalledWith(STAGE_WORKER_EXIT.FAILED);
-    exit.mockRestore();
+    expect(
+      await exitForOutcome({ ok: false, reason: "skip-gates: stage requested wait" }),
+    ).toBe(STAGE_WORKER_EXIT.FAILED);
   });
 });

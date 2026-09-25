@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import { globalStageflowHome } from "../project/globalHome.js";
 import {
   INLINE_PIPELINE_PATH,
   loadPipelineFromObjectOutcome,
@@ -20,6 +21,9 @@ import {
   loadMcpCatalog,
   mcpCatalogPath,
 } from "./resolveStageMcpServers.js";
+import { loadSecretRegistry } from "../runtime/stageSecrets.js";
+import { isForeverDeniedSecret } from "../runtime/stageEnvironment.js";
+import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -35,6 +39,7 @@ export type ValidationFindingCode =
   | "pipeline.stage_missing_body"
   | "pipeline.stage_id_mismatch"
   | "pipeline.invalid_completion"
+  | "catalog.path_case_mismatch"
   | "pipeline.invalid_recovery"
   | "pipeline.include_cycle"
   | "pipeline.include_invalid"
@@ -46,6 +51,8 @@ export type ValidationFindingCode =
   | "pipeline.model_applies"
   | "pipeline.route_if_invalid"
   | "pipeline.route_all_gated"
+  | "pipeline.invalid_requires"
+  | "pipeline.requires_conflict"
   | "stage.invalid_shape"
   | "stage.invalid_model"
   | "stage.missing_model"
@@ -58,6 +65,10 @@ export type ValidationFindingCode =
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
+  | "stage.invalid_secrets"
+  | "stage.unknown_secret"
+  | "stage.denied_secret"
+  | "stage.invalid_requires"
   | "stage.invalid_agent"
   | "stage.invalid_io"
   | "stage.load_error"
@@ -65,14 +76,20 @@ export type ValidationFindingCode =
   | "task.invalid_shape"
   | "task.load_error"
   | "task.entry_input_unmet"
+  | "task.binding_conflict"
+  | "task.repository_ref_required"
+  | "task.ref_without_repository"
+  | "task.repository_invalid"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
   | "catalog.empty_catalog"
   | "catalog.manifest_load_error"
   | "catalog.invalid_mcp"
+  | "catalog.mcp_command_missing"
   | "catalog.mixed_yaml_dialect"
-  | "catalog.legacy_yaml";
+  | "catalog.legacy_yaml"
+  | "catalog.stageflow_home_absolute_path";
 
 export type ValidationFinding = {
   severity: ValidationSeverity;
@@ -357,6 +374,39 @@ export function findingStageIdFilenameMismatch(
   );
 }
 
+/** Parent readdir case check — warn by default; error under --strict. */
+export async function findingPathCaseMismatch(
+  cwd: string,
+  referencedPath: string,
+): Promise<ValidationFinding | null> {
+  const { readdir } = await import("node:fs/promises");
+  const abs = path.isAbsolute(referencedPath)
+    ? referencedPath
+    : path.resolve(cwd, referencedPath);
+  const parent = path.dirname(abs);
+  const base = path.basename(abs);
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return null;
+  }
+  const exact = entries.includes(base);
+  if (exact) return null;
+  const match = entries.find((e) => e.toLowerCase() === base.toLowerCase());
+  if (match === undefined) return null;
+  return baseFinding(
+    {
+      cwd,
+      absPath: abs,
+      message: `Path casing differs on disk: referenced "${base}" but found "${match}"`,
+      code: "catalog.path_case_mismatch",
+      category: "catalog",
+    },
+    "warning",
+  );
+}
+
 async function checkStageIdFilename(
   cwd: string,
   stagePath: string,
@@ -411,6 +461,155 @@ function collectMcpAllowlistNames(loaded: LoadedPipeline): string[] {
   return [...names];
 }
 
+function findingsForStageSecrets(
+  cwd: string,
+  pipelinePath: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const registry = loadSecretRegistry(process.env);
+  const findings: ValidationFinding[] = [];
+  for (const stage of loaded.stages) {
+    for (const decl of stage.secrets ?? []) {
+      if (isForeverDeniedSecret(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `secret "${decl.name}" is permanently denied and cannot be granted`,
+            "stage.denied_secret",
+            stage.id,
+          ),
+        );
+        continue;
+      }
+      if (!registry.has(decl.name)) {
+        findings.push(
+          findingStageError(
+            cwd,
+            pipelinePath,
+            `unknown secret "${decl.name}" is not in the Host secret registry`,
+            "stage.unknown_secret",
+            stage.id,
+          ),
+        );
+      }
+    }
+  }
+  return findings;
+}
+
+const ABSOLUTE_PATH_IN_TEXT_RE =
+  /(?:^|[\s"'`=:(])(\/(?:[^\s"'`;|&<>()]+))/g;
+
+const TRAILING_PATH_PUNCT_RE = /[.,:;!?)\]]+$/;
+
+export function collectAbsolutePathCandidates(text: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  ABSOLUTE_PATH_IN_TEXT_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = ABSOLUTE_PATH_IN_TEXT_RE.exec(text)) !== null) {
+    const raw = match[1]?.replace(TRAILING_PATH_PUNCT_RE, "") ?? "";
+    if (!raw || !path.isAbsolute(raw) || seen.has(raw)) continue;
+    seen.add(raw);
+    found.push(raw);
+  }
+  return found;
+}
+
+export function isPathUnderStageflowHome(candidate: string, home: string): boolean {
+  if (!path.isAbsolute(candidate)) return false;
+  const resolved = path.resolve(candidate);
+  const homeResolved = path.resolve(home);
+  return (
+    resolved === homeResolved || resolved.startsWith(`${homeResolved}${path.sep}`)
+  );
+}
+
+function stageSourcePath(loaded: LoadedPipeline, stageId: string): string {
+  const source = loaded.stageSources?.[stageId];
+  if (source?.kind === "file") return source.path;
+  return loaded.pipelinePath;
+}
+
+function stageflowHomeAbsolutePathMessage(
+  stageId: string,
+  location: string,
+  absolutePath: string,
+): string {
+  return (
+    `Stage "${stageId}" ${location} contains absolute path under STAGEFLOW_HOME ` +
+    `("${absolutePath}"). Use STAGEFLOW_CHECKOUT / STAGEFLOW_RUN_WORKSPACE ` +
+    `(and related binding env vars) instead of durable-home paths`
+  );
+}
+
+function findingsForStageflowHomeAbsolutePaths(
+  cwd: string,
+  loaded: LoadedPipeline,
+): ValidationFinding[] {
+  const home = globalStageflowHome();
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+
+  const pushFinding = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    absolutePath: string,
+  ): void => {
+    const key = `${stageId}\0${location}\0${absolutePath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push(
+      baseFinding(
+        {
+          cwd,
+          absPath,
+          message: stageflowHomeAbsolutePathMessage(stageId, location, absolutePath),
+          code: "catalog.stageflow_home_absolute_path",
+          category: "catalog",
+          pipelineId: loaded.pipeline.id,
+          stageId,
+        },
+        "error",
+      ),
+    );
+  };
+
+  const scanText = (
+    stageId: string,
+    absPath: string,
+    location: string,
+    text: string,
+  ): void => {
+    for (const candidate of collectAbsolutePathCandidates(text)) {
+      if (isPathUnderStageflowHome(candidate, home)) {
+        pushFinding(stageId, absPath, location, candidate);
+      }
+    }
+  };
+
+  for (const stage of loaded.stages) {
+    const absPath = stageSourcePath(loaded, stage.id);
+    scanText(stage.id, absPath, "system_prompt", stage.system_prompt);
+  }
+
+  for (const node of loaded.dag.nodes) {
+    const checks = node.completion?.checks ?? [];
+    for (const check of checks) {
+      if (check.type !== "command") continue;
+      const absPath = stageSourcePath(loaded, node.id);
+      scanText(node.id, absPath, `verify command "${check.id}" run`, check.run);
+      if (typeof check.cwd === "string") {
+        scanText(node.id, absPath, `verify command "${check.id}" cwd`, check.cwd);
+      }
+    }
+  }
+
+  return findings;
+}
+
 async function findingsForStageMcpCatalog(
   cwd: string,
   loaded: LoadedPipeline,
@@ -457,7 +656,24 @@ async function findingsForStageMcpCatalog(
     throw err;
   }
 
-  return [];
+  const findings: ValidationFinding[] = [];
+  const serversForPath: Record<string, { command?: string }> = {};
+  for (const name of allowlist) {
+    const entry = catalog.servers[name] as { command?: string } | undefined;
+    if (entry) serversForPath[name] = entry;
+  }
+  for (const missing of findMissingMcpCommands(serversForPath, process.env)) {
+    findings.push(
+      findingCatalog(
+        cwd,
+        catalogAbsPath,
+        `MCP server "${missing.serverName}" command "${missing.command}" was not found on PATH`,
+        "catalog.mcp_command_missing",
+        "error",
+      ),
+    );
+  }
+  return findings;
 }
 
 type PipelineValidationCoreResult =
@@ -506,6 +722,8 @@ async function runPipelineValidation(
   }
 
   findings.push(...(await findingsForStageMcpCatalog(cwd, outcome.value)));
+  findings.push(...findingsForStageSecrets(cwd, pipelinePath, outcome.value));
+  findings.push(...findingsForStageflowHomeAbsolutePaths(cwd, outcome.value));
 
   if (validateStages && outcome.value.stageSources) {
     for (const source of Object.values(outcome.value.stageSources)) {

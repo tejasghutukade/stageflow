@@ -4,9 +4,13 @@ import type { Stats } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
+import { resolveBashPath } from "../preflight/bash.js";
+import { redactString } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import type { CompletionCheck, CompletionContract } from "../types/completion.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { StageGateKind } from "../types/stage.js";
+import { signalProcessGroup } from "./stageProcessLauncher.js";
 
 /**
  * The result of executing a pipeline-owned command. Command execution is a
@@ -24,6 +28,7 @@ export type CommandExecutionInput = {
   command: string;
   cwd: string;
   timeout_ms?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type CommandExecutor = {
@@ -74,6 +79,8 @@ export type CompletionCheckRunnerInput = {
   artifactsDir: string;
   /** Base directory used for a command check without its own cwd. */
   commandWorkingDirectory?: string;
+  /** Curated env for command checks; omit to inherit the caller's process env. */
+  commandEnv?: NodeJS.ProcessEnv;
   commandExecutor?: CommandExecutor;
   gates?: GateDecisionProvider;
   /** Captured before the agent attempt began. */
@@ -158,6 +165,7 @@ export type CompletionVerificationResult = {
 };
 
 const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024;
+const COMMAND_KILL_ESCALATE_MS = 2000;
 
 function captureOutput(
   chunks: Buffer[],
@@ -182,19 +190,25 @@ export const nodeCommandExecutor: CommandExecutor = {
       let timedOut = false;
       let settled = false;
       let timeout: NodeJS.Timeout | undefined;
+      let escalateTimer: NodeJS.Timeout | undefined;
 
       const finish = (result: CommandExecution) => {
         if (settled) return;
         settled = true;
         if (timeout) clearTimeout(timeout);
+        // When timed out, keep escalateTimer so SIGKILL still runs after the
+        // grace window even if the parent already exited cooperatively.
+        if (escalateTimer && !timedOut) clearTimeout(escalateTimer);
         resolve(result);
       };
 
       let child;
       try {
-        child = spawn(input.command, {
+        const bash = resolveBashPath(input.env ?? process.env);
+        child = spawn(bash, ["-c", input.command], {
           cwd: input.cwd,
-          shell: true,
+          env: input.env,
+          detached: true,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
@@ -213,6 +227,12 @@ export const nodeCommandExecutor: CommandExecutor = {
       });
       child.stderr?.on("data", (data: Buffer) => {
         stderrSize = captureOutput(stderr, Buffer.from(data), stderrSize);
+      });
+      child.once("exit", () => {
+        if (timedOut) {
+          // Parent may exit on SIGTERM while SIGTERM-proof grandchildren remain.
+          signalProcessGroup(child.pid, "SIGKILL");
+        }
       });
       child.once("error", (error) => {
         finish({
@@ -234,7 +254,12 @@ export const nodeCommandExecutor: CommandExecutor = {
       if (input.timeout_ms !== undefined) {
         timeout = setTimeout(() => {
           timedOut = true;
-          child.kill("SIGTERM");
+          const pid = child.pid;
+          signalProcessGroup(pid, "SIGTERM");
+          escalateTimer = setTimeout(() => {
+            // Always escalate after the grace window regardless of exited.
+            signalProcessGroup(pid, "SIGKILL");
+          }, COMMAND_KILL_ESCALATE_MS);
         }, input.timeout_ms);
       }
     });
@@ -276,16 +301,31 @@ async function runCommandCheck(
   const cwd = resolveCommandCwd(check, base);
   const executor = input.commandExecutor ?? nodeCommandExecutor;
   try {
-    const execution = await executor.run({ command: check.run, cwd, timeout_ms: check.timeout_ms });
+    const execution = await executor.run({
+      command: check.run,
+      cwd,
+      timeout_ms: check.timeout_ms,
+      ...(input.commandEnv !== undefined ? { env: input.commandEnv } : {}),
+    });
     const evidence: CommandCheckEvidence = {
       kind: "command",
       command: check.run,
       cwd,
       exit_code: execution.exit_code,
-      stdout: execution.stdout,
-      stderr: execution.stderr,
+      stdout: redactString(execution.stdout, {
+        namedSecrets: getNamedSecrets(),
+      }),
+      stderr: redactString(execution.stderr, {
+        namedSecrets: getNamedSecrets(),
+      }),
       timed_out: execution.timed_out,
-      ...(execution.error !== undefined ? { error: execution.error } : {}),
+      ...(execution.error !== undefined
+        ? {
+            error: redactString(execution.error, {
+              namedSecrets: getNamedSecrets(),
+            }),
+          }
+        : {}),
     };
     if (execution.timed_out) return result(check, "failed", evidence, "command timed out");
     if (execution.error !== undefined) return result(check, "error", evidence, execution.error);

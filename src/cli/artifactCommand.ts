@@ -2,8 +2,13 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { readRunArtifact } from "../mcp/readArtifact.js";
 import { globalStageflowHome } from "../project/globalHome.js";
-import { createRunStore } from "../runstore/createStore.js";
-import { isInsideDir } from "../runstore/workspaceLayout.js";
+import {
+  createRunStoreAfterHostEnsure,
+} from "../runstore/createStore.js";
+import {
+  ensureGlobalService,
+} from "../server/ensureGlobalService.js";
+import { resolveSafeOutPath } from "./resolveSafeOutPath.js";
 
 export const ARTIFACT_USAGE = `Usage:
   sf artifact read --run <runId> --path <relPath> [--out <file>]`;
@@ -76,21 +81,6 @@ function parseArtifactArgs(args: string[]): ParsedArtifactArgs {
   return { help, subcommand, runId, artifactPath, outPath };
 }
 
-function resolveSafeOutPath(outPath: string, cwd: string): string {
-  const segments = outPath.split(/[/\\]/);
-  if (segments.some((segment) => segment === "..")) {
-    throw new Error("path must not contain .. segments");
-  }
-  const resolved = path.resolve(cwd, outPath);
-  const cwdResolved = path.resolve(cwd);
-  if (!isInsideDir(resolved, cwdResolved)) {
-    throw new Error(
-      "output path must resolve under the current working directory",
-    );
-  }
-  return resolved;
-}
-
 export async function runArtifactCommand(
   args: string[],
   options: {
@@ -129,7 +119,15 @@ export async function runArtifactCommand(
     return 1;
   }
 
-  const store = createRunStore({ rootDir: globalStageflowHome() });
+  const opened = await createRunStoreAfterHostEnsure(
+    { rootDir: globalStageflowHome() },
+    () => ensureGlobalService(),
+  );
+  if (!opened.ok) {
+    out.error(opened.message);
+    return 1;
+  }
+  const store = opened.store;
 
   try {
     const contents = await readRunArtifact(

@@ -110,6 +110,7 @@ describe("run_stage — standalone stage execution (MCP)", () => {
   ): Promise<void> {
     const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-run-stage-"));
     const store = createRunStore({ rootDir: storeRoot });
+    await store.ensureProject(projectRoot);
     const agent = scriptedFakeAgent(agentBehaviors);
     const { server } = await startUiServer({
       agent,
