@@ -217,7 +217,12 @@ export class A2aInvocations {
       if (result.done) {
         void result.done
           .catch(() => undefined)
-          .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+          .then(() => {
+            const row = this.store.getTask(taskId);
+            if (!row) return;
+            return this.maybeFinalize(row);
+          })
+          .catch(() => undefined);
       }
     }
     this.store.recordMessage({ callerId: caller.id, messageId, taskId, operation: "invoke", requestHash: hash, outcome: { ok: true } });
@@ -370,7 +375,12 @@ export class A2aInvocations {
       if (result.done) {
         void result.done
           .catch(() => undefined)
-          .then(() => this.maybeFinalize(this.store.getTask(taskId)!));
+          .then(() => {
+            const row = this.store.getTask(taskId);
+            if (!row) return;
+            return this.maybeFinalize(row);
+          })
+          .catch(() => undefined);
       }
     }
     this.store.recordMessage({ callerId: caller.id, messageId: cmd.messageId, taskId, operation: "run_stage", requestHash: hash, outcome: { ok: true } });
