@@ -139,6 +139,8 @@ volumes:
   stageflow-data:
 ```
 
+**Stage secrets and environment visibility:** Host environment variables (including `GITHUB_TOKEN` in a compose file) are **Host-only** until stages explicitly declare `secrets:` with matching names. Stages run with a curated environment (Slot 6) that includes only allowlisted system vars (PATH, locale, proxy/CA, binding vars) plus declared secrets. Default GitHub token behavior is `GIT_ASKPASS` (credential helper); use `{ name: GITHUB_TOKEN, as: env }` only when a tool requires the env var (emits a warning). See [Migration: curated stage environment](migration-stage-environment.md) for the full Slot 6 contract and `STAGEFLOW_STAGE_ENV_PASSTHROUGH` stopgap.
+
 ## CLI via `docker exec` {#cli-via-docker-exec}
 
 A remote harness drives the Host over MCP/REST with a control token. Some CLI commands stay **exec-only** on purpose — see the decision table in [MCP — CLI-only capabilities](mcp.md#cli-only-capabilities-decision-table). Below are literal commands assuming the container is named `stageflow` (replace with your compose service / container id). Prefer catalog-relative paths the Host already knows; mount or bake catalog into the image as your deployment does.

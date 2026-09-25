@@ -250,6 +250,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/README.md](docs/README.md) | Documentation index |
 | [docs/architecture.md](docs/architecture.md) | Runtime components, execution flow, persistence, and design decisions |
 | [docs/quickstart.md](docs/quickstart.md) | Expanded quick start |
+| [docs/docker.md](docs/docker.md) | Docker and self-hosting: volumes, backup/restore, provenance, stage secrets |
 | [docs/yaml-catalog.md](docs/yaml-catalog.md) | Pipelines, stages, tasks schema |
 | [docs/cli-reference.md](docs/cli-reference.md) | `sf init`, `sf run`, `sf run-stage`, `sf graph`, `sf validate`, `sf ui`, `sf mcp`, `sf envelope`, `sf export-run`, `sf artifact`, `sf skills`, `sf providers` |
 | [docs/envelopes.md](docs/envelopes.md) | Handoff envelope contract |
