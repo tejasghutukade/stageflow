@@ -140,7 +140,16 @@ describe.skipIf(!gitAvailable)("git operations", () => {
     const staleSha = execFileSync(
       "git",
       ["-C", bare, "commit-tree", `${tipSha}^{tree}`, "-m", "stale-local-only"],
-      { encoding: "utf8" },
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Test",
+          GIT_AUTHOR_EMAIL: "test@example.com",
+          GIT_COMMITTER_NAME: "Test",
+          GIT_COMMITTER_EMAIL: "test@example.com",
+        },
+      },
     ).trim();
     expect(staleSha).not.toBe(tipSha);
     execFileSync("git", ["-C", bare, "update-ref", "refs/heads/main", staleSha], {
