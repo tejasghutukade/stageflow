@@ -2388,12 +2388,20 @@ describe("runtime stage retry", () => {
     });
 
     const retryClarify = await manager.retryStage(started.runId, "clarify");
-    expect(retryClarify.ok).toBe(true);
+    expect(
+      retryClarify.ok,
+      retryClarify.ok ? undefined : retryClarify.reason,
+    ).toBe(true);
+    if (!retryClarify.ok) return;
 
     await waitFor(async () => {
       const meta = await store.readRunMeta(started.runId);
       return meta.status === "failed";
     });
+
+    if (retryClarify.done !== undefined) {
+      await retryClarify.done;
+    }
 
     const workspaceDir = store.getWorkspaceDir(started.runId);
     await expect(store.readEnvelope(started.runId, "clarify")).resolves.toMatchObject(
@@ -2401,7 +2409,10 @@ describe("runtime stage retry", () => {
     );
 
     const retryDesign = await manager.retryStage(started.runId, "design-doc");
-    expect(retryDesign.ok).toBe(true);
+    expect(
+      retryDesign.ok,
+      retryDesign.ok ? undefined : retryDesign.reason,
+    ).toBe(true);
     if (!retryDesign.ok) return;
 
     await waitFor(async () => {
