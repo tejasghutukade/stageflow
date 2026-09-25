@@ -52,6 +52,8 @@ The run store and Host Pi agent directory live under the **global durable root**
 
 Provider API keys are **not** passed into stage process environments. Model auth continues via `authPath` (file binding). Claude backend refuses to start as root (`euid=0`) because the SDK requires `bypassPermissions`. See [migration-stage-environment.md](migration-stage-environment.md).
 
+**Docker Compose:** set `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` / `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY` (or `_FILE`) in `.env` — bare `OPENROUTER_API_KEY` alone does not configure Host boot. See [Docker — Local try](docker.md#local-try-compose) and [`.env.example`](../.env.example).
+
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 
 ## CLI commands

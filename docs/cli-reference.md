@@ -51,14 +51,16 @@ Also ensures the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`) exist
 Run a pipeline against a task file.
 
 ```bash
-sf run --task <path> --pipeline <path> [--checkout <path>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
+sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/repo>] [--ref <ref>] [--json] [--include stages] [--skip-gates] [--git-sha <sha>] [--ci-pr-url <url>] [--ci-job-url <url>] [--operator-cwd <path>] [--operator-agent-dir <path>]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--task` | Path to a task YAML file (required) |
 | `--pipeline` | Filesystem path to a pipeline YAML file (required) |
-| `--checkout` | Override task `checkout` with a working tree path |
+| `--checkout` | Override task `checkout` with a working tree path (conflicts with `--repository` / task `repository`) |
+| `--repository` | Override task `repository` (`owner/repo` GitHub form) for a Host-owned worktree binding |
+| `--ref` | Override task `ref` (branch, tag, or SHA); required when binding by repository |
 | `--json` | Print one JSON document to stdout |
 | `--include stages` | With `--json`, append `stages[]` run projection (requires `--json`) |
 | `--skip-gates` | Fail the stage instead of waiting on HITL (see [HITL](hitl.md)) |

@@ -879,8 +879,12 @@ Shared pool example: [`tests/fixtures/stages/plan-review.yaml`](../tests/fixture
 | `goal` | yes | What the run should accomplish |
 | `context` | no | Background for agents |
 | `constraints` | no | Boundaries |
-| `checkout` | no | Relative or absolute path to working tree |
+| `checkout` | no | Relative or absolute path to working tree (path binding; conflicts with `repository`) |
+| `repository` | no | GitHub `owner/repo` for a Host-owned worktree binding (requires `ref`) |
+| `ref` | no | Branch, tag, or SHA for `repository` binding (required when `repository` is set) |
 | `input` | no | Structured object matched against each entry stage's `io.input`; omitted is `{}` |
+
+Do not set both `checkout` and `repository` on the same task. CLI overrides: [`sf run --repository` / `--ref`](cli-reference.md#sf-run) / `--checkout`. Repo-bound Docker notes: [Docker — Repo-bound run](docker.md#repo-bound-run).
 
 Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `io.input.schema` and the task omits `input`, start-run / `preparePipeline` treat it as `{}` and fail with `task.invalid_shape` when that does not match. `sf validate` of the task file alone still succeeds. Non-entry stages still receive the full task in the agent prompt.
 

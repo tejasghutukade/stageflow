@@ -84,7 +84,7 @@ CLI starts are unattributed (`surface: cli`, null `caller_id`). MCP/REST stamp `
 
 Missing/malformed credentials → `401` + `WWW-Authenticate: Bearer`. Valid token, wrong scope → `403`. Host/Origin failures → `403` before bearer checks.
 
-Non-loopback bind without a drive token refuses to start (exit `1`) with a stderr message naming the bind and how to set `STAGEFLOW_CONTROL_TOKEN`. Prefer `sf mcp` in containers with `STAGEFLOW_BIND=0.0.0.0`, `STAGEFLOW_CONTROL_TOKEN_FILE=…`, and `STAGEFLOW_ALLOWED_HOSTS` set to the public hostname. Until Slot 6, stage workers inherit `process.env` — treat the control token as Host-process secret hygiene.
+Non-loopback bind without a drive token refuses to start (exit `1`) with a stderr message naming the bind and how to set `STAGEFLOW_CONTROL_TOKEN`. Prefer `sf mcp` in containers with `STAGEFLOW_BIND=0.0.0.0`, `STAGEFLOW_CONTROL_TOKEN_FILE=…`, and `STAGEFLOW_ALLOWED_HOSTS` set to the public hostname. Slot 6 stages use a curated environment (not Host `process.env`) — still treat the control token as Host-process secret hygiene; never put it in stage `secrets:`. See [migration-stage-environment.md](migration-stage-environment.md).
 
 ### Stateless escape hatch (test/debug)
 

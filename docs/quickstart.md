@@ -155,7 +155,7 @@ Exit codes: `0` success, `1` failure, `2` waiting on HITL. Details in [CI / head
 - [CLI reference](cli-reference.md) — all `sf` commands and selected env vars
 - [Operator console](operator-console.md) — console navigation and settings
 - [MCP](mcp.md) — Streamable HTTP tools (`sf ui` or `sf mcp`)
-- [Docker and self-hosting](docker.md) — `docker compose up` local Host (token + volume); never mount docker.sock
+- [Docker and self-hosting](docker.md#local-try-compose) — Compose first-run (`.env.example`, control token, `STAGEFLOW_PROVIDER_*`); never mount docker.sock
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — attach project `.mcp.json` servers to a stage
 - [Envelopes](envelopes.md) — what stages must emit to advance
 

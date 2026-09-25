@@ -17,19 +17,36 @@ The shipped root [`docker-compose.yml`](../docker-compose.yml) has no socket mou
 
 ## Local try (Compose)
 
-From the repo root, generate a drive token (≥32 characters, no whitespace), then start the Host. The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data` and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). This is a **local try** surface — not the hardened egress sandbox.
+First-run checklist for the shipped [`docker-compose.yml`](../docker-compose.yml). The compose file builds the local `Dockerfile`, mounts a named volume at `/data`, publishes port **3847**, and sets `STAGEFLOW_HOME=/data` and `TMPDIR=/data/tmp` (`STAGEFLOW_BIND=0.0.0.0` is already in the image). This is a **local try** surface — not the hardened egress sandbox.
 
-```bash
-# Generate a 32+ character control token (required: image binds 0.0.0.0)
-export STAGEFLOW_CONTROL_TOKEN="$(openssl rand -hex 32)"
-# or: python3 -c 'import secrets; print(secrets.token_hex(32))'
+The compose service runs `command: ["sf", "ui"]` on purpose: operator console **and** MCP on the same Host. The image `CMD` is still `sf mcp` (headless); override to `sf mcp` only when you want a UI-less Host. Do not run both `sf ui` and `sf mcp` at once — they share port **3847**.
 
-docker compose up --build -d
+### Checklist
 
-# Health probe (no bearer; Host/Origin from localhost is fine)
-curl -fsS http://127.0.0.1:3847/livez
-# → {"ok":true,"status":"live",…}
-```
+1. **Generate a control token** (≥32 characters, no whitespace). Required when the image binds non-loopback:
+
+   ```bash
+   openssl rand -hex 32
+   # or: python3 -c 'import secrets; print(secrets.token_hex(32))'
+   ```
+
+2. **Create `.env` from [`.env.example`](../.env.example)** at the repo root. Paste the token into `STAGEFLOW_CONTROL_TOKEN=…`. Fill provider and GitHub vars as needed (see below). Compose loads `.env` automatically; do not commit `.env`.
+
+3. **Shell env overrides Compose `.env`.** If you have empty `GITHUB_TOKEN` / `GH_TOKEN` (or other keys) exported in your shell, Compose substitutes those empties and **blanks** the container value. Unset them for the compose invocation when the file should win:
+
+   ```bash
+   env -u GITHUB_TOKEN -u GH_TOKEN docker compose up --build -d
+   ```
+
+4. **Start and wait for live:**
+
+   ```bash
+   docker compose up --build -d
+   curl -fsS http://127.0.0.1:3847/livez
+   # → {"ok":true,"status":"live",…}
+   ```
+
+5. **Open the console** at [http://127.0.0.1:3847](http://127.0.0.1:3847) and paste the same control token under **Settings** (drive bearer for API/MCP).
 
 Prefer a file secret when the token must not appear in the process environment on the host:
 
@@ -38,10 +55,41 @@ openssl rand -hex 32 > .stageflow-control-token
 chmod 600 .stageflow-control-token
 # Point STAGEFLOW_CONTROL_TOKEN_FILE at that path inside the container
 # (e.g. bind-mount the file and set STAGEFLOW_CONTROL_TOKEN_FILE=/run/secrets/…),
-# or pass STAGEFLOW_CONTROL_TOKEN from the env as above.
+# or pass STAGEFLOW_CONTROL_TOKEN from `.env` as above.
 ```
 
-Override the default `sf mcp` command only when you need the operator console (`sf ui`); MCP-first remains the container default.
+### Provider boot (Compose)
+
+Host boot configures providers from `STAGEFLOW_PROVIDER_<ID>_API_KEY` / `_FILE` — not bare `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` alone. For Compose local try, set for example:
+
+- `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY`
+- `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY`
+
+See [Providers — Non-interactive Host boot credentials](providers.md#non-interactive-host-boot-credentials). Optional: put custom OpenRouter models / `maxTokens` in `$STAGEFLOW_HOME/agent/models.json` on the data volume (same durable agent dir as `auth.json`).
+
+### Host `GITHUB_TOKEN` (clone / fetch)
+
+Repository-bound materialization uses Host askpass. Set `GITHUB_TOKEN` (or `GH_TOKEN`) on the Host even for **public** repos — clone/fetch go through that helper. Stages still need explicit `secrets:` grants for their own git/`gh` use (next subsection).
+
+### Stage secrets vs Host env
+
+Slot 6 stages get a **curated** environment — not a copy of Host `process.env`. Credentials reach a stage only when listed under `secrets:` (stage body or pipeline entry). `GITHUB_TOKEN` / `GH_TOKEN` default to `GIT_ASKPASS` + a materialised token file (no raw env). Use `{ name: GITHUB_TOKEN, as: env }` when `gh` or MCP needs the env var (askpass stays set for plain HTTPS `git`). Full migration and YAML: [migration-stage-environment.md](migration-stage-environment.md), [YAML catalog — Stage secrets](yaml-catalog.md#stage-secrets).
+
+### `gh` is not in the base image
+
+The published image does **not** install the GitHub CLI. Catalogs that `requires:` `gh` need a [derived image](#derived-images) (or an install step in your Dockerfile). Stageflow never installs tools from `requires:` automatically.
+
+### Catalog in the container
+
+Shipped examples are baked at `/opt/stageflow/examples` (seeded `project_root` id `examples`). For your own catalog, bind-mount it into the container and **register / ensure** that absolute path with the Host (`POST /api/projects`, or local `sf run` ensure-then-start). Remotes cannot invent unknown absolute `project_root` values. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root). Compose has a commented volume-mount example in [`docker-compose.yml`](../docker-compose.yml).
+
+### Repo-bound run (brief) {#repo-bound-run}
+
+A task with `repository` + `ref` (or `sf run --repository` / `--ref`) materializes a Host worktree under `/data/worktrees/<runId>` (`$STAGEFLOW_HOME/worktrees/…`). On **`succeeded`**, Stageflow **reclaims** that worktree immediately (keeps `run_branch`; `checkout_root` may still be recorded after the directory is gone). Failed/cancelled runs keep their worktrees until retention SLIM — see [Post-mortem debug bundle](#debug-bundle).
+
+### Named volume
+
+Compose mounts the named volume `stageflow-data` at `/data`. That volume holds the durable store (`state.db`, credentials, settings). Deleting the volume **wipes** irreplaceable state — use `sf backup` before destructive resets. See [Precious vs disposable](#precious-vs-disposable).
 
 ## Image smoke (CI / local)
 
@@ -296,7 +344,11 @@ There is no MCP shell/`exec` tool — this is the supported escape hatch.
 
 ### Post-mortem debug bundle {#debug-bundle}
 
-Failed and cancelled runs keep worktrees/logs for **30 days** by default before SLIM (succeeded stays **3 days**). Override with `STAGEFLOW_SLIM_FAILED_MS` / `STAGEFLOW_SLIM_CANCELLED_MS`.
+Distinguish **succeed reclaim** from **retention SLIM/PURGE**:
+
+- On **`succeeded`**, the Host worktree under `$STAGEFLOW_HOME/worktrees/<runId>/` is reclaimed immediately (`run_branch` kept; `checkout_root` may still be recorded). That is not SLIM and does not set `slimmed_at`.
+- **Failed / cancelled** runs keep their worktrees until retention SLIM (default **30 days**; override `STAGEFLOW_SLIM_FAILED_MS` / `STAGEFLOW_SLIM_CANCELLED_MS`).
+- Separate SLIM/PURGE timers still apply to run workspaces and logs under `$STAGEFLOW_HOME/runs/` (succeeded default SLIM **3 days** via `STAGEFLOW_SLIM_SUCCEEDED_MS`). A succeeded run can therefore have no worktree left while run-dir retention is still ticking.
 
 Pull a capped, Slot-6-redacted attachable bundle (export projection + manifest + stage events + verification evidence + `get_run_diff` + stream-log tails + redacted host config):
 

@@ -36,7 +36,7 @@ Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent director
 
 Credential choice is unchanged: a saved setting, otherwise a usable `~/.pi/agent/auth.json`, otherwise `agent/auth.json` under the durable root.
 
-Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is inside the durable root and outside that run's workspace (`stageflow_path_denied`). That is defence in depth, not a sandbox — `bash` is not path-restricted.
+Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is inside the durable root and outside that run's workspace (`stageflow_path_denied`). On repository- or path-bound runs, `checkoutRoot` (the Host worktree or checkout path) is **allowlisted** for those file tools so the agent can edit the bound tree; other durable-root paths (`state.db`, `agent/`, sibling worktrees) stay denied. That is defence in depth, not a sandbox — `bash` is not path-restricted.
 
 ## Container image user and volumes
 
