@@ -84,6 +84,22 @@ describe("loadHostConfig", () => {
     ).not.toThrow();
   });
 
+  it("accepts STAGEFLOW_BUILD_SHA and other Dockerfile Host envs", () => {
+    const home = tempHome();
+    expect(() =>
+      loadHostConfig({
+        homeDir: home,
+        env: {
+          STAGEFLOW_HOME: home,
+          STAGEFLOW_BIND: "0.0.0.0",
+          STAGEFLOW_NO_AUTOSTART: "1",
+          STAGEFLOW_NO_OPEN: "1",
+          STAGEFLOW_BUILD_SHA: "abc123def456",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("fails boot on STAGEFLOW_MAX_CONCURRENT_RUNS=banana", () => {
     const home = tempHome();
     expect(() =>

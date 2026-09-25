@@ -16,7 +16,7 @@ import {
   worktreeRemove,
 } from "../git/operations.js";
 import { ensureGlobalHome, globalStageflowHome } from "../project/globalHome.js";
-import type { RunMeta } from "../runstore/port.js";
+import type { RunMeta, RunStore } from "../runstore/port.js";
 import type { TaskFile } from "../types/task.js";
 import type { WorkspaceBinding } from "./workspaceBinding.js";
 
@@ -213,6 +213,22 @@ export async function reclaimWorkspaceBinding(
   try {
     await deleteBranch(cachePath, meta.run_branch!);
   } catch {
+  }
+}
+
+export async function reclaimWorkspaceOnRunSucceeded(
+  store: RunStore,
+  runId: string,
+): Promise<void> {
+  try {
+    const meta = await store.readRunMeta(runId);
+    await reclaimWorkspaceBinding(meta, { keepRunBranch: true });
+  } catch (err) {
+    console.error(
+      `reclaimWorkspaceOnRunSucceeded: failed for ${runId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 }
 

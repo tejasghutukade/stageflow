@@ -3,6 +3,8 @@ node_modules/
 dist/
 ui/dist/
 .stageflow/
+.stageflow-control-token
+.env
 .software-factory/
 *.log
 .DS_Store

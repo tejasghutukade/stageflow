@@ -10,7 +10,13 @@ import {
 import path from "node:path";
 import { ensureGlobalHome, globalStageflowHome } from "../project/globalHome.js";
 import { hostGitAskpassEnv } from "./credentials.js";
-import { catFileCommit, cloneBare, remoteUpdate } from "./operations.js";
+import {
+  catFileCommit,
+  cloneBare,
+  configureBareOriginFetch,
+  pruneNonStageflowLocalHeads,
+  remoteUpdate,
+} from "./operations.js";
 
 const FETCH_TIMEOUT_MS = 300_000;
 const LOCK_POLL_MS = 50;
@@ -166,28 +172,8 @@ export async function ensureBareCache(
   const requireToken = !isFileUrl(url);
 
   return withInProcessMutex(cachePath, async () => {
-    if (isFullCommitSha(ref) && existsSync(cachePath)) {
-      const present = await catFileCommit(cachePath, ref, {
-        env: options?.env,
-        signal: options?.signal,
-      });
-      if (present) {
-        return { cachePath, fetched: false };
-      }
-    }
-
     const lockPath = fetchLockPath(cachePath);
     return withExclusiveLock(lockPath, FETCH_TIMEOUT_MS, async () => {
-      if (isFullCommitSha(ref) && existsSync(cachePath)) {
-        const present = await catFileCommit(cachePath, ref, {
-          env: options?.env,
-          signal: options?.signal,
-        });
-        if (present) {
-          return { cachePath, fetched: false };
-        }
-      }
-
       const askpassEnv = hostGitAskpassEnv({
         env: options?.env,
         requireToken,
@@ -199,10 +185,23 @@ export async function ensureBareCache(
 
       if (!existsSync(cachePath)) {
         await cloneBare(url, cachePath, callOpts);
+        await remoteUpdate(cachePath, callOpts);
+        await pruneNonStageflowLocalHeads(cachePath, callOpts);
         return { cachePath, fetched: true };
       }
 
+      await configureBareOriginFetch(cachePath, callOpts);
+
+      if (isFullCommitSha(ref)) {
+        const present = await catFileCommit(cachePath, ref, callOpts);
+        if (present) {
+          await pruneNonStageflowLocalHeads(cachePath, callOpts);
+          return { cachePath, fetched: false };
+        }
+      }
+
       await remoteUpdate(cachePath, callOpts);
+      await pruneNonStageflowLocalHeads(cachePath, callOpts);
       return { cachePath, fetched: true };
     });
   });

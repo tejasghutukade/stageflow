@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -109,7 +109,7 @@ describe.skipIf(!gitAvailable)("git bare cache", () => {
     expect(githubHttpsRemoteUrl("acme/api")).toBe("https://github.com/acme/api.git");
   });
 
-  it("second ensure reuses the mirror and SHA-present skip does not fetch", async () => {
+  it("second ensure reuses the cache and SHA-present skip does not fetch", async () => {
     const { root: source, sha } = await createSourceRepo();
     const url = pathToFileURL(source).href;
     setBareCacheRemoteUrlOverrideForTests(() => url);
@@ -136,6 +136,149 @@ describe.skipIf(!gitAvailable)("git bare cache", () => {
     expect(remoteUpdateSpy.mock.calls.length).toBe(updatesBeforeSha);
     expect(cloneSpy.mock.calls.length).toBe(clonesAfterFirst);
     expect(updatesAfterFirst).toBeGreaterThanOrEqual(0);
+  });
+
+  it("heals a legacy --mirror cache and allows push from a linked worktree", async () => {
+    const { root: source, sha } = await createSourceRepo();
+    const url = pathToFileURL(source).href;
+    setBareCacheRemoteUrlOverrideForTests(() => url);
+
+    const cachePath = bareCachePath("acme/api");
+    mkdirSync(path.dirname(cachePath), { recursive: true });
+    execFileSync("git", ["clone", "--mirror", url, cachePath], { stdio: "ignore" });
+
+    const mirrorBefore = execFileSync(
+      "git",
+      ["-C", cachePath, "config", "--get", "remote.origin.mirror"],
+      { encoding: "utf8" },
+    ).trim();
+    expect(mirrorBefore).toBe("true");
+
+    const ensured = await ensureBareCache("acme/api", "main");
+    expect(ensured.cachePath).toBe(cachePath);
+
+    let mirrorAfter = "";
+    try {
+      mirrorAfter = execFileSync(
+        "git",
+        ["-C", cachePath, "config", "--get", "remote.origin.mirror"],
+        { encoding: "utf8" },
+      ).trim();
+    } catch {
+      mirrorAfter = "";
+    }
+    expect(mirrorAfter).toBe("");
+    const fetchSpecs = execFileSync(
+      "git",
+      ["-C", cachePath, "config", "--get-all", "remote.origin.fetch"],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(fetchSpecs).toEqual([
+      operations.BARE_ORIGIN_FETCH_HEADS,
+      operations.BARE_ORIGIN_FETCH_TAGS,
+    ]);
+    expect(fetchSpecs).not.toContain("+refs/*:refs/*");
+
+    const remotesMain = execFileSync(
+      "git",
+      ["-C", cachePath, "rev-parse", "refs/remotes/origin/main"],
+      { encoding: "utf8" },
+    ).trim();
+    expect(remotesMain).toBe(sha);
+    expect(await operations.resolveRef(cachePath, "main")).toBe(sha);
+
+    let localMain = "";
+    try {
+      localMain = execFileSync(
+        "git",
+        ["-C", cachePath, "rev-parse", "--verify", "refs/heads/main"],
+        { encoding: "utf8" },
+      ).trim();
+    } catch {
+      localMain = "";
+    }
+    expect(localMain).toBe("");
+
+    const keptBranch = "stageflow/run-keep";
+    execFileSync("git", ["-C", cachePath, "branch", keptBranch, sha], { stdio: "ignore" });
+
+    const worktree = path.join(
+      await mkdtemp(path.join(tmpdir(), "sf-cache-wt-heal-")),
+      "run-heal",
+    );
+    temps.push(path.dirname(worktree));
+    await operations.worktreeAdd(cachePath, {
+      worktreePath: worktree,
+      branch: "stageflow/run-heal",
+      startPoint: sha,
+    });
+
+    git(worktree, ["config", "user.email", "test@example.com"]);
+    git(worktree, ["config", "user.name", "Test"]);
+    await writeFile(path.join(worktree, "healed.txt"), "ok\n");
+    git(worktree, ["add", "healed.txt"]);
+    git(worktree, ["commit", "-m", "push after heal"]);
+
+    execFileSync("git", ["push", "-u", "origin", "stageflow/run-heal"], {
+      cwd: worktree,
+      stdio: "pipe",
+      encoding: "utf8",
+    });
+
+    const remoteSha = execFileSync(
+      "git",
+      ["-C", source, "rev-parse", "refs/heads/stageflow/run-heal"],
+      { encoding: "utf8" },
+    ).trim();
+    const localSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: worktree,
+      encoding: "utf8",
+    }).trim();
+    expect(remoteSha).toBe(localSha);
+
+    await ensureBareCache("acme/api", "main");
+    const kept = execFileSync(
+      "git",
+      ["-C", cachePath, "rev-parse", `refs/heads/${keptBranch}`],
+      { encoding: "utf8" },
+    ).trim();
+    expect(kept).toBe(sha);
+  });
+
+  it("heals legacy +refs/*:refs/* fetch to remotes-style under lock", async () => {
+    const { root: source, sha } = await createSourceRepo();
+    const url = pathToFileURL(source).href;
+    setBareCacheRemoteUrlOverrideForTests(() => url);
+
+    const cachePath = bareCachePath("acme/api");
+    mkdirSync(path.dirname(cachePath), { recursive: true });
+    execFileSync("git", ["clone", "--bare", url, cachePath], { stdio: "ignore" });
+    execFileSync(
+      "git",
+      ["-C", cachePath, "config", "remote.origin.fetch", "+refs/*:refs/*"],
+      { stdio: "ignore" },
+    );
+
+    await ensureBareCache("acme/api", "main");
+
+    const fetchSpecs = execFileSync(
+      "git",
+      ["-C", cachePath, "config", "--get-all", "remote.origin.fetch"],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(fetchSpecs).toEqual([
+      operations.BARE_ORIGIN_FETCH_HEADS,
+      operations.BARE_ORIGIN_FETCH_TAGS,
+    ]);
+    expect(await operations.resolveRef(cachePath, "main")).toBe(sha);
   });
 
   it("serializes concurrent ensure on the same cache", async () => {

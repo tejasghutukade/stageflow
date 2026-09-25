@@ -34,6 +34,7 @@ type ToolCallHandler = (
 async function installPathDeny(
   runWorkspaceDir: string,
   durableRoot: string,
+  checkoutRoot?: string,
 ): Promise<ToolCallHandler> {
   let handler: ToolCallHandler | undefined;
   const pi = {
@@ -44,6 +45,7 @@ async function installPathDeny(
   const factory = createDurableRootPathDenyExtension({
     runWorkspaceDir,
     durableRoot,
+    ...(checkoutRoot !== undefined ? { checkoutRoot } : {}),
   });
   await factory(pi);
   if (!handler) {
@@ -70,6 +72,19 @@ async function setupHomeWithRun(): Promise<{
   await mkdir(runWorkspaceDir, { recursive: true });
   const cwd = await makeTempDir("sf-path-deny-cwd-");
   return { durableRoot, runWorkspaceDir, cwd };
+}
+
+async function setupBoundHome(): Promise<{
+  durableRoot: string;
+  runWorkspaceDir: string;
+  checkoutRoot: string;
+  cwd: string;
+}> {
+  const base = await setupHomeWithRun();
+  const checkoutRoot = path.join(base.durableRoot, "worktrees", "run-1");
+  await mkdir(checkoutRoot, { recursive: true });
+  await writeFile(path.join(checkoutRoot, "src.ts"), "export {};");
+  return { ...base, checkoutRoot, cwd: checkoutRoot };
 }
 
 describe("Pi durable-root path deny", () => {
@@ -196,5 +211,156 @@ describe("Pi durable-root path deny", () => {
       { cwd },
     );
     expect(result).toBeUndefined();
+  });
+
+  it("bound checkout file under worktrees/<runId> is allowed for read/write/edit", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const target = path.join(checkoutRoot, "src.ts");
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    for (const toolName of ["read", "write", "edit"] as const) {
+      const result = await onToolCall(
+        {
+          type: "tool_call",
+          toolCallId: `bound-${toolName}`,
+          toolName,
+          input:
+            toolName === "write"
+              ? { path: target, content: "export {};" }
+              : toolName === "edit"
+                ? {
+                    path: target,
+                    edits: [{ oldText: "a", newText: "b" }],
+                  }
+                : { path: target },
+        },
+        { cwd },
+      );
+      expect(result).toBeUndefined();
+    }
+  });
+
+  it("bound layout still denies state.db under durable root", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "bound-state",
+        toolName: "read",
+        input: { path: path.join(durableRoot, "state.db") },
+      },
+      { cwd },
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: STAGEFLOW_PATH_DENIED,
+    });
+  });
+
+  it("bound layout still denies agent/auth.json under durable root", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "bound-auth",
+        toolName: "read",
+        input: { path: path.join(durableRoot, "agent", "auth.json") },
+      },
+      { cwd },
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: STAGEFLOW_PATH_DENIED,
+    });
+  });
+
+  it("path under worktrees/<otherRunId> is denied", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const otherCheckout = path.join(durableRoot, "worktrees", "other-run");
+    await mkdir(otherCheckout, { recursive: true });
+    const otherFile = path.join(otherCheckout, "secret.ts");
+    await writeFile(otherFile, "nope");
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "other-wt",
+        toolName: "read",
+        input: { path: otherFile },
+      },
+      { cwd },
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: STAGEFLOW_PATH_DENIED,
+    });
+  });
+
+  it("bound layout still allows paths under runWorkspaceDir", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const target = path.join(runWorkspaceDir, "notes.txt");
+    await writeFile(target, "ok");
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "bound-ws",
+        toolName: "read",
+        input: { path: target },
+      },
+      { cwd },
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("symlink from checkout into state.db is still denied", async () => {
+    const { durableRoot, runWorkspaceDir, checkoutRoot, cwd } =
+      await setupBoundHome();
+    const linkPath = path.join(checkoutRoot, "sneaky-db");
+    await symlink(path.join(durableRoot, "state.db"), linkPath);
+    const onToolCall = await installPathDeny(
+      runWorkspaceDir,
+      durableRoot,
+      checkoutRoot,
+    );
+    const result = await onToolCall(
+      {
+        type: "tool_call",
+        toolCallId: "bound-symlink",
+        toolName: "read",
+        input: { path: linkPath },
+      },
+      { cwd },
+    );
+    expect(result).toEqual({
+      block: true,
+      reason: STAGEFLOW_PATH_DENIED,
+    });
   });
 });

@@ -278,7 +278,7 @@ See [Providers — Non-interactive Host boot credentials](providers.md#non-inter
 When you need a shell inside a run's checkout (diff inspection, one-off git, post-mortem), obtain the path from the run projection, then exec:
 
 1. Call MCP `get_run` with the `runId`, or `GET /api/runs/<runId>` with a **read** token.
-2. Read `binding.checkout_root` (absolute path inside the container). Unbound runs omit it — there is nothing to enter. Repository-bound runs typically use `$STAGEFLOW_HOME/worktrees/<runId>/`.
+2. Read `binding.checkout_root` (absolute path inside the container). Unbound runs omit it — there is nothing to enter. Repository-bound runs typically use `$STAGEFLOW_HOME/worktrees/<runId>/`. After a run reaches `succeeded`, that worktree may already have been reclaimed even though `checkout_root` remains recorded on the run — if the path is missing, MCP checkout tools soft-fail with `checkout_reclaimed`.
 3. Open a shell (or run a one-shot command) with that path as the working directory:
 
 ```bash

@@ -24,7 +24,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `runs/` | disposable | Per-run workspaces, stage attempts, artifacts |
 | `a2a-artifacts/` | disposable | A2A artifact bytes |
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
-| `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start |
+| `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start. When a run reaches `succeeded`, Stageflow may reclaim the worktree (keeping `run_branch`); the `checkout_root` column can still be recorded after the directory is gone. Failed/cancelled runs keep their worktrees until retention SLIM. |
 | `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
 | `backups/` | disposable | `sf backup` archives (default output) |
 | `restore-pending/` | disposable | Staged API restore archives + marker |

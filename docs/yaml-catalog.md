@@ -842,9 +842,13 @@ stages:
   - id: raise-pr
     uses: ./raise-pr.yaml
     secrets:
-      - GITHUB_TOKEN                 # GIT_ASKPASS + materialised token file
-      - { name: NPM_TOKEN, as: env } # raw env (WARN)
+      - GITHUB_TOKEN                 # GIT_ASKPASS + materialised token file (no raw env)
+      - { name: NPM_TOKEN, as: env } # raw env (WARN); no askpass
+# Prefer { name: GITHUB_TOKEN, as: env } when gh/MCP need the env var:
+# that form still sets GIT_ASKPASS + token file for plain HTTPS git (WARN).
 ```
+
+For `GITHUB_TOKEN` / `GH_TOKEN`, `{ as: env }` is **additive** with askpass: the value is in the curated env (for `gh` / MCP) and `GIT_ASKPASS` plus a materialised token file are still set for plain HTTPS `git`. Other secrets with `as: env` stay env-only. Askpass/env grants apply only to secrets declared on the stage.
 
 `verify` `command` checks run as `bash -c <command>` with the same curated env. Host stopgaps: `STAGEFLOW_STAGE_ENV_ALLOW` and deprecated `STAGEFLOW_STAGE_ENV_PASSTHROUGH=all`.
 

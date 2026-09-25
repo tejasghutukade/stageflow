@@ -731,6 +731,60 @@ describe.skipIf(!gitAvailable)("bare-cache eviction (U6)", () => {
     expect(git(cachePath, ["branch", "--list", runBranch])).toContain(runBranch);
   });
 
+  it("SLIM after succeed reclaim still sets slimmed_at (worktree step no-op)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-u2-slim-after-"));
+    temps.push(root);
+    const { store, connection } = createRunStoreWithConnection({ rootDir: root });
+    const a2aStore = new A2aStore(root, connection);
+    const now = new Date("2026-09-22T12:00:00.000Z");
+    const { root: source, sha } = await createSourceRepo();
+    setBareCacheRemoteUrlOverrideForTests(() => pathToFileURL(source).href);
+
+    const run = await store.createRun({
+      pipelineId: "docs-only",
+      taskYaml: "id: t\ngoal: g\n",
+    });
+    const repository = "acme/u2-slim-after";
+    const runBranch = `stageflow/run-${run.runId}`;
+    const checkoutRoot = worktreePathForRun(run.runId);
+    const { cachePath } = await ensureBareCache(repository, "main");
+    mkdirSync(path.dirname(checkoutRoot), { recursive: true });
+    await worktreeAdd(cachePath, {
+      worktreePath: checkoutRoot,
+      branch: runBranch,
+      startPoint: sha,
+    });
+    connection
+      .prepare(
+        `UPDATE runs SET repository = ?, ref = ?, resolved_sha = ?, checkout_root = ?, run_branch = ? WHERE run_id = ?`,
+      )
+      .run(repository, "main", sha, checkoutRoot, runBranch, run.runId);
+
+    const { writeTerminalRunStatus } = await import(
+      "../src/runtime/pipelineScheduler.js"
+    );
+    await writeTerminalRunStatus(store, run.runId, "succeeded");
+    expect(existsSync(checkoutRoot)).toBe(false);
+    expect((await store.readRunMeta(run.runId)).slimmed_at).toBeUndefined();
+
+    setFinishedAt(
+      connection,
+      run.runId,
+      new Date(now.getTime() - 4 * DAY_MS).toISOString(),
+    );
+    await seedAttemptTree(store.getWorkspaceDir(run.runId));
+
+    const report = await runRetentionSweep(store, a2aStore, {
+      now,
+      execute: true,
+    });
+    expect(report.slimmed).toEqual([run.runId]);
+    const meta = await store.readRunMeta(run.runId);
+    expect(meta.slimmed_at).toBeDefined();
+    expect(meta.checkout_root).toBe(checkoutRoot);
+    expect(git(cachePath, ["branch", "--list", runBranch])).toContain(runBranch);
+  });
+
   it("refuses execute when a2aStore missing and PURGE candidates exist (before SLIM)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-u6-no-a2a-"));
     temps.push(root);

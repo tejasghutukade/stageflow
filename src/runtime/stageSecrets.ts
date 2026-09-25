@@ -135,6 +135,28 @@ export function assertSecretPresent(
   }
 }
 
+function materialiseGitAskpassGrant(
+  grantEnv: Record<string, string>,
+  credentialDirs: string[],
+  opts: {
+    attemptDir: string;
+    secretName: string;
+    value: string;
+    home?: string;
+  },
+): void {
+  const destDir = attemptCredentialsDir(opts.attemptDir, opts.secretName);
+  const tokenFile = materialiseSecretBytes({
+    contents: opts.value,
+    destDir,
+    destBasename: "token",
+  });
+  credentialDirs.push(destDir);
+  grantEnv.GIT_ASKPASS = ensureStageAskpassHelper(opts.home);
+  grantEnv.GIT_TERMINAL_PROMPT = "0";
+  grantEnv.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE = tokenFile.destPath;
+}
+
 export function resolveStageSecrets(
   input: ResolveStageSecretsInput,
 ): ResolveStageSecretsResult {
@@ -194,20 +216,23 @@ export function resolveStageSecrets(
         );
       }
       grantEnv[decl.name] = value;
+      if (defaultSecretDelivery(decl.name) === "helper") {
+        materialiseGitAskpassGrant(grantEnv, credentialDirs, {
+          attemptDir: input.attemptDir,
+          secretName: decl.name,
+          value,
+          home: input.home,
+        });
+      }
       continue;
     }
 
-    const destDir = attemptCredentialsDir(input.attemptDir, decl.name);
-    const tokenFile = materialiseSecretBytes({
-      contents: value,
-      destDir,
-      destBasename: "token",
+    materialiseGitAskpassGrant(grantEnv, credentialDirs, {
+      attemptDir: input.attemptDir,
+      secretName: decl.name,
+      value,
+      home: input.home,
     });
-    credentialDirs.push(destDir);
-    const askpass = ensureStageAskpassHelper(input.home);
-    grantEnv.GIT_ASKPASS = askpass;
-    grantEnv.GIT_TERMINAL_PROMPT = "0";
-    grantEnv.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE = tokenFile.destPath;
   }
 
   return {

@@ -3,6 +3,7 @@ import { deriveStatusFromStages } from "../runstore/port.js";
 import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import { finaliseStoredRunManifest } from "../runstore/runManifest.js";
 import { deriveExecutionPatchFromEvent } from "../runstore/stageExecution.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
 import {
   attemptContext,
   type StageAttemptContext,
@@ -71,6 +72,9 @@ export async function syncRunStatusFromStages(
     ) {
       await finaliseStoredRunManifest(store, runId).catch(() => undefined);
       await refreshRunDiskUsage(store, runId).catch(() => undefined);
+    }
+    if (derived === "succeeded") {
+      await reclaimWorkspaceOnRunSucceeded(store, runId);
     }
   }
 }

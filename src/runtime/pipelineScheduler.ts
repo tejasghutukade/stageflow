@@ -63,6 +63,7 @@ import {
 } from "./replayLifecycle.js";
 import { WAIT_WITHOUT_WORKER_DISPATCH } from "./answerResume.js";
 import type { PipelineRunResult } from "./pipelineRunner.js";
+import { reclaimWorkspaceOnRunSucceeded } from "./repositoryMaterialize.js";
 import { syncRunStatusFromStages } from "./stageRecovery.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
@@ -344,6 +345,9 @@ export async function writeTerminalRunStatus(
   await store.updateRunStatus(runId, status);
   await finaliseStoredRunManifest(store, runId).catch(() => undefined);
   await refreshRunDiskUsage(store, runId).catch(() => undefined);
+  if (status === "succeeded") {
+    await reclaimWorkspaceOnRunSucceeded(store, runId);
+  }
 }
 
 export async function resumeRun(

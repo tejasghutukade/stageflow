@@ -182,6 +182,7 @@ export async function durableRootFileToolDenial(
   candidatePath: string,
   runWorkspaceDir: string,
   durableRoot: string,
+  allowlistedRoots?: readonly string[],
 ): Promise<typeof STAGEFLOW_PATH_DENIED | undefined> {
   const fileReal = await resolveEffectiveRealPath(candidatePath);
   if (fileReal === undefined) {
@@ -196,6 +197,17 @@ export async function durableRootFileToolDenial(
   }
   if (isInsideDir(fileReal, workspaceReal)) {
     return undefined;
+  }
+
+  for (const root of allowlistedRoots ?? []) {
+    try {
+      const allowReal = await realpath(root);
+      if (isInsideDir(fileReal, allowReal)) {
+        return undefined;
+      }
+    } catch {
+      // skip roots that cannot be resolved
+    }
   }
 
   let durableReal: string;

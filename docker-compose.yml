@@ -4,12 +4,18 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/tejasghutukade/stageflow:local
+    command: ["sf", "ui"]
     ports:
       - "3847:3847"
     environment:
       STAGEFLOW_HOME: /data
       TMPDIR: /data/tmp
       STAGEFLOW_CONTROL_TOKEN: ${STAGEFLOW_CONTROL_TOKEN:?set STAGEFLOW_CONTROL_TOKEN to a 32+ character secret}
+      STAGEFLOW_MIN_FREE_DISK_BYTES: "1073741824"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GH_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       - stageflow-data:/data
     restart: unless-stopped

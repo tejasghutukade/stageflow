@@ -139,6 +139,32 @@ describe("RunWorkspaceLayout", () => {
     ).resolves.toBe(STAGEFLOW_PATH_DENIED);
   });
 
+  it("durableRootFileToolDenial allows paths inside allowlisted checkoutRoot", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-layout-allow-"));
+    const workspace = path.join(root, "runs", "r1");
+    const checkout = path.join(root, "worktrees", "r1");
+    await mkdir(workspace, { recursive: true });
+    await mkdir(checkout, { recursive: true });
+    const file = path.join(checkout, "src.ts");
+    await writeFile(file, "ok");
+    await writeFile(path.join(root, "state.db"), "db");
+
+    await expect(
+      durableRootFileToolDenial(file, workspace, root, [checkout]),
+    ).resolves.toBeUndefined();
+    await expect(
+      durableRootFileToolDenial(
+        path.join(root, "state.db"),
+        workspace,
+        root,
+        [checkout],
+      ),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
+    await expect(
+      durableRootFileToolDenial(file, workspace, root),
+    ).resolves.toBe(STAGEFLOW_PATH_DENIED);
+  });
+
   it("listArtifactNames walks nested files", async () => {
     const ws = await mkdtemp(path.join(tmpdir(), "sf-layout-"));
     const dir = attemptArtifactsDir(ws, "clarify", 1);

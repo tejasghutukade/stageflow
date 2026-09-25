@@ -98,9 +98,11 @@ describe("resolveStageSecrets", () => {
     }
   });
 
-  it("as: env injects value and warns", async () => {
+  it("GITHUB_TOKEN as: env is additive with askpass", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-sec-env-"));
     try {
+      const home = path.join(root, "home");
+      mkdirSync(home, { recursive: true });
       const registry = loadSecretRegistry({
         GITHUB_TOKEN: "ghp_as_env_token_xx",
       });
@@ -109,9 +111,98 @@ describe("resolveStageSecrets", () => {
         registry,
         hostEnv: { GITHUB_TOKEN: "ghp_as_env_token_xx" },
         attemptDir: root,
+        home,
       });
       expect(result.grants.env.GITHUB_TOKEN).toBe("ghp_as_env_token_xx");
-      expect(result.warnings.length).toBeGreaterThan(0);
+      expect(result.grants.env.GIT_ASKPASS).toBeTruthy();
+      expect(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE).toBeTruthy();
+      expect(
+        readFileSync(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE!, "utf8"),
+      ).toBe("ghp_as_env_token_xx");
+      expect(
+        result.warnings.some((w) => w.includes("GITHUB_TOKEN") && w.includes("as: env")),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("GH_TOKEN as: env is additive with askpass", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sec-gh-env-"));
+    try {
+      const home = path.join(root, "home");
+      mkdirSync(home, { recursive: true });
+      const registry = loadSecretRegistry({
+        GH_TOKEN: "ghp_gh_as_env_token_xx",
+      });
+      const result = resolveStageSecrets({
+        decls: [{ name: "GH_TOKEN", as: "env" }],
+        registry,
+        hostEnv: { GH_TOKEN: "ghp_gh_as_env_token_xx" },
+        attemptDir: root,
+        home,
+      });
+      expect(result.grants.env.GH_TOKEN).toBe("ghp_gh_as_env_token_xx");
+      expect(result.grants.env.GIT_ASKPASS).toBeTruthy();
+      expect(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE).toBeTruthy();
+      expect(
+        readFileSync(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE!, "utf8"),
+      ).toBe("ghp_gh_as_env_token_xx");
+      expect(
+        result.warnings.some((w) => w.includes("GH_TOKEN") && w.includes("as: env")),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("NPM_TOKEN as: env does not couple to GitHub askpass", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sec-npm-env-"));
+    try {
+      const registry = loadSecretRegistry({
+        NPM_TOKEN: "npm-as-env-token-xx",
+      });
+      const result = resolveStageSecrets({
+        decls: [{ name: "NPM_TOKEN", as: "env" }],
+        registry,
+        hostEnv: { NPM_TOKEN: "npm-as-env-token-xx" },
+        attemptDir: root,
+      });
+      expect(result.grants.env.NPM_TOKEN).toBe("npm-as-env-token-xx");
+      expect(result.grants.env.GIT_ASKPASS).toBeUndefined();
+      expect(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE).toBeUndefined();
+      expect(
+        result.warnings.some((w) => w.includes("NPM_TOKEN") && w.includes("as: env")),
+      ).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("undeclared GITHUB_TOKEN is absent from grants", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-sec-undeclared-"));
+    try {
+      const home = path.join(root, "home");
+      mkdirSync(home, { recursive: true });
+      const registry = loadSecretRegistry({
+        GITHUB_TOKEN: "ghp_undeclared_token_xx",
+        NPM_TOKEN: "npm-declared-token-xx",
+      });
+      const result = resolveStageSecrets({
+        decls: [{ name: "NPM_TOKEN", as: "env" }],
+        registry,
+        hostEnv: {
+          GITHUB_TOKEN: "ghp_undeclared_token_xx",
+          NPM_TOKEN: "npm-declared-token-xx",
+        },
+        attemptDir: root,
+        home,
+      });
+      expect(result.grants.env.GITHUB_TOKEN).toBeUndefined();
+      expect(result.grants.env.GIT_ASKPASS).toBeUndefined();
+      expect(result.grants.env.STAGEFLOW_GIT_ASKPASS_TOKEN_FILE).toBeUndefined();
+      expect(result.grants.env.NPM_TOKEN).toBe("npm-declared-token-xx");
+      expect(result.grants.declaredSecretNames).toEqual(["NPM_TOKEN"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

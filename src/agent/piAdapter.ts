@@ -108,8 +108,13 @@ const PATH_DENY_FILE_TOOLS = new Set(["read", "write", "edit"]);
 export function createDurableRootPathDenyExtension(options: {
   runWorkspaceDir: string;
   durableRoot: string;
+  checkoutRoot?: string;
 }): ExtensionFactory {
-  const { runWorkspaceDir, durableRoot } = options;
+  const { runWorkspaceDir, durableRoot, checkoutRoot } = options;
+  const allowlistedRoots =
+    checkoutRoot !== undefined && checkoutRoot !== ""
+      ? [checkoutRoot]
+      : undefined;
   return (pi) => {
     pi.on("tool_call", async (event, ctx) => {
       if (!PATH_DENY_FILE_TOOLS.has(event.toolName)) {
@@ -126,6 +131,7 @@ export function createDurableRootPathDenyExtension(options: {
         candidate,
         runWorkspaceDir,
         durableRoot,
+        allowlistedRoots,
       );
       if (reason !== undefined) {
         return { block: true, reason };
@@ -1158,6 +1164,9 @@ async function prepareStageSessionWiring(
         factory: createDurableRootPathDenyExtension({
           runWorkspaceDir: roots.runWorkspaceDir,
           durableRoot: globalStageflowHome(),
+          ...(roots.checkoutRoot !== undefined
+            ? { checkoutRoot: roots.checkoutRoot }
+            : {}),
         }),
       },
       ...(attached.extensionFactories ?? []),

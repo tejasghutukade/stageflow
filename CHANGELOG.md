@@ -13,9 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sf doctor` `store_integrity` check runs full `PRAGMA integrity_check` (boot/readyz stay on `quick_check`).
 - `sf validate` flags absolute paths under `$STAGEFLOW_HOME` in stage prompts and verify commands (`catalog.stageflow_home_absolute_path`).
 
+### Fixed
+
+- `STAGEFLOW_BUILD_SHA` is an allowed Host env (image provenance / `/api/health` `build_sha`) so container boot no longer rejects the Dockerfile-baked value.
+- Bound-run Pi `read`/`write`/`edit` allow the stage `checkoutRoot` (still deny other durable-root paths such as `state.db`, `agent/`, sibling worktrees).
+- Bare repo cache uses `git clone --bare` with remotes-style fetch (`+refs/heads/*:refs/remotes/origin/*` and `+refs/tags/*:refs/tags/*`, no `remote.origin.mirror`); existing mirrored or `+refs/*:refs/*` caches are healed under the cache lock, short refs resolve via remotes tips, and non-`stageflow/` local heads are pruned so linked-worktree `git push` keeps working.
+- For `GITHUB_TOKEN` / `GH_TOKEN`, `{ as: env }` is additive with askpass: curated env keeps the value and `GIT_ASKPASS` + token file are still materialised for plain HTTPS git.
+- When a repository-bound run reaches `succeeded`, Stageflow reclaims the Host worktree (keeps `run_branch`; leaves `checkout_root` recorded; does not set `slimmed_at`). Fail/cancel and mid-pipeline checkouts are unchanged; retry after succeed soft-fails `checkout_reclaimed` when the path is gone.
+
 ### Changed
 
 - `docs/mcp.md` Limitations / CLI-only table refreshed to match shipped Slot 9 surfaces (`skills`, `export_run`, debug-bundle).
+- Stage-env migration / YAML catalog docs clarify that GitHub `{ as: env }` keeps askpass for HTTPS git.
 ## [0.26.0] - 2026-09-24
 
 ### Added

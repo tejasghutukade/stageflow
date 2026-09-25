@@ -1,3 +1,4 @@
+import { GitError } from "./errors.js";
 import { runGit, runGitSync, type RunGitOptions } from "./exec.js";
 
 const TIMEOUT = {
@@ -7,6 +8,8 @@ const TIMEOUT = {
   clone: 900_000,
   default: 30_000,
 } as const;
+
+const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
 
 export type GitCallOptions = {
   env?: NodeJS.ProcessEnv;
@@ -30,12 +33,87 @@ function baseOpts(
   };
 }
 
+export const BARE_ORIGIN_FETCH_HEADS = "+refs/heads/*:refs/remotes/origin/*";
+export const BARE_ORIGIN_FETCH_TAGS = "+refs/tags/*:refs/tags/*";
+
+export async function configureBareOriginFetch(
+  repoDir: string,
+  opts?: GitCallOptions,
+): Promise<void> {
+  try {
+    await runGit(
+      baseOpts(repoDir, ["config", "--unset", "remote.origin.mirror"], TIMEOUT.default, opts),
+    );
+  } catch {
+    // unset fails when the key is absent
+  }
+  try {
+    await runGit(
+      baseOpts(
+        repoDir,
+        ["config", "--unset-all", "remote.origin.fetch"],
+        TIMEOUT.default,
+        opts,
+      ),
+    );
+  } catch {
+    // unset-all fails when the key is absent
+  }
+  await runGit(
+    baseOpts(
+      repoDir,
+      ["config", "--add", "remote.origin.fetch", BARE_ORIGIN_FETCH_HEADS],
+      TIMEOUT.default,
+      opts,
+    ),
+  );
+  await runGit(
+    baseOpts(
+      repoDir,
+      ["config", "--add", "remote.origin.fetch", BARE_ORIGIN_FETCH_TAGS],
+      TIMEOUT.default,
+      opts,
+    ),
+  );
+}
+
+export async function pruneNonStageflowLocalHeads(
+  repoDir: string,
+  opts?: GitCallOptions,
+): Promise<void> {
+  const listed = await runGit(
+    baseOpts(
+      repoDir,
+      ["for-each-ref", "--format=%(refname)", "refs/heads/"],
+      TIMEOUT.default,
+      opts,
+    ),
+  );
+  const refs = listed.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  for (const ref of refs) {
+    if (ref === "refs/heads/stageflow" || ref.startsWith("refs/heads/stageflow/")) {
+      continue;
+    }
+    try {
+      await runGit(
+        baseOpts(repoDir, ["update-ref", "-d", ref], TIMEOUT.default, opts),
+      );
+    } catch {
+      // best-effort prune under heal lock
+    }
+  }
+}
+
 export async function cloneBare(
   url: string,
   dest: string,
   opts?: GitCallOptions,
 ): Promise<void> {
-  await runGit(baseOpts(undefined, ["clone", "--mirror", url, dest], TIMEOUT.clone, opts));
+  await runGit(baseOpts(undefined, ["clone", "--bare", url, dest], TIMEOUT.clone, opts));
+  await configureBareOriginFetch(dest, opts);
 }
 
 export async function fetch(
@@ -57,7 +135,7 @@ export async function remoteUpdate(
   );
 }
 
-export async function resolveRef(
+async function revParseCommit(
   repoDir: string,
   ref: string,
   opts?: GitCallOptions,
@@ -71,6 +149,42 @@ export async function resolveRef(
     ),
   );
   return result.stdout.trim();
+}
+
+async function tryRevParseCommit(
+  repoDir: string,
+  ref: string,
+  opts?: GitCallOptions,
+): Promise<string | null> {
+  try {
+    return await revParseCommit(repoDir, ref, opts);
+  } catch (err) {
+    if (err instanceof GitError && err.code === "ref_not_found") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+export async function resolveRef(
+  repoDir: string,
+  ref: string,
+  opts?: GitCallOptions,
+): Promise<string> {
+  if (FULL_SHA_RE.test(ref) || ref.startsWith("refs/")) {
+    return revParseCommit(repoDir, ref, opts);
+  }
+
+  const candidates = [
+    `refs/remotes/origin/${ref}`,
+    `origin/${ref}`,
+    `refs/tags/${ref}`,
+  ];
+  for (const candidate of candidates) {
+    const sha = await tryRevParseCommit(repoDir, candidate, opts);
+    if (sha !== null) return sha;
+  }
+  return revParseCommit(repoDir, candidates[0]!, opts);
 }
 
 export async function catFileCommit(
