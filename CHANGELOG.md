@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/mcp.md` Limitations / CLI-only table refreshed to match shipped Slot 9 surfaces (`skills`, `export_run`, debug-bundle).
 - Stage-env migration / YAML catalog docs clarify that GitHub `{ as: env }` keeps askpass for HTTPS git.
 - Docker Local try docs rewritten as a Compose first-run checklist; add root `.env.example` and align `docker-compose.yml` with `STAGEFLOW_PROVIDER_*` boot keys.
+- Harness skills suite updated for Compose local try, drive-token MCP calls, `$STAGEFLOW_HOME` run store, repository/`ref` binding, and Slot 6 `secrets:` authoring.
 ## [0.26.0] - 2026-09-24
 
 ### Added

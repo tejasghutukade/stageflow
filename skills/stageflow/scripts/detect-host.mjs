@@ -33,6 +33,15 @@ function parseArgs(argv) {
   return { baseUrl };
 }
 
+function clientHasControlToken(env = process.env) {
+  const plain = env.STAGEFLOW_CONTROL_TOKEN;
+  const filePath = env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  return (
+    (plain !== undefined && plain.length > 0) ||
+    (filePath !== undefined && filePath.length > 0)
+  );
+}
+
 async function probe(baseUrl) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), TIMEOUT_MS);
@@ -50,5 +59,9 @@ async function probe(baseUrl) {
 
 const { baseUrl } = parseArgs(process.argv.slice(2));
 const status = await probe(baseUrl);
-console.log(`${status} ${baseUrl}`);
+const parts = [status, baseUrl];
+if (clientHasControlToken()) {
+  parts.push("bearer");
+}
+console.log(parts.join(" "));
 process.exit(status === "up" ? 0 : 1);

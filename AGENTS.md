@@ -32,7 +32,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `cli/` | `sf run`, `sf runs`, `sf validate`, `sf ui`, `sf providers` |
 | `config/` | YAML load/validate, pipeline DAG resolution |
 | `runtime/` | Pipeline runner, stage worker, HITL, scheduling |
-| `runstore/` | SQLite run state under `.stageflow/` |
+| `runstore/` | SQLite run state under `$STAGEFLOW_HOME` (default `~/.stageflow/`) |
 | `agent/` | Pi coding agent adapter |
 | `mcp/` | MCP server and tools |
 | `server/` | HTTP routes for the operator console API |

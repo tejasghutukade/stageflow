@@ -7,10 +7,18 @@ import { test } from "node:test";
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "detect-host.mjs");
 
-function run(baseUrl) {
+function cleanEnv(extra = {}) {
+  const env = { ...process.env };
+  delete env.STAGEFLOW_CONTROL_TOKEN;
+  delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  return { ...env, ...extra };
+}
+
+function run(baseUrl, opts = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script, "--base-url", baseUrl], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: opts.env ?? cleanEnv(),
     });
     let stdout = "";
     let stderr = "";
@@ -91,6 +99,26 @@ test("classifies a hung /api/health as down", async () => {
     const result = await run(baseUrl);
     assert.equal(result.status, 1);
     assert.equal(result.stdout.trim(), `down ${baseUrl}`);
+  } finally {
+    server.close();
+  }
+});
+
+test("notes bearer when STAGEFLOW_CONTROL_TOKEN is set without changing health probe", async () => {
+  const { server, baseUrl } = await listen((req, res) => {
+    assert.equal(req.url, "/api/health");
+    assert.equal(req.headers.authorization, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  try {
+    const result = await run(baseUrl, {
+      env: cleanEnv({
+        STAGEFLOW_CONTROL_TOKEN: "b".repeat(32),
+      }),
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), `up ${baseUrl} bearer`);
   } finally {
     server.close();
   }

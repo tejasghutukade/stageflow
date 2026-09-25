@@ -1,16 +1,20 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
+
 const DEFAULT_BASE_URL = "http://127.0.0.1:3847";
 const ALLOWED_TOOLS = new Set([
   "list_pipelines",
   "list_tasks",
   "start_run",
+  "run_stage",
   "get_run",
   "wait_run",
   "list_waiting",
   "list_runs",
   "answer_gate",
   "decide_feedback_loop",
+  "get_envelope",
   "read_artifact",
   "list_checkout_changes",
   "get_run_diff",
@@ -29,6 +33,34 @@ const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 const WAIT_RUN_DEFAULT_MS = 60_000;
 const WAIT_RUN_BUFFER_MS = 5_000;
 const WAIT_RUN_CAP_MS = 250_000;
+
+function controlTokenFromEnv(env = process.env) {
+  const plain = env.STAGEFLOW_CONTROL_TOKEN;
+  const filePath = env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  const hasPlain = plain !== undefined && plain.length > 0;
+  const hasFile = filePath !== undefined && filePath.length > 0;
+  if (hasPlain && hasFile) {
+    console.error("mcp-call: set only one of STAGEFLOW_CONTROL_TOKEN or STAGEFLOW_CONTROL_TOKEN_FILE");
+    process.exit(2);
+  }
+  if (hasFile) {
+    try {
+      return readFileSync(filePath, "utf8").replace(/\r?\n$/, "");
+    } catch (err) {
+      console.error(
+        `mcp-call: failed to read STAGEFLOW_CONTROL_TOKEN_FILE=${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      process.exit(2);
+    }
+  }
+  if (hasPlain) return plain;
+  return undefined;
+}
+
+function authHeaders(token) {
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
 
 function usage() {
   return "Usage: mcp-call.mjs --base-url URL --tool NAME --args JSON [--stateless]";
@@ -159,13 +191,14 @@ function extractToolPayload(message) {
   return { payload, isError: result.isError === true };
 }
 
-async function postMcp(mcpUrl, { body, sessionId, timeoutMs }) {
+async function postMcp(mcpUrl, { body, sessionId, timeoutMs, token }) {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const headers = {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
+      ...authHeaders(token),
     };
     if (sessionId) headers["mcp-session-id"] = sessionId;
     const res = await fetch(mcpUrl, {
@@ -188,7 +221,7 @@ function failTransport(detail, extra) {
   console.error(`mcp-call: ${detail}`);
 }
 
-async function initializeSession(mcpUrl) {
+async function initializeSession(mcpUrl, token) {
   const { res, text } = await postMcp(mcpUrl, {
     body: {
       jsonrpc: "2.0",
@@ -201,6 +234,7 @@ async function initializeSession(mcpUrl) {
       },
     },
     timeoutMs: INIT_TIMEOUT_MS,
+    token,
   });
   if (res.status < 200 || res.status >= 300) {
     let extra;
@@ -218,19 +252,20 @@ async function initializeSession(mcpUrl) {
       body: { jsonrpc: "2.0", method: "notifications/initialized" },
       sessionId,
       timeoutMs: INIT_TIMEOUT_MS,
+      token,
     });
   } catch {}
   return sessionId;
 }
 
-async function closeSession(mcpUrl, sessionId) {
+async function closeSession(mcpUrl, sessionId, token) {
   if (!sessionId) return;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), INIT_TIMEOUT_MS);
   try {
     await fetch(mcpUrl, {
       method: "DELETE",
-      headers: { "mcp-session-id": sessionId },
+      headers: { "mcp-session-id": sessionId, ...authHeaders(token) },
       signal: ac.signal,
     });
   } catch {
@@ -277,12 +312,13 @@ if (!ALLOWED_TOOLS.has(tool)) {
 const toolArgs = parseToolArgs(argsText);
 const mcpUrl = `${baseUrl}/mcp`;
 const timeoutMs = toolTimeoutMs(tool, toolArgs);
+const token = controlTokenFromEnv();
 
 let sessionId;
 let exitCode = 1;
 try {
   if (!stateless) {
-    sessionId = await initializeSession(mcpUrl);
+    sessionId = await initializeSession(mcpUrl, token);
   }
   const { res, text } = await postMcp(mcpUrl, {
     body: {
@@ -293,6 +329,7 @@ try {
     },
     sessionId,
     timeoutMs,
+    token,
   });
   exitCode = handleToolResponse(res, text);
 } catch (err) {
@@ -305,7 +342,7 @@ try {
   }
 } finally {
   if (sessionId) {
-    await closeSession(mcpUrl, sessionId);
+    await closeSession(mcpUrl, sessionId, token);
   }
 }
 process.exit(exitCode);

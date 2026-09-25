@@ -7,10 +7,18 @@ import { test } from "node:test";
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "mcp-call.mjs");
 
+function cleanEnv(extra = {}) {
+  const env = { ...process.env };
+  delete env.STAGEFLOW_CONTROL_TOKEN;
+  delete env.STAGEFLOW_CONTROL_TOKEN_FILE;
+  return { ...env, ...extra };
+}
+
 function run(args, opts = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [script, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: opts.env ?? cleanEnv(),
     });
     let stdout = "";
     let stderr = "";
@@ -233,6 +241,62 @@ test("isError true exits non-zero and prints the payload", async () => {
     assert.notEqual(result.status, 0);
     assert.notEqual(result.status, 2);
     assert.deepEqual(JSON.parse(result.stdout), payload);
+  } finally {
+    server.close();
+  }
+});
+
+test("sends Authorization Bearer when STAGEFLOW_CONTROL_TOKEN is set", async () => {
+  let sawAuth;
+  const { server, baseUrl } = await listen(async (req, res) => {
+    sawAuth = req.headers.authorization;
+    const body = await readJsonBody(req);
+    writeToolResult(res, body.id, HEALTH);
+  });
+  try {
+    const token = "a".repeat(32);
+    const result = await run(
+      [
+        "--base-url",
+        baseUrl,
+        "--tool",
+        "get_health",
+        "--args",
+        "{}",
+        "--stateless",
+      ],
+      {
+        env: cleanEnv({ STAGEFLOW_CONTROL_TOKEN: token }),
+      },
+    );
+    assert.equal(result.status, 0);
+    assert.equal(sawAuth, `Bearer ${token}`);
+  } finally {
+    server.close();
+  }
+});
+
+test("allows run_stage and get_envelope tool names", async () => {
+  const seen = [];
+  const { server, baseUrl } = await listen(async (req, res) => {
+    const body = await readJsonBody(req);
+    seen.push(body?.params?.name);
+    writeToolResult(res, body.id, { ok: true });
+  });
+  try {
+    for (const tool of ["run_stage", "get_envelope"]) {
+      const result = await run([
+        "--base-url",
+        baseUrl,
+        "--tool",
+        tool,
+        "--args",
+        "{}",
+        "--stateless",
+      ]);
+      assert.equal(result.status, 0, tool);
+    }
+    assert.deepEqual(seen, ["run_stage", "get_envelope"]);
   } finally {
     server.close();
   }
