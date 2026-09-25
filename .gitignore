@@ -52,6 +52,7 @@ docs/specs/*
 !docs/specs/*.md
 docs/specs/deterministic-route-if.md
 docs/specs/container-ready*.md
+docs/container-ready-plan.html
 docs/specs/pre-container-work.md
 docs/specs/host-owned-worktrees.md
 docs/specs/run-scoped-skills.md
