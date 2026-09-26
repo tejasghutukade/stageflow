@@ -26,6 +26,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `repos/` | disposable | Shared bare-clone cache (`repos/<host>/<owner>/<repo>.git`); Host-owned, used for repository-bound runs |
 | `worktrees/` | disposable | Per-run checkouts (`worktrees/<runId>`); Host-owned, created on repository-bound start. When a run reaches `succeeded`, Stageflow may reclaim the worktree (keeping `run_branch`); the `checkout_root` column can still be recorded after the directory is gone. Failed/cancelled runs keep their worktrees until retention SLIM. |
 | `cache/` | disposable | Reserved name; this release creates `cache/jiti` when the jiti MCP fallback runs |
+| `tmp/` | disposable | Soft-default when `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty at Host boot (`assertTmpdirUsable` creates `$STAGEFLOW_HOME/tmp` then asserts writability) |
 | `backups/` | disposable | `sf backup` archives (default output) |
 | `restore-pending/` | disposable | Staged API restore archives + marker |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
@@ -35,6 +36,8 @@ For the operator keep-table and why `cp state.db` is unsafe, see [Docker and sel
 Stage workers do **not** use `$STAGEFLOW_HOME/agent/` as their Pi agent directory. Each stage attempt binds `PI_CODING_AGENT_DIR` to a per-attempt directory under that run's workspace (`runs/<runId>/stages/<stageId>/attempts/<n>/.pi-agent`).
 
 Credential choice is unchanged: a saved setting, otherwise a usable `~/.pi/agent/auth.json`, otherwise `agent/auth.json` under the durable root.
+
+**Temp dir:** Host boot still requires a writable temp directory. If `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Stageflow soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it), then asserts writability. An explicit unwritable `TMPDIR` still fails with `tmpdir_unusable`.
 
 Stage agents' Pi `read`, `write`, and `edit` tools deny paths whose real path is inside the durable root and outside that run's workspace (`stageflow_path_denied`). On repository- or path-bound runs, `checkoutRoot` (the Host worktree or checkout path) is **allowlisted** for those file tools so the agent can edit the bound tree; other durable-root paths (`state.db`, `agent/`, sibling worktrees) stay denied. That is defence in depth, not a sandbox — `bash` is not path-restricted.
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** Omitting `gate_kinds` no longer registers `ask_operator`. Only an explicit non-empty `gate_kinds` list registers the tool (kinds allowlist as before). `gate_kinds: []` remains explicit off. Stages that relied on omit-means-on must declare kinds. See `docs/hitl.md` and `docs/yaml-catalog.md`.
+
 ## [0.27.0] - 2026-09-25
 
 ### Added

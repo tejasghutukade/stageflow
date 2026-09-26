@@ -9,7 +9,7 @@ export type StageLibraryRow = {
 export function stageMayAsk(
   gateKinds: unknown[] | undefined,
 ): boolean {
-  return gateKinds === undefined || gateKinds.length > 0;
+  return Array.isArray(gateKinds) && gateKinds.length > 0;
 }
 
 export function gateCount(

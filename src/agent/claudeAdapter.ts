@@ -251,7 +251,7 @@ async function runTurn(
   const askCapture: AskOperatorCapture = {};
 
   const gateKinds = input.stage.gate_kinds;
-  const hitlAllowed = gateKinds === undefined || gateKinds.length > 0;
+  const hitlAllowed = Array.isArray(gateKinds) && gateKinds.length > 0;
 
   input.onActivity?.({ event: "agent_start" });
   input.onActivity?.({ event: "turn_start" });
@@ -277,7 +277,7 @@ async function runTurn(
         ? {
             askOperator: {
               capture: askCapture,
-              ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
+              allowedKinds: gateKinds,
             },
           }
         : {}),

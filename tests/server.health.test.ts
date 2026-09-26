@@ -110,6 +110,20 @@ describe("health surfaces", () => {
       expect(body.version).toBeTruthy();
       expect(body.maxConcurrent).toBeTruthy();
       expect(body.capacity).toBeTruthy();
+      expect(typeof body.stageflow_home).toBe("string");
+      expect(body.boot_providers).toEqual(
+        expect.objectContaining({
+          configured: expect.any(Array),
+          failures: expect.any(Array),
+        }),
+      );
+      expect(body.providers_live).toEqual(
+        expect.objectContaining({
+          configured: expect.any(Array),
+          note: expect.stringMatching(/list_providers/),
+        }),
+      );
+      expect(body.providers).toEqual(body.boot_providers);
       expect(Array.isArray(body.catalog_roots)).toBe(true);
       const roots = body.catalog_roots as Array<Record<string, unknown>>;
       expect(roots.length).toBeGreaterThan(0);

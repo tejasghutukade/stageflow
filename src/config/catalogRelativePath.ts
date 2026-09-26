@@ -66,8 +66,12 @@ export function resolveCatalogRelativePath(
   const registered = input.roots.map((r) => r.project_root);
 
   if (path.isAbsolute(input.inputPath)) {
+    const rootsList =
+      registered.length > 0
+        ? registered.join(", ")
+        : "(none — register a project or use seeded examples)";
     throw new CatalogPathError(
-      `Absolute ${field} is not allowed on network surfaces; use a catalog-relative path under a registered project_root, or an inline definition.`,
+      `Absolute ${field} is not allowed on network surfaces. Use a catalog-relative path under project_root (registered or seeded roots: ${rootsList}). Local CLI may pass absolute paths and auto-registers the project folder.`,
       "absolute_path_not_allowed",
       registered,
     );
@@ -95,12 +99,23 @@ export function catalogPathErrorBody(err: CatalogPathError): {
   error: string;
   code: CatalogPathErrorCode;
   registered_roots: string[];
+  hint?: string;
 } {
-  return {
+  const body: {
+    error: string;
+    code: CatalogPathErrorCode;
+    registered_roots: string[];
+    hint?: string;
+  } = {
     error: err.message,
     code: err.code,
     registered_roots: err.registered_roots,
   };
+  if (err.code === "absolute_path_not_allowed") {
+    body.hint =
+      "MCP/HTTP: relative path under project_root; CLI may pass absolute paths and auto-register.";
+  }
+  return body;
 }
 
 /**

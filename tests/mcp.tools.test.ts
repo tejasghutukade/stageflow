@@ -556,6 +556,18 @@ describe("MCP tools and HTTP inline task", () => {
       const health = await mcpCall(base, "get_health");
       expect(health.isError).toBe(false);
       expect(health.payload.version).toBe(PACKAGE_VERSION);
+      expect(typeof health.payload.stageflow_home).toBe("string");
+      expect(health.payload.boot_providers).toEqual(
+        expect.objectContaining({
+          configured: expect.any(Array),
+          failures: expect.any(Array),
+        }),
+      );
+      expect(health.payload.providers_live).toEqual(
+        expect.objectContaining({
+          note: expect.stringMatching(/list_providers/),
+        }),
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

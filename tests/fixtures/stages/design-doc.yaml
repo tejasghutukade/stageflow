@@ -1,4 +1,6 @@
 id: design-doc
+gate_kinds:
+  - free_text
 system_prompt: Write a design doc from the clarified requirements.
 model: anthropic/claude-sonnet-4-5
 io:

@@ -26,8 +26,8 @@
  * fails closed with `StageSessionReconstructError` (KTD7). Epic proving
  * vehicle: pipeline `plan-review-proving` (Pi live wait + console answers).
  *
- * `ask_operator` is registered on sealed stage sessions unless the stage
- * declares `gate_kinds: []`.
+ * `ask_operator` is registered on sealed stage sessions only when the stage
+ * declares a non-empty `gate_kinds` list.
  */
 import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -142,7 +142,7 @@ export function createDurableRootPathDenyExtension(options: {
 }
 /**
  * Stage tool allowlist for sealed Pi sessions.
- * Includes `ask_operator` unless `gateKinds` is an empty list (R6).
+ * Includes `ask_operator` only when `gateKinds` is a non-empty list.
  * `write_stage_artifact` when registered (always, for bound and unbound —
  * bound/unbound only gates cwd / env bind).
  */
@@ -159,7 +159,7 @@ export function resolveStageToolNames(
     "edit",
     emitToolName,
   ];
-  if (gateKinds === undefined || gateKinds.length > 0) {
+  if (Array.isArray(gateKinds) && gateKinds.length > 0) {
     tools.push(askOperatorToolName);
   }
   if (artifactToolName) {
@@ -1100,11 +1100,11 @@ async function prepareStageSessionWiring(
   const emitTool = defineTool(emitDef);
 
   const gateKinds = input.stage.gate_kinds;
-  const includeAsk = gateKinds === undefined || gateKinds.length > 0;
+  const includeAsk = Array.isArray(gateKinds) && gateKinds.length > 0;
   const askDef = includeAsk
     ? createAskOperatorTool({
         requestWait: (prompt) => askWaitChannel.requestWait(prompt),
-        ...(gateKinds !== undefined ? { allowedKinds: gateKinds } : {}),
+        allowedKinds: gateKinds,
       })
     : undefined;
   const askTool = askDef ? defineTool(askDef) : undefined;

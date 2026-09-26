@@ -46,7 +46,7 @@ More CI-focused examples will follow this pattern (prepare context → run pipel
 
 Current wiring tours: [`route-wiring-smoke-test`](route-wiring-smoke-test/), [`route-if-tour`](route-if-tour/).
 
-Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). **`sf ui` started from any subdirectory** still uses `<repo>/.stageflow` for run state.
+Browse scope is declared in repo-root [`stageflow.yaml`](../stageflow.yaml). Cold Host (`sf ui` / `sf mcp`) also browses the packaged seeded root via [`examples/stageflow.yaml`](stageflow.yaml) (paths relative to `examples/`; wire `project_root: "examples"`). **`sf ui` started from any subdirectory** still uses the global durable root (`$STAGEFLOW_HOME`) for run state.
 
 ## Prerequisites (all examples)
 

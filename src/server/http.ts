@@ -1223,6 +1223,7 @@ export function createOperatorRoutes(
           json(res, 200, {
             tasks: result.items,
             root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
           });
           return true;
         }
@@ -1248,6 +1249,7 @@ export function createOperatorRoutes(
           json(res, 200, {
             pipelines: result.items,
             root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
           });
           return true;
         }

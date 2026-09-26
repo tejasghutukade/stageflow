@@ -1,4 +1,6 @@
 id: branch-c
+gate_kinds:
+  - free_text
 system_prompt: Parallel HITL branch C.
 model: anthropic/claude-sonnet-4-5
 io:

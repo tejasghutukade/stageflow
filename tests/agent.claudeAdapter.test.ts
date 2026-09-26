@@ -723,7 +723,7 @@ describe("ClaudeAgentAdapter — MCP connect-fail", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
       resolvedMcpServers: { github: { command: "npx", args: ["-y", "pkg"] } },
     };
@@ -766,9 +766,9 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     await adapter.runStage(baseInput({ gate_kinds: [] }));
   });
 
-  it("registers ask_operator when gate_kinds is undefined", async () => {
+  it("does not register ask_operator when gate_kinds is omitted", async () => {
     queryImpl = async function* (options) {
-      expect(() => findTool(options, "ask_operator")).not.toThrow();
+      expect(() => findTool(options, "ask_operator")).toThrow();
       yield { type: "result", subtype: "success", is_error: false, result: "ok" };
     };
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
@@ -790,7 +790,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
     };
 
@@ -814,7 +814,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
     };
     const handle = adapter.openStage(input);
@@ -843,7 +843,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
     };
     const handle = adapter.openStage(input);
@@ -880,7 +880,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
       resolvedMcpServers: snapshot,
     };
@@ -917,7 +917,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const firstAdapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
     };
     const firstHandle = firstAdapter.openStage(input);
@@ -961,7 +961,7 @@ describe("ClaudeAgentAdapter — HITL (ask_operator)", () => {
     const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
     const adapter = new ClaudeAgentAdapter();
     const input: StageRunInput = {
-      ...baseInput({ gate_kinds: undefined }),
+      ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
       roots: buildStageRoots(workspaceDir, "review"),
     };
     const handle = adapter.openStage(input);
@@ -1024,7 +1024,7 @@ describe("ClaudeAgentAdapter — never-let-it-go-dangling regression guard", () 
       const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
       const adapter = new ClaudeAgentAdapter();
       const input: StageRunInput = {
-        ...baseInput({ gate_kinds: undefined }),
+        ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
         roots: buildStageRoots(dir, "review"),
       };
       const handle = adapter.openStage(input);
@@ -1055,7 +1055,7 @@ describe("ClaudeAgentAdapter — never-let-it-go-dangling regression guard", () 
       const { ClaudeAgentAdapter } = await import("../src/agent/claudeAdapter.js");
       const adapter = new ClaudeAgentAdapter();
       const input: StageRunInput = {
-        ...baseInput({ gate_kinds: undefined }),
+        ...baseInput({ gate_kinds: ["free_text", "confirm"] }),
         roots: buildStageRoots(dir, "review"),
       };
       const markerPath = claudeSessionMarkerPath(input);
