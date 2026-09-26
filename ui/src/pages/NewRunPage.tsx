@@ -11,8 +11,7 @@ import {
 import { stageMayAsk } from "../catalogJoin";
 
 export function previewGateMeta(gateKinds?: StageGateKind[]): string {
-  if (gateKinds === undefined) return "all kinds";
-  if (gateKinds.length === 0) return "no gate";
+  if (!Array.isArray(gateKinds) || gateKinds.length === 0) return "no gate";
   return "will ask you";
 }
 import { useRunCatalog } from "../catalog/useRunCatalog";

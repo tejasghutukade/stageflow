@@ -72,6 +72,8 @@ sf run --task <path> --pipeline <path> [--checkout <path>] [--repository <owner/
 
 `sf run` is an HTTP client of the shared global Stageflow service (started/reused across invocations, see [`sf ui`](#sf-ui) / [`sf mcp`](#sf-mcp)); it no longer constructs a per-invocation `RunManager`, so `--operator-cwd`/`--operator-agent-dir` can't be threaded through per call. Passing either flag prints a warning and is otherwise a no-op. Set `STAGEFLOW_OPERATOR_CWD` / `STAGEFLOW_OPERATOR_AGENT_DIR` in the environment **before that service first starts** instead — the operator catalog used for skill resolution is fixed once, at daemon start. See [CI: Skills in CI](ci.md#skills-in-ci).
 
+**Contrast:** `STAGEFLOW_OPERATOR_CWD` is skills/operator checkout resolution only. Catalog browse and MCP `project_root` use **seeded ∪ registered** roots (each with its own `stageflow.yaml`) — not the operator cwd. See [MCP — Skills cwd vs catalog project_root](mcp.md#skills-cwd-vs-catalog-project_root) and [Data directory](data-directory.md).
+
 **Project identity.** Pipeline/task paths resolve from the CLI cwd (relative or absolute local paths). Before `start_run`, the CLI ensure-registers that resolved project folder with the Host (`POST /api/projects` on trusted loopback), then sends catalog-relative paths plus `project_root` for that folder. Host boot cwd does not define the run's project. Remote MCP/HTTP callers cannot ensure arbitrary paths — they may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [Data directory](data-directory.md).
 
 **Exit codes:**

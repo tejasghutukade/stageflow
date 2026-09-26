@@ -12,7 +12,9 @@ Print a short pick list (id + path). Ask which.
 
 ## MCP catalog
 
-`list_pipelines` and `list_tasks` (native tools, or [`mcp-call.md`](mcp-call.md)). Listing objects carry `path` and `id`.
+`list_pipelines` and `list_tasks` (native tools, or [`mcp-call.md`](mcp-call.md)). Listing objects carry `path` and `id`. The Host must already know the catalog root (seeded or registered via ensure / `POST /api/projects`) and that root needs a readable `stageflow.yaml`. Git is optional for listing — register + manifest is enough.
+
+**Paths:** MCP requires catalog-relative paths under `project_root`. Absolute pipeline/task/checkout paths return `absolute_path_not_allowed` (with `registered_roots`). Local CLI may pass absolute paths and auto-register.
 
 ## CLI catalog
 

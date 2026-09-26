@@ -163,11 +163,19 @@ There is **no** mandatory `boot` catalog root from Host cwd. Cold Host with an e
 
 **Path contract (MCP / remote HTTP / A2A sharing the helper):**
 
-- Pipeline/task paths must be **catalog-relative** under a known root (absolute pipeline/task paths → `absolute_path_not_allowed`).
+- Pipeline/task paths must be **catalog-relative** under a known root (absolute pipeline/task paths → `absolute_path_not_allowed`). Error body keeps `code` + `registered_roots` and explains the remedy: relative under `project_root`; local CLI may pass absolute paths and auto-register.
 - Unknown absolute `project_root` → `unknown_project_root` (listing and path resolution agree; the Host does **not** invent a request-scoped root).
 - `..` / realpath escape of the selected root → `path_outside_project_root`.
 
+**MCP vs CLI paths:** MCP/HTTP require catalog-relative paths under `project_root`. Local CLI may pass absolute paths and auto-registers the project folder.
+
 **Registration:** Trusted local clients (CLI / loopback + control token) call `POST /api/projects` with `{ "project_root": "/abs/path" }` to ensure a folder into the registry. Remote MCP and non-loopback HTTP cannot ensure arbitrary paths (`ensure_project_not_allowed`). After ensure, remotes may `start_run` with that absolute `project_root` and catalog-relative paths. Local `sf run` ensure-then-starts automatically — see [CLI reference](cli-reference.md#sf-run).
+
+**Browse requirements:** `list_pipelines` / `list_tasks` need a **registered or seeded** root with a readable `stageflow.yaml` at that root. Git is **not** required for discovery — a non-git folder with a manifest browses the same way after ensure.
+
+### Skills cwd vs catalog `project_root` {#skills-cwd-vs-catalog-project-root}
+
+`STAGEFLOW_OPERATOR_CWD` (and the operator skills catalog) is the Host's skill-resolution checkout — set before the service first starts. It is **not** the same as catalog membership or MCP `project_root`. Pipelines and tasks list under **seeded ∪ registered** roots (`stageflow.yaml` at each root). Skills resolve under the operator cwd; listing and `start_run` paths resolve under the selected catalog `project_root`.
 
 ## Tools
 
@@ -211,7 +219,7 @@ List manifest-declared pipeline paths across every catalog root this Host knows 
 }
 ```
 
-Paths are relative to the project git root (as declared in `stageflow.yaml`). Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`). `root_errors` is always present (possibly empty).
+Paths are relative to the catalog root (registered folder or seeded path) as declared in that root's `stageflow.yaml`. Each listing always includes `stages: PipelineStageListing[]` (`id`, optional `gate_kinds`, `uses_path`, `inline`). `root_errors` is always present (possibly empty). When `pipelines` is empty and there is no `unknown_project_root` error, the response may include an additive `tip` string pointing at registration / `stageflow.yaml`.
 
 ### `list_tasks`
 
@@ -451,7 +459,15 @@ Server health, soft-max run capacity, toolchain map (from the image manifest wit
 
 **Input:** `{}`
 
-**Output:** includes capacity fields, `version`, `build_sha`, `toolchain` (map of tool → version string), and `disk` breakdown.
+**Output:** includes capacity fields, `version`, `build_sha`, `stageflow_home`, `toolchain` (map of tool → version string), `disk` breakdown, plus:
+
+| Field | Meaning |
+|-------|---------|
+| `boot_providers` | Host boot snapshot (`STAGEFLOW_PROVIDER_*` env/file at process start): `{ configured, failures }` |
+| `providers_live` | Live auth summary (`configured` ids) plus a `note` — prefer `list_providers` / `sf providers status` for full readiness |
+| `providers` | Same shape as `boot_providers` (kept for older clients; prefer `boot_providers`) |
+
+Empty `boot_providers.configured` does **not** mean the CLI has no credentials — compare `stageflow_home` and use `list_providers` for live auth.
 
 ### `preflight`
 

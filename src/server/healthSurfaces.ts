@@ -1,4 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { BootProviderResult } from "../agent/bootProviderConfig.js";
+import {
+  getAuthStatus,
+  type ProviderAuthContext,
+} from "../agent/providerAuth.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { redactHostConfig } from "../config/hostConfig.js";
@@ -13,6 +18,38 @@ import {
 } from "../diagnostics/checks.js";
 import { buildEgressHealth } from "../net/proxy.js";
 import { toolchainHealthMap } from "../preflight/toolchain.js";
+
+function bootProvidersSnapshot(
+  providerBoot: BootProviderResult | undefined,
+): { configured: string[]; failures: BootProviderResult["failures"] } {
+  return providerBoot
+    ? {
+        configured: providerBoot.configured,
+        failures: providerBoot.failures,
+      }
+    : { configured: [], failures: [] };
+}
+
+async function providersLiveSummary(
+  cwd: string,
+  authCtx: ProviderAuthContext | undefined,
+): Promise<{ configured: string[]; note: string }> {
+  const note =
+    "Live auth inspect — prefer list_providers / sf providers status. boot_providers is Host boot env only and may be empty when CLI credentials are configured.";
+  if (authCtx === undefined) {
+    return { configured: [], note };
+  }
+  try {
+    const status = await getAuthStatus(cwd, undefined, authCtx);
+    const rows = Array.isArray(status) ? status : [status];
+    return {
+      configured: rows.filter((r) => r.configured).map((r) => r.providerId),
+      note,
+    };
+  } catch {
+    return { configured: [], note };
+  }
+}
 
 export function handleLivez(
   _req: IncomingMessage,
@@ -73,6 +110,11 @@ export async function buildRichHealthPayload(
     store: boot.store,
     bootCwd: boot.cwd,
   });
+  const boot_providers = bootProvidersSnapshot(boot.providerBoot);
+  const providers_live = await providersLiveSummary(
+    boot.cwd,
+    boot.providerAuthContext,
+  );
   const payload: Record<string, unknown> = {
     ...capacity,
     capacity: {
@@ -97,12 +139,9 @@ export async function buildRichHealthPayload(
       kind: r.kind,
       read_only: r.read_only,
     })),
-    providers: boot.providerBoot
-      ? {
-          configured: boot.providerBoot.configured,
-          failures: boot.providerBoot.failures,
-        }
-      : { configured: [], failures: [] },
+    boot_providers,
+    providers_live,
+    providers: boot_providers,
   };
   if (boot.hostConfig) {
     payload.config = redactHostConfig(boot.hostConfig);

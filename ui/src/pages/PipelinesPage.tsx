@@ -37,8 +37,7 @@ function definitionTrack(stages: PipelineStageListing[]): TrackStage[] {
 }
 
 export function gateLabel(kinds: string[] | undefined): string {
-  if (kinds === undefined) return "all kinds";
-  if (kinds.length === 0) return "none";
+  if (!Array.isArray(kinds) || kinds.length === 0) return "none";
   return kinds.join(" · ");
 }
 

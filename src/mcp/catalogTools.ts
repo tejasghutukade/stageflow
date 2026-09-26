@@ -21,6 +21,10 @@ import { validateCatalog, type ValidationResult } from "../config/validateCatalo
 import { writeAudit } from "../logging/audit.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { PACKAGE_VERSION, BUILD_SHA } from "../package-meta.js";
+import { globalStageflowHome } from "../project/globalHome.js";
+import {
+  getAuthStatus,
+} from "../agent/providerAuth.js";
 import type { ListRunsFilter, RunStatus } from "../runstore/port.js";
 import { PipelineValidationError } from "../runtime/pipelineValidationError.js";
 import { PipelinePreflightError } from "../runtime/pipelineRunner.js";
@@ -205,7 +209,7 @@ const runStatusSchema = z.enum([
 ]);
 
 export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void {
-  const { manager, store, cwd } = deps;
+  const { manager, store, cwd, providerAuthContext, providerBoot } = deps;
   const agentDir = deps.agentDir ?? getAgentDir();
 
   server.registerTool(
@@ -280,6 +284,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       return textResult({
         pipelines: result.items,
         root_errors: result.root_errors,
+        ...(result.tip !== undefined ? { tip: result.tip } : {}),
       });
     },
   );
@@ -315,6 +320,7 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
       return textResult({
         tasks: result.items,
         root_errors: result.root_errors,
+        ...(result.tip !== undefined ? { tip: result.tip } : {}),
       });
     },
   );
@@ -389,16 +395,49 @@ export function registerCatalogTools(server: McpServer, deps: McpToolDeps): void
     "get_health",
     {
       description:
-        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, activeStageProcesses, version, plus disk breakdown (disk.runs_bytes, worktrees_bytes, repos_bytes, state_db_bytes, a2a_artifacts_bytes, free_bytes) for the durable root. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
+        "Server health and soft-max run capacity: activeRunIds, activeCount, maxConcurrent, slotsAvailable, activeStageProcesses, version, stageflow_home, boot_providers (Host boot snapshot), providers_live (or pointer to list_providers), plus disk breakdown for the durable root. Start until slotsAvailable is 0; then wait for a run to finish or raise STAGEFLOW_MAX_CONCURRENT_RUNS.",
       inputSchema: z.object({}),
     },
-    async () =>
-      textResult({
+    async () => {
+      const boot_providers = providerBoot
+        ? {
+            configured: providerBoot.configured,
+            failures: providerBoot.failures,
+          }
+        : { configured: [] as string[], failures: [] as Array<{ providerId: string; code: string; message: string }> };
+      let providers_live: { configured: string[]; note: string } = {
+        configured: [],
+        note: "Live auth inspect — prefer list_providers / sf providers status. boot_providers is Host boot env only and may be empty when CLI credentials are configured.",
+      };
+      if (providerAuthContext !== undefined) {
+        try {
+          const status = await getAuthStatus(
+            cwd,
+            undefined,
+            providerAuthContext,
+          );
+          const rows = Array.isArray(status) ? status : [status];
+          providers_live = {
+            configured: rows
+              .filter((r) => r.configured)
+              .map((r) => r.providerId),
+            note: providers_live.note,
+          };
+        } catch {
+          /* keep empty configured + note */
+        }
+      }
+      return textResult({
         ...(await manager.getHealthWithDisk()),
         version: PACKAGE_VERSION,
         build_sha: BUILD_SHA,
         toolchain: toolchainHealthMap(),
-      }),
+        stageflow_home: globalStageflowHome(),
+        boot_providers,
+        providers_live,
+        providers: boot_providers,
+      });
+    },
   );
 
   server.registerTool(

@@ -1,0 +1,51 @@
+version: 1
+catalog:
+  pipelines:
+    - generic-fan-in
+    - stage-mcp
+    - playwright-mcp
+    - context7-mcp
+    - conditional-fork
+    - hello-world
+    - plan-review
+    - github-release
+    - ci-validate
+    - archify-on-pr
+    - feedback-loop
+    - oss-issue-contribution
+    - oss-quick-fix
+    - route-wiring-smoke-test
+    - route-if-tour
+    - verify-tour
+    - retry-tour
+    - mcp-hitl-tour
+    - feature-loop
+    - ship-feature
+  tasks:
+    - generic-fan-in
+    - stage-mcp
+    - playwright-mcp
+    - context7-mcp
+    - conditional-fork
+    - hello-world
+    - plan-review
+    - github-release
+    - ci-validate
+    - archify-on-pr
+    - feedback-loop
+    - oss-issue-contribution
+    - oss-quick-fix
+    - route-wiring-smoke-test
+    - route-if-tour
+    - verify-tour
+    - retry-tour
+    - mcp-hitl-tour
+    - feature-loop
+    - ship-feature
+  patterns:
+    pipeline: "*.pipeline.yaml"
+    task: "*.task.yaml"
+  exclude:
+    - route-wiring-smoke-test/rejected
+    - stage-mcp/stage-mcp-dead.pipeline.yaml
+    - stage-mcp/stage-mcp-dead.task.yaml

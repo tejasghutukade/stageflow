@@ -204,13 +204,13 @@ describe("skip-gates yield-loop fail-before-park (U2)", () => {
     expect(events.some((e) => e.event === "waiting_for_input")).toBe(false);
   });
 
-  it("ask_operator remains registered when gate_kinds is omitted", () => {
-    expect(resolveStageToolNames("emit_stage_envelope")).toContain(
+  it("ask_operator is not registered when gate_kinds is omitted", () => {
+    expect(resolveStageToolNames("emit_stage_envelope")).not.toContain(
       "ask_operator",
     );
     expect(
       resolveStageToolNames("emit_stage_envelope", "write_stage_artifact"),
-    ).toContain("ask_operator");
+    ).not.toContain("ask_operator");
   });
 
   it("ask_operator is omitted when gate_kinds is empty (AE5)", () => {
@@ -230,6 +230,17 @@ describe("skip-gates yield-loop fail-before-park (U2)", () => {
         [],
       ),
     ).not.toContain("ask_operator");
+  });
+
+  it("ask_operator is registered when gate_kinds is non-empty", () => {
+    expect(
+      resolveStageToolNames(
+        "emit_stage_envelope",
+        undefined,
+        "ask_operator",
+        ["confirm"],
+      ),
+    ).toContain("ask_operator");
   });
 
   it("skip-gates wait maps to worker FAILED exit 1", async () => {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CatalogPathError,
+  catalogPathErrorBody,
   resolveCatalogRelativePath,
   relativizeLocalPathForNetwork,
   selectCatalogRootForStart,
@@ -57,6 +58,24 @@ describe("resolveCatalogRelativePath", () => {
       expect(err).toBeInstanceOf(CatalogPathError);
       expect((err as CatalogPathError).code).toBe("absolute_path_not_allowed");
       expect((err as CatalogPathError).registered_roots).toContain("examples");
+      expect((err as CatalogPathError).message).toMatch(/catalog-relative/);
+      expect((err as CatalogPathError).message).toMatch(/Local CLI/);
+      expect((err as CatalogPathError).message).toMatch(/examples/);
+    }
+  });
+
+  it("catalogPathErrorBody adds hint for absolute_path_not_allowed", () => {
+    try {
+      resolveCatalogRelativePath({
+        inputPath: "/abs/x.pipeline.yaml",
+        roots,
+        fieldName: "pipeline",
+      });
+    } catch (err) {
+      const body = catalogPathErrorBody(err as CatalogPathError);
+      expect(body.code).toBe("absolute_path_not_allowed");
+      expect(body.hint).toMatch(/MCP\/HTTP/);
+      expect(body.registered_roots).toContain("examples");
     }
   });
 

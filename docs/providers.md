@@ -54,6 +54,8 @@ Provider API keys are **not** passed into stage process environments. Model auth
 
 **Docker Compose:** set `STAGEFLOW_PROVIDER_OPENROUTER_API_KEY` / `STAGEFLOW_PROVIDER_ANTHROPIC_API_KEY` (or `_FILE`) in `.env` — bare `OPENROUTER_API_KEY` alone does not configure Host boot. See [Docker — Local try](docker.md#local-try-compose) and [`.env.example`](../.env.example).
 
+**Health fields:** `GET /api/health` and MCP `get_health` expose `boot_providers` (Host boot env snapshot) and `providers_live` (live summary + note). The legacy `providers` key matches `boot_providers`. Empty boot configured does **not** imply CLI is unconfigured — compare `stageflow_home` and use `list_providers` / `sf providers status` for live auth. See [MCP — get_health](mcp.md#get_health).
+
 The console **Connect** flow (`#/connect`) mirrors CLI login for browser-based setup.
 
 ## CLI commands

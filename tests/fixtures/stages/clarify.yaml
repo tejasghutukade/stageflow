@@ -1,4 +1,6 @@
 id: clarify
+gate_kinds:
+  - free_text
 system_prompt: Clarify the task into crisp requirements.
 model: anthropic/claude-sonnet-4-5
 io:
