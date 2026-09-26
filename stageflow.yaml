@@ -48,3 +48,5 @@ catalog:
   exclude:
     - tests/fixtures
     - examples/route-wiring-smoke-test/rejected
+    - examples/stage-mcp/stage-mcp-dead.pipeline.yaml
+    - examples/stage-mcp/stage-mcp-dead.task.yaml
