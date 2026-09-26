@@ -39,7 +39,7 @@ PI_CURSOR_SETTING_SOURCES=all STAGEFLOW_ACTIVITY_VERBOSE=1 node dist/cli.js ui
 
 `npm run dev -- ui` runs the TypeScript CLI via tsx; use `node dist/cli.js ui` after `ui:build` so the console is served from `dist/ui`. Do not use a globally installed `sf` — Homebrew `sf` is an older build that cannot load this catalog.
 
-Open `http://127.0.0.1:3847`. Browse should list **stage-mcp**, **stage-mcp-missing-var**, and **stage-mcp-dead**.
+Open `http://127.0.0.1:3847`. Browse should list **stage-mcp** and **stage-mcp-missing-var**. **stage-mcp-dead** is excluded from the catalog manifest (so `sf validate --strict` and release CI stay green) but remains loadable by explicit path — see Scenario C.
 
 ## Terminal 2 — start a run (repo root)
 
@@ -91,7 +91,7 @@ node dist/cli.js run \
 
 ## Scenario C — dead server
 
-New run:
+Excluded from catalog browse / manifest-all validate (command is intentionally not on PATH). Load by explicit path:
 
 ```bash
 node dist/cli.js run \
@@ -103,6 +103,7 @@ node dist/cli.js run \
 
 1. The passed `dead` server will not connect.
 2. The stage fails.
+3. `sf validate --strict` (no `--pipeline`) does not report this pipeline; validating the dead pipeline by explicit path still reports `catalog.mcp_command_missing`.
 
 ---
 
