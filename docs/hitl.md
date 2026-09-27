@@ -11,7 +11,7 @@ HITL is optional — pipelines with no `ask_operator` calls run fully headless.
 
 ## Gate kinds
 
-Declared in stage YAML as `gate_kinds` (optional but recommended):
+Declared in stage YAML as `gate_kinds`:
 
 | Kind | Purpose |
 |------|---------|
@@ -19,6 +19,12 @@ Declared in stage YAML as `gate_kinds` (optional but recommended):
 | `confirm` | Accept/reject confirmation (yes/no is a UI label only) |
 | `multi_question` | Batch of sub-questions (each sub-question has its own kind) |
 | `artifact_backed` | Operator reviews one or more artifact paths before accepting |
+
+| `gate_kinds` value | Registers `ask_operator`? |
+|--------------------|---------------------------|
+| omitted | **no** |
+| `[]` | **no** (explicit off) |
+| non-empty list (e.g. `[confirm]`) | **yes** — kinds are the allowlist |
 
 Allowed values are the catalog enum `STAGE_GATE_KINDS` (`src/types/stage.ts`). `gate_kinds` documents intent and catalog membership. Runtime does **not** require each `ask_operator` kind to be a subset of the declared list.
 
@@ -30,9 +36,10 @@ Plan review with artifact gate: [`tests/fixtures/stages/plan-review.yaml`](../te
 
 ## Emit-phase verify
 
-`gate_kinds` alone documents intent — it does not stop a stage from calling
+`gate_kinds` alone does not stop a stage from calling
 `emit_stage_envelope` with `status: "success"` before the operator has actually
-answered. To make a gate load-bearing *this attempt*, declare it on body `verify`
+answered — and omitting `gate_kinds` (or setting `gate_kinds: []`) means
+`ask_operator` is not registered at all. To make a gate load-bearing *this attempt*, declare it on body `verify`
 (`type: gate`; omitted `when` defaults to `[emit]`):
 
 ```yaml
@@ -129,7 +136,7 @@ system_prompt: |
 model: anthropic/claude-sonnet-4-5
 ```
 
-`gate_kinds` documents intent and catalog enum membership; runtime enforcement is via actual `ask_operator` calls in the agent session.
+`gate_kinds` declares which HITL kinds the stage may use. Omitting the field or setting `gate_kinds: []` does **not** register `ask_operator`; only a non-empty list does. Runtime enforcement of waits is via actual `ask_operator` calls in the agent session.
 
 ## Console reply
 

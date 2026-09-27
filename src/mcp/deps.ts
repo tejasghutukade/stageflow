@@ -1,3 +1,4 @@
+import type { BootProviderResult } from "../agent/bootProviderConfig.js";
 import type { ProviderAuthContext } from "../agent/providerAuth.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
@@ -10,6 +11,7 @@ export type McpToolDeps = {
   agentDir?: string;
   providerAuthContext?: ProviderAuthContext;
   projectRoot?: string;
+  providerBoot?: BootProviderResult;
 };
 
 export type McpHttpDeps = McpToolDeps & {

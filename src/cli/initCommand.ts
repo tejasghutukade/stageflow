@@ -1,11 +1,13 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { getAuthStatus } from "../agent/providerAuth.js";
 import { findProjectRoot } from "../project/findProjectRoot.js";
 import { ensureGlobalHome } from "../project/globalHome.js";
 import {
-  HELLO_PIPELINE_YAML,
   HELLO_TASK_YAML,
   STAGEFLOW_YAML,
+  helloPipelineYaml,
+  resolveInitDefaultModel,
 } from "./initTemplates.js";
 
 export const INIT_USAGE = `Usage:
@@ -25,12 +27,6 @@ type InitTarget = {
   relPath: string;
   content: string;
 };
-
-const INIT_TARGETS: InitTarget[] = [
-  { relPath: "stageflow.yaml", content: STAGEFLOW_YAML },
-  { relPath: "pipelines/hello.pipeline.yaml", content: HELLO_PIPELINE_YAML },
-  { relPath: "tasks/hello.task.yaml", content: HELLO_TASK_YAML },
-];
 
 async function fileExists(absPath: string): Promise<boolean> {
   try {
@@ -54,9 +50,23 @@ function parseInitArgs(args: string[]): { help: boolean } {
   throw new Error(`Unexpected argument: ${args[0]}`);
 }
 
+async function defaultConfiguredProviderIds(cwd: string): Promise<string[]> {
+  try {
+    const status = await getAuthStatus(cwd);
+    const rows = Array.isArray(status) ? status : [status];
+    return rows.filter((r) => r.configured).map((r) => r.providerId);
+  } catch {
+    return [];
+  }
+}
+
 export async function runInitCommand(
   args: string[],
-  options: { cwd?: string; io?: Partial<InitCommandIo> } = {},
+  options: {
+    cwd?: string;
+    io?: Partial<InitCommandIo>;
+    resolveConfiguredProviderIds?: (cwd: string) => Promise<string[]>;
+  } = {},
 ): Promise<number> {
   const cwd = options.cwd ?? process.cwd();
   const out: InitCommandIo = { ...defaultIo, ...options.io };
@@ -71,7 +81,20 @@ export async function runInitCommand(
     const initRoot = findProjectRoot(cwd) ?? path.resolve(cwd);
     ensureGlobalHome();
 
-    for (const target of INIT_TARGETS) {
+    const configuredIds = await (
+      options.resolveConfiguredProviderIds ?? defaultConfiguredProviderIds
+    )(cwd);
+    const model = resolveInitDefaultModel(configuredIds);
+    const targets: InitTarget[] = [
+      { relPath: "stageflow.yaml", content: STAGEFLOW_YAML },
+      {
+        relPath: "pipelines/hello.pipeline.yaml",
+        content: helloPipelineYaml(model),
+      },
+      { relPath: "tasks/hello.task.yaml", content: HELLO_TASK_YAML },
+    ];
+
+    for (const target of targets) {
       const absPath = path.join(initRoot, target.relPath);
       if (await fileExists(absPath)) {
         out.log(`Skipped ${target.relPath} (exists)`);

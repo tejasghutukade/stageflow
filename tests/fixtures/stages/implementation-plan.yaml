@@ -1,4 +1,6 @@
 id: implementation-plan
+gate_kinds:
+  - free_text
 system_prompt: Write an implementation plan from the design doc.
 model: anthropic/claude-sonnet-4-5
 io:

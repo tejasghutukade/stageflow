@@ -55,8 +55,10 @@ id: hello
 stages:
   - id: hello
     system_prompt: Say hello and emit a success envelope.
-    model: anthropic/claude-sonnet-4-5
+    model: CHANGE_ME/<provider-model>
 ```
+
+`sf init` fills `model` from the single configured provider when one is logged in (for example `openrouter/auto` or `anthropic/claude-sonnet-4-5`). With none or more than one configured provider, it writes the loud placeholder `CHANGE_ME/<provider-model>` — replace it before running.
 
 **`tasks/hello.task.yaml`**
 
@@ -115,6 +117,24 @@ Start `sf ui` before running any pipeline if you want the console open: `sf run`
 - **Start a run** — rail button or `#/new` with pipeline and task pre-filled
 
 If a stage calls `ask_operator`, the run pauses until you reply in the console. See [Human-in-the-loop](hitl.md).
+
+## CLI smoke vs MCP smoke
+
+### CLI smoke path
+
+1. `sf init` (or author the three files above)
+2. `sf providers list` / `sf providers login …`
+3. `sf validate --strict`
+4. `sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml`
+
+### MCP smoke path
+
+1. Start a Host: `sf ui` or `sf mcp` (default `http://127.0.0.1:3847`)
+2. Ensure/register the catalog folder (`POST /api/projects` on trusted loopback, or a prior local `sf run` ensure) — or use seeded `project_root: "examples"`
+3. MCP: `list_pipelines` (catalog-relative paths; absolute paths → `absolute_path_not_allowed`) → `start_run` → `wait_run`
+4. Compare homes/providers with `get_health` (`stageflow_home`, `boot_providers`) and live auth via `list_providers`
+
+Details: [MCP](mcp.md). Setup skill checklist: `skills/stageflow-setup/SKILL.md`.
 
 For MCP without the console, use `sf mcp` — see [MCP](mcp.md).
 

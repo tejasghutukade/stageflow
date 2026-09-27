@@ -195,7 +195,7 @@ Rich health reports `store_filesystem`.
 
 ## Writable paths and `read_only: true`
 
-Supported writable set: `$STAGEFLOW_HOME` and an explicit writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). Boot fails with `tmpdir_unusable` if `TMPDIR` is missing or not writable.
+Supported writable set: `$STAGEFLOW_HOME` and a writable `TMPDIR` (also used as `SQLITE_TMPDIR` when unset). When `TMPDIR` / `TMP` / `TEMP` are unset or whitespace-empty, Host boot soft-defaults to `$STAGEFLOW_HOME/tmp` (creates it) then asserts writability. Boot still fails with `tmpdir_unusable` if that path (or an explicit `TMPDIR`) is not writable. Compose/images often set `TMPDIR=/data/tmp` explicitly — that remains valid.
 
 ## Logging budget
 

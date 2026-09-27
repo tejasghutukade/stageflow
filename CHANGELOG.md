@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-09-26
+
+### Fixed
+
+- Registered catalog roots with a local `stageflow.yaml` now list pipelines/tasks without requiring git, so MCP/HTTP discovery matches `start_run` / validate for non-git projects.
+- Cold Host seeded `examples` browse via `examples/stageflow.yaml` (symbolic `project_root: "examples"`).
+- Empty catalog lists return a registration tip; absolute-path rejections keep the ban but include richer relative-path / CLI-ensure guidance.
+- Unset `TMPDIR` / `TMP` / `TEMP` soft-defaults to `$STAGEFLOW_HOME/tmp` before the Host writability assert.
+- HTTP health exposes `boot_providers` (and clarified live provider summary); MCP `get_health` includes `stageflow_home`.
+- `sf init` / author defaults prefer a configured provider (or a loud placeholder) instead of silently assuming Anthropic.
+
+### Changed
+
+- **BREAKING:** Omitting `gate_kinds` no longer registers `ask_operator`. Only an explicit non-empty `gate_kinds` list registers the tool (kinds allowlist as before). `gate_kinds: []` remains explicit off. Stages that relied on omit-means-on must declare kinds. See `docs/hitl.md` and `docs/yaml-catalog.md`.
+- Quickstart and setup skill split CLI smoke vs MCP smoke (Host + register + catalog-relative paths); docs contrast `STAGEFLOW_OPERATOR_CWD` (skills) vs catalog `project_root`.
+
 ## [0.27.0] - 2026-09-25
 
 ### Added

@@ -16,8 +16,6 @@ import {
   type CatalogRoot,
   type ResolveCatalogRootsOptions,
 } from "./resolveCatalogRoots.js";
-import { catalogContextFromStageflow } from "./resolveCatalogContext.js";
-import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 
 export type CatalogRootError = {
   project_root: string;
@@ -29,27 +27,39 @@ export type MultiProjectListResult<T> = {
   items: T[];
   root_errors: CatalogRootError[];
   roots: CatalogRoot[];
+  tip?: string;
 };
 
+export const EMPTY_CATALOG_LIST_TIP =
+  "No catalog entries listed. Register a project root (POST /api/projects or local sf run / ensure), ensure stageflow.yaml exists at that root, then retry list_pipelines / list_tasks. Packaged examples use project_root \"examples\" when present. Git is not required for discovery.";
+
+function listTip(
+  itemsLength: number,
+  root_errors: CatalogRootError[],
+): string | undefined {
+  if (itemsLength > 0) return undefined;
+  if (root_errors.some((e) => e.code === "unknown_project_root")) {
+    return undefined;
+  }
+  return EMPTY_CATALOG_LIST_TIP;
+}
+
 async function catalogContextForRoot(root: CatalogRoot): Promise<CatalogContext> {
-  if (root.kind === "seeded") {
-    const outcome = await loadStageflowManifestOutcome(root.path);
-    if (!outcome.ok) {
-      return {
-        projectRoot: root.path,
-        manifest: null,
-        manifestStatus: "invalid",
-        issues: outcome.issues,
-      };
-    }
+  const outcome = await loadStageflowManifestOutcome(root.path);
+  if (!outcome.ok) {
     return {
       projectRoot: root.path,
-      manifest: outcome.value,
-      manifestStatus: "ok",
-      issues: [],
+      manifest: null,
+      manifestStatus: "invalid",
+      issues: outcome.issues,
     };
   }
-  return catalogContextFromStageflow(await resolveStageflowContext(root.path));
+  return {
+    projectRoot: root.path,
+    manifest: outcome.value,
+    manifestStatus: "ok",
+    issues: [],
+  };
 }
 
 async function selectRoots(
@@ -108,6 +118,13 @@ async function selectRoots(
   return { roots, selected, root_errors };
 }
 
+function withListTip<T extends { items: unknown[]; root_errors: CatalogRootError[] }>(
+  result: T,
+): T & { tip?: string } {
+  const tip = listTip(result.items.length, result.root_errors);
+  return tip !== undefined ? { ...result, tip } : result;
+}
+
 export async function listPipelinesMultiProject(
   options: ResolveCatalogRootsOptions & { projectRootFilter?: string },
 ): Promise<MultiProjectListResult<PipelineListing & { project_root: string }>> {
@@ -128,7 +145,7 @@ export async function listPipelinesMultiProject(
       });
     }
   }
-  return { items, root_errors, roots };
+  return withListTip({ items, root_errors, roots });
 }
 
 export async function listTasksMultiProject(
@@ -151,7 +168,7 @@ export async function listTasksMultiProject(
       });
     }
   }
-  return { items, root_errors, roots };
+  return withListTip({ items, root_errors, roots });
 }
 
 export async function listModelsMultiProject(

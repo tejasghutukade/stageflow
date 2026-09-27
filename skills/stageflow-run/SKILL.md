@@ -19,6 +19,8 @@ MCP tool shapes: [`docs/mcp.md`](../../docs/mcp.md). CLI flags and exit codes: [
 
 Runs live under **`$STAGEFLOW_HOME`** (default `~/.stageflow/`), not the project tree. Project `.stageflow/settings.json` is settings only.
 
+`STAGEFLOW_OPERATOR_CWD` (skills resolution) is **not** catalog `project_root` / registration — see [MCP — Skills cwd vs catalog project_root](../../docs/mcp.md#skills-cwd-vs-catalog-project_root).
+
 ## Preconditions
 
 Run `sf --version`. **Done when** it prints a version. If `sf` is missing, stop and name `stageflow-setup`.

@@ -1,15 +1,16 @@
 import { accessSync, constants, mkdirSync } from "node:fs";
+import path from "node:path";
+import { globalStageflowHome } from "../project/globalHome.js";
 import { StoreOpenError } from "./sqlite/storeOpenError.js";
 
 export function assertTmpdirUsable(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const raw = env.TMPDIR ?? env.TMP ?? env.TEMP;
+  let raw = env.TMPDIR ?? env.TMP ?? env.TEMP;
   if (raw === undefined || raw.trim() === "") {
-    throw new StoreOpenError(
-      "tmpdir_unusable: TMPDIR is unset. Set TMPDIR to a writable path (supported writable set: $STAGEFLOW_HOME and TMPDIR).",
-      "tmpdir_unusable",
-    );
+    const soft = path.join(globalStageflowHome(), "tmp");
+    process.env.TMPDIR = soft;
+    raw = soft;
   }
   const dir = raw.trim();
   try {

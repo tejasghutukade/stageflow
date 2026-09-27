@@ -6,9 +6,11 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { runInitCommand } from "../src/cli/initCommand.js";
 import {
-  HELLO_PIPELINE_YAML,
   HELLO_TASK_YAML,
+  LOUD_MODEL_PLACEHOLDER,
   STAGEFLOW_YAML,
+  helloPipelineYaml,
+  resolveInitDefaultModel,
 } from "../src/cli/initTemplates.js";
 import { initTempGitRepo, withIsolatedHome } from "./helpers/projectContext.js";
 
@@ -23,6 +25,22 @@ function runCli(args: string[], cwd: string) {
   });
 }
 
+describe("resolveInitDefaultModel", () => {
+  it("uses provider family default when exactly one configured", () => {
+    expect(resolveInitDefaultModel(["openrouter"])).toBe("openrouter/auto");
+    expect(resolveInitDefaultModel(["anthropic"])).toBe(
+      "anthropic/claude-sonnet-4-5",
+    );
+  });
+
+  it("uses loud placeholder when none or ambiguous", () => {
+    expect(resolveInitDefaultModel([])).toBe(LOUD_MODEL_PLACEHOLDER);
+    expect(resolveInitDefaultModel(["anthropic", "openrouter"])).toBe(
+      LOUD_MODEL_PLACEHOLDER,
+    );
+  });
+});
+
 describe("runInitCommand", () => {
   it("AE6: scaffolds manifest, pipeline, task, and global home in fresh git repo", async () => {
     await withIsolatedHome(async (home) => {
@@ -32,6 +50,7 @@ describe("runInitCommand", () => {
         const code = await runInitCommand([], {
           cwd: repoRoot,
           io: { log: (line) => logs.push(line), error: () => undefined },
+          resolveConfiguredProviderIds: async () => [],
         });
         expect(code).toBe(0);
         expect(logs).toContain("Created stageflow.yaml");
@@ -43,7 +62,7 @@ describe("runInitCommand", () => {
         );
         expect(
           await readFile(path.join(repoRoot, "pipelines/hello.pipeline.yaml"), "utf8"),
-        ).toBe(HELLO_PIPELINE_YAML);
+        ).toBe(helloPipelineYaml(LOUD_MODEL_PLACEHOLDER));
         expect(await readFile(path.join(repoRoot, "tasks/hello.task.yaml"), "utf8")).toBe(
           HELLO_TASK_YAML,
         );
@@ -53,6 +72,28 @@ describe("runInitCommand", () => {
         );
         expect(validated.status).toBe(0);
         await access(path.join(home, ".stageflow", "agent"));
+      } finally {
+        await cleanup();
+      }
+    });
+  });
+
+  it("scaffolds openrouter model when that provider alone is configured", async () => {
+    await withIsolatedHome(async () => {
+      const { root: repoRoot, cleanup } = await initTempGitRepo();
+      try {
+        const code = await runInitCommand([], {
+          cwd: repoRoot,
+          io: { log: () => undefined, error: () => undefined },
+          resolveConfiguredProviderIds: async () => ["openrouter"],
+        });
+        expect(code).toBe(0);
+        const yaml = await readFile(
+          path.join(repoRoot, "pipelines/hello.pipeline.yaml"),
+          "utf8",
+        );
+        expect(yaml).toBe(helloPipelineYaml("openrouter/auto"));
+        expect(yaml).not.toMatch(/anthropic\/claude-sonnet-4-5/);
       } finally {
         await cleanup();
       }

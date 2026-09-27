@@ -140,3 +140,14 @@ Do not invent compose flags or env names. See Stageflow docs: Docker and self-ho
 7. Open `http://127.0.0.1:3847` and paste the same control token under **Settings** (drive bearer for API/MCP).
 
 After Compose is up, talking jobs use MCP with `Authorization: Bearer <drive-token>` — see [`../stageflow/references/control-surface.md`](../stageflow/references/control-surface.md). `/api/health` is ungated; a health 200 is not authenticated MCP.
+
+## MCP checklist (optional standing Host)
+
+Do **not** auto-start `sf ui` / `sf mcp` from this job unless the operator already chose Compose or asked to start a Host. When a Host is up:
+
+1. Host up — probe [`../stageflow/scripts/detect-host.mjs`](../stageflow/scripts/detect-host.mjs) or `curl -fsS http://127.0.0.1:3847/livez`
+2. Register/ensure the catalog folder (`POST /api/projects` on trusted loopback, or a prior local `sf run`) — or use seeded `project_root: "examples"`
+3. Use **catalog-relative** paths only on MCP (absolute → `absolute_path_not_allowed`); CLI may pass abs and auto-register
+4. `list_pipelines` → `start_run` → `wait_run` (see Stageflow docs: MCP; Quickstart — MCP smoke path)
+
+`STAGEFLOW_OPERATOR_CWD` (skills) ≠ catalog `project_root` — see Stageflow docs: MCP — Skills cwd vs catalog project_root.
