@@ -1,18 +1,37 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   attachTaskArtifact,
+  checkWorkshopDiskChange,
+  clearWorkshopAutosave,
   createDraftPackageWithDetails,
   fetchTasks,
+  getWorkshopAutosave,
   openDraftPackage,
   overwriteDraftPackageWithDetails,
+  putWorkshopAutosave,
   validateDraftPackage,
   type DraftValidationResult,
   type TaskListing,
   type ValidationFinding,
+  type WorkshopAutosavePayload,
 } from "../api";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
-import { navigate, newRunPath, pipelinePath, workshopPath } from "../routes";
+import {
+  navigate,
+  newRunPath,
+  parseHash,
+  pipelinePath,
+  workshopPath,
+} from "../routes";
 import { showToast } from "../toast";
+import {
+  DIRTY_DISCARD_CONFIRM,
+  DIRTY_LEAVE_CONFIRM,
+  DIRTY_NEW_CONFIRM,
+  workshopAutosaveSlotKey,
+  workshopSessionFingerprint,
+  type WorkshopAutosaveDestination,
+} from "../workshop/autosave";
 import {
   autoApplyStatusMessage,
   canOfferRunShortcut,
@@ -44,10 +63,35 @@ import {
   type InspectorSelection,
 } from "../workshop/DraftInspector";
 
+const AUTOSAVE_DEBOUNCE_MS = 500;
+
 let msgSeq = 0;
 function nextMsgId(): string {
   msgSeq += 1;
   return `msg-${msgSeq}`;
+}
+
+function greetingMessages(): ChatMessage[] {
+  return [
+    {
+      id: nextMsgId(),
+      role: "assistant",
+      text: WORKSHOP_AUTHOR_GREETING,
+    },
+  ];
+}
+
+function normalizeMessages(
+  raw: WorkshopAutosavePayload["messages"],
+): ChatMessage[] {
+  return raw.map((m) => ({
+    id: m.id,
+    role: m.role,
+    text: m.text,
+    ...(Array.isArray(m.artifacts)
+      ? { artifacts: m.artifacts as ProposalArtifactDiff[] }
+      : {}),
+  }));
 }
 
 function definitionTrack(
@@ -84,10 +128,28 @@ function ArtifactDiffList({
   );
 }
 
-type Destination = {
-  directory: string;
-  pipelineFilename?: string;
+type Destination = WorkshopAutosaveDestination;
+
+type DiskChangeBanner = {
+  changedPaths: string[];
+  currentFingerprints: Record<string, string>;
 };
+
+function openedPackageMessages(
+  pipelinePathValue: string,
+  draft: DraftPackage,
+): ChatMessage[] {
+  const taskNote = draft.task
+    ? ` Task “${draft.task.filename}” is attached.`
+    : " Task panel stays empty until you attach a task.";
+  return [
+    {
+      id: nextMsgId(),
+      role: "assistant",
+      text: `Opened ${pipelinePathValue}. Edit the DAG or inspector — Save overwrites the known package paths.${taskNote}`,
+    },
+  ];
+}
 
 export function WorkshopPage({
   openPipelinePath,
@@ -97,15 +159,14 @@ export function WorkshopPage({
   openTaskPath?: string;
 }) {
   const [draft, setDraft] = useState<DraftPackage>(() => emptyDraftPackage());
-  const [messages, setMessages] = useState<ChatMessage[]>(() => [
-    {
-      id: nextMsgId(),
-      role: "assistant",
-      text: WORKSHOP_AUTHOR_GREETING,
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    greetingMessages(),
+  );
   const [pending, setPending] = useState<WorkshopProposal | null>(null);
   const [autoApply, setAutoApply] = useState(false);
+  const [sessionModelOverride, setSessionModelOverride] = useState<
+    string | null
+  >(null);
   const [input, setInput] = useState("");
   const [findings, setFindings] = useState<ValidationFinding[]>([]);
   const [validationOk, setValidationOk] = useState<boolean | null>(null);
@@ -125,6 +186,61 @@ export function WorkshopPage({
   const [taskGoalDraft, setTaskGoalDraft] = useState("");
   const [taskListings, setTaskListings] = useState<TaskListing[]>([]);
   const [attachPath, setAttachPath] = useState("");
+  const [diskFingerprints, setDiskFingerprints] = useState<
+    Record<string, string>
+  >({});
+  const [diskChange, setDiskChange] = useState<DiskChangeBanner | null>(null);
+  const [cleanBaseline, setCleanBaseline] = useState(() =>
+    workshopSessionFingerprint({
+      draft: emptyDraftPackage(),
+      messages: [],
+      autoApply: false,
+      sessionModelOverride: null,
+    }),
+  );
+  const [hydrated, setHydrated] = useState(false);
+
+  const autosaveKey = workshopAutosaveSlotKey(
+    openPipelinePath ?? savedPath ?? null,
+  );
+  const sessionFingerprint = workshopSessionFingerprint({
+    draft,
+    messages,
+    autoApply,
+    sessionModelOverride,
+  });
+  const dirty = hydrated && sessionFingerprint !== cleanBaseline;
+
+  const dirtyRef = useRef(dirty);
+  const suppressHashRef = useRef(false);
+  const persistPayloadRef = useRef<{
+    key: string;
+    draft: DraftPackage;
+    messages: ChatMessage[];
+    autoApply: boolean;
+    sessionModelOverride: string | null;
+    destination: Destination | null;
+    savedPath: string | null;
+    savedTaskPath: string | null;
+    diskFingerprints: Record<string, string>;
+  } | null>(null);
+  const openPipelinePathRef = useRef(openPipelinePath);
+  const openTaskPathRef = useRef(openTaskPath);
+
+  dirtyRef.current = dirty;
+  openPipelinePathRef.current = openPipelinePath;
+  openTaskPathRef.current = openTaskPath;
+  persistPayloadRef.current = {
+    key: autosaveKey,
+    draft,
+    messages,
+    autoApply,
+    sessionModelOverride,
+    destination,
+    savedPath,
+    savedTaskPath,
+    diskFingerprints,
+  };
 
   const proposedIds = useMemo(() => {
     if (!pending) return new Set<string>();
@@ -149,6 +265,116 @@ export function WorkshopPage({
     savedTaskPath,
     hasTaskInDraft: Boolean(draft.task),
   });
+
+  const persistAutosave = useCallback(async () => {
+    const payload = persistPayloadRef.current;
+    if (!payload) return;
+    await putWorkshopAutosave({
+      version: 1,
+      key: payload.key,
+      updatedAt: new Date().toISOString(),
+      draft: payload.draft,
+      messages: payload.messages,
+      autoApply: payload.autoApply,
+      sessionModelOverride: payload.sessionModelOverride,
+      destination: payload.destination,
+      savedPath: payload.savedPath,
+      savedTaskPath: payload.savedTaskPath,
+      diskFingerprints: payload.diskFingerprints,
+    });
+  }, []);
+
+  const markClean = useCallback(
+    (next: {
+      draft: DraftPackage;
+      messages: ChatMessage[];
+      autoApply: boolean;
+      sessionModelOverride: string | null;
+    }) => {
+      setCleanBaseline(workshopSessionFingerprint(next));
+    },
+    [],
+  );
+
+  const resetTransientUi = useCallback(() => {
+    setPending(null);
+    setFindings([]);
+    setValidationOk(null);
+    setShowSaveForm(false);
+    setOpenError(null);
+    setTaskMode("idle");
+    setInput("");
+  }, []);
+
+  const applyOpenedPackage = useCallback(
+    (input: {
+      draft: DraftPackage;
+      destination: Destination;
+      pipelinePath: string;
+      taskPath: string | null;
+      fingerprints: Record<string, string>;
+      messages: ChatMessage[];
+      autoApply?: boolean;
+      sessionModelOverride?: string | null;
+    }) => {
+      const nextAutoApply = input.autoApply ?? false;
+      const nextOverride = input.sessionModelOverride ?? null;
+      setDraft(input.draft);
+      setDestination(input.destination);
+      setSavedPath(input.pipelinePath);
+      setSavedTaskPath(input.taskPath);
+      setSavePipelineId(input.draft.pipeline.id);
+      setSaveDirectory(input.destination.directory);
+      setMessages(input.messages);
+      setAutoApply(nextAutoApply);
+      setSessionModelOverride(nextOverride);
+      setDiskFingerprints(input.fingerprints);
+      setDiskChange(null);
+      setSelection({ kind: "pipeline" });
+      resetTransientUi();
+      markClean({
+        draft: input.draft,
+        messages: input.messages,
+        autoApply: nextAutoApply,
+        sessionModelOverride: nextOverride,
+      });
+    },
+    [markClean, resetTransientUi],
+  );
+
+  const loadPackageFromDisk = useCallback(
+    async (
+      pipeline: string,
+      task?: string | null,
+      baseline?: Record<string, string> | null,
+    ) => {
+      const result = await openDraftPackage({
+        path: pipeline,
+        ...(task ? { task } : {}),
+      });
+      if (!result.ok) {
+        return { ok: false as const, error: result.error };
+      }
+      const fp = await checkWorkshopDiskChange({
+        pipelinePath: result.pipelinePath,
+        draft: result.draft,
+        taskPath: result.taskPath ?? null,
+        baseline: baseline ?? null,
+      });
+      const fingerprints = fp.ok ? fp.fingerprints : {};
+      return {
+        ok: true as const,
+        draft: result.draft,
+        destination: result.destination,
+        pipelinePath: result.pipelinePath,
+        taskPath: result.taskPath ?? null,
+        fingerprints,
+        changed: fp.ok ? fp.changed : false,
+        changedPaths: fp.ok ? fp.changedPaths : [],
+      };
+    },
+    [],
+  );
 
   const discardPendingForEdit = useCallback(
     (notice = STALE_PROPOSAL_NOTICE) => {
@@ -178,10 +404,14 @@ export function WorkshopPage({
     [discardPendingForEdit, pending],
   );
 
-  const startNew = useCallback(() => {
-    setDraft(emptyDraftPackage());
+  const resetToEmptyNew = useCallback(() => {
+    const nextDraft = emptyDraftPackage();
+    const nextMessages = greetingMessages();
+    setDraft(nextDraft);
+    setMessages(nextMessages);
     setPending(null);
     setAutoApply(false);
+    setSessionModelOverride(null);
     setFindings([]);
     setValidationOk(null);
     setSavedPath(null);
@@ -192,62 +422,393 @@ export function WorkshopPage({
     setSelection(null);
     setOpenError(null);
     setTaskMode("idle");
-    setMessages([
-      {
-        id: nextMsgId(),
-        role: "assistant",
-        text: WORKSHOP_AUTHOR_GREETING,
-      },
-    ]);
+    setInput("");
+    setDiskFingerprints({});
+    setDiskChange(null);
+    markClean({
+      draft: nextDraft,
+      messages: nextMessages,
+      autoApply: false,
+      sessionModelOverride: null,
+    });
+  }, [markClean]);
+
+  const startNew = useCallback(() => {
+    if (dirty && !window.confirm(DIRTY_NEW_CONFIRM)) return;
+    const key = autosaveKey;
+    void clearWorkshopAutosave({ key });
+    dirtyRef.current = false;
+    resetToEmptyNew();
     if (openPipelinePath || openTaskPath) {
+      suppressHashRef.current = true;
       navigate(workshopPath());
     }
-  }, [openPipelinePath, openTaskPath]);
+  }, [
+    autosaveKey,
+    dirty,
+    openPipelinePath,
+    openTaskPath,
+    resetToEmptyNew,
+  ]);
+
+  const onDiscard = useCallback(() => {
+    if (dirty && !window.confirm(DIRTY_DISCARD_CONFIRM)) return;
+    dirtyRef.current = false;
+    const key = autosaveKey;
+    const reloadPath = openPipelinePath ?? savedPath;
+    const reloadTask = openTaskPath ?? savedTaskPath;
+    void (async () => {
+      setBusy(true);
+      try {
+        await clearWorkshopAutosave({ key });
+        if (reloadPath) {
+          const loaded = await loadPackageFromDisk(reloadPath, reloadTask);
+          if (!loaded.ok) {
+            setOpenError(loaded.error);
+            showToast(loaded.error);
+            resetToEmptyNew();
+            return;
+          }
+          applyOpenedPackage({
+            draft: loaded.draft,
+            destination: loaded.destination,
+            pipelinePath: loaded.pipelinePath,
+            taskPath: loaded.taskPath,
+            fingerprints: loaded.fingerprints,
+            messages: openedPackageMessages(
+              loaded.pipelinePath,
+              loaded.draft,
+            ),
+          });
+        } else {
+          resetToEmptyNew();
+        }
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [
+    applyOpenedPackage,
+    autosaveKey,
+    dirty,
+    loadPackageFromDisk,
+    openPipelinePath,
+    openTaskPath,
+    resetToEmptyNew,
+    savedPath,
+    savedTaskPath,
+  ]);
+
+  const onReloadDisk = useCallback(() => {
+    const reloadPath = openPipelinePath ?? savedPath;
+    if (!reloadPath) {
+      setDiskChange(null);
+      return;
+    }
+    dirtyRef.current = false;
+    const key = autosaveKey;
+    const reloadTask = openTaskPath ?? savedTaskPath;
+    void (async () => {
+      setBusy(true);
+      try {
+        await clearWorkshopAutosave({ key });
+        const loaded = await loadPackageFromDisk(reloadPath, reloadTask);
+        if (!loaded.ok) {
+          setOpenError(loaded.error);
+          showToast(loaded.error);
+          return;
+        }
+        applyOpenedPackage({
+          draft: loaded.draft,
+          destination: loaded.destination,
+          pipelinePath: loaded.pipelinePath,
+          taskPath: loaded.taskPath,
+          fingerprints: loaded.fingerprints,
+          messages: openedPackageMessages(loaded.pipelinePath, loaded.draft),
+        });
+      } finally {
+        setBusy(false);
+      }
+    })();
+  }, [
+    applyOpenedPackage,
+    autosaveKey,
+    loadPackageFromDisk,
+    openPipelinePath,
+    openTaskPath,
+    savedPath,
+    savedTaskPath,
+  ]);
+
+  const onKeepDiskDraft = useCallback(() => {
+    if (!diskChange) return;
+    const nextFingerprints = diskChange.currentFingerprints;
+    setDiskFingerprints(nextFingerprints);
+    setDiskChange(null);
+    void putWorkshopAutosave({
+      version: 1,
+      key: autosaveKey,
+      updatedAt: new Date().toISOString(),
+      draft,
+      messages,
+      autoApply,
+      sessionModelOverride,
+      destination,
+      savedPath,
+      savedTaskPath,
+      diskFingerprints: nextFingerprints,
+    });
+  }, [
+    autosaveKey,
+    autoApply,
+    destination,
+    diskChange,
+    draft,
+    messages,
+    savedPath,
+    savedTaskPath,
+    sessionModelOverride,
+  ]);
 
   useEffect(() => {
-    if (!openPipelinePath) return;
     let cancelled = false;
+    setHydrated(false);
     setBusy(true);
     setOpenError(null);
+    setDiskChange(null);
+    setPending(null);
+
     void (async () => {
-      const result = await openDraftPackage({
-        path: openPipelinePath,
-        ...(openTaskPath ? { task: openTaskPath } : {}),
-      });
+      const key = workshopAutosaveSlotKey(openPipelinePath ?? null);
+      const autosaveResult = await getWorkshopAutosave({ key });
       if (cancelled) return;
-      if (!result.ok) {
-        setOpenError(result.error);
-        showToast(result.error);
+      const autosave = autosaveResult.ok ? autosaveResult.autosave : null;
+
+      if (openPipelinePath) {
+        const loaded = await loadPackageFromDisk(
+          openPipelinePath,
+          openTaskPath,
+          autosave?.diskFingerprints ?? null,
+        );
+        if (cancelled) return;
+        if (!loaded.ok) {
+          setOpenError(loaded.error);
+          showToast(loaded.error);
+          setBusy(false);
+          setHydrated(true);
+          return;
+        }
+
+        if (autosave) {
+          const restoredMessages = normalizeMessages(autosave.messages);
+          const restoredAutoApply = autosave.autoApply;
+          const restoredOverride = autosave.sessionModelOverride ?? null;
+          const restoredDraft = autosave.draft as DraftPackage;
+          setDraft(restoredDraft);
+          setMessages(restoredMessages);
+          setAutoApply(restoredAutoApply);
+          setSessionModelOverride(restoredOverride);
+          setDestination(
+            (autosave.destination as Destination | null | undefined) ??
+              loaded.destination,
+          );
+          setSavedPath(autosave.savedPath ?? loaded.pipelinePath);
+          setSavedTaskPath(autosave.savedTaskPath ?? loaded.taskPath);
+          setSavePipelineId(restoredDraft.pipeline.id);
+          setSaveDirectory(
+            (
+              (autosave.destination as Destination | null | undefined) ??
+              loaded.destination
+            ).directory,
+          );
+          setDiskFingerprints(
+            autosave.diskFingerprints ?? loaded.fingerprints,
+          );
+          setSelection({ kind: "pipeline" });
+          resetTransientUi();
+          markClean({
+            draft: restoredDraft,
+            messages: restoredMessages,
+            autoApply: restoredAutoApply,
+            sessionModelOverride: restoredOverride,
+          });
+          if (loaded.changed) {
+            setDiskChange({
+              changedPaths: loaded.changedPaths,
+              currentFingerprints: loaded.fingerprints,
+            });
+          }
+        } else {
+          applyOpenedPackage({
+            draft: loaded.draft,
+            destination: loaded.destination,
+            pipelinePath: loaded.pipelinePath,
+            taskPath: loaded.taskPath,
+            fingerprints: loaded.fingerprints,
+            messages: openedPackageMessages(
+              loaded.pipelinePath,
+              loaded.draft,
+            ),
+          });
+        }
         setBusy(false);
+        setHydrated(true);
         return;
       }
-      setDraft(result.draft);
-      setDestination(result.destination);
-      setSavedPath(result.pipelinePath);
-      setSavedTaskPath(result.taskPath ?? null);
-      setSavePipelineId(result.draft.pipeline.id);
-      setSaveDirectory(result.destination.directory);
-      setPending(null);
-      setFindings([]);
-      setValidationOk(null);
-      setSelection({ kind: "pipeline" });
-      setTaskMode("idle");
-      const taskNote = result.draft.task
-        ? ` Task “${result.draft.task.filename}” is attached.`
-        : " Task panel stays empty until you attach a task.";
-      setMessages([
-        {
-          id: nextMsgId(),
-          role: "assistant",
-          text: `Opened ${result.pipelinePath}. Edit the DAG or inspector — Save overwrites the known package paths.${taskNote}`,
-        },
-      ]);
-      setBusy(false);
+
+      if (autosave) {
+        const restoredMessages = normalizeMessages(autosave.messages);
+        const restoredDraft = autosave.draft as DraftPackage;
+        const restoredAutoApply = autosave.autoApply;
+        const restoredOverride = autosave.sessionModelOverride ?? null;
+        setDraft(restoredDraft);
+        setMessages(restoredMessages);
+        setAutoApply(restoredAutoApply);
+        setSessionModelOverride(restoredOverride);
+        setDestination(
+          (autosave.destination as Destination | null | undefined) ?? null,
+        );
+        setSavedPath(autosave.savedPath ?? null);
+        setSavedTaskPath(autosave.savedTaskPath ?? null);
+        setSavePipelineId(restoredDraft.pipeline.id || "untitled");
+        if (autosave.destination && typeof autosave.destination === "object") {
+          setSaveDirectory(
+            (autosave.destination as Destination).directory || "pipelines",
+          );
+        }
+        setDiskFingerprints(autosave.diskFingerprints ?? {});
+        setSelection({ kind: "pipeline" });
+        resetTransientUi();
+        markClean({
+          draft: restoredDraft,
+          messages: restoredMessages,
+          autoApply: restoredAutoApply,
+          sessionModelOverride: restoredOverride,
+        });
+        if (autosave.savedPath) {
+          const fp = await checkWorkshopDiskChange({
+            pipelinePath: autosave.savedPath,
+            draft: restoredDraft,
+            taskPath: autosave.savedTaskPath ?? null,
+            baseline: autosave.diskFingerprints ?? null,
+          });
+          if (!cancelled && fp.ok && fp.changed) {
+            setDiskChange({
+              changedPaths: fp.changedPaths,
+              currentFingerprints: fp.fingerprints,
+            });
+          }
+        }
+      } else {
+        resetToEmptyNew();
+      }
+      if (!cancelled) {
+        setBusy(false);
+        setHydrated(true);
+      }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [openPipelinePath, openTaskPath]);
+  }, [
+    applyOpenedPackage,
+    loadPackageFromDisk,
+    markClean,
+    openPipelinePath,
+    openTaskPath,
+    resetToEmptyNew,
+    resetTransientUi,
+  ]);
+
+  useEffect(() => {
+    if (!hydrated || !dirty) return;
+    const timer = window.setTimeout(() => {
+      void persistAutosave();
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [
+    hydrated,
+    dirty,
+    draft,
+    messages,
+    autoApply,
+    sessionModelOverride,
+    destination,
+    savedPath,
+    savedTaskPath,
+    diskFingerprints,
+    autosaveKey,
+    persistAutosave,
+  ]);
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirtyRef.current) return;
+      void persistAutosave();
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    const onHashChange = () => {
+      if (suppressHashRef.current) {
+        suppressHashRef.current = false;
+        return;
+      }
+      if (!dirtyRef.current) return;
+      const route = parseHash();
+      const staying =
+        route.name === "workshop" &&
+        (route.pipelinePath ?? undefined) ===
+          (openPipelinePathRef.current ?? undefined) &&
+        (route.taskPath ?? undefined) === (openTaskPathRef.current ?? undefined);
+      if (staying) return;
+      if (!window.confirm(DIRTY_LEAVE_CONFIRM)) {
+        suppressHashRef.current = true;
+        navigate(
+          workshopPath({
+            ...(openPipelinePathRef.current
+              ? { pipeline: openPipelinePathRef.current }
+              : {}),
+            ...(openTaskPathRef.current
+              ? { task: openTaskPathRef.current }
+              : {}),
+          }),
+        );
+        return;
+      }
+      void persistAutosave();
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("hashchange", onHashChange);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("hashchange", onHashChange);
+    };
+  }, [persistAutosave]);
+
+  const clearAutosaveAfterSave = useCallback(
+    async (pipelinePathValue: string, nextDraft: DraftPackage, taskPathValue: string | null) => {
+      await clearWorkshopAutosave({ key: autosaveKey });
+      if (autosaveKey === workshopAutosaveSlotKey(null)) {
+        await clearWorkshopAutosave({
+          key: workshopAutosaveSlotKey(pipelinePathValue),
+        });
+      }
+      const fp = await checkWorkshopDiskChange({
+        pipelinePath: pipelinePathValue,
+        draft: nextDraft,
+        taskPath: taskPathValue,
+        baseline: null,
+      });
+      const fingerprints = fp.ok ? fp.fingerprints : {};
+      setDiskFingerprints(fingerprints);
+      setDiskChange(null);
+      return fingerprints;
+    },
+    [autosaveKey],
+  );
 
   const onSend = useCallback(() => {
     const text = input.trim();
@@ -405,6 +966,18 @@ export function WorkshopPage({
         }
         setSavedPath(result.pipelinePath);
         setSavedTaskPath(result.taskPath ?? null);
+        await clearAutosaveAfterSave(
+          result.pipelinePath,
+          draft,
+          result.taskPath ?? null,
+        );
+        markClean({
+          draft,
+          messages,
+          autoApply,
+          sessionModelOverride,
+        });
+        dirtyRef.current = false;
         showToast(`Saved ${result.pipelinePath}`);
       } finally {
         setBusy(false);
@@ -413,7 +986,16 @@ export function WorkshopPage({
     }
     setShowSaveForm(true);
     setSavePipelineId(draft.pipeline.id || "untitled");
-  }, [destination, draft, validationOk]);
+  }, [
+    autoApply,
+    clearAutosaveAfterSave,
+    destination,
+    draft,
+    markClean,
+    messages,
+    sessionModelOverride,
+    validationOk,
+  ]);
 
   const onConfirmSave = useCallback(async () => {
     if (validationOk !== true) {
@@ -446,11 +1028,33 @@ export function WorkshopPage({
         pipelineFilename: `${id}.pipeline.yaml`,
       });
       setShowSaveForm(false);
+      await clearAutosaveAfterSave(
+        result.pipelinePath,
+        packageDraft,
+        result.taskPath ?? null,
+      );
+      markClean({
+        draft: packageDraft,
+        messages,
+        autoApply,
+        sessionModelOverride,
+      });
+      dirtyRef.current = false;
       showToast(`Saved ${result.pipelinePath}`);
     } finally {
       setBusy(false);
     }
-  }, [draft, saveDirectory, savePipelineId, validationOk]);
+  }, [
+    autoApply,
+    clearAutosaveAfterSave,
+    draft,
+    markClean,
+    messages,
+    saveDirectory,
+    savePipelineId,
+    sessionModelOverride,
+    validationOk,
+  ]);
 
   const onAddStage = useCallback(() => {
     const next = addStageToDraft(draft, `stage-${draft.pipeline.stages.length + 1}`);
@@ -555,13 +1159,15 @@ export function WorkshopPage({
   }, [savedPath, savedTaskPath]);
 
   const viewDraft = pending ? pending.nextDraft : draft;
+  const subtitlePath = savedPath ? savedPath : "Untitled draft · Workshop Author";
 
   return (
     <div className="pane workshop">
       <div className="topbar">
         <div className="topbar__title">Workshop</div>
         <div className="topbar__sub">
-          {savedPath ? savedPath : "Untitled draft · Workshop Author"}
+          {subtitlePath}
+          {dirty ? " · unsaved" : ""}
         </div>
         <div className="topbar__spacer" />
         <label className="workshop__auto-apply">
@@ -594,6 +1200,14 @@ export function WorkshopPage({
         <button
           type="button"
           className="btn"
+          onClick={onDiscard}
+          disabled={busy}
+        >
+          Discard
+        </button>
+        <button
+          type="button"
+          className="btn"
           onClick={() => void onValidate()}
           disabled={busy}
         >
@@ -615,6 +1229,36 @@ export function WorkshopPage({
           Save
         </button>
       </div>
+
+      {diskChange ? (
+        <div className="workshop__banner" role="status">
+          <p>
+            Catalog files changed on disk
+            {diskChange.changedPaths.length > 0
+              ? ` (${diskChange.changedPaths.join(", ")})`
+              : ""}
+            . Reload from disk or keep this Workshop draft.
+          </p>
+          <div className="workshop__proposal-actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={onReloadDisk}
+              disabled={busy}
+            >
+              Reload
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={onKeepDiskDraft}
+              disabled={busy}
+            >
+              Keep workshop draft
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="workshop__body">
         <section className="workshop__canvas" aria-label="Draft DAG">

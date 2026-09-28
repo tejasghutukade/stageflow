@@ -2899,10 +2899,20 @@ a.topbar__back { text-decoration: none; }
 
 .workshop__proposal,
 .workshop__findings,
-.workshop__save {
+.workshop__save,
+.workshop__banner {
   padding: var(--spacing-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-container);
+}
+
+.workshop__banner {
+  margin: 0 var(--spacing-4) var(--spacing-3);
+  background: var(--color-background-subtle, var(--color-background));
+}
+
+.workshop__banner p {
+  margin: 0 0 var(--spacing-2);
 }
 
 .workshop__proposal-actions {

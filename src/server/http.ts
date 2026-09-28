@@ -26,6 +26,18 @@ import {
   parseOverwriteDraftPackageBody,
   validateDraftPackage,
 } from "../config/draftPackage.js";
+import {
+  clearWorkshopAutosave,
+  detectDiskChange,
+  draftPackageDiskRelativePaths,
+  fingerprintPackageFiles,
+  parseWorkshopAutosaveRecord,
+  readWorkshopAutosave,
+  resolveWorkshopAutosaveStoreRoot,
+  workshopAutosaveSlotKey,
+  writeWorkshopAutosave,
+  type WorkshopAutosaveRecord,
+} from "../workshop/autosave.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import {
   listModelsMultiProject,
@@ -174,6 +186,10 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function contentTypeFor(filePath: string): string {
@@ -1676,6 +1692,271 @@ export function createOperatorRoutes(
           json(res, 200, {
             task: result.task,
             taskPath: result.taskPath,
+          });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          const keyParam = url.searchParams.get("key");
+          const key = workshopAutosaveSlotKey(keyParam);
+          const writeRoot =
+            url.searchParams.get("project_root") ?? undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveCatalogStartInput(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const record = readWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, autosave: record });
+          return true;
+        }
+
+        if (
+          method === "PUT" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const candidate: WorkshopAutosaveRecord = {
+            version: 1,
+            key,
+            updatedAt:
+              typeof body.updatedAt === "string" && body.updatedAt
+                ? body.updatedAt
+                : new Date().toISOString(),
+            draft: body.draft as WorkshopAutosaveRecord["draft"],
+            messages:
+              body.messages as WorkshopAutosaveRecord["messages"],
+            autoApply: Boolean(body.autoApply),
+            ...(body.sessionModelOverride === null ||
+            typeof body.sessionModelOverride === "string"
+              ? { sessionModelOverride: body.sessionModelOverride }
+              : {}),
+            ...(body.destination !== undefined
+              ? {
+                  destination:
+                    body.destination as WorkshopAutosaveRecord["destination"],
+                }
+              : {}),
+            ...(body.savedPath === null || typeof body.savedPath === "string"
+              ? { savedPath: body.savedPath }
+              : {}),
+            ...(body.savedTaskPath === null ||
+            typeof body.savedTaskPath === "string"
+              ? { savedTaskPath: body.savedTaskPath }
+              : {}),
+            ...(isPlainObject(body.diskFingerprints)
+              ? {
+                  diskFingerprints:
+                    body.diskFingerprints as Record<string, string>,
+                }
+              : {}),
+          };
+          const parsed = parseWorkshopAutosaveRecord(candidate);
+          if (!parsed) {
+            json(res, 400, { error: "Invalid workshop autosave payload" });
+            return true;
+          }
+          const written = writeWorkshopAutosave(storeRoot, parsed);
+          json(res, 200, { autosave: written });
+          return true;
+        }
+
+        if (
+          method === "DELETE" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const cleared = clearWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, cleared });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/disk-change"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.pipelinePath !== "string" || !body.pipelinePath.trim()) {
+            json(res, 400, { error: "pipelinePath is required" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let projectRoot: string;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            const ctx = await resolveStageflowContext(wireRoot.path);
+            projectRoot = ctx.projectRoot;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const relativePaths = draftPackageDiskRelativePaths({
+            pipelinePath: body.pipelinePath,
+            draft: draftParsed,
+            taskPath:
+              typeof body.taskPath === "string" ? body.taskPath : null,
+          });
+          const current = fingerprintPackageFiles(projectRoot, relativePaths);
+          const baseline =
+            isPlainObject(body.baseline) &&
+            Object.values(body.baseline).every((v) => typeof v === "string")
+              ? (body.baseline as Record<string, string>)
+              : null;
+          const detection = detectDiskChange({ baseline, current });
+          json(res, 200, {
+            fingerprints: current,
+            changed: detection.changed,
+            changedPaths: detection.changedPaths,
           });
           return true;
         }

@@ -572,6 +572,57 @@ export type AttachTaskResult =
       error: string;
     };
 
+export type WorkshopAutosavePayload = {
+  version: 1;
+  key: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  messages: Array<{
+    id: string;
+    role: "assistant" | "user" | "system";
+    text: string;
+    artifacts?: unknown;
+  }>;
+  autoApply: boolean;
+  sessionModelOverride?: string | null;
+  destination?: {
+    directory: string;
+    pipelineFilename?: string;
+  } | null;
+  savedPath?: string | null;
+  savedTaskPath?: string | null;
+  diskFingerprints?: Record<string, string>;
+};
+
+export type GetWorkshopAutosaveResult =
+  | { ok: true; key: string; autosave: WorkshopAutosavePayload | null }
+  | { ok: false; status: number; error: string };
+
+export type PutWorkshopAutosaveResult =
+  | { ok: true; autosave: WorkshopAutosavePayload }
+  | { ok: false; status: number; error: string };
+
+export type ClearWorkshopAutosaveResult =
+  | { ok: true; key: string; cleared: boolean }
+  | { ok: false; status: number; error: string };
+
+export type WorkshopDiskChangeInput = {
+  pipelinePath: string;
+  draft: DraftPackagePayload;
+  taskPath?: string | null;
+  baseline?: Record<string, string> | null;
+  project_root?: string;
+};
+
+export type WorkshopDiskChangeResult =
+  | {
+      ok: true;
+      fingerprints: Record<string, string>;
+      changed: boolean;
+      changedPaths: string[];
+    }
+  | { ok: false; status: number; error: string };
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];

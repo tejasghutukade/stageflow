@@ -31,15 +31,21 @@ import type {
   ProjectMcpProbeResult,
   AttachTaskInput,
   AttachTaskResult,
+  ClearWorkshopAutosaveResult,
   CreateDraftPackageInput,
   CreateDraftPackageResult,
   DraftPackagePayload,
   DraftValidationResult,
+  GetWorkshopAutosaveResult,
   OpenDraftPackageInput,
   OpenDraftPackageResult,
   OverwriteDraftPackageInput,
   OverwriteDraftPackageResult,
+  PutWorkshopAutosaveResult,
   ValidationFinding,
+  WorkshopAutosavePayload,
+  WorkshopDiskChangeInput,
+  WorkshopDiskChangeResult,
 } from "./types";
 import { authorizationHeaders } from "./controlToken";
 
@@ -843,6 +849,146 @@ export async function attachTaskArtifact(
         ok: true,
         task: body.task,
         taskPath: body.taskPath,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function getWorkshopAutosave(input: {
+  key: string;
+  project_root?: string;
+}): Promise<GetWorkshopAutosaveResult> {
+  try {
+    const params = new URLSearchParams({ key: input.key });
+    if (input.project_root) params.set("project_root", input.project_root);
+    const res = await fetch(`/api/workshop/autosave?${params}`, {
+      headers: { ...authorizationHeaders() },
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      key?: string;
+      autosave?: WorkshopAutosavePayload | null;
+      error?: string;
+    };
+    if (res.ok && typeof body.key === "string") {
+      return {
+        ok: true,
+        key: body.key,
+        autosave: body.autosave ?? null,
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function putWorkshopAutosave(
+  payload: WorkshopAutosavePayload & { project_root?: string },
+): Promise<PutWorkshopAutosaveResult> {
+  try {
+    const res = await fetch("/api/workshop/autosave", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(payload),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      autosave?: WorkshopAutosavePayload;
+      error?: string;
+    };
+    if (res.ok && body.autosave) {
+      return { ok: true, autosave: body.autosave };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function clearWorkshopAutosave(input: {
+  key: string;
+  project_root?: string;
+}): Promise<ClearWorkshopAutosaveResult> {
+  try {
+    const res = await fetch("/api/workshop/autosave", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      key?: string;
+      cleared?: boolean;
+      error?: string;
+    };
+    if (res.ok && typeof body.key === "string" && typeof body.cleared === "boolean") {
+      return { ok: true, key: body.key, cleared: body.cleared };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function checkWorkshopDiskChange(
+  input: WorkshopDiskChangeInput,
+): Promise<WorkshopDiskChangeResult> {
+  try {
+    const res = await fetch("/api/workshop/disk-change", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      fingerprints?: Record<string, string>;
+      changed?: boolean;
+      changedPaths?: string[];
+      error?: string;
+    };
+    if (
+      res.ok &&
+      body.fingerprints &&
+      typeof body.changed === "boolean" &&
+      Array.isArray(body.changedPaths)
+    ) {
+      return {
+        ok: true,
+        fingerprints: body.fingerprints,
+        changed: body.changed,
+        changedPaths: body.changedPaths,
       };
     }
     return {
