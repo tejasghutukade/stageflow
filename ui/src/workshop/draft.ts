@@ -259,6 +259,112 @@ export function proposeStageFromMessage(
   };
 }
 
+function slugifyTaskId(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return slug || "task";
+}
+
+function extractQuotedPhrase(text: string): string | null {
+  const match = text.match(/["“]([^"”]+)["”]/);
+  return match?.[1]?.trim() || null;
+}
+
+/** Detect clear NL requests to create or fill the draft task (vs stage proposals). */
+export function isTaskProposalIntent(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(create|add|make|attach|fill|set|write)\b[\s\w-]*\btask\b/.test(text) ||
+    /\btask\b[\s\w-]*\b(create|add|fill|goal|brief)\b/.test(text) ||
+    /\b(task brief|task package|task fields)\b/.test(text)
+  );
+}
+
+/** Client-side fake Workshop Author turn for task create/fill. */
+export function proposeTaskFromMessage(
+  draft: DraftPackage,
+  userText: string,
+): WorkshopProposal {
+  proposalSeq += 1;
+  const quoted = extractQuotedPhrase(userText);
+  const existingId =
+    typeof draft.task?.body.id === "string" ? draft.task.body.id : "";
+  const existingGoal =
+    typeof draft.task?.body.goal === "string" ? draft.task.body.goal : "";
+
+  let taskId = existingId;
+  let goal = existingGoal;
+
+  if (quoted) {
+    if (!existingId || /\b(create|add|make|attach)\b/i.test(userText)) {
+      taskId = slugifyTaskId(quoted);
+    }
+    goal = quoted;
+  } else {
+    const goalMatch = userText.match(
+      /\b(?:goal|brief)\s*[:=]\s*(.+)$/i,
+    );
+    if (goalMatch?.[1]) {
+      goal = goalMatch[1].trim();
+    } else if (!goal) {
+      goal = userText.trim() || "Describe the workflow goal";
+    }
+    if (!taskId) {
+      taskId = slugifyTaskId(
+        userText
+          .replace(/\b(create|add|make|attach|fill|set|write|a|the|task|brief|goal|fields|package)\b/gi, " ")
+          .trim() || "task",
+      );
+    }
+  }
+
+  if (!taskId) taskId = "task";
+  if (!goal) goal = "Describe the workflow goal";
+
+  const filename = `${taskId}.task.yaml`;
+  const filling = Boolean(draft.task);
+  const nextDraft: DraftPackage = {
+    ...draft,
+    task: {
+      filename,
+      body: {
+        ...(draft.task?.body ?? {}),
+        id: taskId,
+        goal,
+      },
+    },
+  };
+
+  return {
+    id: `proposal-${proposalSeq}`,
+    summary: filling
+      ? `Fill task “${taskId}”`
+      : `Create task “${taskId}”`,
+    nextDraft,
+    baseDraft: draft,
+    baseFingerprint: draftFingerprint(draft),
+    artifacts: diffDraftPackages(draft, nextDraft),
+    affectedStageIds: [],
+  };
+}
+
+/** True when Save wrote a task and the draft still has one — offer New Run deep-link. */
+export function canOfferRunShortcut(opts: {
+  savedPipelinePath: string | null;
+  savedTaskPath: string | null;
+  hasTaskInDraft: boolean;
+}): boolean {
+  return Boolean(
+    opts.savedPipelinePath &&
+      opts.savedTaskPath &&
+      opts.hasTaskInDraft,
+  );
+}
+
 export function draftStageIds(draft: DraftPackage): string[] {
   return draft.pipeline.stages.map((stage, index) =>
     typeof stage.id === "string" && stage.id ? stage.id : `stage-${index}`,

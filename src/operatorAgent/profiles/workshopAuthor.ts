@@ -94,6 +94,95 @@ export function buildStageAddProposal(
   };
 }
 
+function slugifyTaskId(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+  return slug || "task";
+}
+
+function extractQuotedPhrase(text: string): string | null {
+  const match = text.match(/["“]([^"”]+)["”]/);
+  return match?.[1]?.trim() || null;
+}
+
+export function isTaskProposalIntent(message: string): boolean {
+  const text = message.trim().toLowerCase();
+  if (!text) return false;
+  return (
+    /\b(create|add|make|attach|fill|set|write)\b[\s\w-]*\btask\b/.test(text) ||
+    /\btask\b[\s\w-]*\b(create|add|fill|goal|brief)\b/.test(text) ||
+    /\b(task brief|task package|task fields)\b/.test(text)
+  );
+}
+
+export function buildTaskAddProposal(
+  draft: DraftPackage,
+  userText: string,
+): OperatorAgentProposal {
+  const quoted = extractQuotedPhrase(userText);
+  const existingId =
+    typeof draft.task?.body.id === "string" ? draft.task.body.id : "";
+  const existingGoal =
+    typeof draft.task?.body.goal === "string" ? draft.task.body.goal : "";
+
+  let taskId = existingId;
+  let goal = existingGoal;
+
+  if (quoted) {
+    if (!existingId || /\b(create|add|make|attach)\b/i.test(userText)) {
+      taskId = slugifyTaskId(quoted);
+    }
+    goal = quoted;
+  } else {
+    const goalMatch = userText.match(/\b(?:goal|brief)\s*[:=]\s*(.+)$/i);
+    if (goalMatch?.[1]) {
+      goal = goalMatch[1].trim();
+    } else if (!goal) {
+      goal = userText.trim() || "Describe the workflow goal";
+    }
+    if (!taskId) {
+      taskId = slugifyTaskId(
+        userText
+          .replace(
+            /\b(create|add|make|attach|fill|set|write|a|the|task|brief|goal|fields|package)\b/gi,
+            " ",
+          )
+          .trim() || "task",
+      );
+    }
+  }
+
+  if (!taskId) taskId = "task";
+  if (!goal) goal = "Describe the workflow goal";
+
+  const filename = `${taskId}.task.yaml`;
+  const filling = Boolean(draft.task);
+  const nextDraft: DraftPackage = {
+    ...draft,
+    task: {
+      filename,
+      body: {
+        ...(draft.task?.body ?? {}),
+        id: taskId,
+        goal,
+      },
+    },
+  };
+
+  return {
+    id: nextProposalId(),
+    summary: filling ? `Fill task “${taskId}”` : `Create task “${taskId}”`,
+    nextContext: nextDraft,
+    baseContext: { draft },
+    baseFingerprint: draftFingerprint(draft),
+    artifacts: diffDraftPackages(draft, nextDraft),
+    affectedStageIds: [],
+  };
+}
+
 const readDraftTool: OperatorAgentTool = {
   name: "read_draft",
   description: "Read the current Workshop virtual draft package",
@@ -155,6 +244,7 @@ export const WORKSHOP_AUTHOR_PLAYBOOK = `You are the Stageflow Workshop Author.
 Read the current draft before proposing changes.
 Propose concrete pipeline/stage package edits; do not write disk yourself.
 Prefer catalog dialect fields (io, verify, on_verify_fail) and file-backed stages with uses: ./id.yaml.
+An optional task (id + goal) may be attached or created for the package; pipeline-only drafts remain valid without one.
 Explain Stageflow practice briefly while authoring.`;
 
 export function createWorkshopAuthorProfile(): OperatorAgentProfile {
@@ -174,6 +264,16 @@ export function proposeStageFromUserMessage(
 ): OperatorAgentProposal {
   const draft = readDraftFromContext(ctx.getContext());
   const proposal = buildStageAddProposal(draft, message);
+  ctx.emitProposal(proposal);
+  return proposal;
+}
+
+export function proposeTaskFromUserMessage(
+  ctx: OperatorAgentToolContext,
+  message: string,
+): OperatorAgentProposal {
+  const draft = readDraftFromContext(ctx.getContext());
+  const proposal = buildTaskAddProposal(draft, message);
   ctx.emitProposal(proposal);
   return proposal;
 }

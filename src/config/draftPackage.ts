@@ -99,6 +99,23 @@ export type LoadDraftPackageResult =
       error: string;
     };
 
+export type DraftTaskArtifact = {
+  filename: string;
+  body: Record<string, unknown>;
+};
+
+export type LoadTaskArtifactResult =
+  | {
+      ok: true;
+      task: DraftTaskArtifact;
+      taskPath: string;
+    }
+  | {
+      ok: false;
+      status: 400 | 404;
+      error: string;
+    };
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -575,6 +592,68 @@ function resolveProjectRelativePath(
   return abs;
 }
 
+/** Load a catalog task file into a draft task artifact (attach without reloading the pipeline). */
+export async function loadTaskArtifact(
+  projectRoot: string,
+  taskRelPath: string,
+): Promise<LoadTaskArtifactResult> {
+  if (typeof taskRelPath !== "string" || !taskRelPath.trim()) {
+    return { ok: false, status: 400, error: "task path is required" };
+  }
+  const taskRel = taskRelPath.trim().replace(/\\/g, "/");
+  const taskAbs = resolveProjectRelativePath(projectRoot, taskRel);
+  if (!taskAbs) {
+    return {
+      ok: false,
+      status: 400,
+      error: "task path must be inside the project root",
+    };
+  }
+  if (!(await fileExists(taskAbs))) {
+    return {
+      ok: false,
+      status: 404,
+      error: `Task does not exist (${taskRel})`,
+    };
+  }
+  try {
+    const body = await readYamlObject(taskAbs);
+    return {
+      ok: true,
+      task: {
+        filename: path.basename(taskAbs),
+        body,
+      },
+      taskPath: path.relative(projectRoot, taskAbs).replace(/\\/g, "/"),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 400, error: `Failed to read task: ${message}` };
+  }
+}
+
+export type AttachTaskBody = {
+  taskPath: string;
+};
+
+export function parseAttachTaskBody(
+  body: unknown,
+): AttachTaskBody | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(body)) {
+    return { ok: false, status: 400, error: "JSON object body required" };
+  }
+  const taskRaw =
+    typeof body.task === "string"
+      ? body.task
+      : typeof body.taskPath === "string"
+        ? body.taskPath
+        : undefined;
+  if (!taskRaw?.trim()) {
+    return { ok: false, status: 400, error: "task path is required" };
+  }
+  return { taskPath: taskRaw.trim().replace(/\\/g, "/") };
+}
+
 export async function loadDraftPackage(
   projectRoot: string,
   pipelineRelPath: string,
@@ -682,33 +761,16 @@ export async function loadDraftPackage(
 
   let attachedTaskPath: string | undefined;
   if (options.taskPath?.trim()) {
-    const taskRel = options.taskPath.trim().replace(/\\/g, "/");
-    const taskAbs = resolveProjectRelativePath(projectRoot, taskRel);
-    if (!taskAbs) {
+    const loaded = await loadTaskArtifact(projectRoot, options.taskPath);
+    if (!loaded.ok) {
       return {
         ok: false,
-        status: 400,
-        error: "task path must be inside the project root",
+        status: loaded.status,
+        error: loaded.error,
       };
     }
-    if (!(await fileExists(taskAbs))) {
-      return {
-        ok: false,
-        status: 404,
-        error: `Task does not exist (${taskRel})`,
-      };
-    }
-    try {
-      const body = await readYamlObject(taskAbs);
-      draft.task = {
-        filename: path.basename(taskAbs),
-        body,
-      };
-      attachedTaskPath = path.relative(projectRoot, taskAbs).replace(/\\/g, "/");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, status: 400, error: `Failed to read task: ${message}` };
-    }
+    draft.task = loaded.task;
+    attachedTaskPath = loaded.taskPath;
   }
 
   return {

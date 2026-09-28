@@ -45,8 +45,11 @@ export {
 } from "./proposals.js";
 export {
   buildStageAddProposal,
+  buildTaskAddProposal,
   createWorkshopAuthorProfile,
+  isTaskProposalIntent,
   proposeStageFromUserMessage,
+  proposeTaskFromUserMessage,
   WORKSHOP_AUTHOR_PLAYBOOK,
   WORKSHOP_AUTHOR_PROFILE_ID,
   workshopAuthorTools,

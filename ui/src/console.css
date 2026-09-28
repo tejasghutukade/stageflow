@@ -2970,6 +2970,14 @@ a.topbar__back { text-decoration: none; }
   border-radius: var(--radius-container);
 }
 
+.workshop__task-form,
+.workshop__task-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
 .workshop__inspector {
   overflow: auto;
   max-height: 40vh;

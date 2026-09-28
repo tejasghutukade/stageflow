@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   extensionFilePath,
   extensionPackagePath,
+  newRunPath,
   parseHash,
   runStagePath,
 } from "./routes";
@@ -61,6 +62,18 @@ describe("parseHash", () => {
     ).toEqual({
       name: "workshop",
       pipelinePath: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+    });
+  });
+
+  it("parses New Run query params used by the Workshop Run shortcut", () => {
+    const path = newRunPath({
+      pipeline: "pipelines/demo.pipeline.yaml",
+      task: "pipelines/demo.task.yaml",
+    });
+    expect(parseHash(`#${path}`)).toEqual({
+      name: "new",
+      pipelineId: "pipelines/demo.pipeline.yaml",
       taskPath: "pipelines/demo.task.yaml",
     });
   });

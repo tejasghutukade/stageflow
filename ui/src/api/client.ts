@@ -29,6 +29,8 @@ import type {
   ExtensionFileListing,
   ProjectMcpCatalogList,
   ProjectMcpProbeResult,
+  AttachTaskInput,
+  AttachTaskResult,
   CreateDraftPackageInput,
   CreateDraftPackageResult,
   DraftPackagePayload,
@@ -800,6 +802,47 @@ export async function openDraftPackage(
         destination: body.destination,
         pipelinePath: body.pipelinePath,
         ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function attachTaskArtifact(
+  input: AttachTaskInput,
+): Promise<AttachTaskResult> {
+  try {
+    const res = await fetch("/api/drafts/attach-task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      task?: { filename: string; body: Record<string, unknown> };
+      taskPath?: string;
+      error?: string;
+    };
+    if (
+      res.ok &&
+      body.task &&
+      typeof body.task.filename === "string" &&
+      body.task.body &&
+      typeof body.taskPath === "string"
+    ) {
+      return {
+        ok: true,
+        task: body.task,
+        taskPath: body.taskPath,
       };
     }
     return {

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   loadDraftPackage,
+  loadTaskArtifact,
   overwriteDraftPackage,
   validateDraftPackage,
   type DraftPackage,
@@ -502,6 +503,28 @@ describe("loadDraftPackage", () => {
       expect(loaded.draft.task?.filename).toBe("demo.task.yaml");
       expect(loaded.draft.task?.body.goal).toBe("Attached brief");
       expect(loaded.taskPath).toBe("pipelines/demo.task.yaml");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("loadTaskArtifact reads a task without loading the pipeline", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        path.join(dir, "solo.task.yaml"),
+        "id: solo\ngoal: Standalone attach\n",
+        "utf8",
+      );
+      const loaded = await loadTaskArtifact(root, "pipelines/solo.task.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.taskPath).toBe("pipelines/solo.task.yaml");
+      expect(loaded.task.filename).toBe("solo.task.yaml");
+      expect(loaded.task.body.id).toBe("solo");
+      expect(loaded.task.body.goal).toBe("Standalone attach");
     } finally {
       await cleanup();
     }

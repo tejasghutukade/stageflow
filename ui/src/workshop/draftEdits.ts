@@ -224,3 +224,61 @@ export function rewireStageRoute(
   }
   return patchPipelineStageRef(draft, fromId, { route: [{ to: toId }] });
 }
+
+export function createTaskInDraft(
+  draft: DraftPackage,
+  input: { id: string; goal: string; filename?: string },
+): DraftPackage {
+  const id = input.id.trim() || "task";
+  const goal = input.goal.trim() || "Describe the goal";
+  const filename =
+    input.filename?.trim() ||
+    `${id.replace(/[^a-zA-Z0-9._-]+/g, "-") || "task"}.task.yaml`;
+  return {
+    ...draft,
+    task: {
+      filename: filename.replace(/\\/g, "/").split("/").pop() || filename,
+      body: { id, goal },
+    },
+  };
+}
+
+export function setTaskInDraft(
+  draft: DraftPackage,
+  task: { filename: string; body: Record<string, unknown> },
+): DraftPackage {
+  return {
+    ...draft,
+    task: {
+      filename: task.filename,
+      body: { ...task.body },
+    },
+  };
+}
+
+export function patchTaskBody(
+  draft: DraftPackage,
+  patch: Record<string, unknown>,
+): DraftPackage {
+  if (!draft.task) return draft;
+  const body = { ...draft.task.body };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) delete body[key];
+    else body[key] = value;
+  }
+  let filename = draft.task.filename;
+  if (typeof patch.id === "string" && patch.id.trim()) {
+    const base = patch.id.trim().replace(/[^a-zA-Z0-9._-]+/g, "-") || "task";
+    filename = `${base}.task.yaml`;
+  }
+  return {
+    ...draft,
+    task: { filename, body },
+  };
+}
+
+export function detachTaskFromDraft(draft: DraftPackage): DraftPackage {
+  if (!draft.task) return draft;
+  const { task: _removed, ...rest } = draft;
+  return rest;
+}

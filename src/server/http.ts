@@ -17,7 +17,9 @@ import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
   createDraftPackage,
   loadDraftPackage,
+  loadTaskArtifact,
   overwriteDraftPackage,
+  parseAttachTaskBody,
   parseCreateDraftPackageBody,
   parseDraftPackageBody,
   parseOpenDraftPackageBody,
@@ -1612,6 +1614,68 @@ export function createOperatorRoutes(
             destination: result.destination,
             pipelinePath: result.pipelinePath,
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/attach-task") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseAttachTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let taskRel: string;
+          try {
+            taskRel = resolveCatalogRelativePath({
+              inputPath: parsed.taskPath,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "task",
+            }).relativePath;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadTaskArtifact(ctx.projectRoot, taskRel);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            task: result.task,
+            taskPath: result.taskPath,
           });
           return true;
         }

@@ -555,6 +555,23 @@ export type OpenDraftPackageResult =
       error: string;
     };
 
+export type AttachTaskInput = {
+  task: string;
+  project_root?: string;
+};
+
+export type AttachTaskResult =
+  | {
+      ok: true;
+      task: { filename: string; body: Record<string, unknown> };
+      taskPath: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];

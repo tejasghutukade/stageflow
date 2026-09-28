@@ -1,5 +1,7 @@
 import {
+  isTaskProposalIntent,
   proposeStageFromUserMessage,
+  proposeTaskFromUserMessage,
   WORKSHOP_AUTHOR_PROFILE_ID,
 } from "./profiles/workshopAuthor.js";
 import { createOperatorAgentHost, type OperatorAgentModel } from "./host.js";
@@ -13,6 +15,7 @@ import type {
 export type FakeOperatorTurn =
   | { type: "echo" }
   | { type: "propose_stage" }
+  | { type: "propose_task" }
   | {
       type: "events";
       events: OperatorAgentSessionEvent[];
@@ -25,14 +28,14 @@ export type FakeOperatorTurn =
 
 /**
  * Deterministic Operator Agent Host for Workshop and tests.
- * Does not call a live provider — scripted turns or auto stage proposals.
+ * Does not call a live provider — scripted turns or auto stage/task proposals.
  */
 export function createFakeOperatorAgentModel(
   script: FakeOperatorTurn[] = [{ type: "propose_stage" }],
 ): OperatorAgentModel {
   let index = 0;
   return {
-    async complete({ profile, message, tools }) {
+    async complete({ message, tools }) {
       const turn = script[Math.min(index, script.length - 1)] ?? {
         type: "propose_stage" as const,
       };
@@ -68,7 +71,10 @@ export function createFakeOperatorAgentModel(
         };
       }
 
-      const proposal = proposeStageFromUserMessage(tools, message);
+      const proposal =
+        turn.type === "propose_task" || isTaskProposalIntent(message)
+          ? proposeTaskFromUserMessage(tools, message)
+          : proposeStageFromUserMessage(tools, message);
       const autoApplied = tools.getAutoApply();
       return {
         events: [

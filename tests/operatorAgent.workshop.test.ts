@@ -168,6 +168,37 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(draft.pipeline.stages[0]!.id).toBe("manual");
   });
 
+  it("Accept applies a task create/fill proposal like stage proposals", async () => {
+    const host = createWorkshopOperatorHost([{ type: "propose_task" }]);
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    expect(readDraftFromContext(session.getContext()).task).toBeUndefined();
+
+    await session.send('create a task "release brief"');
+    const pending = session.getPendingProposal();
+    expect(pending).not.toBeNull();
+    expect(pending!.summary).toMatch(/Create task/i);
+    expect(pending!.artifacts.some((a) => a.kind === "added")).toBe(true);
+    expect(pending!.affectedStageIds).toEqual([]);
+
+    expect(session.rejectProposal(pending!.id)).toBe(true);
+    expect(readDraftFromContext(session.getContext()).task).toBeUndefined();
+
+    await session.send('create a task "release brief"');
+    const again = session.getPendingProposal();
+    expect(again).not.toBeNull();
+    expect(session.acceptProposal(again!.id)).toEqual({ ok: true });
+
+    const draft = readDraftFromContext(session.getContext());
+    expect(draft.task?.filename).toBe("release-brief.task.yaml");
+    expect(draft.task?.body.id).toBe("release-brief");
+    expect(draft.task?.body.goal).toBe("release brief");
+    expect(draft.pipeline.stages).toEqual([]);
+  });
+
   it("is distinct from stage-execution AgentPort (no openStage/runStage)", () => {
     const host = createWorkshopOperatorHost();
     expect("openStage" in host).toBe(false);
@@ -253,6 +284,56 @@ describe("createDraftPackage (first Save)", () => {
       expect(collision.ok).toBe(false);
       if (collision.ok) return;
       expect(collision.status).toBe(409);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("writes the task file when the draft includes a task", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const withTask: DraftPackage = {
+        pipeline: {
+          id: "with-task",
+          stages: [
+            {
+              id: "clarify",
+              uses: "./clarify.yaml",
+              entry: true,
+            },
+          ],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Clarify the task",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+        task: {
+          filename: "with-task.task.yaml",
+          body: { id: "with-task", goal: "Run the packaged workflow" },
+        },
+      };
+
+      const created = await createDraftPackage(root, {
+        directory: "pipelines",
+        draft: withTask,
+      });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.taskPath).toBe("pipelines/with-task.task.yaml");
+      const taskYaml = await readFile(
+        path.join(root, "pipelines", "with-task.task.yaml"),
+        "utf8",
+      );
+      expect(taskYaml).toContain("Run the packaged workflow");
+      expect(taskYaml).toContain("with-task");
     } finally {
       await cleanup();
     }
