@@ -159,7 +159,6 @@ export function WorkshopPage({
   const [sessionModelOverride, setSessionModelOverride] = useState<
     string | null
   >(null);
-  const [input, setInput] = useState("");
   const [findings, setFindings] = useState<ValidationFinding[]>([]);
   const [validationOk, setValidationOk] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
@@ -305,7 +304,6 @@ export function WorkshopPage({
     setShowSaveForm(false);
     setOpenError(null);
     setTaskMode("idle");
-    setInput("");
   }, []);
 
   const applyOpenedPackage = useCallback(
@@ -424,7 +422,6 @@ export function WorkshopPage({
     setSelection(null);
     setOpenError(null);
     setTaskMode("idle");
-    setInput("");
     setDiskFingerprints({});
     setDiskChange(null);
     markClean({
@@ -833,62 +830,64 @@ export function WorkshopPage({
     [autosaveKey],
   );
 
-  const onSend = useCallback(() => {
-    const text = input.trim();
-    if (!text || busy || pending) return;
-    setInput("");
-    setMessages((prev) => [
-      ...prev,
-      { id: nextMsgId(), role: "user", text },
-    ]);
-
-    const intent = parseAutoApplyIntent(text);
-    if (intent !== null) {
-      setAutoApply(intent);
+  const onSendMessage = useCallback(
+    (rawText: string) => {
+      const text = rawText.trim();
+      if (!text || busy || pending) return;
       setMessages((prev) => [
         ...prev,
-        {
-          id: nextMsgId(),
-          role: "system",
-          text: autoApplyStatusMessage(intent),
-        },
+        { id: nextMsgId(), role: "user", text },
       ]);
-      return;
-    }
 
-    const proposal = isTaskProposalIntent(text)
-      ? proposeTaskFromMessage(draft, text)
-      : proposeStageFromMessage(draft, text);
-    if (autoApply) {
-      setDraft(proposal.nextDraft);
-      setSavedTaskPath(null);
-      if (typeof proposal.nextDraft.pipeline.id === "string") {
-        setSavePipelineId(proposal.nextDraft.pipeline.id);
+      const intent = parseAutoApplyIntent(text);
+      if (intent !== null) {
+        setAutoApply(intent);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMsgId(),
+            role: "system",
+            text: autoApplyStatusMessage(intent),
+          },
+        ]);
+        return;
       }
-      setValidationOk(null);
+
+      const proposal = isTaskProposalIntent(text)
+        ? proposeTaskFromMessage(draft, text)
+        : proposeStageFromMessage(draft, text);
+      if (autoApply) {
+        setDraft(proposal.nextDraft);
+        setSavedTaskPath(null);
+        if (typeof proposal.nextDraft.pipeline.id === "string") {
+          setSavePipelineId(proposal.nextDraft.pipeline.id);
+        }
+        setValidationOk(null);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: nextMsgId(),
+            role: "assistant",
+            text: `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`,
+            artifacts: proposal.artifacts,
+          },
+        ]);
+        return;
+      }
+
+      setPending(proposal);
       setMessages((prev) => [
         ...prev,
         {
           id: nextMsgId(),
           role: "assistant",
-          text: `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`,
+          text: `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
           artifacts: proposal.artifacts,
         },
       ]);
-      return;
-    }
-
-    setPending(proposal);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: nextMsgId(),
-        role: "assistant",
-        text: `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
-        artifacts: proposal.artifacts,
-      },
-    ]);
-  }, [autoApply, busy, draft, input, pending]);
+    },
+    [autoApply, busy, draft, pending],
+  );
 
   const onAccept = useCallback(() => {
     if (!pending) return;
@@ -1628,9 +1627,7 @@ export function WorkshopPage({
           pending={pending}
           busy={busy}
           autoApply={autoApply}
-          input={input}
-          onInputChange={setInput}
-          onSend={onSend}
+          onSendMessage={onSendMessage}
           onAccept={onAccept}
           onReject={onReject}
         />

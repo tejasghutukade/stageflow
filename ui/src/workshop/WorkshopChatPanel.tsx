@@ -1,9 +1,26 @@
 import {
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+  getExternalStoreMessages,
+  useAuiState,
+  useExternalStoreRuntime,
+  useMessagePartText,
+  type AppendMessage,
+} from "@assistant-ui/react";
+import { Markdown } from "@astryxdesign/core/Markdown";
+import { useCallback } from "react";
+import {
   formatArtifactDiffLine,
   type ChatMessage,
   type ProposalArtifactDiff,
   type WorkshopProposal,
 } from "./draft";
+import {
+  convertChatMessage,
+  extractAppendText,
+} from "./workshopChatRuntime";
 
 export function ArtifactDiffList({
   artifacts,
@@ -30,59 +47,127 @@ export type WorkshopChatPanelProps = {
   pending: WorkshopProposal | null;
   busy: boolean;
   autoApply: boolean;
-  input: string;
-  onInputChange: (value: string) => void;
-  onSend: () => void;
+  onSendMessage: (text: string) => void;
   onAccept: () => void;
   onReject: () => void;
 };
 
-export function WorkshopChatPanel({
-  messages,
-  pending,
-  busy,
-  input,
-  onInputChange,
-  onSend,
-}: WorkshopChatPanelProps) {
+function AstryxAssistantText() {
+  const { text } = useMessagePartText();
   return (
-    <section className="workshop__chat" aria-label="Workshop Author chat">
-      <div className="eyebrow">Workshop Author</div>
-      <div className="workshop__transcript">
-        {messages.map((m) => (
-          <div key={m.id} className="workshop__bubble" data-role={m.role}>
-            <div className="eyebrow">{m.role}</div>
-            <p>{m.text}</p>
-            {m.artifacts ? <ArtifactDiffList artifacts={m.artifacts} /> : null}
-          </div>
-        ))}
-      </div>
-      <form
-        className="workshop__composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onSend();
-        }}
-      >
-        <input
-          className="input"
-          value={input}
-          onChange={(e) => onInputChange(e.target.value)}
+    <div className="workshop__bubble-md">
+      <Markdown headingLevelStart={3} contentWidth="100%">
+        {text}
+      </Markdown>
+    </div>
+  );
+}
+
+function PlainMessageText() {
+  const { text } = useMessagePartText();
+  return <p>{text}</p>;
+}
+
+function MessageArtifacts() {
+  const message = useAuiState((s) => s.message);
+  const originals = getExternalStoreMessages<ChatMessage>(message);
+  const artifacts = originals[0]?.artifacts;
+  if (!artifacts?.length) return null;
+  return <ArtifactDiffList artifacts={artifacts} />;
+}
+
+function UserMessage() {
+  return (
+    <MessagePrimitive.Root className="workshop__bubble" data-role="user">
+      <div className="eyebrow">user</div>
+      <MessagePrimitive.Parts components={{ Text: PlainMessageText }} />
+    </MessagePrimitive.Root>
+  );
+}
+
+function AssistantMessage() {
+  return (
+    <MessagePrimitive.Root className="workshop__bubble" data-role="assistant">
+      <div className="eyebrow">assistant</div>
+      <MessagePrimitive.Parts components={{ Text: AstryxAssistantText }} />
+      <MessageArtifacts />
+    </MessagePrimitive.Root>
+  );
+}
+
+function SystemMessage() {
+  return (
+    <MessagePrimitive.Root className="workshop__bubble" data-role="system">
+      <div className="eyebrow">system</div>
+      <MessagePrimitive.Parts components={{ Text: PlainMessageText }} />
+    </MessagePrimitive.Root>
+  );
+}
+
+const MESSAGE_COMPONENTS = {
+  UserMessage,
+  AssistantMessage,
+  SystemMessage,
+};
+
+function WorkshopThread({
+  pending,
+}: {
+  pending: WorkshopProposal | null;
+}) {
+  return (
+    <ThreadPrimitive.Root className="workshop__thread">
+      <ThreadPrimitive.Viewport className="workshop__transcript">
+        <ThreadPrimitive.Messages components={MESSAGE_COMPONENTS} />
+      </ThreadPrimitive.Viewport>
+      <ComposerPrimitive.Root className="workshop__composer">
+        <ComposerPrimitive.Input
+          className="input workshop__composer-input"
           placeholder={
             pending
               ? "Accept or Reject the pending proposal first"
               : "Describe a stage, task, or workflow…"
           }
-          disabled={busy || Boolean(pending)}
+          rows={2}
+          submitMode="enter"
         />
-        <button
-          type="submit"
-          className="btn btn--primary"
-          disabled={busy || Boolean(pending) || !input.trim()}
-        >
+        <ComposerPrimitive.Send className="btn btn--primary">
           Send
-        </button>
-      </form>
+        </ComposerPrimitive.Send>
+      </ComposerPrimitive.Root>
+    </ThreadPrimitive.Root>
+  );
+}
+
+export function WorkshopChatPanel({
+  messages,
+  pending,
+  busy,
+  onSendMessage,
+}: WorkshopChatPanelProps) {
+  const onNew = useCallback(
+    async (message: AppendMessage) => {
+      const text = extractAppendText(message);
+      if (!text) return;
+      onSendMessage(text);
+    },
+    [onSendMessage],
+  );
+
+  const runtime = useExternalStoreRuntime({
+    messages,
+    isRunning: busy,
+    isDisabled: busy || Boolean(pending),
+    convertMessage: convertChatMessage,
+    onNew,
+  });
+
+  return (
+    <section className="workshop__chat" aria-label="Workshop Author chat">
+      <div className="eyebrow">Workshop Author</div>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <WorkshopThread pending={pending} />
+      </AssistantRuntimeProvider>
     </section>
   );
 }

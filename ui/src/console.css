@@ -2863,6 +2863,14 @@ a.topbar__back { text-decoration: none; }
   min-width: 0;
 }
 
+.workshop__thread {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: var(--spacing-3);
+}
+
 .workshop__transcript {
   flex: 1;
   overflow: auto;
@@ -2883,18 +2891,38 @@ a.topbar__back { text-decoration: none; }
   border-color: var(--color-border-emphasized);
 }
 
+.workshop__bubble[data-role="system"] {
+  border-style: dashed;
+  opacity: 0.92;
+}
+
 .workshop__bubble p {
   margin: var(--spacing-1) 0 0;
   white-space: pre-wrap;
 }
 
+.workshop__bubble-md {
+  margin-top: var(--spacing-1);
+}
+
+.workshop__bubble-md p {
+  margin: 0 0 var(--spacing-2);
+  white-space: normal;
+}
+
 .workshop__composer {
   display: flex;
+  align-items: flex-end;
   gap: var(--spacing-2);
 }
 
-.workshop__composer .input {
+.workshop__composer .input,
+.workshop__composer-input {
   flex: 1;
+  min-height: 2.75rem;
+  max-height: 10rem;
+  resize: none;
+  field-sizing: content;
 }
 
 .workshop__proposal,
