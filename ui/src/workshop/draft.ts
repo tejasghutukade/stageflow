@@ -41,7 +41,29 @@ export type ChatMessage = {
   role: "assistant" | "user" | "system";
   text: string;
   artifacts?: ProposalArtifactDiff[];
+  /** When set, ExternalStore maps this message to a workshop_proposal tool-call card. */
+  proposalId?: string;
+  proposalSummary?: string;
 };
+
+export const WORKSHOP_PROPOSAL_TOOL_NAME = "workshop_proposal";
+
+export type WorkshopProposalToolArgs = {
+  proposalId: string;
+  summary: string;
+  artifacts: ProposalArtifactDiff[];
+};
+
+export type WorkshopProposalToolResult = {
+  status: "settled";
+};
+
+export function isProposalToolInteractive(
+  pendingId: string | null | undefined,
+  proposalId: string,
+): boolean {
+  return Boolean(pendingId) && pendingId === proposalId;
+}
 
 export const WORKSHOP_AUTHOR_GREETING =
   "What are we building? Describe the workflow you want and I’ll propose stages and wiring for this draft.";

@@ -8,39 +8,34 @@ import {
   useExternalStoreRuntime,
   useMessagePartText,
   type AppendMessage,
+  type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { Markdown } from "@astryxdesign/core/Markdown";
-import { useCallback } from "react";
 import {
-  formatArtifactDiffLine,
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  type ReactNode,
+} from "react";
+import {
+  WORKSHOP_PROPOSAL_TOOL_NAME,
+  isProposalToolInteractive,
   type ChatMessage,
-  type ProposalArtifactDiff,
   type WorkshopProposal,
+  type WorkshopProposalToolArgs,
+  type WorkshopProposalToolResult,
 } from "./draft";
+import {
+  ArtifactDiffList,
+  WorkshopProposalCard,
+} from "./WorkshopProposalCard";
 import {
   convertChatMessage,
   extractAppendText,
 } from "./workshopChatRuntime";
 
-export function ArtifactDiffList({
-  artifacts,
-}: {
-  artifacts: ProposalArtifactDiff[];
-}) {
-  if (artifacts.length === 0) return null;
-  return (
-    <ul className="workshop__diff-list" aria-label="Per-artifact diff">
-      {artifacts.map((diff) => (
-        <li key={`${diff.kind}-${diff.path}`}>
-          {formatArtifactDiffLine(diff)}
-          {diff.after || diff.before ? (
-            <pre>{diff.after ?? diff.before}</pre>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
+export { ArtifactDiffList, WorkshopProposalCard } from "./WorkshopProposalCard";
 
 export type WorkshopChatPanelProps = {
   messages: ChatMessage[];
@@ -51,6 +46,51 @@ export type WorkshopChatPanelProps = {
   onAccept: () => void;
   onReject: () => void;
 };
+
+type ProposalActions = {
+  pendingId: string | null;
+  onAccept: () => void;
+  onReject: () => void;
+};
+
+const ProposalActionsContext = createContext<ProposalActions>({
+  pendingId: null,
+  onAccept: () => {},
+  onReject: () => {},
+});
+
+function useProposalActions(): ProposalActions {
+  return useContext(ProposalActionsContext);
+}
+
+function WorkshopProposalToolUI(
+  props: ToolCallMessagePartProps<
+    WorkshopProposalToolArgs,
+    WorkshopProposalToolResult
+  >,
+) {
+  const { args, result } = props;
+  const { pendingId, onAccept, onReject } = useProposalActions();
+  const proposalId =
+    typeof args?.proposalId === "string" ? args.proposalId : "";
+  const interactive =
+    !result && isProposalToolInteractive(pendingId, proposalId);
+  const summary =
+    typeof args?.summary === "string" && args.summary.length > 0
+      ? args.summary
+      : "Proposed draft changes";
+  const artifacts = Array.isArray(args?.artifacts) ? args.artifacts : [];
+
+  return (
+    <WorkshopProposalCard
+      summary={summary}
+      artifacts={artifacts}
+      interactive={interactive}
+      onAccept={onAccept}
+      onReject={onReject}
+    />
+  );
+}
 
 function AstryxAssistantText() {
   const { text } = useMessagePartText();
@@ -71,10 +111,21 @@ function PlainMessageText() {
 function MessageArtifacts() {
   const message = useAuiState((s) => s.message);
   const originals = getExternalStoreMessages<ChatMessage>(message);
-  const artifacts = originals[0]?.artifacts;
+  const original = originals[0];
+  if (original?.proposalId) return null;
+  const artifacts = original?.artifacts;
   if (!artifacts?.length) return null;
   return <ArtifactDiffList artifacts={artifacts} />;
 }
+
+const ASSISTANT_PARTS = {
+  Text: AstryxAssistantText,
+  tools: {
+    by_name: {
+      [WORKSHOP_PROPOSAL_TOOL_NAME]: WorkshopProposalToolUI,
+    },
+  },
+};
 
 function UserMessage() {
   return (
@@ -89,7 +140,7 @@ function AssistantMessage() {
   return (
     <MessagePrimitive.Root className="workshop__bubble" data-role="assistant">
       <div className="eyebrow">assistant</div>
-      <MessagePrimitive.Parts components={{ Text: AstryxAssistantText }} />
+      <MessagePrimitive.Parts components={ASSISTANT_PARTS} />
       <MessageArtifacts />
     </MessagePrimitive.Root>
   );
@@ -139,12 +190,38 @@ function WorkshopThread({
   );
 }
 
+function ProposalActionsProvider({
+  pendingId,
+  onAccept,
+  onReject,
+  children,
+}: {
+  pendingId: string | null;
+  onAccept: () => void;
+  onReject: () => void;
+  children: ReactNode;
+}) {
+  const value = useMemo(
+    () => ({ pendingId, onAccept, onReject }),
+    [pendingId, onAccept, onReject],
+  );
+  return (
+    <ProposalActionsContext.Provider value={value}>
+      {children}
+    </ProposalActionsContext.Provider>
+  );
+}
+
 export function WorkshopChatPanel({
   messages,
   pending,
   busy,
   onSendMessage,
+  onAccept,
+  onReject,
 }: WorkshopChatPanelProps) {
+  const pendingId = pending?.id ?? null;
+
   const onNew = useCallback(
     async (message: AppendMessage) => {
       const text = extractAppendText(message);
@@ -154,11 +231,16 @@ export function WorkshopChatPanel({
     [onSendMessage],
   );
 
+  const convertMessage = useCallback(
+    (message: ChatMessage) => convertChatMessage(message, { pendingId }),
+    [pendingId],
+  );
+
   const runtime = useExternalStoreRuntime({
     messages,
     isRunning: busy,
     isDisabled: busy || Boolean(pending),
-    convertMessage: convertChatMessage,
+    convertMessage,
     onNew,
   });
 
@@ -166,7 +248,13 @@ export function WorkshopChatPanel({
     <section className="workshop__chat" aria-label="Workshop Author chat">
       <div className="eyebrow">Workshop Author</div>
       <AssistantRuntimeProvider runtime={runtime}>
-        <WorkshopThread pending={pending} />
+        <ProposalActionsProvider
+          pendingId={pendingId}
+          onAccept={onAccept}
+          onReject={onReject}
+        >
+          <WorkshopThread pending={pending} />
+        </ProposalActionsProvider>
       </AssistantRuntimeProvider>
     </section>
   );

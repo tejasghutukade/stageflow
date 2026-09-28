@@ -67,10 +67,7 @@ import {
   DEFAULT_WORKSHOP_MODEL,
   resolveWorkshopModel,
 } from "../workshop/modelSettings";
-import {
-  ArtifactDiffList,
-  WorkshopChatPanel,
-} from "../workshop/WorkshopChatPanel";
+import { WorkshopChatPanel } from "../workshop/WorkshopChatPanel";
 
 const AUTOSAVE_DEBOUNCE_MS = 500;
 const SAVE_INVALID_CONFIRM =
@@ -104,6 +101,10 @@ function normalizeMessages(
     text: m.text,
     ...(Array.isArray(m.artifacts)
       ? { artifacts: m.artifacts as ProposalArtifactDiff[] }
+      : {}),
+    ...(typeof m.proposalId === "string" ? { proposalId: m.proposalId } : {}),
+    ...(typeof m.proposalSummary === "string"
+      ? { proposalSummary: m.proposalSummary }
       : {}),
   }));
 }
@@ -883,6 +884,8 @@ export function WorkshopPage({
           role: "assistant",
           text: `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
           artifacts: proposal.artifacts,
+          proposalId: proposal.id,
+          proposalSummary: proposal.summary,
         },
       ]);
     },
@@ -1545,23 +1548,10 @@ export function WorkshopPage({
             onRemoveStage={onRemoveStage}
           />
           {pending ? (
-            <div className="workshop__proposal">
-              <div className="eyebrow">Pending proposal</div>
-              <p>{pending.summary}</p>
-              <ArtifactDiffList artifacts={pending.artifacts} />
-              <div className="workshop__proposal-actions">
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  onClick={onAccept}
-                >
-                  Accept
-                </button>
-                <button type="button" className="btn" onClick={onReject}>
-                  Reject
-                </button>
-              </div>
-            </div>
+            <p className="workshop__sr-only" role="status" aria-live="polite">
+              Pending proposal in chat: {pending.summary}. Use Accept or Reject
+              on the proposal card in the Workshop Author thread.
+            </p>
           ) : null}
           {findings.length > 0 ? (
             <div className="workshop__findings" aria-label="Validation findings">

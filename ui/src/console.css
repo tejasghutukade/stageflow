@@ -2934,6 +2934,22 @@ a.topbar__back { text-decoration: none; }
   border-radius: var(--radius-container);
 }
 
+.workshop__proposal--thread {
+  margin-top: var(--spacing-2);
+}
+
+.workshop__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .workshop__banner {
   margin: 0 var(--spacing-4) var(--spacing-3);
   background: var(--color-background-subtle, var(--color-background));
