@@ -46,6 +46,24 @@ describe("parseHash", () => {
   it("parses the workshop route", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
   });
+
+  it("parses workshop open query params", () => {
+    expect(
+      parseHash("#/workshop?pipeline=pipelines%2Fdemo.pipeline.yaml"),
+    ).toEqual({
+      name: "workshop",
+      pipelinePath: "pipelines/demo.pipeline.yaml",
+    });
+    expect(
+      parseHash(
+        "#/workshop?pipeline=pipelines/demo.pipeline.yaml&task=pipelines/demo.task.yaml",
+      ),
+    ).toEqual({
+      name: "workshop",
+      pipelinePath: "pipelines/demo.pipeline.yaml",
+      taskPath: "pipelines/demo.task.yaml",
+    });
+  });
 });
 
 describe("run stage hash", () => {

@@ -532,6 +532,29 @@ export type CreateDraftPackageResult =
       findings?: ValidationFinding[];
     };
 
+export type OverwriteDraftPackageInput = CreateDraftPackageInput;
+export type OverwriteDraftPackageResult = CreateDraftPackageResult;
+
+export type OpenDraftPackageInput = {
+  path: string;
+  task?: string;
+  project_root?: string;
+};
+
+export type OpenDraftPackageResult =
+  | {
+      ok: true;
+      draft: DraftPackagePayload;
+      destination: { directory: string; pipelineFilename: string };
+      pipelinePath: string;
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];

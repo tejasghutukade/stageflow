@@ -33,6 +33,10 @@ import type {
   CreateDraftPackageResult,
   DraftPackagePayload,
   DraftValidationResult,
+  OpenDraftPackageInput,
+  OpenDraftPackageResult,
+  OverwriteDraftPackageInput,
+  OverwriteDraftPackageResult,
   ValidationFinding,
 } from "./types";
 import { authorizationHeaders } from "./controlToken";
@@ -712,6 +716,96 @@ export async function createDraftPackageWithDetails(
       status: res.status,
       error: body.error ?? `Request failed (${res.status})`,
       ...(body.findings ? { findings: body.findings } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function overwriteDraftPackageWithDetails(
+  input: OverwriteDraftPackageInput,
+): Promise<OverwriteDraftPackageResult> {
+  try {
+    const res = await fetch("/api/drafts/overwrite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      pipeline?: PipelineListing;
+      pipelinePath?: string;
+      stagePaths?: string[];
+      taskPath?: string;
+      error?: string;
+      findings?: ValidationFinding[];
+    };
+    if (
+      res.ok &&
+      body.pipeline &&
+      typeof body.pipelinePath === "string" &&
+      Array.isArray(body.stagePaths)
+    ) {
+      return {
+        ok: true,
+        pipeline: body.pipeline,
+        pipelinePath: body.pipelinePath,
+        stagePaths: body.stagePaths,
+        ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+      ...(body.findings ? { findings: body.findings } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function openDraftPackage(
+  input: OpenDraftPackageInput,
+): Promise<OpenDraftPackageResult> {
+  try {
+    const res = await fetch("/api/drafts/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      draft?: DraftPackagePayload;
+      destination?: { directory: string; pipelineFilename: string };
+      pipelinePath?: string;
+      taskPath?: string;
+      error?: string;
+    };
+    if (
+      res.ok &&
+      body.draft &&
+      body.destination &&
+      typeof body.pipelinePath === "string"
+    ) {
+      return {
+        ok: true,
+        draft: body.draft,
+        destination: body.destination,
+        pipelinePath: body.pipelinePath,
+        ...(body.taskPath !== undefined ? { taskPath: body.taskPath } : {}),
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
     };
   } catch (err) {
     return {

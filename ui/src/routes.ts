@@ -23,7 +23,7 @@ export type Route =
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
   | { name: "connect" }
-  | { name: "workshop" };
+  | { name: "workshop"; pipelinePath?: string; taskPath?: string };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -68,8 +68,15 @@ export function extensionFilePath(filePath: string): string {
   return `/extensions/files/${encodeURIComponent(filePath)}`;
 }
 
-export function workshopPath(): string {
-  return "/workshop";
+export function workshopPath(opts?: {
+  pipeline?: string;
+  task?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.pipeline) params.set("pipeline", opts.pipeline);
+  if (opts?.task) params.set("task", opts.task);
+  const query = params.toString();
+  return query ? `/workshop?${query}` : "/workshop";
 }
 
 export function connectPath(): string {
@@ -154,7 +161,15 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
-  if (path === "workshop") return { name: "workshop" };
+  if (path === "workshop") {
+    const pipelinePath = params.get("pipeline") ?? undefined;
+    const taskPath = params.get("task") ?? undefined;
+    return {
+      name: "workshop",
+      ...(pipelinePath ? { pipelinePath } : {}),
+      ...(taskPath ? { taskPath } : {}),
+    };
+  }
   if (path.startsWith("runs/")) {
     const parts = path.slice("runs/".length).split("/");
     const runId = decodeURIComponent(parts[0] ?? "");

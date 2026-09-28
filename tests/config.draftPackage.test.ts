@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  loadDraftPackage,
   overwriteDraftPackage,
   validateDraftPackage,
   type DraftPackage,
@@ -390,6 +391,255 @@ describe("overwriteDraftPackage", () => {
       expect(forced.ok).toBe(true);
       const written = await readFile(path.join(dir, "broken.pipeline.yaml"), "utf8");
       expect(written).toContain("Still broken");
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("loadDraftPackage", () => {
+  it("loads pipeline + referenced stage files; task absent by default", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      expect(
+        (
+          await createStage(root, {
+            pipeline_directory: "pipelines",
+            filename: "clarify.yaml",
+            id: "clarify",
+            system_prompt: "Clarify the task",
+            model: MODEL,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await createStage(root, {
+            pipeline_directory: "pipelines",
+            filename: "decide.yaml",
+            id: "decide",
+            system_prompt: "Decide next steps",
+            model: MODEL,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await createPipeline(root, {
+            directory: "pipelines",
+            id: "demo",
+            stages: [
+              { id: "clarify", uses: "./clarify.yaml" },
+              { id: "decide", uses: "./decide.yaml", needs: "clarify" },
+            ],
+          })
+        ).ok,
+      ).toBe(true);
+      await writeFile(
+        path.join(dir, "demo.task.yaml"),
+        "id: demo-task\ngoal: Should not load unless attached\n",
+        "utf8",
+      );
+
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      expect(loaded.pipelinePath).toBe("pipelines/demo.pipeline.yaml");
+      expect(loaded.destination).toEqual({
+        directory: "pipelines",
+        pipelineFilename: "demo.pipeline.yaml",
+      });
+      expect(loaded.draft.pipeline.id).toBe("demo");
+      expect(loaded.draft.pipeline.stages).toHaveLength(2);
+      expect(loaded.draft.stages).toHaveLength(2);
+      expect(loaded.draft.stages?.[0]?.body.system_prompt).toBe("Clarify the task");
+      expect(loaded.draft.task).toBeUndefined();
+      expect(loaded.taskPath).toBeUndefined();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("optionally attaches a task when taskPath is provided", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      expect(
+        (
+          await createStage(root, {
+            pipeline_directory: "pipelines",
+            filename: "clarify.yaml",
+            id: "clarify",
+            system_prompt: "Clarify",
+            model: MODEL,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await createPipeline(root, {
+            directory: "pipelines",
+            id: "demo",
+            stages: [{ id: "clarify", uses: "./clarify.yaml" }],
+          })
+        ).ok,
+      ).toBe(true);
+      await writeFile(
+        path.join(dir, "demo.task.yaml"),
+        "id: demo-task\ngoal: Attached brief\n",
+        "utf8",
+      );
+
+      const loaded = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml", {
+        taskPath: "pipelines/demo.task.yaml",
+      });
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+      expect(loaded.draft.task?.filename).toBe("demo.task.yaml");
+      expect(loaded.draft.task?.body.goal).toBe("Attached brief");
+      expect(loaded.taskPath).toBe("pipelines/demo.task.yaml");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns 404 when the pipeline is missing", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const loaded = await loadDraftPackage(root, "pipelines/missing.pipeline.yaml");
+      expect(loaded.ok).toBe(false);
+      if (loaded.ok) return;
+      expect(loaded.status).toBe(404);
+    } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe("open → edit → overwrite (draft/catalog seam)", () => {
+  it("loads a package, applies live draft edits, and overwrites known paths", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const dir = path.join(root, "pipelines");
+      await mkdir(dir, { recursive: true });
+      expect(
+        (
+          await createStage(root, {
+            pipeline_directory: "pipelines",
+            filename: "clarify.yaml",
+            id: "clarify",
+            system_prompt: "Old prompt",
+            model: MODEL,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await createStage(root, {
+            pipeline_directory: "pipelines",
+            filename: "decide.yaml",
+            id: "decide",
+            system_prompt: "Decide",
+            model: MODEL,
+          })
+        ).ok,
+      ).toBe(true);
+      expect(
+        (
+          await createPipeline(root, {
+            directory: "pipelines",
+            id: "demo",
+            stages: [
+              {
+                id: "clarify",
+                uses: "./clarify.yaml",
+                entry: true,
+                route: [{ to: "decide" }],
+              },
+              { id: "decide", uses: "./decide.yaml" },
+            ],
+          })
+        ).ok,
+      ).toBe(true);
+
+      const opened = await loadDraftPackage(root, "pipelines/demo.pipeline.yaml");
+      expect(opened.ok).toBe(true);
+      if (!opened.ok) return;
+
+      const draft: DraftPackage = {
+        ...opened.draft,
+        stages: (opened.draft.stages ?? []).map((stage) =>
+          stage.body.id === "clarify"
+            ? {
+                ...stage,
+                body: {
+                  ...stage.body,
+                  system_prompt: "Inspector-edited clarify prompt",
+                },
+              }
+            : stage,
+        ),
+        pipeline: {
+          ...opened.draft.pipeline,
+          stages: [
+            {
+              id: "clarify",
+              uses: "./clarify.yaml",
+              entry: true,
+              route: [{ to: "decide" }],
+            },
+            {
+              id: "decide",
+              uses: "./decide.yaml",
+              route: [{ to: "ship" }],
+            },
+            { id: "ship", uses: "./ship.yaml" },
+          ],
+        },
+      };
+      draft.stages = [
+        ...(draft.stages ?? []),
+        {
+          path: "./ship.yaml",
+          body: {
+            id: "ship",
+            system_prompt: "Ship it",
+            model: MODEL,
+            ...REQUIRED_IO,
+          },
+        },
+      ];
+
+      const validation = await validateDraftPackage(draft, {
+        cwd: root,
+        projectRoot: root,
+        strict: true,
+      });
+      expect(validation.ok).toBe(true);
+
+      const saved = await overwriteDraftPackage(root, {
+        directory: opened.destination.directory,
+        draft,
+        pipelineFilename: opened.destination.pipelineFilename,
+      });
+      expect(saved.ok).toBe(true);
+      if (!saved.ok) return;
+
+      expect(saved.pipelinePath).toBe("pipelines/demo.pipeline.yaml");
+      const clarifyYaml = await readFile(path.join(dir, "clarify.yaml"), "utf8");
+      expect(clarifyYaml).toContain("Inspector-edited clarify prompt");
+      const shipYaml = await readFile(path.join(dir, "ship.yaml"), "utf8");
+      expect(shipYaml).toContain("Ship it");
+      const pipelineYaml = await readFile(
+        path.join(dir, "demo.pipeline.yaml"),
+        "utf8",
+      );
+      expect(pipelineYaml).toContain("ship");
+      expect(pipelineYaml).toContain("to: ship");
     } finally {
       await cleanup();
     }

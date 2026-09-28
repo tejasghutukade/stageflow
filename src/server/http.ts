@@ -16,8 +16,12 @@ import { createPipeline, parseCreatePipelineBody } from "../config/createPipelin
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
   createDraftPackage,
+  loadDraftPackage,
+  overwriteDraftPackage,
   parseCreateDraftPackageBody,
   parseDraftPackageBody,
+  parseOpenDraftPackageBody,
+  parseOverwriteDraftPackageBody,
   validateDraftPackage,
 } from "../config/draftPackage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
@@ -1473,6 +1477,140 @@ export function createOperatorRoutes(
             pipeline: result.pipeline,
             pipelinePath: result.pipelinePath,
             stagePaths: result.stagePaths,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/overwrite") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseOverwriteDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const result = await overwriteDraftPackage(ctx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/open") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseOpenDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let pipelineRel: string;
+          let taskRel: string | undefined;
+          try {
+            pipelineRel = resolveCatalogRelativePath({
+              inputPath: parsed.path,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "path",
+            }).relativePath;
+            if (parsed.taskPath) {
+              taskRel = resolveCatalogRelativePath({
+                inputPath: parsed.taskPath,
+                projectRoot: writeRoot,
+                roots,
+                fieldName: "task",
+              }).relativePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadDraftPackage(ctx.projectRoot, pipelineRel, {
+            ...(taskRel !== undefined ? { taskPath: taskRel } : {}),
+          });
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            draft: result.draft,
+            destination: result.destination,
+            pipelinePath: result.pipelinePath,
             ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
           });
           return true;

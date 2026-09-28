@@ -233,6 +233,13 @@ body {
   font-size: var(--font-size-sm);
 }
 
+.page-head__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+  align-items: center;
+}
+
 .crumbs {
   margin-bottom: var(--spacing-3);
   color: var(--color-text-secondary);
@@ -2907,6 +2914,43 @@ a.topbar__back { text-decoration: none; }
   gap: var(--spacing-1);
   margin-top: var(--spacing-2);
   font-size: var(--font-size-sm);
+}
+
+.workshop__canvas-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.workshop__canvas-actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.workshop__inspector,
+.workshop__task-panel {
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+}
+
+.workshop__inspector {
+  overflow: auto;
+  max-height: 40vh;
+}
+
+.workshop__check {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  margin-top: var(--spacing-1);
+}
+
+.workshop__inspector textarea.input {
+  resize: vertical;
+  font-family: var(--font-family-mono, ui-monospace, monospace);
 }
 
 @media (max-width: 900px) {

@@ -7,6 +7,7 @@ import { loadPipelineOutcome } from "./loadPipeline.js";
 import type { PipelineListing } from "./listConfig.js";
 import { parseTaskFile } from "./loadTask.js";
 import { stringifyTargetYaml } from "./printTargetYaml.js";
+import { readYamlObject } from "./readYamlObject.js";
 import {
   buildValidationResult,
   findingsFromLoadIssues,
@@ -73,6 +74,30 @@ export type DraftPackageWriteResult =
 
 export type OverwriteDraftPackageResult = DraftPackageWriteResult;
 export type CreateDraftPackageResult = DraftPackageWriteResult;
+
+export type DraftPackageDestination = {
+  directory: string;
+  pipelineFilename: string;
+};
+
+export type LoadDraftPackageOptions = {
+  /** When set, attach this task file into the draft. Otherwise task stays absent. */
+  taskPath?: string;
+};
+
+export type LoadDraftPackageResult =
+  | {
+      ok: true;
+      draft: DraftPackage;
+      destination: DraftPackageDestination;
+      pipelinePath: string;
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: 400 | 404;
+      error: string;
+    };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -506,5 +531,191 @@ export function parseCreateDraftPackageBody(
       ? { pipelineFilename: body.pipelineFilename }
       : {}),
     ...(body.allowInvalid === true ? { allowInvalid: true } : {}),
+  };
+}
+
+export const parseOverwriteDraftPackageBody = parseCreateDraftPackageBody;
+
+export type OpenDraftPackageInput = {
+  path: string;
+  taskPath?: string;
+};
+
+export function parseOpenDraftPackageBody(
+  body: unknown,
+): OpenDraftPackageInput | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(body)) {
+    return { ok: false, status: 400, error: "JSON object body required" };
+  }
+  if (typeof body.path !== "string" || !body.path.trim()) {
+    return { ok: false, status: 400, error: "path is required" };
+  }
+  const pathValue = body.path.trim().replace(/\\/g, "/");
+  const taskRaw =
+    typeof body.task === "string"
+      ? body.task
+      : typeof body.taskPath === "string"
+        ? body.taskPath
+        : undefined;
+  return {
+    path: pathValue,
+    ...(taskRaw?.trim() ? { taskPath: taskRaw.trim().replace(/\\/g, "/") } : {}),
+  };
+}
+
+function resolveProjectRelativePath(
+  projectRoot: string,
+  relPath: string,
+): string | null {
+  const abs = path.resolve(projectRoot, relPath);
+  const rel = path.relative(projectRoot, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return null;
+  }
+  return abs;
+}
+
+export async function loadDraftPackage(
+  projectRoot: string,
+  pipelineRelPath: string,
+  options: LoadDraftPackageOptions = {},
+): Promise<LoadDraftPackageResult> {
+  if (typeof pipelineRelPath !== "string" || !pipelineRelPath.trim()) {
+    return { ok: false, status: 400, error: "path is required" };
+  }
+  const normalizedRel = pipelineRelPath.trim().replace(/\\/g, "/");
+  const pipelineAbs = resolveProjectRelativePath(projectRoot, normalizedRel);
+  if (!pipelineAbs) {
+    return {
+      ok: false,
+      status: 400,
+      error: "path must be inside the project root",
+    };
+  }
+  if (!(await fileExists(pipelineAbs))) {
+    return {
+      ok: false,
+      status: 404,
+      error: `Pipeline does not exist (${normalizedRel})`,
+    };
+  }
+
+  let raw: Record<string, unknown>;
+  try {
+    raw = await readYamlObject(pipelineAbs);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, status: 400, error: `Failed to read pipeline: ${message}` };
+  }
+
+  if (typeof raw.id !== "string" || !raw.id.trim()) {
+    return { ok: false, status: 400, error: "pipeline id is required" };
+  }
+  if (!Array.isArray(raw.stages)) {
+    return { ok: false, status: 400, error: "pipeline stages must be an array" };
+  }
+
+  const packageDirectory = path.dirname(pipelineAbs);
+  const pipelineFilename = path.basename(pipelineAbs);
+  const directory = path
+    .relative(projectRoot, packageDirectory)
+    .replace(/\\/g, "/") || ".";
+  const pipelinePath = path
+    .relative(projectRoot, pipelineAbs)
+    .replace(/\\/g, "/");
+
+  const pipelineStages = raw.stages.filter(isPlainObject) as Array<
+    Record<string, unknown>
+  >;
+  const stageArtifacts: DraftStageArtifact[] = [];
+  const seenUses = new Set<string>();
+
+  for (const stage of pipelineStages) {
+    if (typeof stage.uses !== "string" || !stage.uses.trim()) continue;
+    const uses = stage.uses.trim().replace(/\\/g, "/");
+    const key = normalizeStageRelPath(uses);
+    if (seenUses.has(key)) continue;
+    seenUses.add(key);
+
+    const stageAbs = path.resolve(packageDirectory, uses);
+    const stageRelToRoot = path.relative(projectRoot, stageAbs);
+    if (stageRelToRoot.startsWith("..") || path.isAbsolute(stageRelToRoot)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Stage path escapes project root (${uses})`,
+      };
+    }
+    if (!(await fileExists(stageAbs))) {
+      return {
+        ok: false,
+        status: 404,
+        error: `Stage file does not exist (${path
+          .relative(projectRoot, stageAbs)
+          .replace(/\\/g, "/")})`,
+      };
+    }
+    try {
+      const body = await readYamlObject(stageAbs);
+      stageArtifacts.push({ path: uses, body });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: 400,
+        error: `Failed to read stage ${uses}: ${message}`,
+      };
+    }
+  }
+
+  const draft: DraftPackage = {
+    pipeline: {
+      id: raw.id,
+      stages: pipelineStages,
+      ...(raw.agent !== undefined ? { agent: raw.agent } : {}),
+      ...(raw.model !== undefined ? { model: raw.model } : {}),
+      ...(raw.schemas !== undefined ? { schemas: raw.schemas } : {}),
+      ...(raw.requires !== undefined ? { requires: raw.requires } : {}),
+    },
+    ...(stageArtifacts.length > 0 ? { stages: stageArtifacts } : {}),
+  };
+
+  let attachedTaskPath: string | undefined;
+  if (options.taskPath?.trim()) {
+    const taskRel = options.taskPath.trim().replace(/\\/g, "/");
+    const taskAbs = resolveProjectRelativePath(projectRoot, taskRel);
+    if (!taskAbs) {
+      return {
+        ok: false,
+        status: 400,
+        error: "task path must be inside the project root",
+      };
+    }
+    if (!(await fileExists(taskAbs))) {
+      return {
+        ok: false,
+        status: 404,
+        error: `Task does not exist (${taskRel})`,
+      };
+    }
+    try {
+      const body = await readYamlObject(taskAbs);
+      draft.task = {
+        filename: path.basename(taskAbs),
+        body,
+      };
+      attachedTaskPath = path.relative(projectRoot, taskAbs).replace(/\\/g, "/");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, status: 400, error: `Failed to read task: ${message}` };
+    }
+  }
+
+  return {
+    ok: true,
+    draft,
+    destination: { directory, pipelineFilename },
+    pipelinePath,
+    ...(attachedTaskPath !== undefined ? { taskPath: attachedTaskPath } : {}),
   };
 }

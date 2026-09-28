@@ -1,11 +1,14 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createDraftPackageWithDetails,
+  openDraftPackage,
+  overwriteDraftPackageWithDetails,
   validateDraftPackage,
   type DraftValidationResult,
   type ValidationFinding,
 } from "../api";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
+import { navigate, pipelinePath, workshopPath } from "../routes";
 import { showToast } from "../toast";
 import {
   draftStageIds,
@@ -16,6 +19,14 @@ import {
   type DraftPackage,
   type WorkshopProposal,
 } from "../workshop/draft";
+import {
+  addStageToDraft,
+  removeStageFromDraft,
+} from "../workshop/draftEdits";
+import {
+  DraftInspector,
+  type InspectorSelection,
+} from "../workshop/DraftInspector";
 
 let msgSeq = 0;
 function nextMsgId(): string {
@@ -26,16 +37,28 @@ function nextMsgId(): string {
 function definitionTrack(
   draft: DraftPackage,
   highlightIds: ReadonlySet<string>,
+  selectedId: string | null,
 ): TrackStage[] {
   return draftStageIds(draft).map((id) => ({
     id,
     label: id,
     status: "pending" as const,
-    selected: highlightIds.has(id),
+    selected: selectedId === id || highlightIds.has(id),
   }));
 }
 
-export function WorkshopPage() {
+type Destination = {
+  directory: string;
+  pipelineFilename?: string;
+};
+
+export function WorkshopPage({
+  openPipelinePath,
+  openTaskPath,
+}: {
+  openPipelinePath?: string;
+  openTaskPath?: string;
+}) {
   const [draft, setDraft] = useState<DraftPackage>(() => emptyDraftPackage());
   const [messages, setMessages] = useState<ChatMessage[]>(() => [
     {
@@ -50,9 +73,12 @@ export function WorkshopPage() {
   const [validationOk, setValidationOk] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [destination, setDestination] = useState<Destination | null>(null);
   const [showSaveForm, setShowSaveForm] = useState(false);
   const [saveDirectory, setSaveDirectory] = useState("pipelines");
   const [savePipelineId, setSavePipelineId] = useState("untitled");
+  const [selection, setSelection] = useState<InspectorSelection | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const pendingIds = useMemo(() => {
     if (!pending) return new Set<string>();
@@ -62,15 +88,24 @@ export function WorkshopPage() {
     );
   }, [draft, pending]);
 
+  const selectedStageId =
+    selection?.kind === "stage" ? selection.stageId : null;
+
   const track = useMemo(
     () =>
       definitionTrack(
         pending ? pending.nextDraft : draft,
         pendingIds,
+        selectedStageId,
       ),
-    [draft, pending, pendingIds],
+    [draft, pending, pendingIds, selectedStageId],
   );
   const canSave = validationOk === true && !busy;
+
+  const applyDraft = useCallback((next: DraftPackage) => {
+    setDraft(next);
+    setValidationOk(null);
+  }, []);
 
   const startNew = useCallback(() => {
     setDraft(emptyDraftPackage());
@@ -78,8 +113,11 @@ export function WorkshopPage() {
     setFindings([]);
     setValidationOk(null);
     setSavedPath(null);
+    setDestination(null);
     setShowSaveForm(false);
     setSavePipelineId("untitled");
+    setSelection(null);
+    setOpenError(null);
     setMessages([
       {
         id: nextMsgId(),
@@ -87,7 +125,50 @@ export function WorkshopPage() {
         text: WORKSHOP_AUTHOR_GREETING,
       },
     ]);
-  }, []);
+    if (openPipelinePath || openTaskPath) {
+      navigate(workshopPath());
+    }
+  }, [openPipelinePath, openTaskPath]);
+
+  useEffect(() => {
+    if (!openPipelinePath) return;
+    let cancelled = false;
+    setBusy(true);
+    setOpenError(null);
+    void (async () => {
+      const result = await openDraftPackage({
+        path: openPipelinePath,
+        ...(openTaskPath ? { task: openTaskPath } : {}),
+      });
+      if (cancelled) return;
+      if (!result.ok) {
+        setOpenError(result.error);
+        showToast(result.error);
+        setBusy(false);
+        return;
+      }
+      setDraft(result.draft);
+      setDestination(result.destination);
+      setSavedPath(result.pipelinePath);
+      setSavePipelineId(result.draft.pipeline.id);
+      setSaveDirectory(result.destination.directory);
+      setPending(null);
+      setFindings([]);
+      setValidationOk(null);
+      setSelection({ kind: "pipeline" });
+      setMessages([
+        {
+          id: nextMsgId(),
+          role: "assistant",
+          text: `Opened ${result.pipelinePath}. Edit the DAG or inspector — Save overwrites the known package paths. Task panel stays empty until you attach a task.`,
+        },
+      ]);
+      setBusy(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [openPipelinePath, openTaskPath]);
 
   const onSend = useCallback(() => {
     const text = input.trim();
@@ -173,17 +254,36 @@ export function WorkshopPage() {
   }, [draft]);
 
   const onSaveClick = useCallback(async () => {
-    if (savedPath) {
-      showToast("Overwrite save lands in a later ticket — use New for another create");
-      return;
-    }
     if (validationOk !== true) {
       showToast("Validate successfully before Save");
       return;
     }
+    if (destination) {
+      setBusy(true);
+      try {
+        const result = await overwriteDraftPackageWithDetails({
+          directory: destination.directory,
+          draft,
+          ...(destination.pipelineFilename
+            ? { pipelineFilename: destination.pipelineFilename }
+            : {}),
+        });
+        if (!result.ok) {
+          if (result.findings) setFindings(result.findings);
+          setValidationOk(false);
+          showToast(result.error);
+          return;
+        }
+        setSavedPath(result.pipelinePath);
+        showToast(`Saved ${result.pipelinePath}`);
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     setShowSaveForm(true);
     setSavePipelineId(draft.pipeline.id || "untitled");
-  }, [draft.pipeline.id, savedPath, validationOk]);
+  }, [destination, draft, validationOk]);
 
   const onConfirmSave = useCallback(async () => {
     if (validationOk !== true) {
@@ -210,12 +310,32 @@ export function WorkshopPage() {
       }
       setDraft(packageDraft);
       setSavedPath(result.pipelinePath);
+      setDestination({
+        directory,
+        pipelineFilename: `${id}.pipeline.yaml`,
+      });
       setShowSaveForm(false);
       showToast(`Saved ${result.pipelinePath}`);
     } finally {
       setBusy(false);
     }
   }, [draft, saveDirectory, savePipelineId, validationOk]);
+
+  const onAddStage = useCallback(() => {
+    const next = addStageToDraft(draft, `stage-${draft.pipeline.stages.length + 1}`);
+    applyDraft(next);
+    const ids = draftStageIds(next);
+    const added = ids[ids.length - 1];
+    if (added) setSelection({ kind: "stage", stageId: added });
+  }, [applyDraft, draft]);
+
+  const onRemoveStage = useCallback(
+    (stageId: string) => {
+      applyDraft(removeStageFromDraft(draft, stageId));
+      setSelection({ kind: "pipeline" });
+    },
+    [applyDraft, draft],
+  );
 
   return (
     <div className="pane workshop">
@@ -225,6 +345,11 @@ export function WorkshopPage() {
           {savedPath ? savedPath : "Untitled draft · Workshop Author"}
         </div>
         <div className="topbar__spacer" />
+        {savedPath ? (
+          <a className="btn" href={`#${pipelinePath(draft.pipeline.id)}`}>
+            Open in catalog
+          </a>
+        ) : null}
         <button type="button" className="btn" onClick={startNew} disabled={busy}>
           New
         </button>
@@ -243,7 +368,9 @@ export function WorkshopPage() {
           disabled={!canSave}
           title={
             validationOk === true
-              ? "Save package to disk"
+              ? destination
+                ? "Overwrite known package paths"
+                : "Save package to disk"
               : "Validate successfully before Save"
           }
         >
@@ -253,14 +380,68 @@ export function WorkshopPage() {
 
       <div className="workshop__body">
         <section className="workshop__canvas" aria-label="Draft DAG">
-          <div className="eyebrow">Draft DAG</div>
+          <div className="workshop__canvas-head">
+            <div className="eyebrow">Draft DAG</div>
+            <div className="workshop__canvas-actions">
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => setSelection({ kind: "pipeline" })}
+              >
+                Pipeline
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={onAddStage}
+                disabled={busy || Boolean(pending)}
+              >
+                Add stage
+              </button>
+            </div>
+          </div>
+          {openError ? (
+            <p style={{ color: "var(--color-text-red)" }}>{openError}</p>
+          ) : null}
           {track.length === 0 ? (
             <p className="empty-hint">
-              Empty scaffold — chat with Workshop Author to propose stages.
+              Empty scaffold — chat with Workshop Author to propose stages, or
+              Add stage.
             </p>
           ) : (
-            <PipelineTrack stages={track} mode="definition" />
+            <PipelineTrack
+              stages={track}
+              mode="definition"
+              onSelect={(stageId) =>
+                setSelection({ kind: "stage", stageId })
+              }
+            />
           )}
+          <div className="workshop__task-panel">
+            <div className="eyebrow">Task</div>
+            {draft.task ? (
+              <p className="mono">
+                {draft.task.filename}
+                {typeof draft.task.body.goal === "string"
+                  ? ` · ${draft.task.body.goal}`
+                  : ""}
+              </p>
+            ) : (
+              <p className="empty-hint">
+                Empty — attach or create a task in a later step. Pipeline-only
+                editing stays valid.
+              </p>
+            )}
+          </div>
+          <DraftInspector
+            draft={pending ? pending.nextDraft : draft}
+            selection={selection}
+            onChange={(next) => {
+              if (pending) return;
+              applyDraft(next);
+            }}
+            onRemoveStage={pending ? undefined : onRemoveStage}
+          />
           {pending ? (
             <div className="workshop__proposal">
               <div className="eyebrow">Pending proposal</div>

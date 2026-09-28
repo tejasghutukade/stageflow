@@ -175,7 +175,12 @@ function AppShell() {
       />
     );
   } else if (route.name === "workshop") {
-    content = <WorkshopPage />;
+    content = (
+      <WorkshopPage
+        openPipelinePath={route.pipelinePath}
+        openTaskPath={route.taskPath}
+      />
+    );
   } else {
     content = (
       <TodayPage

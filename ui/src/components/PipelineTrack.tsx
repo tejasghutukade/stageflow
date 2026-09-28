@@ -95,7 +95,7 @@ export function PipelineTrack({
               meta={stage.meta}
               selected={stage.selected}
               onClick={
-                onSelect && stage.status !== "pending"
+                onSelect && (mode === "definition" || stage.status !== "pending")
                   ? () => onSelect(stage.id)
                   : undefined
               }
