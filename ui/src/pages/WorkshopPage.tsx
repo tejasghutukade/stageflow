@@ -11,6 +11,7 @@ import {
   openDraftPackage,
   overwriteDraftPackageWithDetails,
   putWorkshopAutosave,
+  sendWorkshopChatTurnStreaming,
   validateDraftPackage,
   type DraftValidationResult,
   type TaskListing,
@@ -34,16 +35,12 @@ import {
   workshopSessionFingerprint,
   type WorkshopAutosaveDestination,
 } from "../workshop/autosave";
+import { applyWorkshopChatTurn } from "../workshop/chatClient";
 import {
-  autoApplyStatusMessage,
   canOfferRunShortcut,
   draftStageIds,
   emptyDraftPackage,
   isProposalStale,
-  isTaskProposalIntent,
-  parseAutoApplyIntent,
-  proposeStageFromMessage,
-  proposeTaskFromMessage,
   STALE_PROPOSAL_NOTICE,
   WORKSHOP_AUTHOR_GREETING,
   type ChatMessage,
@@ -835,61 +832,83 @@ export function WorkshopPage({
     (rawText: string) => {
       const text = rawText.trim();
       if (!text || busy || pending) return;
-      setMessages((prev) => [
-        ...prev,
-        { id: nextMsgId(), role: "user", text },
-      ]);
 
-      const intent = parseAutoApplyIntent(text);
-      if (intent !== null) {
-        setAutoApply(intent);
-        setMessages((prev) => [
-          ...prev,
+      const userId = nextMsgId();
+      setMessages((prev) => [...prev, { id: userId, role: "user", text }]);
+      setBusy(true);
+
+      void (async () => {
+        let streamingId: string | null = null;
+
+        const result = await sendWorkshopChatTurnStreaming(
           {
-            id: nextMsgId(),
-            role: "system",
-            text: autoApplyStatusMessage(intent),
+            message: text,
+            draft,
+            autoApply,
+            model: sessionModelOverride,
           },
-        ]);
-        return;
-      }
+          {
+            onDelta: (chunk) => {
+              if (!streamingId) {
+                streamingId = nextMsgId();
+                const id = streamingId;
+                setMessages((prev) => [
+                  ...prev,
+                  { id, role: "assistant", text: chunk },
+                ]);
+                return;
+              }
+              const id = streamingId;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === id ? { ...m, text: `${m.text}${chunk}` } : m,
+                ),
+              );
+            },
+          },
+        );
 
-      const proposal = isTaskProposalIntent(text)
-        ? proposeTaskFromMessage(draft, text)
-        : proposeStageFromMessage(draft, text);
-      if (autoApply) {
-        setDraft(proposal.nextDraft);
-        setSavedTaskPath(null);
-        if (typeof proposal.nextDraft.pipeline.id === "string") {
-          setSavePipelineId(proposal.nextDraft.pipeline.id);
+        if (!result.ok) {
+          setMessages((prev) => [
+            ...(streamingId
+              ? prev.filter((m) => m.id !== streamingId)
+              : prev),
+            {
+              id: nextMsgId(),
+              role: "system",
+              text: `Workshop Author unavailable: ${result.error}`,
+            },
+          ]);
+          setBusy(false);
+          showToast(result.error);
+          return;
         }
-        setValidationOk(null);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nextMsgId(),
-            role: "assistant",
-            text: `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`,
-            artifacts: proposal.artifacts,
-          },
-        ]);
-        return;
-      }
 
-      setPending(proposal);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextMsgId(),
-          role: "assistant",
-          text: `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
-          artifacts: proposal.artifacts,
-          proposalId: proposal.id,
-          proposalSummary: proposal.summary,
-        },
-      ]);
+        const applied = applyWorkshopChatTurn({
+          turn: result,
+          nextMessageId: nextMsgId,
+        });
+
+        setMessages((prev) => {
+          const base = streamingId
+            ? prev.filter((m) => m.id !== streamingId)
+            : prev;
+          return [...base, ...applied.messages];
+        });
+        setAutoApply(applied.autoApply);
+        setPending(applied.pending);
+        if (JSON.stringify(applied.draft) !== JSON.stringify(draft)) {
+          setDraft(applied.draft);
+          setSavedTaskPath(null);
+          if (typeof applied.draft.pipeline.id === "string") {
+            setSavePipelineId(applied.draft.pipeline.id);
+          }
+          setValidationOk(null);
+        }
+        setBusy(false);
+      })();
     },
-    [autoApply, busy, draft, pending],
+    [autoApply, busy, draft, pending, sessionModelOverride],
   );
 
   const onAccept = useCallback(() => {

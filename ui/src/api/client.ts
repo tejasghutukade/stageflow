@@ -44,6 +44,10 @@ import type {
   PutWorkshopAutosaveResult,
   ValidationFinding,
   WorkshopAutosavePayload,
+  WorkshopChatStreamFrame,
+  WorkshopChatTurnInput,
+  WorkshopChatTurnPayload,
+  WorkshopChatTurnResult,
   WorkshopDiskChangeInput,
   WorkshopDiskChangeResult,
 } from "./types";
@@ -1011,5 +1015,174 @@ export async function checkWorkshopDiskChange(
       status: 0,
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+function isWorkshopChatTurnPayload(
+  body: unknown,
+): body is WorkshopChatTurnPayload {
+  if (body === null || typeof body !== "object") return false;
+  const record = body as Record<string, unknown>;
+  return (
+    Array.isArray(record.events) &&
+    record.draft !== null &&
+    typeof record.draft === "object" &&
+    typeof record.autoApply === "boolean" &&
+    typeof record.model === "string" &&
+    (record.pending === null || typeof record.pending === "object")
+  );
+}
+
+/** Full-turn Workshop Author chat via Operator Agent Host (JSON). */
+export async function sendWorkshopChatTurn(
+  input: WorkshopChatTurnInput,
+): Promise<WorkshopChatTurnResult> {
+  try {
+    const res = await fetch("/api/workshop/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify({
+        message: input.message,
+        draft: input.draft,
+        autoApply: input.autoApply === true,
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.project_root ? { project_root: input.project_root } : {}),
+        stream: false,
+      }),
+    });
+    const body = (await res.json().catch(() => ({}))) as WorkshopChatTurnPayload & {
+      error?: string;
+    };
+    if (res.ok && isWorkshopChatTurnPayload(body)) {
+      return { ok: true, ...body };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Prefer NDJSON stream when the host supports it; fall back to a coherent JSON turn.
+ * `onDelta` receives assistant text chunks for progressive UI updates.
+ */
+export async function sendWorkshopChatTurnStreaming(
+  input: WorkshopChatTurnInput,
+  handlers: {
+    onDelta?: (text: string) => void;
+    onEvent?: (event: WorkshopChatTurnPayload["events"][number]) => void;
+  } = {},
+): Promise<WorkshopChatTurnResult> {
+  try {
+    const res = await fetch("/api/workshop/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/x-ndjson",
+        ...authorizationHeaders(),
+      },
+      body: JSON.stringify({
+        message: input.message,
+        draft: input.draft,
+        autoApply: input.autoApply === true,
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.project_root ? { project_root: input.project_root } : {}),
+        stream: true,
+      }),
+    });
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      return {
+        ok: false,
+        status: res.status,
+        error: body.error ?? `Request failed (${res.status})`,
+      };
+    }
+
+    if (!contentType.includes("ndjson") || !res.body) {
+      const body = (await res.json().catch(() => ({}))) as WorkshopChatTurnPayload & {
+        error?: string;
+      };
+      if (isWorkshopChatTurnPayload(body)) {
+        return { ok: true, ...body };
+      }
+      return {
+        ok: false,
+        status: res.status,
+        error: body.error ?? `Request failed (${res.status})`,
+      };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let donePayload: WorkshopChatTurnPayload | null = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let frame: WorkshopChatStreamFrame;
+        try {
+          frame = JSON.parse(trimmed) as WorkshopChatStreamFrame;
+        } catch {
+          continue;
+        }
+        if (frame.type === "delta") {
+          handlers.onDelta?.(frame.text);
+        } else if (frame.type === "event") {
+          handlers.onEvent?.(frame.event);
+        } else if (frame.type === "done") {
+          donePayload = {
+            events: frame.events ?? [],
+            draft: frame.draft,
+            pending: frame.pending,
+            autoApply: frame.autoApply,
+            model: frame.model,
+          };
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      try {
+        const frame = JSON.parse(buffer.trim()) as WorkshopChatStreamFrame;
+        if (frame.type === "done") {
+          donePayload = {
+            events: frame.events ?? [],
+            draft: frame.draft,
+            pending: frame.pending,
+            autoApply: frame.autoApply,
+            model: frame.model,
+          };
+        }
+      } catch {
+        /* ignore trailing partial */
+      }
+    }
+
+    if (donePayload && isWorkshopChatTurnPayload(donePayload)) {
+      return { ok: true, ...donePayload };
+    }
+
+    // Stream ended without a usable done frame — fall back to JSON turn.
+    return sendWorkshopChatTurn(input);
+  } catch {
+    return sendWorkshopChatTurn(input);
   }
 }

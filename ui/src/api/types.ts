@@ -624,6 +624,58 @@ export type WorkshopDiskChangeResult =
     }
   | { ok: false; status: number; error: string };
 
+export type WorkshopChatProposalPayload = {
+  id: string;
+  summary: string;
+  nextDraft: DraftPackagePayload;
+  baseDraft: DraftPackagePayload;
+  baseFingerprint: string;
+  artifacts: Array<{
+    path: string;
+    kind: "added" | "removed" | "modified";
+    before?: string;
+    after?: string;
+  }>;
+  affectedStageIds: string[];
+};
+
+export type WorkshopChatWireEvent =
+  | { type: "message"; role: "assistant" | "user" | "system"; text: string }
+  | {
+      type: "proposal";
+      proposal: WorkshopChatProposalPayload;
+      autoApplied?: boolean;
+    }
+  | { type: "tool_result"; name: string; result: unknown }
+  | { type: "validation"; result: unknown }
+  | { type: "error"; message: string };
+
+export type WorkshopChatTurnPayload = {
+  events: WorkshopChatWireEvent[];
+  draft: DraftPackagePayload;
+  pending: WorkshopChatProposalPayload | null;
+  autoApply: boolean;
+  model: string;
+};
+
+export type WorkshopChatTurnInput = {
+  message: string;
+  draft: DraftPackagePayload;
+  autoApply?: boolean;
+  model?: string | null;
+  stream?: boolean;
+  project_root?: string;
+};
+
+export type WorkshopChatTurnResult =
+  | ({ ok: true } & WorkshopChatTurnPayload)
+  | { ok: false; status: number; error: string };
+
+export type WorkshopChatStreamFrame =
+  | { type: "delta"; text: string }
+  | { type: "event"; event: WorkshopChatWireEvent }
+  | ({ type: "done" } & WorkshopChatTurnPayload);
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];

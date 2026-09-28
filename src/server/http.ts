@@ -38,6 +38,11 @@ import {
   writeWorkshopAutosave,
   type WorkshopAutosaveRecord,
 } from "../workshop/autosave.js";
+import {
+  iterateWorkshopChatStreamFrames,
+  runWorkshopChatTurn,
+} from "../workshop/chatTurn.js";
+import type { OperatorAgentHost } from "../operatorAgent/index.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import {
   listModelsMultiProject,
@@ -173,6 +178,8 @@ export type UiServerOptions = {
   runChangeBus?: RunChangeBus;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  /** Optional Workshop Operator Agent Host (fake in tests). */
+  workshopOperatorHost?: OperatorAgentHost;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -279,6 +286,11 @@ export type OperatorRouteDeps = {
   controlTokens?: ControlTokens;
   /** Live shutdown controller; set after listen so restore can beginDrain. */
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
+  /**
+   * Optional Operator Agent Host for Workshop chat (tests inject the fake host).
+   * Distinct from stage-execution AgentPort. Defaults to Workshop Author fake host.
+   */
+  workshopOperatorHost?: OperatorAgentHost;
 };
 
 /**
@@ -291,7 +303,16 @@ export type OperatorRouteDeps = {
 export function createOperatorRoutes(
   deps: OperatorRouteDeps,
 ): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
-  const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
+  const {
+    manager,
+    store,
+    cwd,
+    agentDir,
+    rootDir,
+    providerAuthContext,
+    uiDistDir,
+    workshopOperatorHost,
+  } = deps;
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method, boot }) => {
@@ -1897,6 +1918,92 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (method === "POST" && pathname === "/api/workshop/chat") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.message !== "string" || !body.message.trim()) {
+            json(res, 400, { error: "message is required" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const settingsDefault = readFactorySettings(cwd).workshopModel;
+          let turn;
+          try {
+            turn = await runWorkshopChatTurn({
+              draft: draftParsed,
+              message: body.message,
+              autoApply: body.autoApply === true,
+              model:
+                typeof body.model === "string" || body.model === null
+                  ? body.model
+                  : undefined,
+              settingsDefault: settingsDefault ?? null,
+              ...(workshopOperatorHost
+                ? { host: workshopOperatorHost }
+                : {}),
+            });
+          } catch (err) {
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return true;
+          }
+
+          const accept = String(req.headers.accept ?? "");
+          const wantsStream =
+            body.stream === true ||
+            accept.includes("application/x-ndjson") ||
+            accept.includes("text/event-stream");
+
+          if (wantsStream) {
+            res.writeHead(200, {
+              "Content-Type": "application/x-ndjson; charset=utf-8",
+              "Cache-Control": "no-store",
+            });
+            try {
+              for (const frame of iterateWorkshopChatStreamFrames(turn)) {
+                if (req.aborted || res.writableEnded || res.destroyed) {
+                  break;
+                }
+                const line = `${JSON.stringify(frame)}\n`;
+                if (!res.write(line)) {
+                  await new Promise<void>((resolve) =>
+                    res.once("drain", resolve),
+                  );
+                }
+              }
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            } catch (err) {
+              if (res.headersSent) {
+                res.destroy(
+                  err instanceof Error ? err : new Error(String(err)),
+                );
+              } else {
+                throw err;
+              }
+            }
+            return true;
+          }
+
+          json(res, 200, turn);
+          return true;
+        }
+
         if (
           method === "POST" &&
           pathname === "/api/workshop/disk-change"
@@ -2164,6 +2271,9 @@ export async function startUiServer(
           allowedHosts,
           controlTokens,
           getShutdown: () => shutdown,
+          ...(options.workshopOperatorHost
+            ? { workshopOperatorHost: options.workshopOperatorHost }
+            : {}),
         });
   const envelope = await createHttpHost({
     boot,
