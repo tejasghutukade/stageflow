@@ -3,6 +3,8 @@ import {
   triggerEnabledLabel,
   triggerKindLabel,
   triggerScheduleSummary,
+  triggerTaskLabel,
+  triggerTaskSummary,
 } from "./TriggersPage";
 
 describe("triggerKindLabel", () => {
@@ -55,5 +57,27 @@ describe("triggerEnabledLabel", () => {
   it("labels enabled and disabled state", () => {
     expect(triggerEnabledLabel(true)).toBe("Enabled");
     expect(triggerEnabledLabel(false)).toBe("Disabled");
+  });
+});
+
+describe("triggerTaskLabel", () => {
+  it("returns the task id unchanged when present", () => {
+    expect(triggerTaskLabel("sample-task")).toBe("sample-task");
+  });
+
+  it("falls back to a dynamic-mode explanation when absent", () => {
+    expect(triggerTaskLabel(undefined)).toBe(
+      "Dynamic (task supplied at fire time)",
+    );
+  });
+});
+
+describe("triggerTaskSummary", () => {
+  it("returns the task id unchanged when present", () => {
+    expect(triggerTaskSummary("sample-task")).toBe("sample-task");
+  });
+
+  it("falls back to a short dynamic-mode label when absent", () => {
+    expect(triggerTaskSummary(undefined)).toBe("Dynamic");
   });
 });

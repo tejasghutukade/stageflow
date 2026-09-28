@@ -17,6 +17,8 @@ import {
   resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { coerceTaskFile } from "../config/loadTask.js";
+import type { TaskFile } from "../types/task.js";
 export type { TriggerListItem } from "../config/triggerCatalog.js";
 
 export type TriggerRoutesCtx = {
@@ -112,14 +114,27 @@ export async function handleTriggerRoutes(
 
   const fireMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/fire$/);
   if (method === "POST" && fireMatch) {
+    let body: unknown;
     try {
-      await readJsonBody(req);
+      body = await readJsonBody(req);
     } catch {
-      // empty body ok
+      // empty/invalid body ok
+    }
+    const rawTask =
+      body !== null && typeof body === "object" && !Array.isArray(body)
+        ? (body as { task?: unknown }).task
+        : undefined;
+    let task: TaskFile | undefined;
+    if (rawTask !== undefined) {
+      task = coerceTaskFile(rawTask);
+      if (task === undefined) {
+        json(res, 400, { error: "Invalid task: id and goal are required strings" });
+        return true;
+      }
     }
     const id = decodeURIComponent(fireMatch[1] ?? "");
     const callerId = callerIdFromRequestAuth();
-    const result = await fireTrigger(id, store, manager, { cwd });
+    const result = await fireTrigger(id, store, manager, { cwd, task });
     if (!result.ok) {
       writeAudit(auditLog, {
         caller_id: callerId,

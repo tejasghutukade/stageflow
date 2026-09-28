@@ -6,6 +6,7 @@ const validValues = {
   id: "nightly-release",
   pipeline: "release",
   task: "release-task",
+  taskMode: "catalog" as const,
   kind: "manual" as const,
   cron: "",
   source: "",
@@ -44,6 +45,18 @@ describe("NewTriggerPanel validateFields", () => {
     expect(validateFields({ ...validValues, task: "" })).toEqual({
       task: "Select a task.",
     });
+  });
+
+  it("does not require a task selection in dynamic mode", () => {
+    expect(
+      validateFields({ ...validValues, taskMode: "dynamic", task: "" }),
+    ).toEqual({});
+  });
+
+  it("still requires a task selection in catalog mode with dynamic-mode fields cleared", () => {
+    expect(
+      validateFields({ ...validValues, taskMode: "catalog", task: "" }),
+    ).toEqual({ task: "Select a task." });
   });
 
   it("requires cron for kind=schedule", () => {

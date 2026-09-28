@@ -13,6 +13,7 @@ import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
+const dynamicTriggerFixture = path.join(fixtures, "triggers", "dynamic-hello.trigger.yaml");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 async function seedCatalog(root: string): Promise<void> {
@@ -132,6 +133,117 @@ describe("runTriggerCommand", () => {
         };
         expect(shownRun.run_id).toBe(fired.runId);
         expect(shownRun.pipeline_id).toBe("hello");
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("fire --task-inline either/or task modes: dynamic+task succeeds, dynamic+no-task rejected, catalog+task rejected, catalog+no-task unchanged", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      await writeFile(
+        path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
+        await readFile(dynamicTriggerFixture, "utf8"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-dynamic-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
+      const service = await startTestService(store, agent, root);
+      try {
+        const dynamicCap = captureIo();
+        const dynamicCode = await runTriggerCommand(
+          [
+            "fire",
+            "dynamic-hello",
+            "--task-inline",
+            JSON.stringify({ id: "inline-task", goal: "Say hello dynamically" }),
+            "--json",
+          ],
+          { io: dynamicCap.io, hostBaseUrl: service.baseUrl, ensureService: alreadyUp },
+        );
+        expect(dynamicCode).toBe(0);
+        const dynamicFired = JSON.parse(dynamicCap.stdout.join("\n")) as {
+          ok: boolean;
+          runId: string;
+        };
+        expect(dynamicFired.ok).toBe(true);
+        const dynamicRun = await store.readRun(dynamicFired.runId);
+        expect(dynamicRun.task_id).toBe("inline-task");
+
+        const dynamicNoTaskCap = captureIo();
+        const dynamicNoTaskCode = await runTriggerCommand(
+          ["fire", "dynamic-hello", "--json"],
+          { io: dynamicNoTaskCap.io, hostBaseUrl: service.baseUrl, ensureService: alreadyUp },
+        );
+        expect(dynamicNoTaskCode).toBe(1);
+        const dynamicNoTaskPayload = JSON.parse(dynamicNoTaskCap.stdout.join("\n")) as {
+          code?: string;
+        };
+        expect(dynamicNoTaskPayload.code).toBe("trigger.task_required");
+
+        const catalogWithTaskCap = captureIo();
+        const catalogWithTaskCode = await runTriggerCommand(
+          [
+            "fire",
+            "manual-hello-world",
+            "--task-inline",
+            JSON.stringify({ id: "inline-task", goal: "Say hello dynamically" }),
+            "--json",
+          ],
+          { io: catalogWithTaskCap.io, hostBaseUrl: service.baseUrl, ensureService: alreadyUp },
+        );
+        expect(catalogWithTaskCode).toBe(1);
+        const catalogWithTaskPayload = JSON.parse(catalogWithTaskCap.stdout.join("\n")) as {
+          code?: string;
+        };
+        expect(catalogWithTaskPayload.code).toBe("trigger.task_override_not_allowed");
+
+        const catalogNoTaskCap = captureIo();
+        const catalogNoTaskCode = await runTriggerCommand(
+          ["fire", "manual-hello-world", "--json"],
+          { io: catalogNoTaskCap.io, hostBaseUrl: service.baseUrl, ensureService: alreadyUp },
+        );
+        expect(catalogNoTaskCode).toBe(0);
+        const catalogFired = JSON.parse(catalogNoTaskCap.stdout.join("\n")) as {
+          ok: boolean;
+          runId: string;
+        };
+        expect(catalogFired.ok).toBe(true);
+        const catalogRun = await store.readRun(catalogFired.runId);
+        expect(catalogRun.task_id).toBe("my-task");
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("fire --task-inline with malformed JSON errors the same way run-stage's --task-inline does", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-cli-badjson-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const service = await startTestService(store, scriptedFakeAgent([]), root);
+      try {
+        const cap = captureIo();
+        const code = await runTriggerCommand(
+          ["fire", "dynamic-hello", "--task-inline", "{not json"],
+          { io: cap.io, hostBaseUrl: service.baseUrl, ensureService: alreadyUp },
+        );
+        expect(code).toBe(1);
+        expect(cap.stderr.join("\n")).toMatch(/--task-inline must be valid JSON/);
       } finally {
         await service.stop();
       }

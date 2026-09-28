@@ -4,6 +4,7 @@ import { getCatalogScanPaths } from "../config/browseCatalog.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
 import type { RunStore } from "../runstore/port.js";
 import type { RunManager, StartRunResult } from "./runManager.js";
+import type { TaskFile } from "../types/task.js";
 import { findCatalogPathById, findTriggerDefinition } from "./triggerCatalog.js";
 
 /**
@@ -11,12 +12,16 @@ import { findCatalogPathById, findTriggerDefinition } from "./triggerCatalog.js"
  * `pipeline`/`task` refs to catalog files, and starts a real run through
  * `RunManager.startRun` — the same internal entry point the CLI/MCP/console use.
  * On a successful start, records the fire on the trigger's store row.
+ *
+ * `task` presence on the trigger definition is the either/or mode switch: a
+ * catalog-mode trigger (`task` set) rejects a supplied `options.task`; a
+ * dynamic-mode trigger (`task` absent) requires one.
  */
 export async function fireTrigger(
   triggerId: string,
   store: RunStore,
   runManager: RunManager,
-  options: { cwd?: string } = {},
+  options: { cwd?: string; task?: TaskFile } = {},
 ): Promise<StartRunResult> {
   const cwd = options.cwd ?? process.cwd();
   const ctx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
@@ -35,6 +40,24 @@ export async function fireTrigger(
     return { ok: false, reason: `Trigger is disabled: ${triggerId}`, status: 409 };
   }
 
+  const suppliedTask = options.task;
+  if (trigger.task !== undefined && suppliedTask !== undefined) {
+    return {
+      ok: false,
+      reason: `Trigger "${triggerId}" already has a catalog task "${trigger.task}"; task override is not allowed`,
+      status: 422,
+      code: "trigger.task_override_not_allowed",
+    };
+  }
+  if (trigger.task === undefined && suppliedTask === undefined) {
+    return {
+      ok: false,
+      reason: `Trigger "${triggerId}" has no catalog task; a task must be supplied when firing`,
+      status: 422,
+      code: "trigger.task_required",
+    };
+  }
+
   const pipelinePath = await findCatalogPathById(scanPaths.pipelinePaths, trigger.pipeline);
   if (!pipelinePath) {
     return {
@@ -43,13 +66,20 @@ export async function fireTrigger(
       status: 400,
     };
   }
-  const taskPath = await findCatalogPathById(scanPaths.taskPaths, trigger.task);
-  if (!taskPath) {
-    return {
-      ok: false,
-      reason: `Trigger "${triggerId}" references unknown task "${trigger.task}"`,
-      status: 400,
-    };
+
+  let taskInput: string | TaskFile;
+  if (trigger.task !== undefined) {
+    const taskPath = await findCatalogPathById(scanPaths.taskPaths, trigger.task);
+    if (!taskPath) {
+      return {
+        ok: false,
+        reason: `Trigger "${triggerId}" references unknown task "${trigger.task}"`,
+        status: 400,
+      };
+    }
+    taskInput = taskPath;
+  } else {
+    taskInput = suppliedTask as TaskFile;
   }
 
   const projectRoot = ctx.projectRoot ?? undefined;
@@ -66,7 +96,7 @@ export async function fireTrigger(
 
   const started = await runManager.startRun({
     pipeline: pipelinePath,
-    task: taskPath,
+    task: taskInput,
     ...(projectRoot !== undefined ? { projectRoot } : {}),
   });
 

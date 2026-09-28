@@ -16,7 +16,7 @@ export type CreateTriggerInput = {
   directory: string;
   id: string;
   pipeline: string;
-  task: string;
+  task?: string;
   kind: "manual" | "schedule" | "event";
   schedule?: TriggerSchedule;
   event?: TriggerEvent;
@@ -112,8 +112,8 @@ export function parseCreateTriggerBody(
   if (typeof body.pipeline !== "string" || !body.pipeline.trim()) {
     return { ok: false, status: 400, error: "pipeline is required" };
   }
-  if (typeof body.task !== "string" || !body.task.trim()) {
-    return { ok: false, status: 400, error: "task is required" };
+  if (body.task !== undefined && (typeof body.task !== "string" || !body.task.trim())) {
+    return { ok: false, status: 400, error: "task must be a non-empty string" };
   }
 
   if (body.kind !== "manual" && body.kind !== "schedule" && body.kind !== "event") {
@@ -148,7 +148,7 @@ export function parseCreateTriggerBody(
     directory,
     id: body.id,
     pipeline: body.pipeline,
-    task: body.task,
+    ...(typeof body.task === "string" ? { task: body.task } : {}),
     kind: body.kind,
     ...(schedule.value !== undefined ? { schedule: schedule.value } : {}),
     ...(event.value !== undefined ? { event: event.value } : {}),
@@ -169,7 +169,7 @@ function triggerInputToYaml(input: CreateTriggerInput, enabled: boolean): string
   const doc: Record<string, unknown> = {
     id: input.id,
     pipeline: input.pipeline,
-    task: input.task,
+    ...(input.task !== undefined ? { task: input.task } : {}),
     kind: input.kind,
   };
   if (input.kind === "schedule" && input.schedule) {
@@ -226,13 +226,15 @@ export async function createTrigger(
     };
   }
 
-  const taskIds = await collectTaskIdsFromPaths(scanPaths.taskPaths);
-  if (!taskIds.has(input.task)) {
-    return {
-      ok: false,
-      status: 422,
-      error: `Trigger references unknown task "${input.task}"`,
-    };
+  if (input.task !== undefined) {
+    const taskIds = await collectTaskIdsFromPaths(scanPaths.taskPaths);
+    if (!taskIds.has(input.task)) {
+      return {
+        ok: false,
+        status: 422,
+        error: `Trigger references unknown task "${input.task}"`,
+      };
+    }
   }
 
   if (input.kind === "schedule") {

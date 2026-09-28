@@ -1,4 +1,6 @@
-export type TriggerFireEvent = { triggerId: string; payload?: Record<string, unknown> };
+import type { TaskFile } from "../types/task.js";
+
+export type TriggerFireEvent = { triggerId: string; task?: TaskFile };
 
 /**
  * Abstract seam for anything that decides "fire trigger X now" — a croner-backed

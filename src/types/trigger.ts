@@ -11,7 +11,7 @@ export type TriggerEvent = {
 export type TriggerFile = {
   id: string;
   pipeline: string;
-  task: string;
+  task?: string;
   kind: "manual" | "schedule" | "event";
   schedule?: TriggerSchedule;
   event?: TriggerEvent;

@@ -18,6 +18,8 @@ export type NewTriggerPanelProps = {
 
 export type TriggerKind = "manual" | "schedule" | "event";
 
+export type TaskMode = "catalog" | "dynamic";
+
 type FieldErrors = Partial<
   Record<"directory" | "id" | "pipeline" | "task" | "cron" | "source", string>
 >;
@@ -27,6 +29,7 @@ export function validateFields(values: {
   id: string;
   pipeline: string;
   task: string;
+  taskMode: TaskMode;
   kind: TriggerKind;
   cron: string;
   source: string;
@@ -44,7 +47,7 @@ export function validateFields(values: {
   if (!values.pipeline) {
     errors.pipeline = "Select a pipeline.";
   }
-  if (!values.task) {
+  if (values.taskMode === "catalog" && !values.task) {
     errors.task = "Select a task.";
   }
   if (values.kind === "schedule" && !values.cron.trim()) {
@@ -83,6 +86,7 @@ const emptyForm = () => ({
   id: "",
   pipeline: "",
   task: "",
+  taskMode: "catalog" as TaskMode,
   kind: "manual" as TriggerKind,
   cron: "",
   timezone: "",
@@ -149,6 +153,7 @@ export function NewTriggerPanel({ isOpen, onClose, onCreated }: NewTriggerPanelP
       id: form.id.trim(),
       pipeline: form.pipeline,
       task: form.task,
+      taskMode: form.taskMode,
       kind: form.kind,
       cron: form.cron.trim(),
       source: form.source.trim(),
@@ -163,7 +168,7 @@ export function NewTriggerPanel({ isOpen, onClose, onCreated }: NewTriggerPanelP
       directory: trimmed.directory,
       id: trimmed.id,
       pipeline: trimmed.pipeline,
-      task: trimmed.task,
+      ...(trimmed.taskMode === "catalog" ? { task: trimmed.task } : {}),
       kind: trimmed.kind,
       ...(trimmed.kind === "schedule"
         ? {
@@ -261,30 +266,67 @@ export function NewTriggerPanel({ isOpen, onClose, onCreated }: NewTriggerPanelP
           </div>
 
           <div className="form-field">
-            <label htmlFor="new-trigger-task">Task</label>
-            <select
-              id="new-trigger-task"
-              className="select"
-              value={form.task}
-              disabled={tasksLoading}
-              onChange={(e) => setForm((prev) => ({ ...prev, task: e.target.value }))}
-            >
-              <option value="">
-                {tasksLoading ? "Loading tasks…" : "Select a task"}
-              </option>
-              {(tasks ?? []).map((t) => (
-                <option key={t.path} value={t.id}>
-                  {t.id}
-                </option>
-              ))}
-            </select>
-            {fieldErrors.task ? (
-              <p className="field-error">{fieldErrors.task}</p>
-            ) : !tasksLoading && tasks?.length === 0 ? (
-              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
-                No tasks in the manifest yet.
+            <span className="eyebrow">Task</span>
+            <div className="pick" style={{ marginTop: "var(--spacing-2)" }}>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-trigger-task-mode"
+                  checked={form.taskMode === "catalog"}
+                  onChange={() => setForm((prev) => ({ ...prev, taskMode: "catalog" }))}
+                />
+                <span>
+                  <strong>Pick from catalog</strong>
+                  <span className="muted"> Runs the same catalog task on every fire.</span>
+                </span>
+              </label>
+              <label className="pick__opt">
+                <input
+                  type="radio"
+                  name="new-trigger-task-mode"
+                  checked={form.taskMode === "dynamic"}
+                  onChange={() => setForm((prev) => ({ ...prev, taskMode: "dynamic" }))}
+                />
+                <span>
+                  <strong>Dynamic — supplied when fired</strong>
+                  <span className="muted"> No fixed task; the caller must supply one.</span>
+                </span>
+              </label>
+            </div>
+            {form.taskMode === "catalog" ? (
+              <div style={{ marginTop: "var(--spacing-3)" }}>
+                <select
+                  id="new-trigger-task"
+                  className="select"
+                  value={form.task}
+                  disabled={tasksLoading}
+                  onChange={(e) => setForm((prev) => ({ ...prev, task: e.target.value }))}
+                >
+                  <option value="">
+                    {tasksLoading ? "Loading tasks…" : "Select a task"}
+                  </option>
+                  {(tasks ?? []).map((t) => (
+                    <option key={t.path} value={t.id}>
+                      {t.id}
+                    </option>
+                  ))}
+                </select>
+                {fieldErrors.task ? (
+                  <p className="field-error">{fieldErrors.task}</p>
+                ) : !tasksLoading && tasks?.length === 0 ? (
+                  <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                    No tasks in the manifest yet.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-3)" }}>
+                This trigger has no fixed task. Whoever fires it — a webhook, a script,{" "}
+                <span className="mono">sf trigger fire --task-inline</span>, or the{" "}
+                <span className="mono">fire_trigger</span> MCP tool — must supply one, or the
+                fire is rejected.
               </p>
-            ) : null}
+            )}
           </div>
 
           <div className="form-field">

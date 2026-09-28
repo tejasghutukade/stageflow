@@ -11,6 +11,7 @@ import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
+const dynamicTriggerFixture = path.join(fixtures, "triggers", "dynamic-hello.trigger.yaml");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 async function seedCatalog(root: string): Promise<void> {
@@ -110,6 +111,86 @@ describe("trigger HTTP routes", () => {
           { method: "POST" },
         );
         expect(fireMissingRes.status).toBe(404);
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("POST /api/triggers/:id/fire either/or task modes: dynamic+task, dynamic+no-task, catalog+task, catalog+no-task, malformed task body", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      await writeFile(
+        path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
+        await readFile(dynamicTriggerFixture, "utf8"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-http-dynamic-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
+      const service = await startTestService(store, agent, root);
+      try {
+        const dynamicFireRes = await fetch(
+          `${service.baseUrl}/api/triggers/dynamic-hello/fire`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task: { id: "inline-task", goal: "Say hello dynamically" } }),
+          },
+        );
+        expect(dynamicFireRes.status).toBe(202);
+        const dynamicFired = (await dynamicFireRes.json()) as { runId: string };
+        const dynamicRun = await store.readRun(dynamicFired.runId);
+        expect(dynamicRun.task_id).toBe("inline-task");
+
+        const dynamicNoTaskRes = await fetch(
+          `${service.baseUrl}/api/triggers/dynamic-hello/fire`,
+          { method: "POST" },
+        );
+        expect(dynamicNoTaskRes.status).toBe(422);
+        const dynamicNoTask = (await dynamicNoTaskRes.json()) as { error: string; code?: string };
+        expect(dynamicNoTask.code).toBe("trigger.task_required");
+
+        const catalogWithTaskRes = await fetch(
+          `${service.baseUrl}/api/triggers/manual-hello-world/fire`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task: { id: "inline-task", goal: "Say hello dynamically" } }),
+          },
+        );
+        expect(catalogWithTaskRes.status).toBe(422);
+        const catalogWithTask = (await catalogWithTaskRes.json()) as {
+          error: string;
+          code?: string;
+        };
+        expect(catalogWithTask.code).toBe("trigger.task_override_not_allowed");
+
+        const catalogNoTaskRes = await fetch(
+          `${service.baseUrl}/api/triggers/manual-hello-world/fire`,
+          { method: "POST" },
+        );
+        expect(catalogNoTaskRes.status).toBe(202);
+        const catalogFired = (await catalogNoTaskRes.json()) as { runId: string };
+        const catalogRun = await store.readRun(catalogFired.runId);
+        expect(catalogRun.task_id).toBe("my-task");
+
+        const malformedTaskRes = await fetch(
+          `${service.baseUrl}/api/triggers/dynamic-hello/fire`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ task: { goal: "missing id" } }),
+          },
+        );
+        expect(malformedTaskRes.status).toBe(400);
+        const malformedTask = (await malformedTaskRes.json()) as { error: string };
+        expect(malformedTask.error).toMatch(/id and goal are required strings/);
       } finally {
         await service.stop();
       }
@@ -231,6 +312,39 @@ describe("trigger HTTP routes", () => {
         const writtenPath = path.join(root, "triggers", "nightly-hello.trigger.yaml");
         const written = await readFile(writtenPath, "utf8");
         expect(written).toContain("id: nightly-hello");
+
+        const createdDynamicRes = await fetch(`${service.baseUrl}/api/triggers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            directory: "triggers",
+            id: "dynamic-created",
+            pipeline: "hello",
+            kind: "manual",
+          }),
+        });
+        expect(createdDynamicRes.status).toBe(201);
+        const createdDynamic = (await createdDynamicRes.json()) as {
+          id: string;
+          task?: string;
+        };
+        expect(createdDynamic.id).toBe("dynamic-created");
+        expect(createdDynamic.task).toBeUndefined();
+
+        const dynamicWrittenPath = path.join(root, "triggers", "dynamic-created.trigger.yaml");
+        const dynamicWritten = await readFile(dynamicWrittenPath, "utf8");
+        expect(dynamicWritten).not.toContain("task:");
+
+        const listAfterDynamicRes = await fetch(`${service.baseUrl}/api/triggers`);
+        expect(listAfterDynamicRes.status).toBe(200);
+        const listedAfterDynamic = (await listAfterDynamicRes.json()) as {
+          triggers: Array<{ id: string; task?: string }>;
+        };
+        const dynamicListed = listedAfterDynamic.triggers.find(
+          (t) => t.id === "dynamic-created",
+        );
+        expect(dynamicListed).toBeDefined();
+        expect(dynamicListed?.task).toBeUndefined();
       } finally {
         await service.stop();
       }

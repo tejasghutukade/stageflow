@@ -57,6 +57,22 @@ describe("parseCreateTriggerBody", () => {
     });
   });
 
+  it("accepts a valid manual body with task omitted", () => {
+    expect(
+      parseCreateTriggerBody({
+        directory: "triggers",
+        id: "dynamic-hello",
+        pipeline: "hello",
+        kind: "manual",
+      }),
+    ).toEqual({
+      directory: "triggers",
+      id: "dynamic-hello",
+      pipeline: "hello",
+      kind: "manual",
+    });
+  });
+
   it("rejects a non-object body", () => {
     expect(parseCreateTriggerBody(null)).toEqual({
       ok: false,
@@ -379,6 +395,73 @@ describe("createTrigger", () => {
       if (result.ok) return;
       expect(result.status).toBe(422);
       expect(result.error).toContain("Invalid schedule.cron");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("creates a dynamic-mode trigger with task omitted, writing no task key", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const created = await createTrigger(root, {
+        directory: "triggers",
+        id: "dynamic-hello",
+        pipeline: "hello",
+        kind: "manual",
+      });
+
+      expect(created).toEqual({
+        ok: true,
+        trigger: {
+          id: "dynamic-hello",
+          pipeline: "hello",
+          kind: "manual",
+          enabled: true,
+          definition_ref: "triggers/dynamic-hello.trigger.yaml",
+        },
+      });
+
+      const filePath = path.join(root, "triggers", "dynamic-hello.trigger.yaml");
+      const yaml = await readFile(filePath, "utf8");
+      expect(yaml).not.toContain("task:");
+
+      const reloaded = await loadTriggerOutcome(filePath);
+      expect(reloaded.ok).toBe(true);
+      if (reloaded.ok) {
+        expect(reloaded.value).toEqual({
+          id: "dynamic-hello",
+          pipeline: "hello",
+          kind: "manual",
+          enabled: true,
+        });
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("still rejects a dangling pipeline ref when task is omitted", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const result = await createTrigger(root, {
+        directory: "triggers",
+        id: "dynamic-bad-pipeline",
+        pipeline: "does-not-exist",
+        kind: "manual",
+      });
+      expect(result).toEqual({
+        ok: false,
+        status: 422,
+        error: 'Trigger references unknown pipeline "does-not-exist"',
+      });
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();

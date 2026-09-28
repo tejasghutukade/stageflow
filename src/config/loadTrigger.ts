@@ -29,9 +29,11 @@ export function coerceTriggerFile(raw: unknown): TriggerFile | undefined {
   if (
     typeof record?.id !== "string" ||
     typeof record?.pipeline !== "string" ||
-    typeof record?.task !== "string" ||
     typeof record?.enabled !== "boolean"
   ) {
+    return undefined;
+  }
+  if (record.task !== undefined && typeof record.task !== "string") {
     return undefined;
   }
   if (record.kind !== "manual" && record.kind !== "schedule" && record.kind !== "event") {
@@ -53,9 +55,9 @@ export function coerceTriggerFile(raw: unknown): TriggerFile | undefined {
   return {
     id: record.id,
     pipeline: record.pipeline,
-    task: record.task,
     kind: record.kind,
     enabled: record.enabled,
+    ...(typeof record.task === "string" ? { task: record.task } : {}),
     ...(schedule !== undefined ? { schedule } : {}),
     ...(event !== undefined ? { event } : {}),
   };
@@ -68,7 +70,7 @@ export function parseTriggerFile(raw: unknown, source = "trigger"): LoadOutcome<
     return loadFailure([
       {
         code: "trigger.invalid_shape",
-        message: `Invalid ${source}: id, pipeline, task, kind, and enabled are required`,
+        message: `Invalid ${source}: id, pipeline, kind, and enabled are required`,
         category: "trigger",
         triggerId: typeof record?.id === "string" ? record.id : undefined,
       },

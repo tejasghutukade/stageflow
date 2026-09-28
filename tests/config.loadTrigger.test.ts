@@ -42,6 +42,21 @@ describe("coerceTriggerFile", () => {
     expect(eventTrigger?.event).toEqual({ source: "github", match: { type: "issue" } });
   });
 
+  it("parses a trigger with task omitted (dynamic mode)", () => {
+    const trigger = coerceTriggerFile({
+      id: "dynamic-hello",
+      pipeline: "hello",
+      kind: "manual",
+      enabled: true,
+    });
+    expect(trigger).toEqual({
+      id: "dynamic-hello",
+      pipeline: "hello",
+      kind: "manual",
+      enabled: true,
+    });
+  });
+
   it("rejects an invalid kind", () => {
     const trigger = coerceTriggerFile({
       id: "bad",
@@ -89,5 +104,19 @@ describe("findingsForTriggerRefs", () => {
       "trigger.unknown_task",
     ]);
     expect(findings.every((f) => f.category === "trigger")).toBe(true);
+  });
+
+  it("produces no task-related findings when task is absent (dynamic mode)", () => {
+    const dynamicTrigger = {
+      id: "dynamic-hello",
+      pipeline: "hello-world",
+      kind: "manual" as const,
+      enabled: true,
+    };
+    const findings = findingsForTriggerRefs("/repo", "/repo/dynamic.trigger.yaml", dynamicTrigger, {
+      pipelineIds: new Set(["hello-world"]),
+      taskIds: new Set(),
+    });
+    expect(findings).toEqual([]);
   });
 });

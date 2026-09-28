@@ -26,6 +26,29 @@ const triggerScheduleSchema = z.object({
   timezone: z.string().optional(),
 });
 
+const gitIdentitySchema = z.object({
+  name: z.string().optional(),
+  email: z.string().optional(),
+});
+
+/**
+ * Same shape as TaskFile (src/types/task.ts), duplicated locally the same way
+ * src/mcp/catalogTools.ts's own taskFileSchema is: deliberately not shared
+ * across module boundaries for a schema this small.
+ */
+const taskFileSchema = z.object({
+  id: z.string(),
+  goal: z.string(),
+  context: z.string().optional(),
+  constraints: z.string().optional(),
+  checkout: z.string().optional(),
+  repository: z.string().optional(),
+  ref: z.string().optional(),
+  run_branch_template: z.string().optional(),
+  git_identity: gitIdentitySchema.optional(),
+  input: z.record(z.string(), z.unknown()).optional(),
+});
+
 const triggerEventSchema = z.object({
   source: z.string(),
   match: z.record(z.string(), z.unknown()).optional(),
@@ -41,7 +64,12 @@ const createTriggerSchema = z.object({
   directory: z.string(),
   id: z.string(),
   pipeline: z.string(),
-  task: z.string(),
+  task: z
+    .string()
+    .optional()
+    .describe(
+      "Catalog task id; omit to create a dynamic-mode trigger whose task is supplied at fire time",
+    ),
   kind: z.enum(["manual", "schedule", "event"]),
   schedule: triggerScheduleSchema.optional(),
   event: triggerEventSchema.optional(),
@@ -96,11 +124,16 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
         "Fire a catalog trigger by id: resolves its pipeline/task refs and starts a run through the same RunManager.startRun path as start_run (same as POST /api/triggers/:id/fire). Returns { runId } or { runId, queued: true, queuePosition }. Fails not_found (404) for an unknown id, or 409 when the trigger is disabled.",
       inputSchema: z.object({
         id: z.string(),
+        task: taskFileSchema
+          .optional()
+          .describe(
+            "Inline TaskFile, required to fire a dynamic-mode trigger (no catalog task) and rejected for a catalog-mode trigger",
+          ),
       }),
     },
-    async ({ id }) => {
+    async ({ id, task }) => {
       const callerId = callerIdFromRequestAuth();
-      const result = await fireTrigger(id, store, manager, { cwd });
+      const result = await fireTrigger(id, store, manager, { cwd, task });
       if (!result.ok) {
         writeAudit(auditLog, {
           caller_id: callerId,

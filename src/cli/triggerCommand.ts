@@ -14,7 +14,7 @@ import {
 export const TRIGGER_USAGE = `Usage:
   sf trigger list [--json]
   sf trigger show <id> [--json]
-  sf trigger fire <id> [--json]`;
+  sf trigger fire <id> [--task-inline '<json>'] [--json]`;
 
 export type TriggerCommandIo = {
   log: (line: string) => void;
@@ -31,6 +31,7 @@ type ParsedTriggerArgs = {
   json: boolean;
   subcommand?: string;
   id?: string;
+  taskInline?: string;
 };
 
 function parseTriggerArgs(args: string[]): ParsedTriggerArgs {
@@ -45,6 +46,7 @@ function parseTriggerArgs(args: string[]): ParsedTriggerArgs {
   let help = false;
   let json = false;
   let id: string | undefined;
+  let taskInline: string | undefined;
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -52,6 +54,12 @@ function parseTriggerArgs(args: string[]): ParsedTriggerArgs {
       help = true;
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--task-inline") {
+      const value = args[++i];
+      if (value === undefined || value.length === 0) {
+        throw new Error("Missing value for --task-inline");
+      }
+      taskInline = value;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag: ${arg}`);
     } else if (id === undefined) {
@@ -61,7 +69,20 @@ function parseTriggerArgs(args: string[]): ParsedTriggerArgs {
     }
   }
 
-  return { help, json, subcommand, id };
+  return { help, json, subcommand, id, taskInline };
+}
+
+function parseJsonFlag(raw: string, flagName: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`${flagName} must be valid JSON`);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${flagName} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function printJson(io: TriggerCommandIo, payload: unknown): void {
@@ -174,7 +195,16 @@ export async function runTriggerCommand(
       if (!parsed.id) {
         return usageError(out, "Missing <id>");
       }
-      const started = await httpFireTrigger(base, parsed.id);
+      let task: Record<string, unknown> | undefined;
+      if (parsed.taskInline !== undefined) {
+        try {
+          task = parseJsonFlag(parsed.taskInline, "--task-inline");
+        } catch (err) {
+          out.error(err instanceof Error ? err.message : String(err));
+          return 1;
+        }
+      }
+      const started = await httpFireTrigger(base, parsed.id, task);
       if (!started.ok) {
         return reportCliRun(
           { kind: "start-failure", started },

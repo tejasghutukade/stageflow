@@ -12,6 +12,7 @@ import { mcpCall } from "./helpers/mcpCall.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
+const dynamicTriggerFixture = path.join(fixtures, "triggers", "dynamic-hello.trigger.yaml");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 async function seedCatalog(root: string): Promise<void> {
@@ -130,6 +131,59 @@ describe("MCP trigger tools", () => {
     }
   });
 
+  it("fire_trigger either/or task modes: dynamic+task succeeds, dynamic+no-task rejected, catalog+task rejected, catalog+no-task unchanged", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      await writeFile(
+        path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
+        await readFile(dynamicTriggerFixture, "utf8"),
+      );
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-dynamic-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const agent = scriptedFakeAgent([successEnvelope("clarified"), successEnvelope("clarified")]);
+      const service = await startTestService(store, agent, root);
+      try {
+        const dynamicFired = await mcpCall(service.baseUrl, "fire_trigger", {
+          id: "dynamic-hello",
+          task: { id: "inline-task", goal: "Say hello dynamically" },
+        });
+        expect(dynamicFired.isError).toBe(false);
+        const dynamicRun = await store.readRun(dynamicFired.payload.runId);
+        expect(dynamicRun.task_id).toBe("inline-task");
+
+        const dynamicNoTask = await mcpCall(service.baseUrl, "fire_trigger", {
+          id: "dynamic-hello",
+        });
+        expect(dynamicNoTask.isError).toBe(true);
+        expect(dynamicNoTask.payload.status).toBe(422);
+        expect(dynamicNoTask.payload.code).toBe("trigger.task_required");
+
+        const catalogWithTask = await mcpCall(service.baseUrl, "fire_trigger", {
+          id: "manual-hello-world",
+          task: { id: "inline-task", goal: "Say hello dynamically" },
+        });
+        expect(catalogWithTask.isError).toBe(true);
+        expect(catalogWithTask.payload.status).toBe(422);
+        expect(catalogWithTask.payload.code).toBe("trigger.task_override_not_allowed");
+
+        const catalogNoTask = await mcpCall(service.baseUrl, "fire_trigger", {
+          id: "manual-hello-world",
+        });
+        expect(catalogNoTask.isError).toBe(false);
+        const catalogRun = await store.readRun(catalogNoTask.payload.runId);
+        expect(catalogRun.task_id).toBe("my-task");
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
   it("create_trigger writes a real trigger visible via list_triggers; rejects dangling refs, bad cron, and duplicate ids", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
@@ -200,6 +254,25 @@ describe("MCP trigger tools", () => {
         expect(listed.payload.triggers.map((t: { id: string }) => t.id)).toContain(
           "nightly-hello",
         );
+
+        const createdDynamic = await mcpCall(service.baseUrl, "create_trigger", {
+          directory: "triggers",
+          id: "dynamic-created",
+          pipeline: "hello",
+          kind: "manual",
+        });
+        expect(createdDynamic.isError).toBe(false);
+        expect(createdDynamic.payload).toMatchObject({
+          id: "dynamic-created",
+          pipeline: "hello",
+          kind: "manual",
+          enabled: true,
+        });
+        expect(createdDynamic.payload.task).toBeUndefined();
+
+        const dynamicWrittenPath = path.join(root, "triggers", "dynamic-created.trigger.yaml");
+        const dynamicWritten = await readFile(dynamicWrittenPath, "utf8");
+        expect(dynamicWritten).not.toContain("task:");
       } finally {
         await service.stop();
       }

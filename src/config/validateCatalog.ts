@@ -1029,7 +1029,7 @@ export function findingsForTriggerRefs(
       ),
     );
   }
-  if (!refs.taskIds.has(trigger.task)) {
+  if (trigger.task !== undefined && !refs.taskIds.has(trigger.task)) {
     findings.push(
       findingTriggerError(
         cwd,

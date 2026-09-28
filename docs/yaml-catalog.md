@@ -901,17 +901,28 @@ A trigger is a small catalog file that binds one addressable `id` to an existing
 |-------|----------|-------------|
 | `id` | yes | Trigger identifier (project-scoped, like pipelines and tasks) |
 | `pipeline` | yes | `id` of a catalog pipeline (`*.pipeline.yaml`) this trigger starts |
-| `task` | yes | `id` of a catalog task (`*.task.yaml`) this trigger starts |
+| `task` | no | `id` of a catalog task (`*.task.yaml`); presence is the either/or mode switch — see below |
 | `kind` | yes | `manual` \| `schedule` \| `event` |
 | `enabled` | yes | Whether firing this trigger is allowed; a disabled trigger fails fire with a `409` |
 | `schedule` | no | `{ cron: string, timezone?: string }` — read by the `schedule` adapter; see below |
 | `event` | no | `{ source: string, match?: Record<string, unknown> }` — shape only; no poller reads it yet |
 
-`kind: manual` only runs when fired explicitly (`sf trigger fire`, `POST /api/triggers/:id/fire`), resolving the `pipeline`/`task` refs and starting a real run through the same internal path the CLI/MCP/console already use.
+### Catalog mode vs. dynamic mode
 
-`kind: schedule` triggers also fire on their own while the Host is running: `ScheduleSource` ticks on an interval (`STAGEFLOW_TRIGGER_TICK_INTERVAL_MS`, default 30s — see [CLI reference](cli-reference.md)), computing each trigger's next fire time from `cron`/`timezone` via `croner` and persisting it (`next_run_at`) so a Host restart doesn't lose or re-derive it. If the Host was down past a trigger's `next_run_at`, it fires **once** on the next boot for the most recent missed occurrence — a schedule does not queue one run per missed interval — then recomputes `next_run_at` from the current time. Firing a `schedule` trigger manually with `sf trigger fire` still works the same as any other trigger.
+`task` is optional, and whether it's present is the whole mode switch — there is no separate `mode` field, and the two modes are never merged:
 
-`kind: event` triggers still only load and validate; nothing polls them yet — see [Architecture](architecture.md).
+- **`task` set → catalog mode.** The trigger always runs that one catalog task, on every fire. Firing it with a task supplied anyway is rejected: `trigger.task_override_not_allowed` (`422`).
+- **`task` absent → dynamic mode.** The trigger has no fixed task; whoever fires it must supply one — a `TaskFile`, inline — and that exact task is used for the run. Firing it with no task supplied is rejected: `trigger.task_required` (`422`).
+
+See [`sf trigger fire`](cli-reference.md#sf-trigger-fire) for the `--task-inline` flag and the same two rejections over HTTP/MCP.
+
+`kind: manual` only runs when fired explicitly (`sf trigger fire`, `POST /api/triggers/:id/fire`), resolving the `pipeline` ref (and, in catalog mode, the `task` ref) and starting a real run through the same internal path the CLI/MCP/console already use.
+
+`kind: schedule` triggers also fire on their own while the Host is running: `ScheduleSource` ticks on an interval (`STAGEFLOW_TRIGGER_TICK_INTERVAL_MS`, default 30s — see [CLI reference](cli-reference.md)), computing each trigger's next fire time from `cron`/`timezone` via `croner` and persisting it (`next_run_at`) so a Host restart doesn't lose or re-derive it. If the Host was down past a trigger's `next_run_at`, it fires **once** on the next boot for the most recent missed occurrence — a schedule does not queue one run per missed interval — then recomputes `next_run_at` from the current time. Firing a `schedule` trigger manually with `sf trigger fire` still works the same as any other trigger. A `schedule` trigger in dynamic mode is accepted (nothing blocks it at the schema level) but always fails when its timer fires, since nothing supplies a task on an automatic tick — dynamic mode is only useful for triggers fired manually with a task in hand.
+
+`kind: event` triggers still only load and validate; nothing polls them yet — see [Architecture](architecture.md). Dynamic mode is what a future webhook/GitHub-poller adapter would need to hand an event-sourced task through, but no such adapter exists today; the only way to use dynamic mode right now is a manual fire with a task supplied (`sf trigger fire --task-inline`, `POST .../fire` with a `task` body, or `fire_trigger`'s `task` param).
+
+Catalog mode:
 
 ```yaml
 id: manual-hello-world
@@ -923,13 +934,24 @@ enabled: true
 
 See [`tests/fixtures/triggers/manual-hello-world.trigger.yaml`](../tests/fixtures/triggers/manual-hello-world.trigger.yaml).
 
+Dynamic mode — no `task` key at all:
+
+```yaml
+id: dynamic-hello
+pipeline: hello
+kind: manual
+enabled: true
+```
+
+See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/triggers/dynamic-hello.trigger.yaml).
+
 ### Validation
 
-`sf validate` loads every `*.trigger.yaml` under the catalog's trigger roots (`catalog.triggers` in the `stageflow.yaml` manifest, below) and confirms its `pipeline` and `task` refs resolve against known catalog ids, the same way stage `uses:` refs are checked. A dangling ref is caught at validate time, not fire time:
+`sf validate` loads every `*.trigger.yaml` under the catalog's trigger roots (`catalog.triggers` in the `stageflow.yaml` manifest, below) and confirms its `pipeline` ref, and its `task` ref when `task` is present, resolve against known catalog ids, the same way stage `uses:` refs are checked. A dangling ref is caught at validate time, not fire time. A dynamic-mode trigger (`task` omitted) produces no `task`-related finding — absence is valid, not an error:
 
 | Code | Meaning |
 |------|---------|
-| `trigger.invalid_shape` | Missing or invalid `id`, `pipeline`, `task`, `kind`, or `enabled` |
+| `trigger.invalid_shape` | Missing or invalid `id`, `pipeline`, `kind`, or `enabled`, or a `task` present with the wrong type (`task` itself is optional) |
 | `trigger.unknown_pipeline` | `pipeline` does not match any catalog pipeline `id` |
 | `trigger.unknown_task` | `task` does not match any catalog task `id` |
 

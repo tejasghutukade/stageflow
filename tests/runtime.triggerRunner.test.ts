@@ -13,6 +13,7 @@ import { initTempGitRepo } from "./helpers/projectContext.js";
 
 const fixtures = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
 const triggerFixture = path.join(fixtures, "triggers", "manual-hello-world.trigger.yaml");
+const dynamicTriggerFixture = path.join(fixtures, "triggers", "dynamic-hello.trigger.yaml");
 const stageFixture = path.join(fixtures, "stages", "clarify.yaml");
 
 async function seedCatalog(root: string): Promise<void> {
@@ -37,6 +38,10 @@ async function seedCatalog(root: string): Promise<void> {
   await writeFile(
     path.join(root, "triggers", "manual-hello-world.trigger.yaml"),
     await readFile(triggerFixture, "utf8"),
+  );
+  await writeFile(
+    path.join(root, "triggers", "dynamic-hello.trigger.yaml"),
+    await readFile(dynamicTriggerFixture, "utf8"),
   );
 }
 
@@ -108,6 +113,98 @@ describe("fireTrigger", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.status).toBe(404);
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("fires the dynamic-hello fixture trigger with a supplied task and starts a real run", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const agent = scriptedFakeAgent([successEnvelope("clarified")]);
+      const runManager = new RunManager({ agent, cwd: root, store });
+
+      const result = await fireTrigger("dynamic-hello", store, runManager, {
+        cwd: root,
+        task: { id: "inline-task", goal: "Say hello dynamically" },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      await result.done;
+
+      const trigger = await store.getTrigger("dynamic-hello");
+      expect(trigger?.last_run_id).toBe(result.runId);
+
+      const run = await store.readRun(result.runId);
+      expect(run.pipeline_id).toBe("hello");
+      expect(run.task_id).toBe("inline-task");
+
+      while (runManager.getActiveCount() > 0) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("rejects firing the dynamic-hello fixture trigger with no task supplied", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const runManager = new RunManager({
+        agent: scriptedFakeAgent([]),
+        cwd: root,
+        store,
+      });
+
+      const result = await fireTrigger("dynamic-hello", store, runManager, { cwd: root });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(422);
+        expect(result.code).toBe("trigger.task_required");
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("rejects firing the manual-hello-world fixture trigger with a task override supplied", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-trigger-home-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      const runManager = new RunManager({
+        agent: scriptedFakeAgent([]),
+        cwd: root,
+        store,
+      });
+
+      const result = await fireTrigger("manual-hello-world", store, runManager, {
+        cwd: root,
+        task: { id: "inline-task", goal: "Say hello dynamically" },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(422);
+        expect(result.code).toBe("trigger.task_override_not_allowed");
       }
     } finally {
       clearFindProjectRootCacheForTests();

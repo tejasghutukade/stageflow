@@ -437,11 +437,12 @@ export type HttpListTriggersResult =
 export async function httpFireTrigger(
   base: string,
   triggerId: string,
+  task?: Record<string, unknown>,
 ): Promise<StartRunResult> {
   const { status, body } = await postJson(
     base,
     `/api/triggers/${enc(triggerId)}/fire`,
-    {},
+    task !== undefined ? { task } : {},
   );
   if (status !== 202) return toStartFailure(status, body);
   const parsed = body as {

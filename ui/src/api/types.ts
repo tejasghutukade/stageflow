@@ -665,7 +665,7 @@ export type TriggerEvent = {
 export type TriggerListItem = {
   id: string;
   pipeline: string;
-  task: string;
+  task?: string;
   kind: "manual" | "schedule" | "event";
   schedule?: TriggerSchedule;
   event?: TriggerEvent;
@@ -680,7 +680,7 @@ export type CreateTriggerInput = {
   directory: string;
   id: string;
   pipeline: string;
-  task: string;
+  task?: string;
   kind: "manual" | "schedule" | "event";
   schedule?: TriggerSchedule;
   event?: TriggerEvent;

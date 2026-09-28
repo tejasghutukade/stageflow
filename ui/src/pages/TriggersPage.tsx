@@ -34,6 +34,14 @@ export function triggerEnabledLabel(enabled: boolean): string {
   return enabled ? "Enabled" : "Disabled";
 }
 
+export function triggerTaskLabel(task?: string): string {
+  return task ?? "Dynamic (task supplied at fire time)";
+}
+
+export function triggerTaskSummary(task?: string): string {
+  return task ?? "Dynamic";
+}
+
 export function TriggersPage({
   triggerId,
 }: {
@@ -130,7 +138,7 @@ export function TriggersPage({
                     className="muted"
                     style={{ fontSize: "var(--font-size-xs)" }}
                   >
-                    {trigger.pipeline} · {trigger.task}
+                    {trigger.pipeline} · {triggerTaskSummary(trigger.task)}
                   </div>
                 </td>
                 <td className="mono">{triggerKindLabel(trigger.kind)}</td>
@@ -256,7 +264,9 @@ function TriggerDetail({
           <dt>Pipeline</dt>
           <dd>{trigger.pipeline}</dd>
           <dt>Task</dt>
-          <dd>{trigger.task}</dd>
+          <dd className={trigger.task ? undefined : "muted"}>
+            {triggerTaskLabel(trigger.task)}
+          </dd>
           <dt>Kind</dt>
           <dd>{triggerKindLabel(trigger.kind)}</dd>
           <dt>Schedule</dt>

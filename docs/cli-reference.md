@@ -436,8 +436,10 @@ Inspect and fire catalog `*.trigger.yaml` definitions (see [YAML catalog — Tri
 ```bash
 sf trigger list [--json]
 sf trigger show <id> [--json]
-sf trigger fire <id> [--json]
+sf trigger fire <id> [--task-inline '<json>'] [--json]
 ```
+
+There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `POST /api/triggers`, the `create_trigger` MCP tool, or the operator console's New Trigger panel — not the CLI.
 
 | Subcommand | Role |
 |------------|------|
@@ -466,11 +468,18 @@ Without `--json`, prints one `id\tkind\tenabled` line per trigger.
 
 **Exit codes:** `0` success, `1` error (unknown trigger id).
 
-### `sf trigger fire`
+### `sf trigger fire` {#sf-trigger-fire}
 
 ```bash
 sf trigger fire manual-hello-world --json
+sf trigger fire dynamic-hello --task-inline '{"id":"t","goal":"Research it"}' --json
 ```
+
+| Flag | Description |
+|------|-------------|
+| `<id>` | Trigger id (required) |
+| `--task-inline` | Inline task JSON (`{ id, goal, ... }`), same shape and parsing as `sf run-stage`'s `--task-inline` (`src/cli/runStageCommand.ts`) — required to fire a dynamic-mode trigger (`task` absent from its `*.trigger.yaml`), rejected for a catalog-mode trigger (`task` set) |
+| `--json` | JSON output — start-failure or completion shape, see below |
 
 Resolves the trigger, starts a run, and blocks until that run reaches a terminal or waiting state — the same completion contract as `sf run`.
 
@@ -479,14 +488,23 @@ Resolves the trigger, starts a run, and blocks until that run reaches a terminal
 | Code | Meaning |
 |------|---------|
 | `0` | Pipeline succeeded |
-| `1` | Failed (unknown trigger id, disabled trigger, dangling `pipeline`/`task` ref, stage error, cancelled, or busy start) |
+| `1` | Failed (unknown trigger id, disabled trigger, dangling `pipeline`/`task` ref, mode mismatch, malformed `--task-inline` JSON, stage error, cancelled, or busy start) |
 | `2` | Pipeline waiting on operator input |
 
-**JSON outcomes** (`--json`) follow the same `sf run` completion shape (`ok`, `outcome`, `runId`, …) on success. On a start failure (unknown id, disabled trigger, or an unresolved ref), the JSON body is the same shape as `sf run`'s start-failure JSON (`reason`, optional `code`), still exit `1`.
+**JSON outcomes** (`--json`) follow the same `sf run` completion shape (`ok`, `outcome`, `runId`, …) on success. On a start failure (unknown id, disabled trigger, an unresolved ref, or a mode mismatch), the JSON body is the same shape as `sf run`'s start-failure JSON (`reason`, optional `code`), still exit `1`.
 
 A disabled trigger (`enabled: false`) fails fire with a reason mentioning "disabled" (HTTP `409`). An unknown trigger id fails with a reason naming the id (HTTP `404`).
 
-HTTP: `GET /api/triggers`, `GET /api/triggers/:id`, `POST /api/triggers/:id/fire` (`202` with `{ runId, queued?, queuePosition?, queuedCode? }` on accept). Same mutate / loopback gating notes as other mutating Host verbs (see [`sf runs`](#sf-runs) above).
+**Catalog vs. dynamic mode rejections** (HTTP `422`, exit `1` — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)):
+
+| Code | When | JSON body |
+|------|------|-----------|
+| `trigger.task_override_not_allowed` | A catalog-mode trigger (`task` set) is fired with `--task-inline` supplied | `{ "ok": false, "outcome": "failed", "reason": "Trigger \"<id>\" already has a catalog task \"<task>\"; task override is not allowed", "code": "trigger.task_override_not_allowed" }` |
+| `trigger.task_required` | A dynamic-mode trigger (`task` absent) is fired with no `--task-inline` | `{ "ok": false, "outcome": "failed", "reason": "Trigger \"<id>\" has no catalog task; a task must be supplied when firing", "code": "trigger.task_required" }` |
+
+Without `--json`, both print as `<code>: <reason>` on stderr.
+
+HTTP: `GET /api/triggers`, `GET /api/triggers/:id`, `POST /api/triggers/:id/fire` with an optional `task` body field (`202` with `{ runId, queued?, queuePosition?, queuedCode? }` on accept, `422` with `{ error, code }` on a mode mismatch). Same mutate / loopback gating notes as other mutating Host verbs (see [`sf runs`](#sf-runs) above).
 
 ## `sf envelope get`
 
