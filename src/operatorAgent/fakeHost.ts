@@ -1,11 +1,17 @@
 import {
+  createOperatorAgentHost,
+  invokeProfileTool,
+  type OperatorAgentModel,
+} from "./host.js";
+import type { DocsRetriever } from "./docsRetrieval.js";
+import {
+  createWorkshopAuthorProfile,
   isTaskProposalIntent,
   proposeStageFromUserMessage,
   proposeTaskFromUserMessage,
   WORKSHOP_AUTHOR_PROFILE_ID,
+  type WorkshopAuthorProfileOptions,
 } from "./profiles/workshopAuthor.js";
-import { createOperatorAgentHost, type OperatorAgentModel } from "./host.js";
-import { createWorkshopAuthorProfile } from "./profiles/workshopAuthor.js";
 import type {
   OperatorAgentHost,
   OperatorAgentProposal,
@@ -24,6 +30,12 @@ export type FakeOperatorTurn =
       type: "propose";
       proposal: OperatorAgentProposal;
       message?: string;
+    }
+  | {
+      type: "call_tool";
+      name: string;
+      args?: Record<string, unknown>;
+      message?: string;
     };
 
 /**
@@ -35,7 +47,7 @@ export function createFakeOperatorAgentModel(
 ): OperatorAgentModel {
   let index = 0;
   return {
-    async complete({ message, tools }) {
+    async complete({ profile, message, tools }) {
       const turn = script[Math.min(index, script.length - 1)] ?? {
         type: "propose_stage" as const,
       };
@@ -55,6 +67,32 @@ export function createFakeOperatorAgentModel(
             },
           ],
         };
+      }
+
+      if (turn.type === "call_tool") {
+        const result = await invokeProfileTool(
+          profile,
+          turn.name,
+          turn.args ?? {},
+          tools,
+        );
+        const events: OperatorAgentSessionEvent[] = [
+          { type: "tool_result", name: turn.name, result },
+        ];
+        if (turn.message) {
+          events.push({
+            type: "message",
+            role: "assistant",
+            text: turn.message,
+          });
+        } else if (!result.ok) {
+          events.push({
+            type: "message",
+            role: "assistant",
+            text: `Retrieval unavailable (${result.error ?? "error"}). Continuing with the baked Workshop Author playbook.`,
+          });
+        }
+        return { events };
       }
 
       if (turn.type === "propose") {
@@ -92,12 +130,21 @@ export function createFakeOperatorAgentModel(
   };
 }
 
+export type WorkshopOperatorHostOptions = WorkshopAuthorProfileOptions & {
+  script?: FakeOperatorTurn[];
+  retriever?: DocsRetriever;
+};
+
 export function createWorkshopOperatorHost(
-  script?: FakeOperatorTurn[],
+  scriptOrOptions?: FakeOperatorTurn[] | WorkshopOperatorHostOptions,
 ): OperatorAgentHost {
-  const host = createOperatorAgentHost(createFakeOperatorAgentModel(script), [
-    createWorkshopAuthorProfile(),
-  ]);
+  const options: WorkshopOperatorHostOptions = Array.isArray(scriptOrOptions)
+    ? { script: scriptOrOptions }
+    : (scriptOrOptions ?? {});
+  const host = createOperatorAgentHost(
+    createFakeOperatorAgentModel(options.script),
+    [createWorkshopAuthorProfile({ retriever: options.retriever })],
+  );
   return host;
 }
 

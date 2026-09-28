@@ -22,7 +22,17 @@ export {
   createFakeOperatorAgentModel,
   createWorkshopOperatorHost,
   type FakeOperatorTurn,
+  type WorkshopOperatorHostOptions,
 } from "./fakeHost.js";
+export {
+  createFailingDocsRetriever,
+  createFilesystemDocsRetriever,
+  createStubDocsRetriever,
+  resolveWorkshopCatalogRoot,
+  type DocsRetrievalHit,
+  type DocsRetrievalResult,
+  type DocsRetriever,
+} from "./docsRetrieval.js";
 export {
   createWorkshopDraftContext,
   draftTrackStages,
@@ -47,10 +57,12 @@ export {
   buildStageAddProposal,
   buildTaskAddProposal,
   createWorkshopAuthorProfile,
+  createWorkshopAuthorTools,
   isTaskProposalIntent,
   proposeStageFromUserMessage,
   proposeTaskFromUserMessage,
   WORKSHOP_AUTHOR_PLAYBOOK,
   WORKSHOP_AUTHOR_PROFILE_ID,
   workshopAuthorTools,
+  type WorkshopAuthorProfileOptions,
 } from "./profiles/workshopAuthor.js";

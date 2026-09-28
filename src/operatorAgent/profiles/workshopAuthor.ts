@@ -3,6 +3,10 @@ import {
   type DraftPackage,
 } from "../../config/draftPackage.js";
 import {
+  createFilesystemDocsRetriever,
+  type DocsRetriever,
+} from "../docsRetrieval.js";
+import {
   readDraftFromContext,
   workshopDraftContextAdapter,
   WORKSHOP_AUTHOR_GREETING,
@@ -19,8 +23,10 @@ import type {
   OperatorAgentToolContext,
   OperatorAgentToolResult,
 } from "../types.js";
+import { WORKSHOP_AUTHOR_PLAYBOOK } from "./workshopAuthorPlaybook.js";
 
 export const WORKSHOP_AUTHOR_PROFILE_ID = "workshop-author";
+export { WORKSHOP_AUTHOR_PLAYBOOK };
 
 const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
 
@@ -234,25 +240,78 @@ const validateDraftTool: OperatorAgentTool = {
   },
 };
 
-export const workshopAuthorTools: OperatorAgentTool[] = [
-  readDraftTool,
-  proposeDraftTool,
-  validateDraftTool,
-];
+function createRetrieveDocsTool(retriever: DocsRetriever): OperatorAgentTool {
+  return {
+    name: "retrieve_docs",
+    description:
+      "Retrieve current public Stageflow docs/examples snippets by query. Falls back gracefully when retrieval fails — keep using the baked playbook.",
+    async handler(args): Promise<OperatorAgentToolResult> {
+      const query =
+        typeof args.query === "string" && args.query.trim()
+          ? args.query.trim()
+          : "";
+      if (!query) {
+        return { ok: false, content: null, error: "query is required" };
+      }
+      const kindRaw = typeof args.kind === "string" ? args.kind : "any";
+      const kind =
+        kindRaw === "docs" || kindRaw === "examples" || kindRaw === "any"
+          ? kindRaw
+          : "any";
+      const limit =
+        typeof args.limit === "number" && Number.isFinite(args.limit)
+          ? args.limit
+          : undefined;
+      try {
+        const result = await retriever.retrieve(query, { kind, limit });
+        if (!result.ok) {
+          return {
+            ok: false,
+            content: result,
+            error: result.error ?? "docs retrieval failed",
+          };
+        }
+        return { ok: true, content: result };
+      } catch (err) {
+        return {
+          ok: false,
+          content: { ok: false, hits: [], error: String(err) },
+          error:
+            err instanceof Error ? err.message : "docs retrieval failed",
+        };
+      }
+    },
+  };
+}
 
-export const WORKSHOP_AUTHOR_PLAYBOOK = `You are the Stageflow Workshop Author.
-Read the current draft before proposing changes.
-Propose concrete pipeline/stage package edits; do not write disk yourself.
-Prefer catalog dialect fields (io, verify, on_verify_fail) and file-backed stages with uses: ./id.yaml.
-An optional task (id + goal) may be attached or created for the package; pipeline-only drafts remain valid without one.
-Explain Stageflow practice briefly while authoring.`;
+export type WorkshopAuthorProfileOptions = {
+  retriever?: DocsRetriever;
+};
 
-export function createWorkshopAuthorProfile(): OperatorAgentProfile {
+export function createWorkshopAuthorTools(
+  retriever: DocsRetriever = createFilesystemDocsRetriever(),
+): OperatorAgentTool[] {
+  return [
+    readDraftTool,
+    proposeDraftTool,
+    validateDraftTool,
+    createRetrieveDocsTool(retriever),
+  ];
+}
+
+/** Default tool list with filesystem docs/examples retrieval. */
+export const workshopAuthorTools: OperatorAgentTool[] =
+  createWorkshopAuthorTools();
+
+export function createWorkshopAuthorProfile(
+  options: WorkshopAuthorProfileOptions = {},
+): OperatorAgentProfile {
+  const retriever = options.retriever ?? createFilesystemDocsRetriever();
   return {
     id: WORKSHOP_AUTHOR_PROFILE_ID,
     title: "Workshop Author",
     playbook: WORKSHOP_AUTHOR_PLAYBOOK,
-    tools: workshopAuthorTools,
+    tools: createWorkshopAuthorTools(retriever),
     contextAdapter: workshopDraftContextAdapter,
     greeting: WORKSHOP_AUTHOR_GREETING,
   };
