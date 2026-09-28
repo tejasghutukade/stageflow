@@ -1,23 +1,6 @@
-export type DraftStageArtifact = {
-  path: string;
-  body: Record<string, unknown>;
-};
-
-export type DraftPackage = {
-  pipeline: {
-    id: string;
-    stages: Array<Record<string, unknown>>;
-    agent?: unknown;
-    model?: unknown;
-    schemas?: unknown;
-    requires?: unknown;
-  };
-  stages?: DraftStageArtifact[];
-  task?: {
-    filename: string;
-    body: Record<string, unknown>;
-  };
-};
+import type { DraftPackage } from "../config/draftPackage.js";
+import { readDraftFromContext } from "./draftContext.js";
+import type { OperatorAgentProposal } from "./types.js";
 
 export type ProposalArtifactDiff = {
   path: string;
@@ -26,55 +9,29 @@ export type ProposalArtifactDiff = {
   after?: string;
 };
 
-export type WorkshopProposal = {
-  id: string;
-  summary: string;
-  nextDraft: DraftPackage;
-  baseDraft: DraftPackage;
-  baseFingerprint: string;
-  artifacts: ProposalArtifactDiff[];
-  affectedStageIds: string[];
-};
+export type AcceptProposalResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "none" | "id_mismatch" | "stale";
+      notice?: string;
+    };
 
-export type ChatMessage = {
-  id: string;
-  role: "assistant" | "user" | "system";
-  text: string;
-  artifacts?: ProposalArtifactDiff[];
-};
-
-export const WORKSHOP_AUTHOR_GREETING =
-  "What are we building? Describe the workflow you want and I’ll propose stages and wiring for this draft.";
-
-export const STALE_PROPOSAL_NOTICE =
+const STALE_NOTICE =
   "Proposal discarded: the draft changed while it was pending. Rejected to avoid clobbering your edits.";
-
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
-
-const REQUIRED_IO = {
-  io: {
-    input: { schema: { type: "object" } },
-    output: { schema: { type: "object" } },
-  },
-};
-
-let proposalSeq = 0;
-
-export function emptyDraftPackage(id = "untitled"): DraftPackage {
-  return {
-    pipeline: {
-      id,
-      stages: [],
-    },
-  };
-}
 
 export function draftFingerprint(draft: DraftPackage): string {
   return JSON.stringify(draft);
 }
 
-function formatArtifact(value: unknown): string {
+export function formatArtifact(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+function stageIds(draft: DraftPackage): string[] {
+  return draft.pipeline.stages.map((stage, index) =>
+    typeof stage.id === "string" && stage.id ? stage.id : `stage-${index}`,
+  );
 }
 
 export function diffDraftPackages(
@@ -156,8 +113,8 @@ export function affectedStageIds(
   before: DraftPackage,
   after: DraftPackage,
 ): string[] {
-  const beforeSet = new Set(draftStageIds(before));
-  const afterSet = new Set(draftStageIds(after));
+  const beforeSet = new Set(stageIds(before));
+  const afterSet = new Set(stageIds(after));
   const ids = new Set<string>();
   for (const id of afterSet) {
     if (!beforeSet.has(id)) ids.add(id);
@@ -192,7 +149,8 @@ export function affectedStageIds(
   for (let i = 0; i < after.pipeline.stages.length; i += 1) {
     const a = after.pipeline.stages[i]!;
     const b = before.pipeline.stages[i];
-    const id = typeof a.id === "string" && a.id ? a.id : `stage-${i}`;
+    const id =
+      typeof a.id === "string" && a.id ? a.id : `stage-${i}`;
     if (!b || JSON.stringify(a) !== JSON.stringify(b)) {
       ids.add(id);
     }
@@ -201,76 +159,46 @@ export function affectedStageIds(
   return [...ids];
 }
 
-function slugifyStageId(text: string): string {
-  const slug = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-  return slug || "stage";
-}
-
-/** Client-side fake Workshop Author turn — mirrors src/operatorAgent fake host. */
-export function proposeStageFromMessage(
-  draft: DraftPackage,
-  userText: string,
-): WorkshopProposal {
-  proposalSeq += 1;
-  const existingIds = new Set(
-    draft.pipeline.stages.map((s) => (typeof s.id === "string" ? s.id : "")),
+export function enrichProposal(
+  proposal: OperatorAgentProposal,
+  currentContext: unknown,
+): OperatorAgentProposal {
+  const baseDraft = readDraftFromContext(
+    proposal.baseContext ?? currentContext,
   );
-  let stageId = slugifyStageId(userText.split(/\s+/).slice(0, 3).join(" "));
-  if (existingIds.has(stageId) || stageId === "untitled") {
-    stageId = `${stageId}-${existingIds.size + 1}`;
-  }
-
-  const stageBody: Record<string, unknown> = {
-    id: stageId,
-    system_prompt: `Stage for: ${userText.trim() || "workshop draft"}`,
-    model: DEFAULT_MODEL,
-    ...REQUIRED_IO,
-  };
-
-  const usesPath = `./${stageId}.yaml`;
-  const nextDraft: DraftPackage = {
-    ...draft,
-    pipeline: {
-      ...draft.pipeline,
-      stages: [
-        ...draft.pipeline.stages,
-        {
-          id: stageId,
-          uses: usesPath,
-          ...(draft.pipeline.stages.length === 0 ? { entry: true } : {}),
-        },
-      ],
-    },
-    stages: [...(draft.stages ?? []), { path: usesPath, body: stageBody }],
-  };
-
+  const nextDraft = readDraftFromContext(proposal.nextContext);
+  const baseContext =
+    proposal.baseContext ??
+    ({ draft: baseDraft } satisfies { draft: DraftPackage });
   return {
-    id: `proposal-${proposalSeq}`,
-    summary: `Add stage “${stageId}”`,
-    nextDraft,
-    baseDraft: draft,
-    baseFingerprint: draftFingerprint(draft),
-    artifacts: diffDraftPackages(draft, nextDraft),
-    affectedStageIds: affectedStageIds(draft, nextDraft),
+    ...proposal,
+    baseContext,
+    baseFingerprint:
+      proposal.baseFingerprint ?? draftFingerprint(baseDraft),
+    artifacts:
+      proposal.artifacts ?? diffDraftPackages(baseDraft, nextDraft),
+    affectedStageIds:
+      proposal.affectedStageIds ?? affectedStageIds(baseDraft, nextDraft),
   };
-}
-
-export function draftStageIds(draft: DraftPackage): string[] {
-  return draft.pipeline.stages.map((stage, index) =>
-    typeof stage.id === "string" && stage.id ? stage.id : `stage-${index}`,
-  );
 }
 
 export function isProposalStale(
-  proposal: WorkshopProposal,
-  draft: DraftPackage,
+  proposal: OperatorAgentProposal,
+  currentContext: unknown,
 ): boolean {
-  return proposal.baseFingerprint !== draftFingerprint(draft);
+  const current = draftFingerprint(readDraftFromContext(currentContext));
+  if (proposal.baseFingerprint) {
+    return proposal.baseFingerprint !== current;
+  }
+  if (proposal.baseContext !== undefined) {
+    return (
+      draftFingerprint(readDraftFromContext(proposal.baseContext)) !== current
+    );
+  }
+  return false;
 }
+
+export const STALE_PROPOSAL_NOTICE = STALE_NOTICE;
 
 /** Parse clear NL requests that flip auto-apply. Returns null if not an auto-apply command. */
 export function parseAutoApplyIntent(message: string): boolean | null {
@@ -303,10 +231,4 @@ export function autoApplyStatusMessage(enabled: boolean): string {
   return enabled
     ? "Auto-apply chat edits is on. Further proposals will update the draft without Accept. Save remains explicit — nothing is written to disk until you Save."
     : "Auto-apply chat edits is off. Proposals will wait for Accept or Reject.";
-}
-
-export function formatArtifactDiffLine(diff: ProposalArtifactDiff): string {
-  const mark =
-    diff.kind === "added" ? "+" : diff.kind === "removed" ? "-" : "~";
-  return `${mark} ${diff.path} (${diff.kind})`;
 }

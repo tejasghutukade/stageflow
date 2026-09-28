@@ -1,4 +1,5 @@
 export type {
+  AcceptProposalResult,
   OperatorAgentContextAdapter,
   OperatorAgentHost,
   OperatorAgentProfile,
@@ -8,6 +9,7 @@ export type {
   OperatorAgentTool,
   OperatorAgentToolContext,
   OperatorAgentToolResult,
+  ProposalArtifactDiff,
   WorkshopDraftContext,
 } from "./types.js";
 export {
@@ -31,6 +33,16 @@ export {
   workshopDraftContextAdapter,
   WORKSHOP_AUTHOR_GREETING,
 } from "./draftContext.js";
+export {
+  affectedStageIds,
+  autoApplyStatusMessage,
+  diffDraftPackages,
+  draftFingerprint,
+  enrichProposal,
+  isProposalStale,
+  parseAutoApplyIntent,
+  STALE_PROPOSAL_NOTICE,
+} from "./proposals.js";
 export {
   buildStageAddProposal,
   createWorkshopAuthorProfile,

@@ -69,12 +69,15 @@ export function createFakeOperatorAgentModel(
       }
 
       const proposal = proposeStageFromUserMessage(tools, message);
+      const autoApplied = tools.getAutoApply();
       return {
         events: [
           {
             type: "message",
             role: "assistant",
-            text: `I propose adding a stage based on your request. Review and Accept to update the draft.`,
+            text: autoApplied
+              ? `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`
+              : `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
           },
           { type: "proposal", proposal },
         ],

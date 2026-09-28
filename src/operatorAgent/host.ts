@@ -1,3 +1,11 @@
+import {
+  autoApplyStatusMessage,
+  enrichProposal,
+  isProposalStale,
+  parseAutoApplyIntent,
+  STALE_PROPOSAL_NOTICE,
+  type AcceptProposalResult,
+} from "./proposals.js";
 import type {
   OperatorAgentHost,
   OperatorAgentProfile,
@@ -18,6 +26,7 @@ export type OperatorAgentModel = {
     message: string;
     contextSnapshot: unknown;
     tools: OperatorAgentToolContext;
+    autoApply: boolean;
   }): Promise<OperatorAgentModelTurn>;
 };
 
@@ -28,15 +37,28 @@ function createSession(
 ): OperatorAgentSession {
   let context = initialContext;
   let pending: OperatorAgentProposal | null = null;
+  let autoApply = false;
   let closed = false;
+  let lastEmitted: OperatorAgentProposal | null = null;
+  let lastEmitAutoApplied = false;
 
   const toolContext: OperatorAgentToolContext = {
     getContext: () => context,
     setContext: (next) => {
       context = next;
     },
+    getAutoApply: () => autoApply,
     emitProposal: (proposal) => {
-      pending = proposal;
+      const enriched = enrichProposal(proposal, context);
+      lastEmitted = enriched;
+      if (autoApply) {
+        context = profile.contextAdapter.applyProposal(context, enriched);
+        pending = null;
+        lastEmitAutoApplied = true;
+        return;
+      }
+      pending = enriched;
+      lastEmitAutoApplied = false;
     },
   };
 
@@ -48,24 +70,64 @@ function createSession(
       context = next;
     },
     getPendingProposal: () => pending,
+    getAutoApply: () => autoApply,
+    setAutoApply: (enabled) => {
+      autoApply = enabled;
+    },
     async send(message: string): Promise<OperatorAgentSessionEvent[]> {
       if (closed) {
         return [{ type: "error", message: "session is closed" }];
       }
+      const intent = parseAutoApplyIntent(message);
+      if (intent !== null) {
+        autoApply = intent;
+        return [
+          {
+            type: "message",
+            role: "system",
+            text: autoApplyStatusMessage(intent),
+          },
+        ];
+      }
+      lastEmitted = null;
+      lastEmitAutoApplied = false;
       const turn = await model.complete({
         profile,
         message,
         contextSnapshot: profile.contextAdapter.serialize(context),
         tools: toolContext,
+        autoApply,
       });
-      return turn.events;
+      const events: OperatorAgentSessionEvent[] = [];
+      for (const event of turn.events) {
+        if (event.type === "proposal") {
+          events.push({
+            type: "proposal",
+            proposal: lastEmitted ?? enrichProposal(event.proposal, context),
+            autoApplied: lastEmitAutoApplied,
+          });
+        } else {
+          events.push(event);
+        }
+      }
+      return events;
     },
-    acceptProposal(proposalId?: string): boolean {
-      if (!pending) return false;
-      if (proposalId !== undefined && pending.id !== proposalId) return false;
+    acceptProposal(proposalId?: string): AcceptProposalResult {
+      if (!pending) return { ok: false, reason: "none" };
+      if (proposalId !== undefined && pending.id !== proposalId) {
+        return { ok: false, reason: "id_mismatch" };
+      }
+      if (isProposalStale(pending, context)) {
+        pending = null;
+        return {
+          ok: false,
+          reason: "stale",
+          notice: STALE_PROPOSAL_NOTICE,
+        };
+      }
       context = profile.contextAdapter.applyProposal(context, pending);
       pending = null;
-      return true;
+      return { ok: true };
     },
     rejectProposal(proposalId?: string): boolean {
       if (!pending) return false;

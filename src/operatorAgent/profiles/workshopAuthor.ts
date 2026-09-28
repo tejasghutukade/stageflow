@@ -7,6 +7,11 @@ import {
   workshopDraftContextAdapter,
   WORKSHOP_AUTHOR_GREETING,
 } from "../draftContext.js";
+import {
+  affectedStageIds,
+  diffDraftPackages,
+  draftFingerprint,
+} from "../proposals.js";
 import type {
   OperatorAgentProfile,
   OperatorAgentProposal,
@@ -82,6 +87,10 @@ export function buildStageAddProposal(
     id: nextProposalId(),
     summary: `Add stage “${stageId}”`,
     nextContext: nextDraft,
+    baseContext: { draft },
+    baseFingerprint: draftFingerprint(draft),
+    artifacts: diffDraftPackages(draft, nextDraft),
+    affectedStageIds: affectedStageIds(draft, nextDraft),
   };
 }
 
@@ -111,10 +120,15 @@ const proposeDraftTool: OperatorAgentTool = {
     if (!nextDraft || !nextDraft.pipeline) {
       return { ok: false, content: null, error: "draft is required" };
     }
+    const current = readDraftFromContext(ctx.getContext());
     const proposal: OperatorAgentProposal = {
       id: nextProposalId(),
       summary,
       nextContext: nextDraft,
+      baseContext: { draft: current },
+      baseFingerprint: draftFingerprint(current),
+      artifacts: diffDraftPackages(current, nextDraft),
+      affectedStageIds: affectedStageIds(current, nextDraft),
     };
     ctx.emitProposal(proposal);
     return { ok: true, content: proposal };

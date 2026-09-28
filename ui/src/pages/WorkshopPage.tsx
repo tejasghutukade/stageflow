@@ -11,12 +11,18 @@ import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
 import { navigate, pipelinePath, workshopPath } from "../routes";
 import { showToast } from "../toast";
 import {
+  autoApplyStatusMessage,
   draftStageIds,
   emptyDraftPackage,
+  formatArtifactDiffLine,
+  isProposalStale,
+  parseAutoApplyIntent,
   proposeStageFromMessage,
+  STALE_PROPOSAL_NOTICE,
   WORKSHOP_AUTHOR_GREETING,
   type ChatMessage,
   type DraftPackage,
+  type ProposalArtifactDiff,
   type WorkshopProposal,
 } from "../workshop/draft";
 import {
@@ -36,15 +42,36 @@ function nextMsgId(): string {
 
 function definitionTrack(
   draft: DraftPackage,
-  highlightIds: ReadonlySet<string>,
+  proposedIds: ReadonlySet<string>,
   selectedId: string | null,
 ): TrackStage[] {
   return draftStageIds(draft).map((id) => ({
     id,
     label: id,
     status: "pending" as const,
-    selected: selectedId === id || highlightIds.has(id),
+    selected: selectedId === id,
+    proposed: proposedIds.has(id),
   }));
+}
+
+function ArtifactDiffList({
+  artifacts,
+}: {
+  artifacts: ProposalArtifactDiff[];
+}) {
+  if (artifacts.length === 0) return null;
+  return (
+    <ul className="workshop__diff-list" aria-label="Per-artifact diff">
+      {artifacts.map((diff) => (
+        <li key={`${diff.kind}-${diff.path}`}>
+          {formatArtifactDiffLine(diff)}
+          {diff.after || diff.before ? (
+            <pre>{diff.after ?? diff.before}</pre>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 type Destination = {
@@ -68,6 +95,7 @@ export function WorkshopPage({
     },
   ]);
   const [pending, setPending] = useState<WorkshopProposal | null>(null);
+  const [autoApply, setAutoApply] = useState(false);
   const [input, setInput] = useState("");
   const [findings, setFindings] = useState<ValidationFinding[]>([]);
   const [validationOk, setValidationOk] = useState<boolean | null>(null);
@@ -80,13 +108,10 @@ export function WorkshopPage({
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
-  const pendingIds = useMemo(() => {
+  const proposedIds = useMemo(() => {
     if (!pending) return new Set<string>();
-    const current = new Set(draftStageIds(draft));
-    return new Set(
-      draftStageIds(pending.nextDraft).filter((id) => !current.has(id)),
-    );
-  }, [draft, pending]);
+    return new Set(pending.affectedStageIds);
+  }, [pending]);
 
   const selectedStageId =
     selection?.kind === "stage" ? selection.stageId : null;
@@ -95,21 +120,44 @@ export function WorkshopPage({
     () =>
       definitionTrack(
         pending ? pending.nextDraft : draft,
-        pendingIds,
+        proposedIds,
         selectedStageId,
       ),
-    [draft, pending, pendingIds, selectedStageId],
+    [draft, pending, proposedIds, selectedStageId],
   );
   const canSave = validationOk === true && !busy;
 
-  const applyDraft = useCallback((next: DraftPackage) => {
-    setDraft(next);
-    setValidationOk(null);
-  }, []);
+  const discardPendingForEdit = useCallback(
+    (notice = STALE_PROPOSAL_NOTICE) => {
+      if (!pending) return;
+      setPending(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMsgId(),
+          role: "system",
+          text: notice,
+        },
+      ]);
+    },
+    [pending],
+  );
+
+  const applyDraft = useCallback(
+    (next: DraftPackage) => {
+      if (pending) {
+        discardPendingForEdit();
+      }
+      setDraft(next);
+      setValidationOk(null);
+    },
+    [discardPendingForEdit, pending],
+  );
 
   const startNew = useCallback(() => {
     setDraft(emptyDraftPackage());
     setPending(null);
+    setAutoApply(false);
     setFindings([]);
     setValidationOk(null);
     setSavedPath(null);
@@ -178,20 +226,66 @@ export function WorkshopPage({
       ...prev,
       { id: nextMsgId(), role: "user", text },
     ]);
+
+    const intent = parseAutoApplyIntent(text);
+    if (intent !== null) {
+      setAutoApply(intent);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMsgId(),
+          role: "system",
+          text: autoApplyStatusMessage(intent),
+        },
+      ]);
+      return;
+    }
+
     const proposal = proposeStageFromMessage(draft, text);
+    if (autoApply) {
+      setDraft(proposal.nextDraft);
+      if (typeof proposal.nextDraft.pipeline.id === "string") {
+        setSavePipelineId(proposal.nextDraft.pipeline.id);
+      }
+      setValidationOk(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMsgId(),
+          role: "assistant",
+          text: `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`,
+          artifacts: proposal.artifacts,
+        },
+      ]);
+      return;
+    }
+
     setPending(proposal);
     setMessages((prev) => [
       ...prev,
       {
         id: nextMsgId(),
         role: "assistant",
-        text: `I propose: ${proposal.summary}. Accept to update the draft, or Reject to leave it unchanged.`,
+        text: `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
+        artifacts: proposal.artifacts,
       },
     ]);
-  }, [busy, draft, input, pending]);
+  }, [autoApply, busy, draft, input, pending]);
 
   const onAccept = useCallback(() => {
     if (!pending) return;
+    if (isProposalStale(pending, draft)) {
+      setPending(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMsgId(),
+          role: "system",
+          text: STALE_PROPOSAL_NOTICE,
+        },
+      ]);
+      return;
+    }
     setDraft(pending.nextDraft);
     if (typeof pending.nextDraft.pipeline.id === "string") {
       setSavePipelineId(pending.nextDraft.pipeline.id);
@@ -206,7 +300,7 @@ export function WorkshopPage({
         text: `Accepted: ${pending.summary}`,
       },
     ]);
-  }, [pending]);
+  }, [draft, pending]);
 
   const onReject = useCallback(() => {
     if (!pending) return;
@@ -337,6 +431,21 @@ export function WorkshopPage({
     [applyDraft, draft],
   );
 
+  const onAutoApplyToggle = useCallback(
+    (enabled: boolean) => {
+      setAutoApply(enabled);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMsgId(),
+          role: "system",
+          text: autoApplyStatusMessage(enabled),
+        },
+      ]);
+    },
+    [],
+  );
+
   return (
     <div className="pane workshop">
       <div className="topbar">
@@ -345,6 +454,15 @@ export function WorkshopPage({
           {savedPath ? savedPath : "Untitled draft · Workshop Author"}
         </div>
         <div className="topbar__spacer" />
+        <label className="workshop__auto-apply">
+          <input
+            type="checkbox"
+            checked={autoApply}
+            onChange={(e) => onAutoApplyToggle(e.target.checked)}
+            disabled={busy}
+          />
+          Auto-apply chat edits
+        </label>
         {savedPath ? (
           <a className="btn" href={`#${pipelinePath(draft.pipeline.id)}`}>
             Open in catalog
@@ -394,7 +512,7 @@ export function WorkshopPage({
                 type="button"
                 className="btn btn--sm"
                 onClick={onAddStage}
-                disabled={busy || Boolean(pending)}
+                disabled={busy}
               >
                 Add stage
               </button>
@@ -437,15 +555,15 @@ export function WorkshopPage({
             draft={pending ? pending.nextDraft : draft}
             selection={selection}
             onChange={(next) => {
-              if (pending) return;
               applyDraft(next);
             }}
-            onRemoveStage={pending ? undefined : onRemoveStage}
+            onRemoveStage={onRemoveStage}
           />
           {pending ? (
             <div className="workshop__proposal">
               <div className="eyebrow">Pending proposal</div>
               <p>{pending.summary}</p>
+              <ArtifactDiffList artifacts={pending.artifacts} />
               <div className="workshop__proposal-actions">
                 <button
                   type="button"
@@ -526,6 +644,9 @@ export function WorkshopPage({
               >
                 <div className="eyebrow">{m.role}</div>
                 <p>{m.text}</p>
+                {m.artifacts ? (
+                  <ArtifactDiffList artifacts={m.artifacts} />
+                ) : null}
               </div>
             ))}
           </div>

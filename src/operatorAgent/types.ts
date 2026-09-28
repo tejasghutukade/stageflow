@@ -1,5 +1,9 @@
 import type { DraftPackage } from "../config/draftPackage.js";
 import type { ValidationResult } from "../config/validateCatalog.js";
+import type {
+  AcceptProposalResult,
+  ProposalArtifactDiff,
+} from "./proposals.js";
 
 export type OperatorAgentToolResult = {
   ok: boolean;
@@ -22,6 +26,7 @@ export type OperatorAgentToolContext = {
   getContext(): unknown;
   setContext(next: unknown): void;
   emitProposal(proposal: OperatorAgentProposal): void;
+  getAutoApply(): boolean;
 };
 
 export type OperatorAgentProposal = {
@@ -29,6 +34,12 @@ export type OperatorAgentProposal = {
   summary: string;
   /** Full proposed context after Accept (Workshop: DraftPackage). */
   nextContext: unknown;
+  /** Context snapshot when the proposal was created. */
+  baseContext?: unknown;
+  /** Fingerprint of the draft at propose time — used for stale detection. */
+  baseFingerprint?: string;
+  artifacts?: ProposalArtifactDiff[];
+  affectedStageIds?: string[];
 };
 
 export type OperatorAgentContextAdapter = {
@@ -47,7 +58,7 @@ export type OperatorAgentProfile = {
 
 export type OperatorAgentSessionEvent =
   | { type: "message"; role: "assistant" | "user" | "system"; text: string }
-  | { type: "proposal"; proposal: OperatorAgentProposal }
+  | { type: "proposal"; proposal: OperatorAgentProposal; autoApplied?: boolean }
   | { type: "tool_result"; name: string; result: OperatorAgentToolResult }
   | { type: "validation"; result: ValidationResult }
   | { type: "error"; message: string };
@@ -58,8 +69,10 @@ export type OperatorAgentSession = {
   getContext(): unknown;
   setContext(next: unknown): void;
   getPendingProposal(): OperatorAgentProposal | null;
+  getAutoApply(): boolean;
+  setAutoApply(enabled: boolean): void;
   send(message: string): Promise<OperatorAgentSessionEvent[]>;
-  acceptProposal(proposalId?: string): boolean;
+  acceptProposal(proposalId?: string): AcceptProposalResult;
   rejectProposal(proposalId?: string): boolean;
   close(): void;
 };
@@ -81,3 +94,5 @@ export type WorkshopDraftContext = {
     pipelineFilename?: string;
   };
 };
+
+export type { AcceptProposalResult, ProposalArtifactDiff };
