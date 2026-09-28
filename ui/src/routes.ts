@@ -22,7 +22,8 @@ export type Route =
     }
   | { name: "extensionFile"; path: string }
   | { name: "settings" }
-  | { name: "connect" };
+  | { name: "connect" }
+  | { name: "workshop" };
 
 export function navigate(to: string): void {
   window.location.hash = to.startsWith("#") ? to : `#${to}`;
@@ -65,6 +66,10 @@ export function extensionPackagePath(
 
 export function extensionFilePath(filePath: string): string {
   return `/extensions/files/${encodeURIComponent(filePath)}`;
+}
+
+export function workshopPath(): string {
+  return "/workshop";
 }
 
 export function connectPath(): string {
@@ -149,6 +154,7 @@ export function parseHash(hash = window.location.hash): Route {
   }
   if (path === "settings") return { name: "settings" };
   if (path === "connect") return { name: "connect" };
+  if (path === "workshop") return { name: "workshop" };
   if (path.startsWith("runs/")) {
     const parts = path.slice("runs/".length).split("/");
     const runId = decodeURIComponent(parts[0] ?? "");

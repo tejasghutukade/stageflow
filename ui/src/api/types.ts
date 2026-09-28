@@ -480,6 +480,58 @@ export type CreatePipelineResult =
   | { ok: true; pipeline: PipelineListing }
   | { ok: false; status: number; error: string };
 
+export type ValidationFinding = {
+  severity: "error" | "warning";
+  code: string;
+  path: string;
+  message: string;
+  category: string;
+  pipelineId?: string;
+  stageId?: string;
+};
+
+export type DraftValidationResult = {
+  scope: "full" | "pipeline" | "task";
+  ok: boolean;
+  summary: { errors: number; warnings: number };
+  findings: ValidationFinding[];
+};
+
+export type DraftPackagePayload = {
+  pipeline: {
+    id: string;
+    stages: Array<Record<string, unknown>>;
+    agent?: unknown;
+    model?: unknown;
+    schemas?: unknown;
+    requires?: unknown;
+  };
+  stages?: Array<{ path: string; body: Record<string, unknown> }>;
+  task?: { filename: string; body: Record<string, unknown> };
+};
+
+export type CreateDraftPackageInput = {
+  directory: string;
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+};
+
+export type CreateDraftPackageResult =
+  | {
+      ok: true;
+      pipeline: PipelineListing;
+      pipelinePath: string;
+      stagePaths: string[];
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      findings?: ValidationFinding[];
+    };
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];

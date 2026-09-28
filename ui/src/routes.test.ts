@@ -42,6 +42,10 @@ describe("parseHash", () => {
   it("parses the provider connect route", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
   });
+
+  it("parses the workshop route", () => {
+    expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
+  });
 });
 
 describe("run stage hash", () => {

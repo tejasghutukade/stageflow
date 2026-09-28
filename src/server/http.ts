@@ -14,6 +14,12 @@ import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
+import {
+  createDraftPackage,
+  parseCreateDraftPackageBody,
+  parseDraftPackageBody,
+  validateDraftPackage,
+} from "../config/draftPackage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import {
   listModelsMultiProject,
@@ -1360,6 +1366,115 @@ export function createOperatorRoutes(
             return true;
           }
           json(res, 201, result.pipeline);
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let validateRoot = cwd;
+          if (writeRoot) {
+            try {
+              const { wireRoot: selected } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              validateRoot = selected.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(
+                  res,
+                  err.code === "catalog_root_read_only" ? 403 : 400,
+                  catalogPathErrorBody(err),
+                );
+                return true;
+              }
+              throw err;
+            }
+          }
+          const ctx = await resolveStageflowContext(validateRoot);
+          const result = await validateDraftPackage(draftParsed, {
+            cwd: ctx.projectRoot,
+            projectRoot: ctx.projectRoot,
+            strict: true,
+          });
+          json(res, 200, result);
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/create") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const result = await createDraftPackage(ctx.projectRoot, parsed);
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 201, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
           return true;
         }
 

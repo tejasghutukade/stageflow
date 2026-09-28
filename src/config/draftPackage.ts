@@ -54,7 +54,9 @@ export type OverwriteDraftPackageInput = {
   allowInvalid?: boolean;
 };
 
-export type OverwriteDraftPackageResult =
+export type CreateDraftPackageInput = OverwriteDraftPackageInput;
+
+export type DraftPackageWriteResult =
   | {
       ok: true;
       pipeline: PipelineListing;
@@ -64,10 +66,13 @@ export type OverwriteDraftPackageResult =
     }
   | {
       ok: false;
-      status: 400 | 404 | 422 | 500;
+      status: 400 | 404 | 409 | 422 | 500;
       error: string;
       findings?: ValidationFinding[];
     };
+
+export type OverwriteDraftPackageResult = DraftPackageWriteResult;
+export type CreateDraftPackageResult = DraftPackageWriteResult;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -276,10 +281,18 @@ function listingFromDraft(
   };
 }
 
-export async function overwriteDraftPackage(
+type ResolvedDraftWrite = {
+  packageDirectory: string;
+  draft: DraftPackage;
+  pipelineFilename: string;
+  pipelineAbsPath: string;
+  pipelineRelPath: string;
+};
+
+function resolveDraftWriteTarget(
   projectRoot: string,
   input: OverwriteDraftPackageInput,
-): Promise<OverwriteDraftPackageResult> {
+): { ok: true; value: ResolvedDraftWrite } | { ok: false; status: 400; error: string } {
   if (typeof input.directory !== "string" || !input.directory.trim()) {
     return { ok: false, status: 400, error: "directory is required" };
   }
@@ -313,33 +326,47 @@ export async function overwriteDraftPackage(
     .relative(projectRoot, pipelineAbsPath)
     .replace(/\\/g, "/");
 
-  if (!(await fileExists(pipelineAbsPath))) {
-    return {
-      ok: false,
-      status: 404,
-      error: `Pipeline does not exist (${pipelineRelPath})`,
-    };
-  }
+  return {
+    ok: true,
+    value: {
+      packageDirectory,
+      draft,
+      pipelineFilename,
+      pipelineAbsPath,
+      pipelineRelPath,
+    },
+  };
+}
 
-  if (!input.allowInvalid) {
-    const validation = await validateDraftPackage(draft, {
-      cwd: projectRoot,
-      projectRoot,
-      strict: true,
-    });
-    if (!validation.ok) {
-      const errorFinding = validation.findings.find(
-        (finding) => finding.severity === "error",
-      );
-      return {
-        ok: false,
-        status: 422,
-        error: errorFinding?.message ?? "Package validation failed",
-        findings: validation.findings,
-      };
-    }
-  }
+async function gateDraftWrite(
+  projectRoot: string,
+  draft: DraftPackage,
+  allowInvalid: boolean | undefined,
+): Promise<DraftPackageWriteResult | null> {
+  if (allowInvalid) return null;
+  const validation = await validateDraftPackage(draft, {
+    cwd: projectRoot,
+    projectRoot,
+    strict: true,
+  });
+  if (validation.ok) return null;
+  const errorFinding = validation.findings.find(
+    (finding) => finding.severity === "error",
+  );
+  return {
+    ok: false,
+    status: 422,
+    error: errorFinding?.message ?? "Package validation failed",
+    findings: validation.findings,
+  };
+}
 
+async function writeDraftPackageFiles(
+  projectRoot: string,
+  target: ResolvedDraftWrite,
+  allowInvalid: boolean | undefined,
+): Promise<DraftPackageWriteResult> {
+  const { packageDirectory, draft, pipelineAbsPath, pipelineRelPath } = target;
   const stagePaths: string[] = [];
   try {
     await mkdir(packageDirectory, { recursive: true });
@@ -371,11 +398,11 @@ export async function overwriteDraftPackage(
       ? buildPipelineListing(projectRoot, pipelineRelPath, loadOutcome.value)
       : listingFromDraft(pipelineRelPath, draft, stagePaths);
 
-    if (!loadOutcome.ok && !input.allowInvalid) {
+    if (!loadOutcome.ok && !allowInvalid) {
       return {
         ok: false,
         status: 500,
-        error: loadOutcome.issues[0]?.message ?? "Failed to load overwritten pipeline",
+        error: loadOutcome.issues[0]?.message ?? "Failed to load written pipeline",
       };
     }
 
@@ -390,4 +417,94 @@ export async function overwriteDraftPackage(
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, status: 500, error: message };
   }
+}
+
+export async function overwriteDraftPackage(
+  projectRoot: string,
+  input: OverwriteDraftPackageInput,
+): Promise<OverwriteDraftPackageResult> {
+  const resolved = resolveDraftWriteTarget(projectRoot, input);
+  if (!resolved.ok) return resolved;
+
+  if (!(await fileExists(resolved.value.pipelineAbsPath))) {
+    return {
+      ok: false,
+      status: 404,
+      error: `Pipeline does not exist (${resolved.value.pipelineRelPath})`,
+    };
+  }
+
+  const blocked = await gateDraftWrite(
+    projectRoot,
+    resolved.value.draft,
+    input.allowInvalid,
+  );
+  if (blocked) return blocked;
+
+  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+}
+
+export async function createDraftPackage(
+  projectRoot: string,
+  input: CreateDraftPackageInput,
+): Promise<CreateDraftPackageResult> {
+  const resolved = resolveDraftWriteTarget(projectRoot, input);
+  if (!resolved.ok) return resolved;
+
+  if (await fileExists(resolved.value.pipelineAbsPath)) {
+    return {
+      ok: false,
+      status: 409,
+      error: `Pipeline already exists (${resolved.value.pipelineRelPath})`,
+    };
+  }
+
+  const blocked = await gateDraftWrite(
+    projectRoot,
+    resolved.value.draft,
+    input.allowInvalid,
+  );
+  if (blocked) return blocked;
+
+  return writeDraftPackageFiles(projectRoot, resolved.value, input.allowInvalid);
+}
+
+export function parseDraftPackageBody(
+  body: unknown,
+): DraftPackage | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(body)) {
+    return { ok: false, status: 400, error: "JSON object body required" };
+  }
+  const draftValue = isPlainObject(body.draft) ? body.draft : body;
+  if (!isPlainObject(draftValue.pipeline)) {
+    return { ok: false, status: 400, error: "draft.pipeline is required" };
+  }
+  if (typeof draftValue.pipeline.id !== "string" || !draftValue.pipeline.id.trim()) {
+    return { ok: false, status: 400, error: "draft.pipeline.id is required" };
+  }
+  if (!Array.isArray(draftValue.pipeline.stages)) {
+    return { ok: false, status: 400, error: "draft.pipeline.stages must be an array" };
+  }
+  return draftValue as DraftPackage;
+}
+
+export function parseCreateDraftPackageBody(
+  body: unknown,
+): CreateDraftPackageInput | { ok: false; status: 400; error: string } {
+  if (!isPlainObject(body)) {
+    return { ok: false, status: 400, error: "JSON object body required" };
+  }
+  const draftParsed = parseDraftPackageBody(body);
+  if ("ok" in draftParsed) return draftParsed;
+  if (typeof body.directory !== "string" || !body.directory.trim()) {
+    return { ok: false, status: 400, error: "directory is required" };
+  }
+  return {
+    directory: body.directory.trim(),
+    draft: draftParsed,
+    ...(typeof body.pipelineFilename === "string"
+      ? { pipelineFilename: body.pipelineFilename }
+      : {}),
+    ...(body.allowInvalid === true ? { allowInvalid: true } : {}),
+  };
 }
