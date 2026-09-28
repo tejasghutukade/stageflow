@@ -2947,6 +2947,18 @@ a.topbar__back { text-decoration: none; }
   margin-right: var(--spacing-2);
 }
 
+.workshop__model {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  margin-right: var(--spacing-2);
+}
+
+.workshop__model .select {
+  max-width: 16rem;
+}
+
 .workshop__findings-list {
   margin: var(--spacing-2) 0 0;
   padding-left: var(--spacing-5);

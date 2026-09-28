@@ -387,6 +387,15 @@ export function postCredentialSource(
   });
 }
 
+export function postWorkshopModel(
+  workshopModel: string,
+): Promise<SettingsSnapshot> {
+  return api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({ workshopModel }),
+  });
+}
+
 export function startRun(task: string, pipeline: string): Promise<{ runId: string }> {
   return api("/api/runs", {
     method: "POST",

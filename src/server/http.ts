@@ -98,7 +98,11 @@ import type {
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
+  INVALID_WORKSHOP_MODEL_MESSAGE,
   parseSlotCount,
+  parseWorkshopModelSetting,
+  readFactorySettings,
+  writeFactorySettings,
 } from "../runtime/settingsFile.js";
 import { isTaskFile } from "../runtime/taskInput.js";
 import {
@@ -2025,9 +2029,13 @@ export function createOperatorRoutes(
         if (method === "GET" && pathname === "/api/settings") {
           const health = manager.getHealth();
           const credential = getCredentialSourceSettings(cwd);
+          const factory = readFactorySettings(cwd);
           json(res, 200, {
             maxConcurrent: health.maxConcurrent,
             ...credential,
+            ...(factory.workshopModel !== undefined
+              ? { workshopModel: factory.workshopModel }
+              : {}),
           });
           return true;
         }
@@ -2052,9 +2060,14 @@ export function createOperatorRoutes(
             record,
             "credentialSource",
           );
-          if (!hasMax && !hasCredentialSource) {
+          const hasWorkshopModel = Object.prototype.hasOwnProperty.call(
+            record,
+            "workshopModel",
+          );
+          if (!hasMax && !hasCredentialSource && !hasWorkshopModel) {
             json(res, 400, {
-              error: "maxConcurrent or credentialSource is required",
+              error:
+                "maxConcurrent, credentialSource, or workshopModel is required",
             });
             return true;
           }
@@ -2080,9 +2093,21 @@ export function createOperatorRoutes(
             }
           }
 
+          let workshopModel = readFactorySettings(cwd).workshopModel;
+          if (hasWorkshopModel) {
+            const parsed = parseWorkshopModelSetting(record.workshopModel);
+            if (parsed === undefined) {
+              json(res, 400, { error: INVALID_WORKSHOP_MODEL_MESSAGE });
+              return true;
+            }
+            writeFactorySettings(cwd, { workshopModel: parsed });
+            workshopModel = parsed;
+          }
+
           json(res, 200, {
             ...health,
             ...credential,
+            ...(workshopModel !== undefined ? { workshopModel } : {}),
           });
           return true;
         }

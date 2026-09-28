@@ -4,6 +4,8 @@ import {
   checkWorkshopDiskChange,
   clearWorkshopAutosave,
   createDraftPackageWithDetails,
+  fetchModels,
+  fetchSettings,
   fetchTasks,
   getWorkshopAutosave,
   openDraftPackage,
@@ -62,8 +64,17 @@ import {
   DraftInspector,
   type InspectorSelection,
 } from "../workshop/DraftInspector";
+import {
+  DEFAULT_WORKSHOP_MODEL,
+  resolveWorkshopModel,
+} from "../workshop/modelSettings";
 
 const AUTOSAVE_DEBOUNCE_MS = 500;
+const SAVE_INVALID_CONFIRM =
+  "Draft is invalid. Save invalid anyway? This writes the package without the validate gate.";
+
+type SaveFormMode = "first" | "saveAs";
+type Destination = WorkshopAutosaveDestination;
 
 let msgSeq = 0;
 function nextMsgId(): string {
@@ -128,8 +139,6 @@ function ArtifactDiffList({
   );
 }
 
-type Destination = WorkshopAutosaveDestination;
-
 type DiskChangeBanner = {
   changedPaths: string[];
   currentFingerprints: Record<string, string>;
@@ -175,6 +184,7 @@ export function WorkshopPage({
   const [savedTaskPath, setSavedTaskPath] = useState<string | null>(null);
   const [destination, setDestination] = useState<Destination | null>(null);
   const [showSaveForm, setShowSaveForm] = useState(false);
+  const [saveFormMode, setSaveFormMode] = useState<SaveFormMode>("first");
   const [saveDirectory, setSaveDirectory] = useState("pipelines");
   const [savePipelineId, setSavePipelineId] = useState("untitled");
   const [selection, setSelection] = useState<InspectorSelection | null>(null);
@@ -190,6 +200,10 @@ export function WorkshopPage({
     Record<string, string>
   >({});
   const [diskChange, setDiskChange] = useState<DiskChangeBanner | null>(null);
+  const [workshopModelDefault, setWorkshopModelDefault] = useState<
+    string | null
+  >(null);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [cleanBaseline, setCleanBaseline] = useState(() =>
     workshopSessionFingerprint({
       draft: emptyDraftPackage(),
@@ -259,7 +273,12 @@ export function WorkshopPage({
       ),
     [draft, pending, proposedIds, selectedStageId],
   );
-  const canSave = validationOk === true && !busy;
+  const canSave = !busy;
+  const effectiveWorkshopModel = resolveWorkshopModel({
+    sessionOverride: sessionModelOverride,
+    settingsDefault: workshopModelDefault,
+    profileDefault: DEFAULT_WORKSHOP_MODEL,
+  });
   const showRunShortcut = canOfferRunShortcut({
     savedPipelinePath: savedPath,
     savedTaskPath,
@@ -722,6 +741,27 @@ export function WorkshopPage({
   ]);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [settings, models] = await Promise.all([
+          fetchSettings(),
+          fetchModels(),
+        ]);
+        if (cancelled) return;
+        setWorkshopModelDefault(settings.workshopModel ?? null);
+        setAvailableModels(models.models);
+      } catch {
+        if (cancelled) return;
+        setAvailableModels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!hydrated || !dirty) return;
     const timer = window.setTimeout(() => {
       void persistAutosave();
@@ -943,11 +983,14 @@ export function WorkshopPage({
     }
   }, [draft]);
 
+  const confirmAllowInvalid = useCallback((): boolean => {
+    if (validationOk === true) return true;
+    return window.confirm(SAVE_INVALID_CONFIRM);
+  }, [validationOk]);
+
   const onSaveClick = useCallback(async () => {
-    if (validationOk !== true) {
-      showToast("Validate successfully before Save");
-      return;
-    }
+    if (!confirmAllowInvalid()) return;
+    const allowInvalid = validationOk !== true;
     if (destination) {
       setBusy(true);
       try {
@@ -957,6 +1000,7 @@ export function WorkshopPage({
           ...(destination.pipelineFilename
             ? { pipelineFilename: destination.pipelineFilename }
             : {}),
+          ...(allowInvalid ? { allowInvalid: true } : {}),
         });
         if (!result.ok) {
           if (result.findings) setFindings(result.findings);
@@ -978,17 +1022,23 @@ export function WorkshopPage({
           sessionModelOverride,
         });
         dirtyRef.current = false;
-        showToast(`Saved ${result.pipelinePath}`);
+        showToast(
+          allowInvalid
+            ? `Saved invalid package ${result.pipelinePath}`
+            : `Saved ${result.pipelinePath}`,
+        );
       } finally {
         setBusy(false);
       }
       return;
     }
+    setSaveFormMode("first");
     setShowSaveForm(true);
     setSavePipelineId(draft.pipeline.id || "untitled");
   }, [
     autoApply,
     clearAutosaveAfterSave,
+    confirmAllowInvalid,
     destination,
     draft,
     markClean,
@@ -997,11 +1047,16 @@ export function WorkshopPage({
     validationOk,
   ]);
 
+  const onSaveAsClick = useCallback(() => {
+    setSaveFormMode("saveAs");
+    setShowSaveForm(true);
+    setSaveDirectory(destination?.directory ?? "pipelines");
+    setSavePipelineId(draft.pipeline.id || "untitled");
+  }, [destination, draft.pipeline.id]);
+
   const onConfirmSave = useCallback(async () => {
-    if (validationOk !== true) {
-      showToast("Save blocked: draft is invalid");
-      return;
-    }
+    if (!confirmAllowInvalid()) return;
+    const allowInvalid = validationOk !== true;
     const directory = saveDirectory.trim() || "pipelines";
     const id = savePipelineId.trim() || "untitled";
     const packageDraft: DraftPackage = {
@@ -1013,6 +1068,7 @@ export function WorkshopPage({
       const result = await createDraftPackageWithDetails({
         directory,
         draft: packageDraft,
+        ...(allowInvalid ? { allowInvalid: true } : {}),
       });
       if (!result.ok) {
         if (result.findings) setFindings(result.findings);
@@ -1040,17 +1096,25 @@ export function WorkshopPage({
         sessionModelOverride,
       });
       dirtyRef.current = false;
-      showToast(`Saved ${result.pipelinePath}`);
+      showToast(
+        allowInvalid
+          ? `Saved invalid package ${result.pipelinePath}`
+          : saveFormMode === "saveAs"
+            ? `Saved As ${result.pipelinePath}`
+            : `Saved ${result.pipelinePath}`,
+      );
     } finally {
       setBusy(false);
     }
   }, [
     autoApply,
     clearAutosaveAfterSave,
+    confirmAllowInvalid,
     draft,
     markClean,
     messages,
     saveDirectory,
+    saveFormMode,
     savePipelineId,
     sessionModelOverride,
     validationOk,
@@ -1213,6 +1277,37 @@ export function WorkshopPage({
         >
           Validate
         </button>
+        <label className="workshop__model">
+          <span className="muted">Model</span>
+          <select
+            className="select"
+            value={sessionModelOverride ?? ""}
+            disabled={busy}
+            title={`Effective: ${effectiveWorkshopModel}`}
+            onChange={(e) => {
+              const value = e.target.value;
+              setSessionModelOverride(value === "" ? null : value);
+            }}
+          >
+            <option value="">
+              Default
+              {workshopModelDefault
+                ? ` (${workshopModelDefault})`
+                : ` (${DEFAULT_WORKSHOP_MODEL})`}
+            </option>
+            {availableModels.map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+            {sessionModelOverride &&
+            !availableModels.includes(sessionModelOverride) ? (
+              <option value={sessionModelOverride}>
+                {sessionModelOverride}
+              </option>
+            ) : null}
+          </select>
+        </label>
         <button
           type="button"
           className="btn btn--primary"
@@ -1223,10 +1318,19 @@ export function WorkshopPage({
               ? destination
                 ? "Overwrite known package paths"
                 : "Save package to disk"
-              : "Validate successfully before Save"
+              : "Save blocked unless you confirm Save invalid anyway"
           }
         >
           Save
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={onSaveAsClick}
+          disabled={busy}
+          title="Fork package to a new destination"
+        >
+          Save As
         </button>
       </div>
 
@@ -1494,7 +1598,11 @@ export function WorkshopPage({
           ) : null}
           {showSaveForm ? (
             <div className="workshop__save">
-              <div className="eyebrow">First Save destination</div>
+              <div className="eyebrow">
+                {saveFormMode === "saveAs"
+                  ? "Save As destination"
+                  : "First Save destination"}
+              </div>
               <label className="workshop__field">
                 Directory
                 <input
@@ -1518,7 +1626,7 @@ export function WorkshopPage({
                   disabled={busy}
                   onClick={() => void onConfirmSave()}
                 >
-                  Create package
+                  {saveFormMode === "saveAs" ? "Save As" : "Create package"}
                 </button>
                 <button
                   type="button"

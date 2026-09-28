@@ -515,6 +515,7 @@ export type CreateDraftPackageInput = {
   draft: DraftPackagePayload;
   pipelineFilename?: string;
   project_root?: string;
+  allowInvalid?: boolean;
 };
 
 export type CreateDraftPackageResult =
@@ -680,6 +681,7 @@ export type SettingsSnapshot = {
   maxConcurrent: number;
   credentialSource?: CredentialSource;
   binding: CredentialBindingView;
+  workshopModel?: string;
 };
 
 export type ProviderAuthMutationResult =
