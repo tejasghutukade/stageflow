@@ -39,7 +39,6 @@ import {
   canOfferRunShortcut,
   draftStageIds,
   emptyDraftPackage,
-  formatArtifactDiffLine,
   isProposalStale,
   isTaskProposalIntent,
   parseAutoApplyIntent,
@@ -68,6 +67,10 @@ import {
   DEFAULT_WORKSHOP_MODEL,
   resolveWorkshopModel,
 } from "../workshop/modelSettings";
+import {
+  ArtifactDiffList,
+  WorkshopChatPanel,
+} from "../workshop/WorkshopChatPanel";
 
 const AUTOSAVE_DEBOUNCE_MS = 500;
 const SAVE_INVALID_CONFIRM =
@@ -117,26 +120,6 @@ function definitionTrack(
     selected: selectedId === id,
     proposed: proposedIds.has(id),
   }));
-}
-
-function ArtifactDiffList({
-  artifacts,
-}: {
-  artifacts: ProposalArtifactDiff[];
-}) {
-  if (artifacts.length === 0) return null;
-  return (
-    <ul className="workshop__diff-list" aria-label="Per-artifact diff">
-      {artifacts.map((diff) => (
-        <li key={`${diff.kind}-${diff.path}`}>
-          {formatArtifactDiffLine(diff)}
-          {diff.after || diff.before ? (
-            <pre>{diff.after ?? diff.before}</pre>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 type DiskChangeBanner = {
@@ -1640,50 +1623,17 @@ export function WorkshopPage({
           ) : null}
         </section>
 
-        <section className="workshop__chat" aria-label="Workshop Author chat">
-          <div className="eyebrow">Workshop Author</div>
-          <div className="workshop__transcript">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className="workshop__bubble"
-                data-role={m.role}
-              >
-                <div className="eyebrow">{m.role}</div>
-                <p>{m.text}</p>
-                {m.artifacts ? (
-                  <ArtifactDiffList artifacts={m.artifacts} />
-                ) : null}
-              </div>
-            ))}
-          </div>
-          <form
-            className="workshop__composer"
-            onSubmit={(e) => {
-              e.preventDefault();
-              onSend();
-            }}
-          >
-            <input
-              className="input"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={
-                pending
-                  ? "Accept or Reject the pending proposal first"
-                  : "Describe a stage, task, or workflow…"
-              }
-              disabled={busy || Boolean(pending)}
-            />
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={busy || Boolean(pending) || !input.trim()}
-            >
-              Send
-            </button>
-          </form>
-        </section>
+        <WorkshopChatPanel
+          messages={messages}
+          pending={pending}
+          busy={busy}
+          autoApply={autoApply}
+          input={input}
+          onInputChange={setInput}
+          onSend={onSend}
+          onAccept={onAccept}
+          onReject={onReject}
+        />
       </div>
     </div>
   );
