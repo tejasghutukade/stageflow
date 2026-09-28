@@ -495,6 +495,44 @@ describe("sf validate integration", { timeout: 30_000 }, () => {
       await cleanup();
     }
   });
+
+  it("manifest-all discovers a trigger's dangling pipeline/task refs", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      await mkdir(path.join(root, "tasks"), { recursive: true });
+      await mkdir(path.join(root, "triggers"), { recursive: true });
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        "version: 1\ncatalog:\n  pipelines:\n    - pipelines\n  tasks:\n    - tasks\n  triggers:\n    - triggers\n",
+      );
+      await cp(
+        path.join(fixtures, "triggers", "manual-dangling-refs.trigger.yaml"),
+        path.join(root, "triggers", "manual-dangling-refs.trigger.yaml"),
+      );
+      clearFindProjectRootCacheForTests();
+      const result = runCli(["validate", "--json"], root);
+      expect(result.status).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        ok: boolean;
+        findings: Array<{ code: string; file: string }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(
+        parsed.findings.some(
+          (f) => f.code === "trigger.unknown_pipeline" && f.file.includes("manual-dangling-refs"),
+        ),
+      ).toBe(true);
+      expect(
+        parsed.findings.some(
+          (f) => f.code === "trigger.unknown_task" && f.file.includes("manual-dangling-refs"),
+        ),
+      ).toBe(true);
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
 });
 
 describe("catalog.legacy_yaml findings", () => {

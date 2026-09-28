@@ -36,6 +36,8 @@ import {
   type StageExecutionPatch,
   type StageLogEvent,
   type StageSnapshot,
+  type TriggerRecord,
+  type UpsertTriggerInput,
   type VerificationCheckResult,
   type VerificationCheckResultPatch,
   type ConfigOriginRecord,
@@ -197,6 +199,17 @@ type ForkGenerationRow = {
   updated_at: string;
 };
 
+type TriggerRow = {
+  id: string;
+  definition_ref: string;
+  enabled: number;
+  last_fired_at: string | null;
+  last_run_id: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const ensuredStageDirs = new Set<string>();
 
 function executionFromRow(row: ExecutionRow): StageExecution {
@@ -258,6 +271,19 @@ function feedbackLoopFromRow(row: FeedbackLoopRow): FeedbackLoopRecord {
           ) as FeedbackLoopRecord["deferred_send_back"],
         }
       : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function triggerFromRow(row: TriggerRow): TriggerRecord {
+  return {
+    id: row.id,
+    definition_ref: row.definition_ref,
+    enabled: row.enabled !== 0,
+    ...(row.last_fired_at != null ? { last_fired_at: row.last_fired_at } : {}),
+    ...(row.last_run_id != null ? { last_run_id: row.last_run_id } : {}),
+    ...(row.next_run_at != null ? { next_run_at: row.next_run_at } : {}),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1276,6 +1302,80 @@ export class SqliteRunStore implements RunStore {
       .prepare(`SELECT project_root FROM projects ORDER BY project_root`)
       .all() as { project_root: string }[];
     return rows.map((row) => row.project_root);
+  }
+
+  async upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO triggers (id, definition_ref, enabled, created_at, updated_at)
+         VALUES (@id, @definition_ref, @enabled, @created_at, @updated_at)
+         ON CONFLICT(id) DO UPDATE SET
+           definition_ref = @definition_ref,
+           enabled = @enabled,
+           updated_at = @updated_at`,
+      )
+      .run({
+        id: input.id,
+        definition_ref: input.definitionRef,
+        enabled: input.enabled ? 1 : 0,
+        created_at: now,
+        updated_at: now,
+      });
+    const record = await this.getTrigger(input.id);
+    if (!record) throw new Error(`Trigger not found after upsert: ${input.id}`);
+    return record;
+  }
+
+  async getTrigger(id: string): Promise<TriggerRecord | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers WHERE id = ?`,
+      )
+      .get(id) as TriggerRow | undefined;
+    return row ? triggerFromRow(row) : null;
+  }
+
+  async listTriggers(): Promise<TriggerRecord[]> {
+    await this.ready();
+    const rows = this.db
+      .prepare(
+        `SELECT id, definition_ref, enabled, last_fired_at, last_run_id, next_run_at, created_at, updated_at
+         FROM triggers ORDER BY id`,
+      )
+      .all() as TriggerRow[];
+    return rows.map(triggerFromRow);
+  }
+
+  async recordTriggerFired(id: string, runId: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE triggers SET last_fired_at = @last_fired_at, last_run_id = @last_run_id, updated_at = @updated_at
+         WHERE id = @id`,
+      )
+      .run({ id, last_fired_at: now, last_run_id: runId, updated_at: now });
+    if (result.changes === 0) {
+      throw new Error(`Trigger not found: ${id}`);
+    }
+  }
+
+  async setTriggerNextRun(id: string, nextRunAt: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    const result = this.db
+      .prepare(
+        `UPDATE triggers SET next_run_at = @next_run_at, updated_at = @updated_at
+         WHERE id = @id`,
+      )
+      .run({ id, next_run_at: nextRunAt, updated_at: now });
+    if (result.changes === 0) {
+      throw new Error(`Trigger not found: ${id}`);
+    }
   }
 
   async readRun(runId: string): Promise<RunDetail> {

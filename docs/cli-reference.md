@@ -429,6 +429,65 @@ sf runs gc [--dry-run] [--json]
 
 `--dry-run` is report-only; omitting it mutates. Matching MCP tool is `gc_runs` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
 
+## `sf trigger`
+
+Inspect and fire catalog `*.trigger.yaml` definitions (see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)). Like `sf run`/`sf runs`, this is an HTTP client of the shared global Stageflow service (auto-started if nothing is listening).
+
+```bash
+sf trigger list [--json]
+sf trigger show <id> [--json]
+sf trigger fire <id> [--json]
+```
+
+| Subcommand | Role |
+|------------|------|
+| `list` | Catalog-authoritative list of every trigger, overlaid with its last-recorded fire state (if any) |
+| `show` | One trigger's catalog fields plus `last_fired_at` / `last_run_id` when it has fired before, and `next_run_at` for a `schedule`-kind trigger |
+| `fire` | Resolve the trigger's `pipeline`/`task` refs and start a real run through the same `start_run` path the CLI/MCP/console use |
+
+`kind: manual` triggers only run when fired explicitly. `kind: schedule` triggers also fire on their own on a running Host, per their `cron`/`timezone` (catch-up-once-on-boot if the Host was down past the due time — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); firing one manually with `sf trigger fire` still works the same as any other trigger. `kind: event` triggers load and validate but have no adapter driving them yet (see [Architecture](architecture.md)).
+
+### `sf trigger list`
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Pretty-printed `{ "triggers": [ … ] }`, each item the trigger's catalog fields plus `definition_ref`, and `last_fired_at` / `last_run_id` / `next_run_at` when present |
+
+Without `--json`, prints one `id\tkind\tenabled` line per trigger.
+
+**Exit codes:** `0` success, `1` error (for example no catalog found).
+
+### `sf trigger show`
+
+| Flag | Description |
+|------|-------------|
+| `<id>` | Trigger id (required) |
+| `--json` | Pretty-printed trigger object (same shape as one `list` item) |
+
+**Exit codes:** `0` success, `1` error (unknown trigger id).
+
+### `sf trigger fire`
+
+```bash
+sf trigger fire manual-hello-world --json
+```
+
+Resolves the trigger, starts a run, and blocks until that run reaches a terminal or waiting state — the same completion contract as `sf run`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Pipeline succeeded |
+| `1` | Failed (unknown trigger id, disabled trigger, dangling `pipeline`/`task` ref, stage error, cancelled, or busy start) |
+| `2` | Pipeline waiting on operator input |
+
+**JSON outcomes** (`--json`) follow the same `sf run` completion shape (`ok`, `outcome`, `runId`, …) on success. On a start failure (unknown id, disabled trigger, or an unresolved ref), the JSON body is the same shape as `sf run`'s start-failure JSON (`reason`, optional `code`), still exit `1`.
+
+A disabled trigger (`enabled: false`) fails fire with a reason mentioning "disabled" (HTTP `409`). An unknown trigger id fails with a reason naming the id (HTTP `404`).
+
+HTTP: `GET /api/triggers`, `GET /api/triggers/:id`, `POST /api/triggers/:id/fire` (`202` with `{ runId, queued?, queuePosition?, queuedCode? }` on accept). Same mutate / loopback gating notes as other mutating Host verbs (see [`sf runs`](#sf-runs) above).
+
 ## `sf envelope get`
 
 Read a stage envelope or CI handoff JSON from the run store.
@@ -855,6 +914,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_NO_AUTOSTART` | Disable detached Host autostart (container-safe); mutating CLI verbs fail with `autostart_disabled` |
 | `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off) |
 | `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per attempt (default `3`) |
+| `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` | `schedule`-kind trigger poll interval (default `30000`); `0` disables the schedule adapter — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 

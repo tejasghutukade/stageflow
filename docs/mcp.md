@@ -313,6 +313,59 @@ Probe one named git-root `.mcp.json` server with isolated connect-and-exit (same
 
 `status` is one of `connected`, `needs_auth`, `connect_failed`, `unresolved_var`, `invalid_config`, `missing_catalog`, `cancelled`. Helper statuses stay in the success payload (`isError` only if the tool itself fails).
 
+### `list_triggers`
+
+List catalog-declared triggers (same source as `GET /api/triggers`): manifest fields plus store-recorded `last_fired_at` / `last_run_id` / `next_run_at` when a trigger has fired before.
+
+**Input:** `{}`
+
+**Output:**
+
+```json
+{
+  "triggers": [
+    {
+      "id": "manual-hello-world",
+      "pipeline": "hello",
+      "task": "my-task",
+      "kind": "manual",
+      "enabled": true,
+      "definition_ref": "triggers/manual-hello-world.trigger.yaml"
+    }
+  ]
+}
+```
+
+Returns `{ "error": "No Stageflow catalog found", "status": 404 }` when no catalog is registered for `cwd`.
+
+### `get_trigger`
+
+Look up one catalog trigger by id (same source as `GET /api/triggers/:id`).
+
+**Input:** `{ "id": "manual-hello-world" }`
+
+**Output:** the same per-trigger shape as `list_triggers`. Unknown id: `{ "error": "Trigger not found: …", "status": 404 }`.
+
+### `fire_trigger`
+
+Fire a catalog trigger by id: resolves its `pipeline`/`task` refs and starts a run through the same `RunManager.startRun` path as `start_run` (same as `POST /api/triggers/:id/fire`), then records the fire on the trigger's store row.
+
+**Input:** `{ "id": "manual-hello-world" }`
+
+**Success:** `{ "runId": "…" }`, or `{ "runId": "…", "queued": true, "queuePosition": … }` when admitted to the queue (same shapes as `start_run`).
+
+Fails `404` for an unknown trigger id, `409` when the trigger is disabled, or `400` when it references an unknown pipeline/task. May also return the same busy / disk codes as `start_run` (`busy_capacity`, `busy_checkout`, `insufficient_disk`).
+
+### `create_trigger`
+
+Create a new `*.trigger.yaml` in the catalog: same validation/write path as `POST /api/triggers` (`src/config/createTrigger.ts`), called in-process rather than over HTTP. Validates `id` format/uniqueness, that `pipeline`/`task` resolve to real catalog ids, and kind-specific shape (`schedule.cron` must parse via `croner`; `event.source` is required), writes `<directory>/<id>.trigger.yaml`, then re-loads it to confirm it round-trips before returning.
+
+**Input:** `{ project_root?, directory, id, pipeline, task, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match? }, enabled? }` (`enabled` defaults to `true`). `project_root` selects the catalog root to write into, same as `start_run`; required when multiple writable roots are configured.
+
+**Success:** the created trigger, same per-trigger shape as `list_triggers`.
+
+Fails `400` for a malformed body or a read-only/unknown `project_root` (`catalog_root_read_only` / `unknown_project_root`), `409` when `id` already exists, `422` when `pipeline`/`task` reference unknown catalog ids or `schedule.cron` fails to parse.
+
 ### `list_runs`
 
 List known pipeline runs from the SQLite store.

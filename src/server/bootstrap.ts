@@ -23,6 +23,12 @@ import {
 import { RunManager } from "../runtime/runManager.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
+  ScheduleSource,
+  triggerTickIntervalMsFromEnv,
+} from "../runtime/scheduleSource.js";
+import { fireTrigger } from "../runtime/triggerRunner.js";
+import type { TriggerFireEvent } from "../runtime/triggerPort.js";
+import {
   createRunChangeBus,
   getRunChangeBusFromWrappedStore,
   isRunStoreWrapped,
@@ -84,6 +90,8 @@ export type StageflowHostBootstrap = {
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
+  /** Stops the schedule-trigger tick loop started at boot. */
+  stopScheduleSource: () => void;
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
   /**
@@ -253,6 +261,7 @@ export async function bootstrapStageflowHost(
         close: async () => {},
       },
       stopGcInterval: () => {},
+      stopScheduleSource: () => {},
       storeFilesystem,
       serveBlocked,
       ...(hostConfig !== undefined ? { hostConfig } : {}),
@@ -351,6 +360,47 @@ export async function bootstrapStageflowHost(
   const stopGcInterval = () => {
     if (gcInterval !== undefined) clearInterval(gcInterval);
   };
+
+  const scheduleSource = new ScheduleSource({
+    store,
+    cwd,
+    intervalMs: triggerTickIntervalMsFromEnv(env),
+    logError: (message) => bootLog.error("trigger.schedule_source_failed", message),
+  });
+  const onScheduleFire = async (event: TriggerFireEvent) => {
+    try {
+      const result = await fireTrigger(event.triggerId, store, manager, { cwd });
+      if (!result.ok) {
+        bootLog.error(
+          "trigger.schedule_fire_failed",
+          `trigger "${event.triggerId}" fire failed: ${result.reason}`,
+        );
+      }
+    } catch (err) {
+      bootLog.error(
+        "trigger.schedule_fire_failed",
+        `trigger "${event.triggerId}" fire threw: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
+  try {
+    // Boot-time catch-up: fire once for any schedule trigger whose next_run_at
+    // already passed while the Host was down, then reschedule from now —
+    // before starting the periodic ticker so this pass never races it.
+    await scheduleSource.tick(onScheduleFire);
+  } catch (err) {
+    bootLog.error(
+      "trigger.schedule_catchup_failed",
+      `boot catch-up tick failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  await scheduleSource.start(onScheduleFire);
+  const stopScheduleSource = () => {
+    void scheduleSource.stop();
+  };
+
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });
@@ -392,6 +442,7 @@ export async function bootstrapStageflowHost(
     ...(providerBoot !== undefined ? { providerBoot } : {}),
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
+    stopScheduleSource,
     storeFilesystem,
   };
 }

@@ -159,6 +159,7 @@ describe("Host boot integrity", () => {
 
       await boot.store!.close();
       boot.stopGcInterval();
+      boot.stopScheduleSource();
     });
   });
 });

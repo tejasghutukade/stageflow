@@ -52,6 +52,7 @@ export type CatalogBrowseResult = {
 export type CatalogScanPaths = {
   pipelinePaths: string[];
   taskPaths: string[];
+  triggerPaths: string[];
 };
 
 const BAKED_MODEL_IDS = [
@@ -104,11 +105,12 @@ export async function getCatalogScanPaths(
   if (!catalogReady(ctx)) {
     return null;
   }
-  const [pipelinePaths, taskPaths] = await Promise.all([
+  const [pipelinePaths, taskPaths, triggerPaths] = await Promise.all([
     scanCatalogPaths(ctx.manifest, "pipeline"),
     scanCatalogPaths(ctx.manifest, "task"),
+    scanCatalogPaths(ctx.manifest, "trigger"),
   ]);
-  return { pipelinePaths, taskPaths };
+  return { pipelinePaths, taskPaths, triggerPaths };
 }
 
 async function listTasksFromManifest(

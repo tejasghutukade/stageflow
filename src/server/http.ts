@@ -12,6 +12,7 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
@@ -1404,6 +1405,19 @@ export function createOperatorRoutes(
           await handleProjectMcpRoutes(req, res, {
             projectRoot: rootDir,
             json,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleTriggerRoutes(req, res, {
+            cwd,
+            manager,
+            store,
+            json,
+            readJsonBody,
+            auditLog,
           })
         ) {
           return true;

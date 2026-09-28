@@ -7,7 +7,7 @@ title: Yaml Catalog
 
 Stageflow uses a **pipeline-owned catalog**: each pipeline file lists stages as object entries with `uses:` (external YAML) or an inline body. Tasks are separate `*.task.yaml` files. A repo-root **`stageflow.yaml`** manifest declares which directories the operator console browses.
 
-Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/), [`tests/fixtures/stages/`](../tests/fixtures/stages/), [`tests/fixtures/tasks/`](../tests/fixtures/tasks/).
+Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/), [`tests/fixtures/stages/`](../tests/fixtures/stages/), [`tests/fixtures/tasks/`](../tests/fixtures/tasks/), [`tests/fixtures/triggers/`](../tests/fixtures/triggers/).
 
 ## Layout
 
@@ -34,6 +34,7 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 |------|---------|---------|
 | Pipeline | `*.pipeline.yaml` | `hello.pipeline.yaml` |
 | Task | `*.task.yaml` | `my-task.task.yaml` |
+| Trigger | `*.trigger.yaml` | `manual-hello-world.trigger.yaml` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
@@ -892,6 +893,48 @@ Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `i
 
 Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
+## Triggers (`*.trigger.yaml`) {#triggers-trigger-yaml}
+
+A trigger is a small catalog file that binds one addressable `id` to an existing `pipeline` + `task`, so something outside the pipeline DAG can start a run without knowing the underlying catalog paths — an operator running `sf trigger fire`, an external system calling the REST route, a `schedule`-kind trigger firing on its own, or (not yet implemented) a future event adapter. See [Architecture](architecture.md) for what backs a trigger today versus what is deferred.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Trigger identifier (project-scoped, like pipelines and tasks) |
+| `pipeline` | yes | `id` of a catalog pipeline (`*.pipeline.yaml`) this trigger starts |
+| `task` | yes | `id` of a catalog task (`*.task.yaml`) this trigger starts |
+| `kind` | yes | `manual` \| `schedule` \| `event` |
+| `enabled` | yes | Whether firing this trigger is allowed; a disabled trigger fails fire with a `409` |
+| `schedule` | no | `{ cron: string, timezone?: string }` — read by the `schedule` adapter; see below |
+| `event` | no | `{ source: string, match?: Record<string, unknown> }` — shape only; no poller reads it yet |
+
+`kind: manual` only runs when fired explicitly (`sf trigger fire`, `POST /api/triggers/:id/fire`), resolving the `pipeline`/`task` refs and starting a real run through the same internal path the CLI/MCP/console already use.
+
+`kind: schedule` triggers also fire on their own while the Host is running: `ScheduleSource` ticks on an interval (`STAGEFLOW_TRIGGER_TICK_INTERVAL_MS`, default 30s — see [CLI reference](cli-reference.md)), computing each trigger's next fire time from `cron`/`timezone` via `croner` and persisting it (`next_run_at`) so a Host restart doesn't lose or re-derive it. If the Host was down past a trigger's `next_run_at`, it fires **once** on the next boot for the most recent missed occurrence — a schedule does not queue one run per missed interval — then recomputes `next_run_at` from the current time. Firing a `schedule` trigger manually with `sf trigger fire` still works the same as any other trigger.
+
+`kind: event` triggers still only load and validate; nothing polls them yet — see [Architecture](architecture.md).
+
+```yaml
+id: manual-hello-world
+pipeline: hello
+task: my-task
+kind: manual
+enabled: true
+```
+
+See [`tests/fixtures/triggers/manual-hello-world.trigger.yaml`](../tests/fixtures/triggers/manual-hello-world.trigger.yaml).
+
+### Validation
+
+`sf validate` loads every `*.trigger.yaml` under the catalog's trigger roots (`catalog.triggers` in the `stageflow.yaml` manifest, below) and confirms its `pipeline` and `task` refs resolve against known catalog ids, the same way stage `uses:` refs are checked. A dangling ref is caught at validate time, not fire time:
+
+| Code | Meaning |
+|------|---------|
+| `trigger.invalid_shape` | Missing or invalid `id`, `pipeline`, `task`, `kind`, or `enabled` |
+| `trigger.unknown_pipeline` | `pipeline` does not match any catalog pipeline `id` |
+| `trigger.unknown_task` | `task` does not match any catalog task `id` |
+
+See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
+
 ## Manifest (`stageflow.yaml`)
 
 Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
@@ -907,9 +950,11 @@ catalog:
   tasks:
     - examples/hello-world
     - examples/plan-review
+  triggers: []
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
+    trigger: "*.trigger.yaml"
   exclude:
     - tests/fixtures
 ```
@@ -918,6 +963,7 @@ catalog:
 - **`agent`**: optional global default backend; separate from `model`.
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
+- **`triggers`**: catalog roots scanned for `*.trigger.yaml` — see [Triggers](#triggers-trigger-yaml).
 
 Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/` — not a global `stages/` pool.
 

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { InlinePipelineDefinition, LoadedPipeline } from "../types/pipeline.js";
+import type { TriggerFile } from "../types/trigger.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   INLINE_PIPELINE_PATH,
@@ -10,6 +11,7 @@ import {
 import type { LoadIssue } from "./loadOutcome.js";
 import { loadStageOutcome } from "./loadStage.js";
 import { loadTaskOutcome } from "./loadTask.js";
+import { loadTriggerOutcome } from "./loadTrigger.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { resolveCatalogContext } from "./resolveCatalogContext.js";
 import { getCatalogScanPaths } from "./browseCatalog.js";
@@ -27,7 +29,7 @@ import { findMissingMcpCommands } from "../preflight/mcpCommands.js";
 
 export type ValidationSeverity = "error" | "warning";
 
-export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task";
+export type ValidationCategory = "pipeline" | "stage" | "catalog" | "task" | "trigger";
 
 export type ValidationFindingCode =
   | "pipeline.invalid_shape"
@@ -80,6 +82,10 @@ export type ValidationFindingCode =
   | "task.repository_ref_required"
   | "task.ref_without_repository"
   | "task.repository_invalid"
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task"
   | "catalog.duplicate_pipeline_id"
   | "catalog.manifest_missing"
   | "catalog.manifest_invalid"
@@ -101,7 +107,7 @@ export type ValidationFinding = {
   stageId?: string;
 };
 
-export type ValidationScope = "full" | "pipeline" | "task";
+export type ValidationScope = "full" | "pipeline" | "task" | "trigger";
 
 export type ValidateCatalogOptions = {
   cwd?: string;
@@ -109,6 +115,7 @@ export type ValidateCatalogOptions = {
   scope: ValidationScope;
   pipeline?: string;
   task?: string;
+  trigger?: string;
   strict?: boolean;
 };
 
@@ -267,6 +274,24 @@ function findingTaskError(
   );
 }
 
+function findingTriggerError(
+  cwd: string,
+  absPath: string,
+  message: string,
+  code: ValidationFindingCode,
+): ValidationFinding {
+  return baseFinding(
+    {
+      cwd,
+      absPath,
+      message,
+      code,
+      category: "trigger",
+    },
+    "error",
+  );
+}
+
 function findingCatalog(
   cwd: string,
   absPath: string,
@@ -334,6 +359,16 @@ export function findingsFromLoadIssues(
     if (issue.category === "task") {
       return [
         findingTaskError(
+          cwd,
+          absPath,
+          issue.message,
+          issue.code as ValidationFindingCode,
+        ),
+      ];
+    }
+    if (issue.category === "trigger") {
+      return [
+        findingTriggerError(
           cwd,
           absPath,
           issue.message,
@@ -832,7 +867,7 @@ function findingEmptyCatalog(
   );
 }
 
-async function collectPipelineIdsFromPaths(
+export async function collectPipelineIdsFromPaths(
   pipelinePaths: string[],
 ): Promise<Map<string, string[]>> {
   const idToPaths = new Map<string, string[]>();
@@ -850,6 +885,19 @@ async function collectPipelineIdsFromPaths(
   }
 
   return idToPaths;
+}
+
+export async function collectTaskIdsFromPaths(taskPaths: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const filePath of taskPaths) {
+    try {
+      const raw = await readYamlObject(filePath);
+      if (typeof raw?.id === "string") ids.add(raw.id);
+    } catch {
+      // unreadable files handled by task validation loop
+    }
+  }
+  return ids;
 }
 
 function findingsForDuplicatePipelineIds(
@@ -915,7 +963,7 @@ async function validateManifestAll(
   if (!scanPaths) {
     return findings;
   }
-  const { pipelinePaths, taskPaths } = scanPaths;
+  const { pipelinePaths, taskPaths, triggerPaths } = scanPaths;
 
   for (const pipelinePath of pipelinePaths) {
     const core = await runPipelineValidation(pipelinePath, {
@@ -937,6 +985,60 @@ async function validateManifestAll(
   const idToPaths = await collectPipelineIdsFromPaths(pipelinePaths);
   findings.push(...findingsForDuplicatePipelineIds(projectRoot, idToPaths));
 
+  if (triggerPaths.length > 0) {
+    const pipelineIds = new Set(idToPaths.keys());
+    const taskIds = await collectTaskIdsFromPaths(taskPaths);
+    for (const triggerPath of triggerPaths) {
+      const outcome = await loadTriggerOutcome(triggerPath);
+      if (!outcome.ok) {
+        findings.push(...findingsFromLoadIssues(projectRoot, triggerPath, outcome.issues));
+        continue;
+      }
+      findings.push(
+        ...findingsForTriggerRefs(projectRoot, triggerPath, outcome.value, {
+          pipelineIds,
+          taskIds,
+        }),
+      );
+    }
+  }
+
+  return findings;
+}
+
+export type TriggerCatalogRefs = {
+  pipelineIds: ReadonlySet<string>;
+  taskIds: ReadonlySet<string>;
+};
+
+/** Confirms a trigger's `pipeline`/`task` refs resolve against known catalog ids. */
+export function findingsForTriggerRefs(
+  cwd: string,
+  absPath: string,
+  trigger: TriggerFile,
+  refs: TriggerCatalogRefs,
+): ValidationFinding[] {
+  const findings: ValidationFinding[] = [];
+  if (!refs.pipelineIds.has(trigger.pipeline)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown pipeline "${trigger.pipeline}"`,
+        "trigger.unknown_pipeline",
+      ),
+    );
+  }
+  if (!refs.taskIds.has(trigger.task)) {
+    findings.push(
+      findingTriggerError(
+        cwd,
+        absPath,
+        `Trigger "${trigger.id}" references unknown task "${trigger.task}"`,
+        "trigger.unknown_task",
+      ),
+    );
+  }
   return findings;
 }
 
@@ -954,6 +1056,32 @@ async function validateSingleTask(
   return [];
 }
 
+async function validateSingleTrigger(
+  invocationCwd: string,
+  triggerArg: string,
+): Promise<ValidationFinding[]> {
+  const ctx = await resolveCatalogContext(invocationCwd);
+  const relCwd = ctx.projectRoot ?? invocationCwd;
+  const triggerPath = path.resolve(invocationCwd, triggerArg);
+  const outcome = await loadTriggerOutcome(triggerPath);
+  if (!outcome.ok) {
+    return findingsFromLoadIssues(relCwd, triggerPath, outcome.issues);
+  }
+
+  const scanPaths = await getCatalogScanPaths(ctx);
+  const pipelineIds = scanPaths
+    ? new Set((await collectPipelineIdsFromPaths(scanPaths.pipelinePaths)).keys())
+    : new Set<string>();
+  const taskIds = scanPaths
+    ? await collectTaskIdsFromPaths(scanPaths.taskPaths)
+    : new Set<string>();
+
+  return findingsForTriggerRefs(relCwd, triggerPath, outcome.value, {
+    pipelineIds,
+    taskIds,
+  });
+}
+
 export async function validateCatalog(
   options: ValidateCatalogOptions,
 ): Promise<ValidationResult> {
@@ -965,6 +1093,9 @@ export async function validateCatalog(
   }
   if (options.scope === "task" && !options.task) {
     throw new Error("validateCatalog: task is required when scope is \"task\"");
+  }
+  if (options.scope === "trigger" && !options.trigger) {
+    throw new Error("validateCatalog: trigger is required when scope is \"trigger\"");
   }
 
   const allFindings: ValidationFinding[] = [];
@@ -978,6 +1109,8 @@ export async function validateCatalog(
     });
   } else if (options.scope === "task") {
     allFindings.push(...(await validateSingleTask(cwd, options.task!)));
+  } else if (options.scope === "trigger") {
+    allFindings.push(...(await validateSingleTrigger(cwd, options.trigger!)));
   } else {
     allFindings.push(...(await validateManifestAll(cwd)));
   }

@@ -18,6 +18,7 @@ const defaultItems: RailItem[] = [
   { id: "runs", label: "Runs", glyph: "▤" },
   { id: "pipelines", label: "Pipelines", glyph: "⛓" },
   { id: "tasks", label: "Tasks", glyph: "▦" },
+  { id: "triggers", label: "Triggers", glyph: "⚡" },
   { id: "skills", label: "Skills", glyph: "✦" },
   { id: "extensions", label: "Extensions", glyph: "◇" },
   { id: "settings", label: "Settings", glyph: "⚙" },
