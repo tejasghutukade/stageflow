@@ -666,7 +666,6 @@ export type WorkshopChatTurnInput = {
   autoApply?: boolean;
   model?: string | null;
   stream?: boolean;
-  project_root?: string;
 };
 
 export type WorkshopChatTurnResult =

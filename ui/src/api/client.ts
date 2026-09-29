@@ -1265,7 +1265,6 @@ export async function sendWorkshopChatTurn(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.project_root ? { project_root: input.project_root } : {}),
         stream: false,
       }),
     });
@@ -1314,7 +1313,6 @@ export async function sendWorkshopChatTurnStreaming(
         draft: input.draft,
         autoApply: input.autoApply === true,
         ...(input.model !== undefined ? { model: input.model } : {}),
-        ...(input.project_root ? { project_root: input.project_root } : {}),
         stream: true,
       }),
     });

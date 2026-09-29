@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  createDraftPackage,
   loadDraftPackage,
   loadTaskArtifact,
   overwriteDraftPackage,
@@ -355,6 +356,53 @@ describe("overwriteDraftPackage", () => {
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.status).toBe(400);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("returns 400 when a stage path escapes the package directory", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const seed = await createDraftPackage(root, {
+        directory: "pipelines",
+        draft: validFilePackageDraft(),
+        allowInvalid: true,
+      });
+      expect(seed.ok).toBe(true);
+
+      const escaped: DraftPackage = {
+        pipeline: {
+          id: "demo",
+          stages: [
+            { id: "clarify", uses: "../escape.yaml", entry: true },
+          ],
+        },
+        stages: [
+          {
+            path: "../escape.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Escape",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      const result = await overwriteDraftPackage(root, {
+        directory: "pipelines",
+        draft: escaped,
+        allowInvalid: true,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.status).toBe(400);
+      expect(result.error).toMatch(/escapes package directory/i);
+      await expect(
+        readFile(path.join(root, "escape.yaml"), "utf8"),
+      ).rejects.toThrow();
     } finally {
       await cleanup();
     }
@@ -741,6 +789,76 @@ describe("Workshop Author save tool facade", () => {
       );
       const blocked = await save.handler({ mode: "create" }, ctx);
       expect(blocked.ok).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("save ignores LLM projectRoot / project_root args and uses host-bound context only", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const outsider = await initTempGitRepo();
+      try {
+        const {
+          createSaveTool,
+          createWorkshopDraftContext,
+        } = await import("../src/operatorAgent/index.js");
+
+        const draft: DraftPackage = {
+          pipeline: {
+            id: "bound-root",
+            stages: [{ id: "clarify", uses: "./clarify.yaml", entry: true }],
+          },
+          stages: [
+            {
+              path: "./clarify.yaml",
+              body: {
+                id: "clarify",
+                system_prompt: "Clarify",
+                model: MODEL,
+                ...REQUIRED_IO,
+              },
+            },
+          ],
+        };
+
+        const save = createSaveTool();
+        let context: unknown = createWorkshopDraftContext(draft, {
+          destination: { directory: "pipelines" },
+          projectRoot: root,
+        });
+        const ctx = {
+          getContext: () => context,
+          setContext: (next: unknown) => {
+            context = next;
+          },
+          emitProposal: () => {},
+        };
+
+        const written = await save.handler(
+          {
+            mode: "create",
+            projectRoot: outsider.root,
+            project_root: outsider.root,
+          },
+          ctx,
+        );
+        expect(written.ok).toBe(true);
+        const yaml = await readFile(
+          path.join(root, "pipelines", "bound-root.pipeline.yaml"),
+          "utf8",
+        );
+        expect(yaml).toContain("bound-root");
+        await expect(
+          readFile(
+            path.join(outsider.root, "pipelines", "bound-root.pipeline.yaml"),
+            "utf8",
+          ),
+        ).rejects.toThrow();
+      } finally {
+        await outsider.cleanup();
+      }
     } finally {
       await cleanup();
     }

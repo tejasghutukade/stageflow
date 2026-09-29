@@ -327,6 +327,9 @@ async function openDefaultPiSession(
 type BoundPiState = {
   handle: PiOperatorSessionHandle;
   profileId: string;
+  profile: OperatorAgentProfile;
+  tools: OperatorAgentToolContext;
+  toolEvents: OperatorAgentSessionEvent[];
   started: boolean;
   replayed: boolean;
 };
@@ -342,10 +345,6 @@ export function createPiOperatorAgentModel(
   const openPiSession = options.openPiSession ?? openDefaultPiSession;
   const bindings = new WeakMap<OperatorAgentToolContext, BoundPiState>();
   const activeTools = new Set<OperatorAgentToolContext>();
-
-  let turnProfile: OperatorAgentProfile | undefined;
-  let turnTools: OperatorAgentToolContext | undefined;
-  let turnToolEvents: OperatorAgentSessionEvent[] = [];
 
   function resolveAuthPath(): string {
     if (options.authPath) return options.authPath;
@@ -367,6 +366,8 @@ export function createPiOperatorAgentModel(
   ): Promise<BoundPiState> {
     const existing = bindings.get(tools);
     if (existing && existing.profileId === profile.id) {
+      existing.profile = profile;
+      existing.tools = tools;
       return existing;
     }
     if (existing) {
@@ -374,23 +375,32 @@ export function createPiOperatorAgentModel(
       bindings.delete(tools);
     }
 
-    turnProfile = profile;
-    turnTools = tools;
-    turnToolEvents = [];
+    const bindingHolder: {
+      current: BoundPiState | null;
+    } = { current: null };
 
     const toolNames = resolveWorkshopToolNames(profile.tools.map((t) => t.name));
     const customTools = buildWorkshopCustomTools(
       profile.tools,
       () => {
-        if (!turnProfile) throw new Error("Workshop Pi profile not bound");
-        return turnProfile;
+        if (!bindingHolder.current) {
+          throw new Error("Workshop Pi profile not bound");
+        }
+        return bindingHolder.current.profile;
       },
       () => {
-        if (!turnTools) throw new Error("Workshop Pi tool context not bound");
-        return turnTools;
+        if (!bindingHolder.current) {
+          throw new Error("Workshop Pi tool context not bound");
+        }
+        return bindingHolder.current.tools;
       },
       (name, result) => {
-        turnToolEvents.push({ type: "tool_result", name, result });
+        if (!bindingHolder.current) return;
+        bindingHolder.current.toolEvents.push({
+          type: "tool_result",
+          name,
+          result,
+        });
       },
     );
 
@@ -405,15 +415,19 @@ export function createPiOperatorAgentModel(
       ...(options.piSessionDir ? { piSessionDir: options.piSessionDir } : {}),
     });
 
-    const state: BoundPiState = {
+    const binding: BoundPiState = {
       handle,
       profileId: profile.id,
+      profile,
+      tools,
+      toolEvents: [],
       started: true,
       replayed: false,
     };
-    bindings.set(tools, state);
+    bindingHolder.current = binding;
+    bindings.set(tools, binding);
     activeTools.add(tools);
-    return state;
+    return binding;
   }
 
   async function releaseTools(tools: OperatorAgentToolContext): Promise<void> {
@@ -439,10 +453,6 @@ export function createPiOperatorAgentModel(
     },
 
     async complete({ profile, message, tools }) {
-      turnProfile = profile;
-      turnTools = tools;
-      turnToolEvents = [];
-
       let state: BoundPiState;
       try {
         state = await ensureBound(profile, tools);
@@ -452,6 +462,10 @@ export function createPiOperatorAgentModel(
           events: [{ type: "error", message: msg }],
         };
       }
+
+      state.profile = profile;
+      state.tools = tools;
+      state.toolEvents = [];
 
       const events: OperatorAgentSessionEvent[] = [];
       let assistantText = "";
@@ -484,14 +498,14 @@ export function createPiOperatorAgentModel(
         const msg = err instanceof Error ? err.message : String(err);
         return {
           events: [
-            ...turnToolEvents,
+            ...state.toolEvents,
             { type: "error", message: msg },
           ],
         };
       }
       unsubscribe();
 
-      for (const toolEvent of turnToolEvents) {
+      for (const toolEvent of state.toolEvents) {
         events.push(toolEvent);
       }
       if (assistantText.trim()) {

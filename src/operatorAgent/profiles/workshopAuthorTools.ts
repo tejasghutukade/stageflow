@@ -127,16 +127,11 @@ function resolveDestination(
 
 function resolveProjectRoot(
   ctx: OperatorAgentToolContext,
-  args: Record<string, unknown>,
   defaultProjectRoot?: string,
 ): string | null {
-  return (
-    stringArg(args, "projectRoot") ??
-    stringArg(args, "project_root") ??
-    readWorkshopContext(ctx).projectRoot ??
-    defaultProjectRoot ??
-    null
-  );
+  // Never trust LLM tool args for the write root — only host-bound context
+  // (or the profile/host default passed into createSaveTool).
+  return readWorkshopContext(ctx).projectRoot ?? defaultProjectRoot ?? null;
 }
 
 export function buildCreateStageDraft(
@@ -517,7 +512,7 @@ export function createSaveTool(
   return {
     name: "save",
     description:
-      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). Requires a destination directory (context.destination or args.directory). Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML.",
+      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). Requires a destination directory (context.destination or args.directory). Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
       const destination = resolveDestination(ctx, args);
       if (!destination) {
@@ -528,13 +523,13 @@ export function createSaveTool(
             "destination is required — set context.destination or pass directory (do not invent a disk path)",
         };
       }
-      const projectRoot = resolveProjectRoot(ctx, args, options.projectRoot);
+      const projectRoot = resolveProjectRoot(ctx, options.projectRoot);
       if (!projectRoot) {
         return {
           ok: false,
           content: null,
           error:
-            "projectRoot is required — bind it on the draft context or pass projectRoot",
+            "projectRoot is required — bind it on the draft context (host-owned; do not invent from tool args)",
         };
       }
 

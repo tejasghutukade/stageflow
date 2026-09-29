@@ -179,4 +179,100 @@ describe("createPiOperatorAgentModel", () => {
 
     session.close();
   });
+
+  it("concurrent chat turns keep profile/tools/events isolated per binding", async () => {
+    let openSeq = 0;
+    const openPiSession = async (
+      input: PiOperatorOpenSessionInput,
+    ): Promise<PiOperatorSessionHandle> => {
+      openSeq += 1;
+      const openIndex = openSeq;
+      const listeners = new Set<(event: unknown) => void>();
+      const handle: PiOperatorSessionHandle = {
+        session: {
+          prompt: vi.fn(async () => {
+            await new Promise((r) => setTimeout(r, 20));
+            const createStage = input.customTools.find(
+              (t) => t.name === "create_stage",
+            );
+            expect(createStage).toBeDefined();
+            await createStage!.execute!("call-1", {
+              id: `stage-${openIndex}`,
+              summary: `from open ${openIndex}`,
+            });
+            for (const listener of listeners) {
+              listener({
+                type: "message_update",
+                assistantMessageEvent: {
+                  type: "text_delta",
+                  delta: "ok",
+                },
+              });
+              listener({
+                type: "message_end",
+                message: {
+                  role: "assistant",
+                  content: [{ type: "text", text: "ok" }],
+                },
+              });
+            }
+          }),
+          subscribe: vi.fn((listener: (event: unknown) => void) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          }),
+          dispose: vi.fn(),
+          bindExtensions: vi.fn(async () => undefined),
+          setModel: vi.fn(async () => undefined),
+          setThinkingLevel: vi.fn(),
+          agent: { state: { messages: [] } },
+        },
+        sessionManager: {
+          appendCustomMessageEntry: vi.fn(),
+          buildSessionContext: vi.fn(() => ({ messages: [] })),
+          getSessionId: vi.fn(() => `pi-${openIndex}`),
+        },
+        piSessionId: `pi-${openIndex}`,
+        shutdown: vi.fn(async () => undefined),
+      };
+      tempHandles.push(handle);
+      return handle;
+    };
+
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+
+    const sessionA = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("alpha")),
+    });
+    const sessionB = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("beta")),
+    });
+
+    const [eventsA, eventsB] = await Promise.all([
+      sessionA.send("mutate A"),
+      sessionB.send("mutate B"),
+    ]);
+
+    expect(eventsA.some((e) => e.type === "tool_result")).toBe(true);
+    expect(eventsB.some((e) => e.type === "tool_result")).toBe(true);
+
+    const draftA = readDraftFromContext(sessionA.getContext());
+    const draftB = readDraftFromContext(sessionB.getContext());
+    expect(draftA.pipeline.id).toBe("alpha");
+    expect(draftB.pipeline.id).toBe("beta");
+    expect(draftA.pipeline.stages).toHaveLength(1);
+    expect(draftB.pipeline.stages).toHaveLength(1);
+    expect(draftA.pipeline.stages[0]!.id).not.toBe(draftB.pipeline.stages[0]!.id);
+    expect(draftA.stages).toHaveLength(1);
+    expect(draftB.stages).toHaveLength(1);
+
+    sessionA.close();
+    sessionB.close();
+  });
 });

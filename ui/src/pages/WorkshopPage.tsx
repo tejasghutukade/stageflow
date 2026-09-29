@@ -923,13 +923,14 @@ export function WorkshopPage() {
         return;
       }
       setSessionId(got.session.id);
+      applyDraft(EMPTY_DRAFT);
       setMutationCards(new Map());
       setSelectedStageId(null);
       setSeedMessages(transcriptToSeedMessages(got.session.transcript));
       setThreadEpoch((n) => n + 1);
       setHistoryOpen(false);
     },
-    [],
+    [applyDraft],
   );
 
   const acceptMutation = useCallback(

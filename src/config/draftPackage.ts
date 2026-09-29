@@ -410,6 +410,27 @@ async function writeDraftPackageFiles(
 ): Promise<DraftPackageWriteResult> {
   const { packageDirectory, draft, pipelineAbsPath, pipelineRelPath } = target;
   const stagePaths: string[] = [];
+
+  for (const stage of draft.stages ?? []) {
+    const rel = normalizeStageRelPath(stage.path);
+    if (!rel || path.isAbsolute(rel) || rel.split(/[/\\]/).includes("..")) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Stage path escapes package directory (${stage.path})`,
+      };
+    }
+    const stageAbs = path.resolve(packageDirectory, rel);
+    const relToPackage = path.relative(packageDirectory, stageAbs);
+    if (relToPackage.startsWith("..") || path.isAbsolute(relToPackage)) {
+      return {
+        ok: false,
+        status: 400,
+        error: `Stage path escapes package directory (${stage.path})`,
+      };
+    }
+  }
+
   try {
     await mkdir(packageDirectory, { recursive: true });
     await writeFile(
@@ -420,7 +441,7 @@ async function writeDraftPackageFiles(
 
     for (const stage of draft.stages ?? []) {
       const rel = normalizeStageRelPath(stage.path);
-      const stageAbs = path.join(packageDirectory, rel);
+      const stageAbs = path.resolve(packageDirectory, rel);
       await mkdir(path.dirname(stageAbs), { recursive: true });
       await writeFile(stageAbs, stringifyTargetYaml(stage.body), "utf8");
       stagePaths.push(path.relative(projectRoot, stageAbs).replace(/\\/g, "/"));
