@@ -48,6 +48,10 @@ describe("parseHash", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
   });
 
+  it("parses the workshop lab route", () => {
+    expect(parseHash("#/workshop-lab")).toEqual({ name: "workshop-lab" });
+  });
+
   it("parses workshop open query params", () => {
     expect(
       parseHash("#/workshop?pipeline=pipelines%2Fdemo.pipeline.yaml"),

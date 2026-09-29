@@ -17,6 +17,7 @@ import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProviderConnectPage } from "./pages/ProviderConnectPage";
 import { WorkshopPage } from "./pages/WorkshopPage";
+import { WorkshopLabPage } from "./pages/WorkshopLabPage";
 import { fetchProvidersDetect } from "./api";
 import { needsFirstRun } from "./providers/helpers";
 import {
@@ -181,6 +182,8 @@ function AppShell() {
         openTaskPath={route.taskPath}
       />
     );
+  } else if (route.name === "workshop-lab") {
+    content = <WorkshopLabPage />;
   } else {
     content = (
       <TodayPage
