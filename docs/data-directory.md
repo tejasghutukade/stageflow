@@ -30,6 +30,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `backups/` | disposable | `sf backup` archives (default output) |
 | `restore-pending/` | disposable | Staged API restore archives + marker |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
+| `workshop/sessions/` | **keep** | Workshop Author chat sessions: per-id directory with `session.json` (title, timestamps, transcript, `piSessionId`). No draft package in the session blob — draft stays client-/Workshop-owned. |
 
 For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
 
