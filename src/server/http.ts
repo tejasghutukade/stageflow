@@ -41,8 +41,19 @@ import {
 import {
   iterateWorkshopChatStreamFrames,
   runWorkshopChatTurn,
+  WorkshopChatSessionRegistry,
+  WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
-import type { OperatorAgentHost } from "../operatorAgent/index.js";
+import {
+  createWorkshopSession,
+  getWorkshopSession,
+  listWorkshopSessions,
+  resolveWorkshopSessionStoreRoot,
+} from "../workshop/sessionStore.js";
+import {
+  createWorkshopOperatorHost,
+  type OperatorAgentHost,
+} from "../operatorAgent/index.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import {
   listModelsMultiProject,
@@ -291,6 +302,11 @@ export type OperatorRouteDeps = {
    * Distinct from stage-execution AgentPort. Defaults to Workshop Author fake host.
    */
   workshopOperatorHost?: OperatorAgentHost;
+  /**
+   * Optional durable Workshop chat registry (host sessions keyed by session id).
+   * Defaults to a registry owned by this route surface.
+   */
+  workshopChatRegistry?: WorkshopChatSessionRegistry;
 };
 
 /**
@@ -313,6 +329,13 @@ export function createOperatorRoutes(
     uiDistDir,
     workshopOperatorHost,
   } = deps;
+  const workshopChatRegistry =
+    deps.workshopChatRegistry ??
+    new WorkshopChatSessionRegistry(
+      workshopOperatorHost ?? createWorkshopOperatorHost(),
+    );
+  const workshopSessionStoreRoot = (): string =>
+    resolveWorkshopSessionStoreRoot();
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method, boot }) => {
@@ -1918,6 +1941,67 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          const sessions = listWorkshopSessions(workshopSessionStoreRoot());
+          json(res, 200, { sessions });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const record = createWorkshopSession(workshopSessionStoreRoot(), {
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+          });
+          json(res, 201, { session: record });
+          return true;
+        }
+
+        const workshopSessionGetMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopSessionGetMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionGetMatch[1] ?? "",
+          );
+          try {
+            const session = getWorkshopSession(
+              workshopSessionStoreRoot(),
+              sessionId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/workshop/chat") {
           let body: unknown;
           try {
@@ -1928,6 +2012,10 @@ export function createOperatorRoutes(
           }
           if (!isPlainObject(body)) {
             json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
             return true;
           }
           if (typeof body.message !== "string" || !body.message.trim()) {
@@ -1943,6 +2031,7 @@ export function createOperatorRoutes(
           let turn;
           try {
             turn = await runWorkshopChatTurn({
+              sessionId: body.sessionId,
               draft: draftParsed,
               message: body.message,
               autoApply: body.autoApply === true,
@@ -1951,11 +2040,21 @@ export function createOperatorRoutes(
                   ? body.model
                   : undefined,
               settingsDefault: settingsDefault ?? null,
-              ...(workshopOperatorHost
-                ? { host: workshopOperatorHost }
-                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
             });
           } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
             json(res, 400, {
               error: err instanceof Error ? err.message : String(err),
             });
