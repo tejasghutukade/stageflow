@@ -64,9 +64,12 @@ describe("Workshop Author playbook + docs retrieval", () => {
     for (const forbidden of ["bash", "write", "edit"] as const) {
       expect(profile.tools.some((t) => t.name === forbidden)).toBe(false);
     }
-    expect(profile.playbook).toMatch(/clarify/i);
+    expect(profile.playbook).toMatch(/clarify-then-create|clarify/i);
     expect(profile.playbook).toMatch(/create_stage/);
     expect(profile.playbook).toMatch(/never use bash\/write\/edit/i);
+    expect(profile.playbook).toMatch(/immediately/i);
+    expect(profile.playbook).toMatch(/soft-undos|soft undo/i);
+    expect(profile.playbook).toMatch(/workshop\/sessions/i);
   });
 
   it("retrieves stubbed docs/examples without a live provider", async () => {

@@ -45,11 +45,15 @@ Runs and Pipelines list rows stack identity above a full-width mini track so cat
 
 ## Workshop
 
-Workshop (`#/workshop`) is the interactive authoring surface. Chat turns go to **`POST /api/workshop/chat`**, which opens an **Operator Agent Host** session with the Workshop Author profile (playbook, draft tools, docs retrieval) — distinct from stage-execution **AgentPort**.
+Workshop (`#/workshop`) is the interactive authoring surface. Chat turns go to **`POST /api/workshop/chat`**, which uses an **Operator Agent Host** session with the Workshop Author profile (baked playbook, draft tools, docs retrieval) — distinct from stage-execution **AgentPort**.
 
-The UI prefers an NDJSON stream (`Accept: application/x-ndjson`) for progressive assistant text; otherwise it uses a coherent JSON turn. Accept / Reject proposal cards still apply only to the in-memory draft; Save writes to disk.
+The Author **clarifies intent, then creates/edits**. Create/edit tools **mutate the in-memory draft immediately** (studio updates before Accept). Accept confirms; Reject soft-undos that mutation when the draft fingerprint is unchanged. Soft undo does not reverse a successful Save. Disk writes happen only via Save (agent `save` or UI Save) through validate-then-write.
 
-Workshop model selection: Settings default + in-session override (same provider stack as stage runs). Autosave under `$STAGEFLOW_HOME` (or project `.stageflow`) keeps the draft + transcript.
+Durable chat sessions (History / New) live under `$STAGEFLOW_HOME/workshop/sessions/` — transcript + agent session id (+ title, timestamps). The draft package is not stored in the session blob. Autosave WIP slots (draft + messages) remain a separate contract under Workshop autosave paths. See [Data directory](data-directory.md).
+
+The UI prefers an NDJSON stream (`Accept: application/x-ndjson`) for progressive assistant text; otherwise it uses a coherent JSON turn.
+
+Workshop model selection: Settings default + in-session override (same provider stack as stage runs).
 
 ### Manual path
 
@@ -59,9 +63,9 @@ From the repo (or a consumer checkout with Stageflow):
 STAGEFLOW_HOME=$PWD/.stageflow-home npm run dev -- ui
 ```
 
-Open the console URL, then navigate to **`#/workshop`**. New → chat a stage description → Accept a proposal → Validate → Save.
+Open the console URL, then navigate to **`#/workshop`**. New → chat (clarify) → agent creates stages on the map → Accept / Reject → Validate → Save. Use History to restore a prior session thread; New starts a fresh greeting session.
 
-Dev without a global install uses the same entrypoint (`npm run dev -- ui`). Prefer an isolated `STAGEFLOW_HOME` so autosave and settings do not touch your real `~/.stageflow`.
+Dev without a global install uses the same entrypoint (`npm run dev -- ui`). Prefer an isolated `STAGEFLOW_HOME` so sessions, autosave, and settings do not touch your real `~/.stageflow`.
 
 ## Key routes
 
