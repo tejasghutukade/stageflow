@@ -48,8 +48,8 @@ describe("parseHash", () => {
     expect(parseHash("#/workshop")).toEqual({ name: "workshop" });
   });
 
-  it("parses the workshop lab route", () => {
-    expect(parseHash("#/workshop-lab")).toEqual({ name: "workshop-lab" });
+  it("redirects workshop-lab hash to workshop route", () => {
+    expect(parseHash("#/workshop-lab")).toEqual({ name: "workshop" });
   });
 
   it("parses workshop open query params", () => {

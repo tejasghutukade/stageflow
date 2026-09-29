@@ -1,1645 +1,433 @@
+import {
+  ActionBarPrimitive,
+  AssistantRuntimeProvider,
+  ComposerPrimitive,
+  MessagePrimitive,
+  ThreadPrimitive,
+  useLocalRuntime,
+  useMessagePartText,
+  type ChatModelAdapter,
+  type ThreadMessageLike,
+} from "@assistant-ui/react";
+import { Markdown } from "@astryxdesign/core/Markdown";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  attachTaskArtifact,
-  checkWorkshopDiskChange,
-  clearWorkshopAutosave,
-  createDraftPackageWithDetails,
-  fetchModels,
-  fetchSettings,
-  fetchTasks,
-  getWorkshopAutosave,
-  openDraftPackage,
-  overwriteDraftPackageWithDetails,
-  putWorkshopAutosave,
-  sendWorkshopChatTurnStreaming,
-  validateDraftPackage,
-  type DraftValidationResult,
-  type TaskListing,
-  type ValidationFinding,
-  type WorkshopAutosavePayload,
-} from "../api";
-import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
-import {
-  navigate,
-  newRunPath,
-  parseHash,
-  pipelinePath,
-  workshopPath,
-} from "../routes";
-import { showToast } from "../toast";
-import {
-  DIRTY_DISCARD_CONFIRM,
-  DIRTY_LEAVE_CONFIRM,
-  DIRTY_NEW_CONFIRM,
-  workshopAutosaveSlotKey,
-  workshopSessionFingerprint,
-  type WorkshopAutosaveDestination,
-} from "../workshop/autosave";
-import { applyWorkshopChatTurn } from "../workshop/chatClient";
-import {
-  canOfferRunShortcut,
-  draftStageIds,
-  emptyDraftPackage,
-  isProposalStale,
-  STALE_PROPOSAL_NOTICE,
-  WORKSHOP_AUTHOR_GREETING,
-  type ChatMessage,
-  type DraftPackage,
-  type ProposalArtifactDiff,
-  type WorkshopProposal,
-} from "../workshop/draft";
-import {
-  addStageToDraft,
-  createTaskInDraft,
-  detachTaskFromDraft,
-  patchTaskBody,
-  removeStageFromDraft,
-  setTaskInDraft,
-} from "../workshop/draftEdits";
-import {
-  DraftInspector,
-  type InspectorSelection,
-} from "../workshop/DraftInspector";
-import {
-  DEFAULT_WORKSHOP_MODEL,
-  resolveWorkshopModel,
-} from "../workshop/modelSettings";
-import { WorkshopChatPanel } from "../workshop/WorkshopChatPanel";
+import type { PipelineTrackProjection, StageSnapshot } from "../api";
+import { SpatialRunMap } from "../components/SpatialRunMap";
+import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
+import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
 
-const AUTOSAVE_DEBOUNCE_MS = 500;
-const SAVE_INVALID_CONFIRM =
-  "Draft is invalid. Save invalid anyway? This writes the package without the validate gate.";
+const CHAT_DEFAULT_W = 420;
+const CHAT_MIN_W = 280;
+const MAP_MIN_W = 320;
+const CHAT_ARROW_STEP = 32;
 
-type SaveFormMode = "first" | "saveAs";
-type Destination = WorkshopAutosaveDestination;
-
-let msgSeq = 0;
-function nextMsgId(): string {
-  msgSeq += 1;
-  return `msg-${msgSeq}`;
-}
-
-function greetingMessages(): ChatMessage[] {
-  return [
+const LAB_PROJECTION: PipelineTrackProjection = {
+  nodes: [
     {
-      id: nextMsgId(),
-      role: "assistant",
-      text: WORKSHOP_AUTHOR_GREETING,
+      stage_id: "intake",
+      status: "succeeded",
+      readiness: "succeeded",
+      layer: 0,
+      layer_order: 0,
+      attempt_count: 1,
     },
-  ];
-}
-
-function normalizeMessages(
-  raw: WorkshopAutosavePayload["messages"],
-): ChatMessage[] {
-  return raw.map((m) => ({
-    id: m.id,
-    role: m.role,
-    text: m.text,
-    ...(Array.isArray(m.artifacts)
-      ? { artifacts: m.artifacts as ProposalArtifactDiff[] }
-      : {}),
-    ...(typeof m.proposalId === "string" ? { proposalId: m.proposalId } : {}),
-    ...(typeof m.proposalSummary === "string"
-      ? { proposalSummary: m.proposalSummary }
-      : {}),
-  }));
-}
-
-function definitionTrack(
-  draft: DraftPackage,
-  proposedIds: ReadonlySet<string>,
-  selectedId: string | null,
-): TrackStage[] {
-  return draftStageIds(draft).map((id) => ({
-    id,
-    label: id,
-    status: "pending" as const,
-    selected: selectedId === id,
-    proposed: proposedIds.has(id),
-  }));
-}
-
-type DiskChangeBanner = {
-  changedPaths: string[];
-  currentFingerprints: Record<string, string>;
+    {
+      stage_id: "implement",
+      status: "running",
+      readiness: "running",
+      layer: 1,
+      layer_order: 0,
+      attempt_count: 1,
+    },
+    {
+      stage_id: "review",
+      status: "waiting_for_input",
+      readiness: "waiting",
+      layer: 2,
+      layer_order: 0,
+      attempt_count: 1,
+      gate_kinds: ["confirm"],
+      blocked_by: ["implement"],
+    },
+    {
+      stage_id: "ship",
+      status: "pending",
+      readiness: "blocked",
+      layer: 3,
+      layer_order: 0,
+      blocked_by: ["review"],
+    },
+  ],
+  edges: [
+    { from: "intake", to: "implement" },
+    { from: "implement", to: "review" },
+    { from: "review", to: "ship" },
+  ],
 };
 
-function openedPackageMessages(
-  pipelinePathValue: string,
-  draft: DraftPackage,
-): ChatMessage[] {
-  const taskNote = draft.task
-    ? ` Task “${draft.task.filename}” is attached.`
-    : " Task panel stays empty until you attach a task.";
-  return [
-    {
-      id: nextMsgId(),
-      role: "assistant",
-      text: `Opened ${pipelinePathValue}. Edit the DAG or inspector — Save overwrites the known package paths.${taskNote}`,
-    },
-  ];
+const LAB_STAGES: StageSnapshot[] = [
+  {
+    stage_id: "intake",
+    status: "succeeded",
+    events: [],
+    envelope: null,
+    artifacts: ["intake/brief.md"],
+    attempt_count: 1,
+    last_at: "2026-09-29T12:00:00.000Z",
+  },
+  {
+    stage_id: "implement",
+    status: "running",
+    events: [],
+    envelope: null,
+    artifacts: [],
+    attempt_count: 1,
+    last_at: "2026-09-29T12:05:00.000Z",
+  },
+  {
+    stage_id: "review",
+    status: "waiting_for_input",
+    events: [],
+    envelope: null,
+    artifacts: [],
+    attempt_count: 1,
+    last_at: "2026-09-29T12:08:00.000Z",
+  },
+  {
+    stage_id: "ship",
+    status: "pending",
+    events: [],
+    envelope: null,
+    artifacts: [],
+    attempt_count: 0,
+  },
+];
+
+const LAB_CHROME: SpatialNodeChrome[] = [
+  {
+    stageId: "intake",
+    title: "Intake",
+    kicker: "stage · succeeded",
+    status: "succeeded",
+    attemptCount: 1,
+    readinessLine: "Brief captured",
+    meta: "1 artifact",
+    isWaitingAttention: false,
+  },
+  {
+    stageId: "implement",
+    title: "Implement",
+    kicker: "stage · running",
+    status: "running",
+    attemptCount: 1,
+    readinessLine: "Writing changes…",
+    isWaitingAttention: false,
+  },
+  {
+    stageId: "review",
+    title: "Review",
+    kicker: "gate · waiting",
+    status: "waiting_for_input",
+    attemptCount: 1,
+    gateKinds: ["confirm"],
+    promptSummary: "Approve the implementation?",
+    readinessLine: "Needs operator confirm",
+    isWaitingAttention: true,
+  },
+  {
+    stageId: "ship",
+    title: "Ship",
+    kicker: "stage · pending",
+    status: "pending",
+    readinessLine: "Blocked on review",
+    isWaitingAttention: false,
+  },
+];
+
+const SEED_MESSAGES: ThreadMessageLike[] = [
+  {
+    role: "assistant",
+    content:
+      "Welcome to **Workshop** — a frontend look prototype.\n\nDescribe a pipeline change on the left; the mock run map on the right shows how the live DAG canvas feels.",
+  },
+  {
+    role: "user",
+    content: "Add a review gate after implement, then ship.",
+  },
+  {
+    role: "assistant",
+    content:
+      "Sketched a four-stage flow:\n\n1. **intake** — succeeded\n2. **implement** — running\n3. **review** — waiting for confirm\n4. **ship** — pending\n\nSelect a node on the map to preview selection chrome. Replies here are local mock text only.",
+  },
+];
+
+const labChatModel: ChatModelAdapter = {
+  async *run() {
+    yield {
+      content: [
+        {
+          type: "text",
+          text: "*(Lab mock)* Got it — no backend on this page. Use this pane to judge chat density, composer height, and how the thread sits next to the run map.",
+        },
+      ],
+    };
+  },
+};
+
+function LabAssistantText() {
+  const { text } = useMessagePartText();
+  return (
+    <div className="workshop-lab__bubble-md">
+      <Markdown headingLevelStart={3} contentWidth="100%">
+        {text}
+      </Markdown>
+    </div>
+  );
 }
 
-export function WorkshopPage({
-  openPipelinePath,
-  openTaskPath,
-}: {
-  openPipelinePath?: string;
-  openTaskPath?: string;
-}) {
-  const [draft, setDraft] = useState<DraftPackage>(() => emptyDraftPackage());
-  const [messages, setMessages] = useState<ChatMessage[]>(() =>
-    greetingMessages(),
-  );
-  const [pending, setPending] = useState<WorkshopProposal | null>(null);
-  const [autoApply, setAutoApply] = useState(false);
-  const [sessionModelOverride, setSessionModelOverride] = useState<
-    string | null
-  >(null);
-  const [findings, setFindings] = useState<ValidationFinding[]>([]);
-  const [validationOk, setValidationOk] = useState<boolean | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [savedPath, setSavedPath] = useState<string | null>(null);
-  const [savedTaskPath, setSavedTaskPath] = useState<string | null>(null);
-  const [destination, setDestination] = useState<Destination | null>(null);
-  const [showSaveForm, setShowSaveForm] = useState(false);
-  const [saveFormMode, setSaveFormMode] = useState<SaveFormMode>("first");
-  const [saveDirectory, setSaveDirectory] = useState("pipelines");
-  const [savePipelineId, setSavePipelineId] = useState("untitled");
-  const [selection, setSelection] = useState<InspectorSelection | null>(null);
-  const [openError, setOpenError] = useState<string | null>(null);
-  const [taskMode, setTaskMode] = useState<"idle" | "create" | "attach">(
-    "idle",
-  );
-  const [taskIdDraft, setTaskIdDraft] = useState("task");
-  const [taskGoalDraft, setTaskGoalDraft] = useState("");
-  const [taskListings, setTaskListings] = useState<TaskListing[]>([]);
-  const [attachPath, setAttachPath] = useState("");
-  const [diskFingerprints, setDiskFingerprints] = useState<
-    Record<string, string>
-  >({});
-  const [diskChange, setDiskChange] = useState<DiskChangeBanner | null>(null);
-  const [workshopModelDefault, setWorkshopModelDefault] = useState<
-    string | null
-  >(null);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
-  const [cleanBaseline, setCleanBaseline] = useState(() =>
-    workshopSessionFingerprint({
-      draft: emptyDraftPackage(),
-      messages: [],
-      autoApply: false,
-      sessionModelOverride: null,
-    }),
-  );
-  const [hydrated, setHydrated] = useState(false);
+function LabUserText() {
+  const { text } = useMessagePartText();
+  return <p>{text}</p>;
+}
 
-  const autosaveKey = workshopAutosaveSlotKey(
-    openPipelinePath ?? savedPath ?? null,
+function LabUserMessage() {
+  return (
+    <MessagePrimitive.Root className="workshop-lab__msg" data-role="user">
+      <div className="workshop-lab__bubble" data-role="user">
+        <div className="eyebrow">you</div>
+        <MessagePrimitive.Parts components={{ Text: LabUserText }} />
+      </div>
+    </MessagePrimitive.Root>
   );
-  const sessionFingerprint = workshopSessionFingerprint({
-    draft,
-    messages,
-    autoApply,
-    sessionModelOverride,
+}
+
+function LabAssistantMessage() {
+  return (
+    <MessagePrimitive.Root className="workshop-lab__msg" data-role="assistant">
+      <div className="workshop-lab__bubble" data-role="assistant">
+        <div className="eyebrow">assistant</div>
+        <MessagePrimitive.Parts components={{ Text: LabAssistantText }} />
+        <ActionBarPrimitive.Root className="workshop-lab__action-bar">
+          <ActionBarPrimitive.Copy className="btn btn--ghost workshop-lab__action">
+            Copy
+          </ActionBarPrimitive.Copy>
+        </ActionBarPrimitive.Root>
+      </div>
+    </MessagePrimitive.Root>
+  );
+}
+
+function LabWelcome() {
+  return (
+    <div className="workshop-lab__welcome">
+      <div className="eyebrow">Workshop · prototype</div>
+      <p>
+        Frontend-only chat + run map. Send a message to see LocalRuntime reply
+        with mock text.
+      </p>
+    </div>
+  );
+}
+
+function LabThread() {
+  return (
+    <ThreadPrimitive.Root className="workshop-lab__thread">
+      <ThreadPrimitive.Viewport className="workshop-lab__transcript">
+        <ThreadPrimitive.Empty>
+          <LabWelcome />
+        </ThreadPrimitive.Empty>
+        <ThreadPrimitive.Messages
+          components={{
+            UserMessage: LabUserMessage,
+            AssistantMessage: LabAssistantMessage,
+          }}
+        />
+        <ThreadPrimitive.ScrollToBottom className="btn btn--ghost workshop-lab__scroll-bottom">
+          ↓ Latest
+        </ThreadPrimitive.ScrollToBottom>
+      </ThreadPrimitive.Viewport>
+      <ComposerPrimitive.Root className="workshop-lab__composer">
+        <ComposerPrimitive.Input
+          className="input workshop-lab__composer-input"
+          placeholder="Describe a stage or workflow change…"
+          rows={3}
+          submitMode="enter"
+        />
+        <ComposerPrimitive.Send className="btn btn--primary">
+          Send
+        </ComposerPrimitive.Send>
+      </ComposerPrimitive.Root>
+    </ThreadPrimitive.Root>
+  );
+}
+
+export function WorkshopPage() {
+  const layout = useMemo(() => layoutSpatialTrack(LAB_PROJECTION), []);
+  const [selectedStageId, setSelectedStageId] = useState<string | null>(
+    "review",
+  );
+  const runtime = useLocalRuntime(labChatModel, {
+    initialMessages: SEED_MESSAGES,
   });
-  const dirty = hydrated && sessionFingerprint !== cleanBaseline;
-
-  const dirtyRef = useRef(dirty);
-  const suppressHashRef = useRef(false);
-  const persistPayloadRef = useRef<{
-    key: string;
-    draft: DraftPackage;
-    messages: ChatMessage[];
-    autoApply: boolean;
-    sessionModelOverride: string | null;
-    destination: Destination | null;
-    savedPath: string | null;
-    savedTaskPath: string | null;
-    diskFingerprints: Record<string, string>;
-  } | null>(null);
-  const openPipelinePathRef = useRef(openPipelinePath);
-  const openTaskPathRef = useRef(openTaskPath);
-
-  dirtyRef.current = dirty;
-  openPipelinePathRef.current = openPipelinePath;
-  openTaskPathRef.current = openTaskPath;
-  persistPayloadRef.current = {
-    key: autosaveKey,
-    draft,
-    messages,
-    autoApply,
-    sessionModelOverride,
-    destination,
-    savedPath,
-    savedTaskPath,
-    diskFingerprints,
-  };
-
-  const proposedIds = useMemo(() => {
-    if (!pending) return new Set<string>();
-    return new Set(pending.affectedStageIds);
-  }, [pending]);
-
-  const selectedStageId =
-    selection?.kind === "stage" ? selection.stageId : null;
-
-  const track = useMemo(
-    () =>
-      definitionTrack(
-        pending ? pending.nextDraft : draft,
-        proposedIds,
-        selectedStageId,
-      ),
-    [draft, pending, proposedIds, selectedStageId],
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const splitGestureRef = useRef<{ id: number; x: number; w: number } | null>(
+    null,
   );
-  const canSave = !busy;
-  const effectiveWorkshopModel = resolveWorkshopModel({
-    sessionOverride: sessionModelOverride,
-    settingsDefault: workshopModelDefault,
-    profileDefault: DEFAULT_WORKSHOP_MODEL,
-  });
-  const showRunShortcut = canOfferRunShortcut({
-    savedPipelinePath: savedPath,
-    savedTaskPath,
-    hasTaskInDraft: Boolean(draft.task),
-  });
+  const [bodyWidth, setBodyWidth] = useState(0);
+  const [chatWidth, setChatWidth] = useState(CHAT_DEFAULT_W);
+  const [splitDragging, setSplitDragging] = useState(false);
 
-  const persistAutosave = useCallback(async () => {
-    const payload = persistPayloadRef.current;
-    if (!payload) return;
-    await putWorkshopAutosave({
-      version: 1,
-      key: payload.key,
-      updatedAt: new Date().toISOString(),
-      draft: payload.draft,
-      messages: payload.messages,
-      autoApply: payload.autoApply,
-      sessionModelOverride: payload.sessionModelOverride,
-      destination: payload.destination,
-      savedPath: payload.savedPath,
-      savedTaskPath: payload.savedTaskPath,
-      diskFingerprints: payload.diskFingerprints,
-    });
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const update = () => setBodyWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
-  const markClean = useCallback(
-    (next: {
-      draft: DraftPackage;
-      messages: ChatMessage[];
-      autoApply: boolean;
-      sessionModelOverride: string | null;
-    }) => {
-      setCleanBaseline(workshopSessionFingerprint(next));
-    },
-    [],
-  );
+  const splitMax = Math.max(CHAT_MIN_W, bodyWidth - MAP_MIN_W);
+  const splitMin = bodyWidth > 0 && bodyWidth < CHAT_MIN_W + MAP_MIN_W
+    ? Math.max(160, Math.floor(bodyWidth / 2))
+    : CHAT_MIN_W;
 
-  const resetTransientUi = useCallback(() => {
-    setPending(null);
-    setFindings([]);
-    setValidationOk(null);
-    setShowSaveForm(false);
-    setOpenError(null);
-    setTaskMode("idle");
-  }, []);
-
-  const applyOpenedPackage = useCallback(
-    (input: {
-      draft: DraftPackage;
-      destination: Destination;
-      pipelinePath: string;
-      taskPath: string | null;
-      fingerprints: Record<string, string>;
-      messages: ChatMessage[];
-      autoApply?: boolean;
-      sessionModelOverride?: string | null;
-    }) => {
-      const nextAutoApply = input.autoApply ?? false;
-      const nextOverride = input.sessionModelOverride ?? null;
-      setDraft(input.draft);
-      setDestination(input.destination);
-      setSavedPath(input.pipelinePath);
-      setSavedTaskPath(input.taskPath);
-      setSavePipelineId(input.draft.pipeline.id);
-      setSaveDirectory(input.destination.directory);
-      setMessages(input.messages);
-      setAutoApply(nextAutoApply);
-      setSessionModelOverride(nextOverride);
-      setDiskFingerprints(input.fingerprints);
-      setDiskChange(null);
-      setSelection({ kind: "pipeline" });
-      resetTransientUi();
-      markClean({
-        draft: input.draft,
-        messages: input.messages,
-        autoApply: nextAutoApply,
-        sessionModelOverride: nextOverride,
-      });
-    },
-    [markClean, resetTransientUi],
-  );
-
-  const loadPackageFromDisk = useCallback(
-    async (
-      pipeline: string,
-      task?: string | null,
-      baseline?: Record<string, string> | null,
-    ) => {
-      const result = await openDraftPackage({
-        path: pipeline,
-        ...(task ? { task } : {}),
-      });
-      if (!result.ok) {
-        return { ok: false as const, error: result.error };
-      }
-      const fp = await checkWorkshopDiskChange({
-        pipelinePath: result.pipelinePath,
-        draft: result.draft,
-        taskPath: result.taskPath ?? null,
-        baseline: baseline ?? null,
-      });
-      const fingerprints = fp.ok ? fp.fingerprints : {};
-      return {
-        ok: true as const,
-        draft: result.draft,
-        destination: result.destination,
-        pipelinePath: result.pipelinePath,
-        taskPath: result.taskPath ?? null,
-        fingerprints,
-        changed: fp.ok ? fp.changed : false,
-        changedPaths: fp.ok ? fp.changedPaths : [],
-      };
-    },
-    [],
-  );
-
-  const discardPendingForEdit = useCallback(
-    (notice = STALE_PROPOSAL_NOTICE) => {
-      if (!pending) return;
-      setPending(null);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextMsgId(),
-          role: "system",
-          text: notice,
-        },
-      ]);
-    },
-    [pending],
-  );
-
-  const applyDraft = useCallback(
-    (next: DraftPackage) => {
-      if (pending) {
-        discardPendingForEdit();
-      }
-      setDraft(next);
-      setValidationOk(null);
-      setSavedTaskPath(null);
-    },
-    [discardPendingForEdit, pending],
-  );
-
-  const resetToEmptyNew = useCallback(() => {
-    const nextDraft = emptyDraftPackage();
-    const nextMessages = greetingMessages();
-    setDraft(nextDraft);
-    setMessages(nextMessages);
-    setPending(null);
-    setAutoApply(false);
-    setSessionModelOverride(null);
-    setFindings([]);
-    setValidationOk(null);
-    setSavedPath(null);
-    setSavedTaskPath(null);
-    setDestination(null);
-    setShowSaveForm(false);
-    setSavePipelineId("untitled");
-    setSelection(null);
-    setOpenError(null);
-    setTaskMode("idle");
-    setDiskFingerprints({});
-    setDiskChange(null);
-    markClean({
-      draft: nextDraft,
-      messages: nextMessages,
-      autoApply: false,
-      sessionModelOverride: null,
-    });
-  }, [markClean]);
-
-  const startNew = useCallback(() => {
-    if (dirty && !window.confirm(DIRTY_NEW_CONFIRM)) return;
-    const key = autosaveKey;
-    void clearWorkshopAutosave({ key });
-    dirtyRef.current = false;
-    resetToEmptyNew();
-    if (openPipelinePath || openTaskPath) {
-      suppressHashRef.current = true;
-      navigate(workshopPath());
-    }
-  }, [
-    autosaveKey,
-    dirty,
-    openPipelinePath,
-    openTaskPath,
-    resetToEmptyNew,
-  ]);
-
-  const onDiscard = useCallback(() => {
-    if (dirty && !window.confirm(DIRTY_DISCARD_CONFIRM)) return;
-    dirtyRef.current = false;
-    const key = autosaveKey;
-    const reloadPath = openPipelinePath ?? savedPath;
-    const reloadTask = openTaskPath ?? savedTaskPath;
-    void (async () => {
-      setBusy(true);
-      try {
-        await clearWorkshopAutosave({ key });
-        if (reloadPath) {
-          const loaded = await loadPackageFromDisk(reloadPath, reloadTask);
-          if (!loaded.ok) {
-            setOpenError(loaded.error);
-            showToast(loaded.error);
-            resetToEmptyNew();
-            return;
-          }
-          applyOpenedPackage({
-            draft: loaded.draft,
-            destination: loaded.destination,
-            pipelinePath: loaded.pipelinePath,
-            taskPath: loaded.taskPath,
-            fingerprints: loaded.fingerprints,
-            messages: openedPackageMessages(
-              loaded.pipelinePath,
-              loaded.draft,
-            ),
-          });
-        } else {
-          resetToEmptyNew();
-        }
-      } finally {
-        setBusy(false);
-      }
-    })();
-  }, [
-    applyOpenedPackage,
-    autosaveKey,
-    dirty,
-    loadPackageFromDisk,
-    openPipelinePath,
-    openTaskPath,
-    resetToEmptyNew,
-    savedPath,
-    savedTaskPath,
-  ]);
-
-  const onReloadDisk = useCallback(() => {
-    const reloadPath = openPipelinePath ?? savedPath;
-    if (!reloadPath) {
-      setDiskChange(null);
-      return;
-    }
-    dirtyRef.current = false;
-    const key = autosaveKey;
-    const reloadTask = openTaskPath ?? savedTaskPath;
-    void (async () => {
-      setBusy(true);
-      try {
-        await clearWorkshopAutosave({ key });
-        const loaded = await loadPackageFromDisk(reloadPath, reloadTask);
-        if (!loaded.ok) {
-          setOpenError(loaded.error);
-          showToast(loaded.error);
-          return;
-        }
-        applyOpenedPackage({
-          draft: loaded.draft,
-          destination: loaded.destination,
-          pipelinePath: loaded.pipelinePath,
-          taskPath: loaded.taskPath,
-          fingerprints: loaded.fingerprints,
-          messages: openedPackageMessages(loaded.pipelinePath, loaded.draft),
-        });
-      } finally {
-        setBusy(false);
-      }
-    })();
-  }, [
-    applyOpenedPackage,
-    autosaveKey,
-    loadPackageFromDisk,
-    openPipelinePath,
-    openTaskPath,
-    savedPath,
-    savedTaskPath,
-  ]);
-
-  const onKeepDiskDraft = useCallback(() => {
-    if (!diskChange) return;
-    const nextFingerprints = diskChange.currentFingerprints;
-    setDiskFingerprints(nextFingerprints);
-    setDiskChange(null);
-    void putWorkshopAutosave({
-      version: 1,
-      key: autosaveKey,
-      updatedAt: new Date().toISOString(),
-      draft,
-      messages,
-      autoApply,
-      sessionModelOverride,
-      destination,
-      savedPath,
-      savedTaskPath,
-      diskFingerprints: nextFingerprints,
-    });
-  }, [
-    autosaveKey,
-    autoApply,
-    destination,
-    diskChange,
-    draft,
-    messages,
-    savedPath,
-    savedTaskPath,
-    sessionModelOverride,
-  ]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setHydrated(false);
-    setBusy(true);
-    setOpenError(null);
-    setDiskChange(null);
-    setPending(null);
-
-    void (async () => {
-      const key = workshopAutosaveSlotKey(openPipelinePath ?? null);
-      const autosaveResult = await getWorkshopAutosave({ key });
-      if (cancelled) return;
-      const autosave = autosaveResult.ok ? autosaveResult.autosave : null;
-
-      if (openPipelinePath) {
-        const loaded = await loadPackageFromDisk(
-          openPipelinePath,
-          openTaskPath,
-          autosave?.diskFingerprints ?? null,
-        );
-        if (cancelled) return;
-        if (!loaded.ok) {
-          setOpenError(loaded.error);
-          showToast(loaded.error);
-          setBusy(false);
-          setHydrated(true);
-          return;
-        }
-
-        if (autosave) {
-          const restoredMessages = normalizeMessages(autosave.messages);
-          const restoredAutoApply = autosave.autoApply;
-          const restoredOverride = autosave.sessionModelOverride ?? null;
-          const restoredDraft = autosave.draft as DraftPackage;
-          setDraft(restoredDraft);
-          setMessages(restoredMessages);
-          setAutoApply(restoredAutoApply);
-          setSessionModelOverride(restoredOverride);
-          setDestination(
-            (autosave.destination as Destination | null | undefined) ??
-              loaded.destination,
-          );
-          setSavedPath(autosave.savedPath ?? loaded.pipelinePath);
-          setSavedTaskPath(autosave.savedTaskPath ?? loaded.taskPath);
-          setSavePipelineId(restoredDraft.pipeline.id);
-          setSaveDirectory(
-            (
-              (autosave.destination as Destination | null | undefined) ??
-              loaded.destination
-            ).directory,
-          );
-          setDiskFingerprints(
-            autosave.diskFingerprints ?? loaded.fingerprints,
-          );
-          setSelection({ kind: "pipeline" });
-          resetTransientUi();
-          markClean({
-            draft: restoredDraft,
-            messages: restoredMessages,
-            autoApply: restoredAutoApply,
-            sessionModelOverride: restoredOverride,
-          });
-          if (loaded.changed) {
-            setDiskChange({
-              changedPaths: loaded.changedPaths,
-              currentFingerprints: loaded.fingerprints,
-            });
-          }
-        } else {
-          applyOpenedPackage({
-            draft: loaded.draft,
-            destination: loaded.destination,
-            pipelinePath: loaded.pipelinePath,
-            taskPath: loaded.taskPath,
-            fingerprints: loaded.fingerprints,
-            messages: openedPackageMessages(
-              loaded.pipelinePath,
-              loaded.draft,
-            ),
-          });
-        }
-        setBusy(false);
-        setHydrated(true);
-        return;
-      }
-
-      if (autosave) {
-        const restoredMessages = normalizeMessages(autosave.messages);
-        const restoredDraft = autosave.draft as DraftPackage;
-        const restoredAutoApply = autosave.autoApply;
-        const restoredOverride = autosave.sessionModelOverride ?? null;
-        setDraft(restoredDraft);
-        setMessages(restoredMessages);
-        setAutoApply(restoredAutoApply);
-        setSessionModelOverride(restoredOverride);
-        setDestination(
-          (autosave.destination as Destination | null | undefined) ?? null,
-        );
-        setSavedPath(autosave.savedPath ?? null);
-        setSavedTaskPath(autosave.savedTaskPath ?? null);
-        setSavePipelineId(restoredDraft.pipeline.id || "untitled");
-        if (autosave.destination && typeof autosave.destination === "object") {
-          setSaveDirectory(
-            (autosave.destination as Destination).directory || "pipelines",
-          );
-        }
-        setDiskFingerprints(autosave.diskFingerprints ?? {});
-        setSelection({ kind: "pipeline" });
-        resetTransientUi();
-        markClean({
-          draft: restoredDraft,
-          messages: restoredMessages,
-          autoApply: restoredAutoApply,
-          sessionModelOverride: restoredOverride,
-        });
-        if (autosave.savedPath) {
-          const fp = await checkWorkshopDiskChange({
-            pipelinePath: autosave.savedPath,
-            draft: restoredDraft,
-            taskPath: autosave.savedTaskPath ?? null,
-            baseline: autosave.diskFingerprints ?? null,
-          });
-          if (!cancelled && fp.ok && fp.changed) {
-            setDiskChange({
-              changedPaths: fp.changedPaths,
-              currentFingerprints: fp.fingerprints,
-            });
-          }
-        }
-      } else {
-        resetToEmptyNew();
-      }
-      if (!cancelled) {
-        setBusy(false);
-        setHydrated(true);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    applyOpenedPackage,
-    loadPackageFromDisk,
-    markClean,
-    openPipelinePath,
-    openTaskPath,
-    resetToEmptyNew,
-    resetTransientUi,
-  ]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const [settings, models] = await Promise.all([
-          fetchSettings(),
-          fetchModels(),
-        ]);
-        if (cancelled) return;
-        setWorkshopModelDefault(settings.workshopModel ?? null);
-        setAvailableModels(models.models);
-      } catch {
-        if (cancelled) return;
-        setAvailableModels([]);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated || !dirty) return;
-    const timer = window.setTimeout(() => {
-      void persistAutosave();
-    }, AUTOSAVE_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [
-    hydrated,
-    dirty,
-    draft,
-    messages,
-    autoApply,
-    sessionModelOverride,
-    destination,
-    savedPath,
-    savedTaskPath,
-    diskFingerprints,
-    autosaveKey,
-    persistAutosave,
-  ]);
-
-  useEffect(() => {
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!dirtyRef.current) return;
-      void persistAutosave();
-      event.preventDefault();
-      event.returnValue = "";
-    };
-
-    const onHashChange = () => {
-      if (suppressHashRef.current) {
-        suppressHashRef.current = false;
-        return;
-      }
-      if (!dirtyRef.current) return;
-      const route = parseHash();
-      const staying =
-        route.name === "workshop" &&
-        (route.pipelinePath ?? undefined) ===
-          (openPipelinePathRef.current ?? undefined) &&
-        (route.taskPath ?? undefined) === (openTaskPathRef.current ?? undefined);
-      if (staying) return;
-      if (!window.confirm(DIRTY_LEAVE_CONFIRM)) {
-        suppressHashRef.current = true;
-        navigate(
-          workshopPath({
-            ...(openPipelinePathRef.current
-              ? { pipeline: openPipelinePathRef.current }
-              : {}),
-            ...(openTaskPathRef.current
-              ? { task: openTaskPathRef.current }
-              : {}),
-          }),
-        );
-        return;
-      }
-      void persistAutosave();
-    };
-
-    window.addEventListener("beforeunload", onBeforeUnload);
-    window.addEventListener("hashchange", onHashChange);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-      window.removeEventListener("hashchange", onHashChange);
-    };
-  }, [persistAutosave]);
-
-  const clearAutosaveAfterSave = useCallback(
-    async (pipelinePathValue: string, nextDraft: DraftPackage, taskPathValue: string | null) => {
-      await clearWorkshopAutosave({ key: autosaveKey });
-      if (autosaveKey === workshopAutosaveSlotKey(null)) {
-        await clearWorkshopAutosave({
-          key: workshopAutosaveSlotKey(pipelinePathValue),
-        });
-      }
-      const fp = await checkWorkshopDiskChange({
-        pipelinePath: pipelinePathValue,
-        draft: nextDraft,
-        taskPath: taskPathValue,
-        baseline: null,
-      });
-      const fingerprints = fp.ok ? fp.fingerprints : {};
-      setDiskFingerprints(fingerprints);
-      setDiskChange(null);
-      return fingerprints;
-    },
-    [autosaveKey],
-  );
-
-  const onSendMessage = useCallback(
-    (rawText: string) => {
-      const text = rawText.trim();
-      if (!text || busy || pending) return;
-
-      const userId = nextMsgId();
-      setMessages((prev) => [...prev, { id: userId, role: "user", text }]);
-      setBusy(true);
-
-      void (async () => {
-        let streamingId: string | null = null;
-
-        const result = await sendWorkshopChatTurnStreaming(
-          {
-            message: text,
-            draft,
-            autoApply,
-            model: sessionModelOverride,
-          },
-          {
-            onDelta: (chunk) => {
-              if (!streamingId) {
-                streamingId = nextMsgId();
-                const id = streamingId;
-                setMessages((prev) => [
-                  ...prev,
-                  { id, role: "assistant", text: chunk },
-                ]);
-                return;
-              }
-              const id = streamingId;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === id ? { ...m, text: `${m.text}${chunk}` } : m,
-                ),
-              );
-            },
-          },
-        );
-
-        if (!result.ok) {
-          setMessages((prev) => [
-            ...(streamingId
-              ? prev.filter((m) => m.id !== streamingId)
-              : prev),
-            {
-              id: nextMsgId(),
-              role: "system",
-              text: `Workshop Author unavailable: ${result.error}`,
-            },
-          ]);
-          setBusy(false);
-          showToast(result.error);
-          return;
-        }
-
-        const applied = applyWorkshopChatTurn({
-          turn: result,
-          nextMessageId: nextMsgId,
-        });
-
-        setMessages((prev) => {
-          const base = streamingId
-            ? prev.filter((m) => m.id !== streamingId)
-            : prev;
-          return [...base, ...applied.messages];
-        });
-        setAutoApply(applied.autoApply);
-        setPending(applied.pending);
-        if (JSON.stringify(applied.draft) !== JSON.stringify(draft)) {
-          setDraft(applied.draft);
-          setSavedTaskPath(null);
-          if (typeof applied.draft.pipeline.id === "string") {
-            setSavePipelineId(applied.draft.pipeline.id);
-          }
-          setValidationOk(null);
-        }
-        setBusy(false);
-      })();
-    },
-    [autoApply, busy, draft, pending, sessionModelOverride],
-  );
-
-  const onAccept = useCallback(() => {
-    if (!pending) return;
-    if (isProposalStale(pending, draft)) {
-      setPending(null);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextMsgId(),
-          role: "system",
-          text: STALE_PROPOSAL_NOTICE,
-        },
-      ]);
-      return;
-    }
-    setDraft(pending.nextDraft);
-    setSavedTaskPath(null);
-    if (typeof pending.nextDraft.pipeline.id === "string") {
-      setSavePipelineId(pending.nextDraft.pipeline.id);
-    }
-    setPending(null);
-    setValidationOk(null);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: nextMsgId(),
-        role: "system",
-        text: `Accepted: ${pending.summary}`,
-      },
-    ]);
-  }, [draft, pending]);
-
-  const onReject = useCallback(() => {
-    if (!pending) return;
-    const summary = pending.summary;
-    setPending(null);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: nextMsgId(),
-        role: "system",
-        text: `Rejected: ${summary}`,
-      },
-    ]);
-  }, [pending]);
-
-  const onValidate = useCallback(async () => {
-    setBusy(true);
-    try {
-      const result: DraftValidationResult = await validateDraftPackage(draft);
-      setFindings(result.findings);
-      setValidationOk(result.ok);
-      if (result.ok) {
-        showToast("Draft is valid");
-      } else {
-        showToast(
-          `${result.summary.errors} validation error${result.summary.errors === 1 ? "" : "s"}`,
-        );
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setValidationOk(false);
-      setFindings([
-        {
-          severity: "error",
-          code: "workshop.validate_failed",
-          path: "<draft>",
-          message,
-          category: "pipeline",
-        },
-      ]);
-      showToast(message);
-    } finally {
-      setBusy(false);
-    }
-  }, [draft]);
-
-  const confirmAllowInvalid = useCallback((): boolean => {
-    if (validationOk === true) return true;
-    return window.confirm(SAVE_INVALID_CONFIRM);
-  }, [validationOk]);
-
-  const onSaveClick = useCallback(async () => {
-    if (!confirmAllowInvalid()) return;
-    const allowInvalid = validationOk !== true;
-    if (destination) {
-      setBusy(true);
-      try {
-        const result = await overwriteDraftPackageWithDetails({
-          directory: destination.directory,
-          draft,
-          ...(destination.pipelineFilename
-            ? { pipelineFilename: destination.pipelineFilename }
-            : {}),
-          ...(allowInvalid ? { allowInvalid: true } : {}),
-        });
-        if (!result.ok) {
-          if (result.findings) setFindings(result.findings);
-          setValidationOk(false);
-          showToast(result.error);
-          return;
-        }
-        setSavedPath(result.pipelinePath);
-        setSavedTaskPath(result.taskPath ?? null);
-        await clearAutosaveAfterSave(
-          result.pipelinePath,
-          draft,
-          result.taskPath ?? null,
-        );
-        markClean({
-          draft,
-          messages,
-          autoApply,
-          sessionModelOverride,
-        });
-        dirtyRef.current = false;
-        showToast(
-          allowInvalid
-            ? `Saved invalid package ${result.pipelinePath}`
-            : `Saved ${result.pipelinePath}`,
-        );
-      } finally {
-        setBusy(false);
-      }
-      return;
-    }
-    setSaveFormMode("first");
-    setShowSaveForm(true);
-    setSavePipelineId(draft.pipeline.id || "untitled");
-  }, [
-    autoApply,
-    clearAutosaveAfterSave,
-    confirmAllowInvalid,
-    destination,
-    draft,
-    markClean,
-    messages,
-    sessionModelOverride,
-    validationOk,
-  ]);
-
-  const onSaveAsClick = useCallback(() => {
-    setSaveFormMode("saveAs");
-    setShowSaveForm(true);
-    setSaveDirectory(destination?.directory ?? "pipelines");
-    setSavePipelineId(draft.pipeline.id || "untitled");
-  }, [destination, draft.pipeline.id]);
-
-  const onConfirmSave = useCallback(async () => {
-    if (!confirmAllowInvalid()) return;
-    const allowInvalid = validationOk !== true;
-    const directory = saveDirectory.trim() || "pipelines";
-    const id = savePipelineId.trim() || "untitled";
-    const packageDraft: DraftPackage = {
-      ...draft,
-      pipeline: { ...draft.pipeline, id },
-    };
-    setBusy(true);
-    try {
-      const result = await createDraftPackageWithDetails({
-        directory,
-        draft: packageDraft,
-        ...(allowInvalid ? { allowInvalid: true } : {}),
-      });
-      if (!result.ok) {
-        if (result.findings) setFindings(result.findings);
-        setValidationOk(false);
-        showToast(result.error);
-        return;
-      }
-      setDraft(packageDraft);
-      setSavedPath(result.pipelinePath);
-      setSavedTaskPath(result.taskPath ?? null);
-      setDestination({
-        directory,
-        pipelineFilename: `${id}.pipeline.yaml`,
-      });
-      setShowSaveForm(false);
-      await clearAutosaveAfterSave(
-        result.pipelinePath,
-        packageDraft,
-        result.taskPath ?? null,
+  const applyChatWidth = useCallback(
+    (requested: number) => {
+      const maxByMap = bodyWidth > 0 ? bodyWidth - MAP_MIN_W : requested;
+      const next = Math.max(
+        splitMin,
+        Math.min(requested, Math.max(splitMin, maxByMap)),
       );
-      markClean({
-        draft: packageDraft,
-        messages,
-        autoApply,
-        sessionModelOverride,
-      });
-      dirtyRef.current = false;
-      showToast(
-        allowInvalid
-          ? `Saved invalid package ${result.pipelinePath}`
-          : saveFormMode === "saveAs"
-            ? `Saved As ${result.pipelinePath}`
-            : `Saved ${result.pipelinePath}`,
-      );
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    autoApply,
-    clearAutosaveAfterSave,
-    confirmAllowInvalid,
-    draft,
-    markClean,
-    messages,
-    saveDirectory,
-    saveFormMode,
-    savePipelineId,
-    sessionModelOverride,
-    validationOk,
-  ]);
-
-  const onAddStage = useCallback(() => {
-    const next = addStageToDraft(draft, `stage-${draft.pipeline.stages.length + 1}`);
-    applyDraft(next);
-    const ids = draftStageIds(next);
-    const added = ids[ids.length - 1];
-    if (added) setSelection({ kind: "stage", stageId: added });
-  }, [applyDraft, draft]);
-
-  const onRemoveStage = useCallback(
-    (stageId: string) => {
-      applyDraft(removeStageFromDraft(draft, stageId));
-      setSelection({ kind: "pipeline" });
+      setChatWidth(next);
     },
-    [applyDraft, draft],
+    [bodyWidth, splitMin],
   );
 
-  const onAutoApplyToggle = useCallback(
-    (enabled: boolean) => {
-      setAutoApply(enabled);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: nextMsgId(),
-          role: "system",
-          text: autoApplyStatusMessage(enabled),
-        },
-      ]);
-    },
-    [],
-  );
-
-  const beginCreateTask = useCallback(() => {
-    setTaskMode("create");
-    setTaskIdDraft(
-      typeof draft.task?.body.id === "string" && draft.task.body.id
-        ? draft.task.body.id
-        : draft.pipeline.id || "task",
+  useEffect(() => {
+    if (bodyWidth <= 0) return;
+    const maxByMap = bodyWidth - MAP_MIN_W;
+    setChatWidth((w) =>
+      Math.max(splitMin, Math.min(w, Math.max(splitMin, maxByMap))),
     );
-    setTaskGoalDraft(
-      typeof draft.task?.body.goal === "string" ? draft.task.body.goal : "",
-    );
-  }, [draft]);
+  }, [bodyWidth, splitMin]);
 
-  const beginAttachTask = useCallback(() => {
-    setTaskMode("attach");
-    setBusy(true);
-    void (async () => {
-      try {
-        const result = await fetchTasks();
-        setTaskListings(result.tasks);
-        setAttachPath(result.tasks[0]?.path ?? "");
-      } catch (err) {
-        showToast(err instanceof Error ? err.message : String(err));
-        setTaskMode("idle");
-      } finally {
-        setBusy(false);
-      }
-    })();
-  }, []);
-
-  const onConfirmCreateTask = useCallback(() => {
-    applyDraft(
-      createTaskInDraft(draft, {
-        id: taskIdDraft.trim() || "task",
-        goal: taskGoalDraft.trim() || "Describe the workflow goal",
-      }),
-    );
-    setTaskMode("idle");
-    setSavedTaskPath(null);
-  }, [applyDraft, draft, taskGoalDraft, taskIdDraft]);
-
-  const onConfirmAttachTask = useCallback(async () => {
-    if (!attachPath.trim()) {
-      showToast("Pick a task to attach");
-      return;
-    }
-    setBusy(true);
-    try {
-      const result = await attachTaskArtifact({ task: attachPath.trim() });
-      if (!result.ok) {
-        showToast(result.error);
-        return;
-      }
-      applyDraft(setTaskInDraft(draft, result.task));
-      setTaskMode("idle");
-      setSavedTaskPath(null);
-      showToast(`Attached ${result.taskPath}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [applyDraft, attachPath, draft]);
-
-  const onDetachTask = useCallback(() => {
-    applyDraft(detachTaskFromDraft(draft));
-    setTaskMode("idle");
-  }, [applyDraft, draft]);
-
-  const onRunWorkflow = useCallback(() => {
-    if (!savedPath || !savedTaskPath) return;
-    navigate(newRunPath({ pipeline: savedPath, task: savedTaskPath }));
-  }, [savedPath, savedTaskPath]);
-
-  const viewDraft = pending ? pending.nextDraft : draft;
-  const subtitlePath = savedPath ? savedPath : "Untitled draft · Workshop Author";
+  const selectedChrome = selectedStageId
+    ? LAB_CHROME.find((c) => c.stageId === selectedStageId)
+    : null;
 
   return (
-    <div className="pane workshop">
+    <div
+      className={`pane workshop-lab${splitDragging ? " is-resizing-x" : ""}`}
+    >
       <div className="topbar">
         <div className="topbar__title">Workshop</div>
         <div className="topbar__sub">
-          {subtitlePath}
-          {dirty ? " · unsaved" : ""}
+          Look prototype · mock chat · mock run map
         </div>
         <div className="topbar__spacer" />
-        <label className="workshop__auto-apply">
-          <input
-            type="checkbox"
-            checked={autoApply}
-            onChange={(e) => onAutoApplyToggle(e.target.checked)}
-            disabled={busy}
-          />
-          Auto-apply chat edits
-        </label>
-        {showRunShortcut ? (
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={onRunWorkflow}
-            disabled={busy}
-          >
-            Run this workflow
-          </button>
-        ) : null}
-        {savedPath ? (
-          <a className="btn" href={`#${pipelinePath(draft.pipeline.id)}`}>
-            Open in catalog
-          </a>
-        ) : null}
-        <button type="button" className="btn" onClick={startNew} disabled={busy}>
-          New
-        </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={onDiscard}
-          disabled={busy}
-        >
-          Discard
-        </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => void onValidate()}
-          disabled={busy}
-        >
-          Validate
-        </button>
-        <label className="workshop__model">
-          <span className="muted">Model</span>
-          <select
-            className="select"
-            value={sessionModelOverride ?? ""}
-            disabled={busy}
-            title={`Effective: ${effectiveWorkshopModel}`}
-            onChange={(e) => {
-              const value = e.target.value;
-              setSessionModelOverride(value === "" ? null : value);
-            }}
-          >
-            <option value="">
-              Default
-              {workshopModelDefault
-                ? ` (${workshopModelDefault})`
-                : ` (${DEFAULT_WORKSHOP_MODEL})`}
-            </option>
-            {availableModels.map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-            {sessionModelOverride &&
-            !availableModels.includes(sessionModelOverride) ? (
-              <option value={sessionModelOverride}>
-                {sessionModelOverride}
-              </option>
-            ) : null}
-          </select>
-        </label>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => void onSaveClick()}
-          disabled={!canSave}
-          title={
-            validationOk === true
-              ? destination
-                ? "Overwrite known package paths"
-                : "Save package to disk"
-              : "Save blocked unless you confirm Save invalid anyway"
-          }
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          className="btn"
-          onClick={onSaveAsClick}
-          disabled={busy}
-          title="Fork package to a new destination"
-        >
-          Save As
-        </button>
       </div>
 
-      {diskChange ? (
-        <div className="workshop__banner" role="status">
-          <p>
-            Catalog files changed on disk
-            {diskChange.changedPaths.length > 0
-              ? ` (${diskChange.changedPaths.join(", ")})`
-              : ""}
-            . Reload from disk or keep this Workshop draft.
-          </p>
-          <div className="workshop__proposal-actions">
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={onReloadDisk}
-              disabled={busy}
-            >
-              Reload
-            </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={onKeepDiskDraft}
-              disabled={busy}
-            >
-              Keep workshop draft
-            </button>
+      <div
+        ref={bodyRef}
+        className="workshop-lab__body"
+        style={{ ["--chat-w" as string]: `${chatWidth}px` }}
+      >
+        <section className="workshop-lab__chat" aria-label="Workshop chat">
+          <div className="eyebrow">Chat</div>
+          <div className="workshop-lab__chat-body">
+            <AssistantRuntimeProvider runtime={runtime}>
+              <LabThread />
+            </AssistantRuntimeProvider>
           </div>
-        </div>
-      ) : null}
-
-      <div className="workshop__body">
-        <section className="workshop__canvas" aria-label="Draft DAG">
-          <div className="workshop__canvas-head">
-            <div className="eyebrow">Draft DAG</div>
-            <div className="workshop__canvas-actions">
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => setSelection({ kind: "pipeline" })}
-              >
-                Pipeline
-              </button>
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={onAddStage}
-                disabled={busy}
-              >
-                Add stage
-              </button>
-            </div>
-          </div>
-          {openError ? (
-            <p style={{ color: "var(--color-text-red)" }}>{openError}</p>
-          ) : null}
-          {track.length === 0 ? (
-            <p className="empty-hint">
-              Empty scaffold — chat with Workshop Author to propose stages, or
-              Add stage.
-            </p>
-          ) : (
-            <PipelineTrack
-              stages={track}
-              mode="definition"
-              onSelect={(stageId) =>
-                setSelection({ kind: "stage", stageId })
-              }
-            />
-          )}
-          <div className="workshop__task-panel">
-            <div className="workshop__canvas-head">
-              <div className="eyebrow">Task</div>
-              <div className="workshop__canvas-actions">
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={beginCreateTask}
-                  disabled={busy || Boolean(pending)}
-                >
-                  {draft.task ? "Edit" : "Create"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={beginAttachTask}
-                  disabled={busy || Boolean(pending)}
-                >
-                  Attach
-                </button>
-                {draft.task ? (
-                  <button
-                    type="button"
-                    className="btn btn--sm"
-                    onClick={onDetachTask}
-                    disabled={busy || Boolean(pending)}
-                  >
-                    Detach
-                  </button>
-                ) : null}
-              </div>
-            </div>
-            {taskMode === "create" ? (
-              <div className="workshop__task-form">
-                <label className="workshop__field">
-                  Task id
-                  <input
-                    className="input"
-                    value={taskIdDraft}
-                    onChange={(e) => setTaskIdDraft(e.target.value)}
-                  />
-                </label>
-                <label className="workshop__field">
-                  Goal
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={taskGoalDraft}
-                    onChange={(e) => setTaskGoalDraft(e.target.value)}
-                  />
-                </label>
-                <div className="workshop__proposal-actions">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    onClick={onConfirmCreateTask}
-                  >
-                    Apply to draft
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setTaskMode("idle")}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {taskMode === "attach" ? (
-              <div className="workshop__task-form">
-                {taskListings.length === 0 ? (
-                  <p className="empty-hint">No catalog tasks found.</p>
-                ) : (
-                  <label className="workshop__field">
-                    Existing task
-                    <select
-                      className="input"
-                      value={attachPath}
-                      onChange={(e) => setAttachPath(e.target.value)}
-                    >
-                      {taskListings.map((t) => (
-                        <option key={t.path} value={t.path}>
-                          {t.id} · {t.path}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                <div className="workshop__proposal-actions">
-                  <button
-                    type="button"
-                    className="btn btn--primary"
-                    disabled={busy || taskListings.length === 0}
-                    onClick={() => void onConfirmAttachTask()}
-                  >
-                    Attach to draft
-                  </button>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setTaskMode("idle")}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : null}
-            {taskMode === "idle" && viewDraft.task ? (
-              <div className="workshop__task-fields">
-                <p className="mono">{viewDraft.task.filename}</p>
-                <label className="workshop__field">
-                  Id
-                  <input
-                    className="input"
-                    value={
-                      typeof viewDraft.task.body.id === "string"
-                        ? viewDraft.task.body.id
-                        : ""
-                    }
-                    onChange={(e) =>
-                      applyDraft(patchTaskBody(draft, { id: e.target.value }))
-                    }
-                    disabled={Boolean(pending)}
-                  />
-                </label>
-                <label className="workshop__field">
-                  Goal
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={
-                      typeof viewDraft.task.body.goal === "string"
-                        ? viewDraft.task.body.goal
-                        : ""
-                    }
-                    onChange={(e) =>
-                      applyDraft(patchTaskBody(draft, { goal: e.target.value }))
-                    }
-                    disabled={Boolean(pending)}
-                  />
-                </label>
-              </div>
-            ) : null}
-            {taskMode === "idle" && !viewDraft.task ? (
-              <p className="empty-hint">
-                Empty — attach an existing task or create one. Pipeline-only
-                drafts stay valid without a task.
-              </p>
-            ) : null}
-          </div>
-          <DraftInspector
-            draft={viewDraft}
-            selection={selection}
-            onChange={(next) => {
-              applyDraft(next);
-            }}
-            onRemoveStage={onRemoveStage}
-          />
-          {pending ? (
-            <p className="workshop__sr-only" role="status" aria-live="polite">
-              Pending proposal in chat: {pending.summary}. Use Accept or Reject
-              on the proposal card in the Workshop Author thread.
-            </p>
-          ) : null}
-          {findings.length > 0 ? (
-            <div className="workshop__findings" aria-label="Validation findings">
-              <div className="eyebrow">
-                Validation {validationOk ? "passed" : "findings"}
-              </div>
-              <ul className="workshop__findings-list">
-                {findings.map((f, i) => (
-                  <li key={`${f.code}-${f.path}-${i}`}>
-                    <span className="mono">{f.severity}</span> · {f.message}
-                    <span className="muted"> ({f.path})</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-          {showSaveForm ? (
-            <div className="workshop__save">
-              <div className="eyebrow">
-                {saveFormMode === "saveAs"
-                  ? "Save As destination"
-                  : "First Save destination"}
-              </div>
-              <label className="workshop__field">
-                Directory
-                <input
-                  className="input"
-                  value={saveDirectory}
-                  onChange={(e) => setSaveDirectory(e.target.value)}
-                />
-              </label>
-              <label className="workshop__field">
-                Pipeline id
-                <input
-                  className="input"
-                  value={savePipelineId}
-                  onChange={(e) => setSavePipelineId(e.target.value)}
-                />
-              </label>
-              <div className="workshop__proposal-actions">
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={busy}
-                  onClick={() => void onConfirmSave()}
-                >
-                  {saveFormMode === "saveAs" ? "Save As" : "Create package"}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => setShowSaveForm(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : null}
         </section>
 
-        <WorkshopChatPanel
-          messages={messages}
-          pending={pending}
-          busy={busy}
-          autoApply={autoApply}
-          onSendMessage={onSendMessage}
-          onAccept={onAccept}
-          onReject={onReject}
-        />
+        <div
+          className={`workshop-lab__split${splitDragging ? " is-dragging" : ""}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize chat and run map"
+          aria-valuemin={Math.round(splitMin)}
+          aria-valuemax={Math.round(splitMax)}
+          aria-valuenow={Math.round(chatWidth)}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            if (event.button != null && event.button !== 0) return;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setSplitDragging(true);
+            splitGestureRef.current = {
+              id: event.pointerId,
+              x: event.clientX,
+              w: chatWidth,
+            };
+          }}
+          onPointerMove={(event) => {
+            const gesture = splitGestureRef.current;
+            if (!gesture || gesture.id !== event.pointerId) return;
+            applyChatWidth(gesture.w + (event.clientX - gesture.x));
+          }}
+          onPointerUp={(event) => {
+            if (splitGestureRef.current?.id !== event.pointerId) return;
+            splitGestureRef.current = null;
+            setSplitDragging(false);
+          }}
+          onPointerCancel={(event) => {
+            if (splitGestureRef.current?.id !== event.pointerId) return;
+            splitGestureRef.current = null;
+            setSplitDragging(false);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              applyChatWidth(chatWidth - CHAT_ARROW_STEP);
+            }
+            if (event.key === "ArrowRight") {
+              event.preventDefault();
+              applyChatWidth(chatWidth + CHAT_ARROW_STEP);
+            }
+            if (event.key === "Home") {
+              event.preventDefault();
+              applyChatWidth(splitMin);
+            }
+            if (event.key === "End") {
+              event.preventDefault();
+              applyChatWidth(splitMax);
+            }
+          }}
+        >
+          <span className="workshop-lab__split-grip" aria-hidden="true" />
+        </div>
+
+        <section className="workshop-lab__map" aria-label="Mock run map">
+          <div className="workshop-lab__map-head">
+            <div className="eyebrow">Run map · mock</div>
+            {selectedChrome ? (
+              <p className="workshop-lab__selection muted">
+                Selected: {selectedChrome.title}
+                {selectedChrome.promptSummary
+                  ? ` — ${selectedChrome.promptSummary}`
+                  : ""}
+              </p>
+            ) : (
+              <p className="workshop-lab__selection muted">
+                Select a stage node
+              </p>
+            )}
+          </div>
+          <div className="workspace workshop-lab__workspace">
+            <SpatialRunMap
+              layout={layout}
+              stages={LAB_STAGES}
+              nodeChrome={LAB_CHROME}
+              selectedStageId={selectedStageId}
+              onSelectStage={setSelectedStageId}
+              onDeselect={() => setSelectedStageId(null)}
+              runId="workshop-lab-mock"
+              showHint
+            />
+          </div>
+        </section>
       </div>
     </div>
   );
