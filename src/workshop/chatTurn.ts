@@ -20,6 +20,12 @@ import {
   type WorkshopSessionAppendMessage,
 } from "./sessionStore.js";
 
+/**
+ * Accept-card / soft-undo payload for a mutation that is **already applied**
+ * to the in-memory draft. `nextDraft` is current; `baseDraft` + fingerprint
+ * are the undo restore target when Reject is safe. Not a gated propose→Accept
+ * patch — create/edit tools mutate immediately.
+ */
 export type WorkshopChatProposalPayload = {
   id: string;
   summary: string;
@@ -32,6 +38,7 @@ export type WorkshopChatProposalPayload = {
 
 export type WorkshopChatWireEvent =
   | { type: "message"; role: "assistant" | "user" | "system"; text: string }
+  /** Mutation receipt for Accept/Reject UX (draft already mutated). */
   | {
       type: "proposal";
       proposal: WorkshopChatProposalPayload;
@@ -69,10 +76,14 @@ export type WorkshopChatTurnInput = {
 export type WorkshopChatTurnResult = {
   sessionId: string;
   events: WorkshopChatWireEvent[];
+  /** Client-posted draft after this turn's mutations (already applied). */
   draft: DraftPackage;
-  /** Latest undoable mutation card, or null after Accept/undo. */
+  /**
+   * Latest undoable mutation card (already applied), or null after
+   * Accept/undo. Name is historical — not a pending gated apply.
+   */
   pending: WorkshopChatProposalPayload | null;
-  /** Always false — auto-apply removed; mutations apply immediately. */
+  /** Always false — auto-apply chrome removed; mutations apply immediately. */
   autoApply: boolean;
   model: string;
 };
@@ -209,6 +220,7 @@ export function serializeWorkshopProposal(
   proposal: OperatorAgentProposal,
   fallbackDraft: DraftPackage,
 ): WorkshopChatProposalPayload {
+  // Wire shape for Accept/Reject cards — mutation already applied on the host.
   const nextDraft = draftFromContextValue(proposal.nextContext, fallbackDraft);
   const baseDraft = draftFromContextValue(
     proposal.baseContext,
@@ -380,6 +392,137 @@ export function* iterateWorkshopChatStreamFrames(
     pending: result.pending,
     autoApply: result.autoApply,
     model: result.model,
+  };
+}
+
+export type WorkshopSessionUndoInput = {
+  sessionId: string;
+  draft: DraftPackage;
+  mutationId?: string;
+  host?: OperatorAgentHost;
+  registry?: WorkshopChatSessionRegistry;
+  storeRoot?: string;
+};
+
+export type WorkshopSessionUndoResult =
+  | {
+      ok: true;
+      sessionId: string;
+      draft: DraftPackage;
+      pending: WorkshopChatProposalPayload | null;
+    }
+  | {
+      ok: false;
+      sessionId: string;
+      draft: DraftPackage;
+      pending: WorkshopChatProposalPayload | null;
+      reason: "none" | "id_mismatch" | "conflict";
+      notice?: string;
+    };
+
+export type WorkshopSessionAcceptInput = {
+  sessionId: string;
+  draft: DraftPackage;
+  mutationId?: string;
+  host?: OperatorAgentHost;
+  registry?: WorkshopChatSessionRegistry;
+  storeRoot?: string;
+};
+
+export type WorkshopSessionAcceptResult =
+  | {
+      ok: true;
+      sessionId: string;
+      draft: DraftPackage;
+      pending: WorkshopChatProposalPayload | null;
+    }
+  | {
+      ok: false;
+      sessionId: string;
+      draft: DraftPackage;
+      pending: WorkshopChatProposalPayload | null;
+      reason: "none" | "id_mismatch";
+      notice?: string;
+    };
+
+/**
+ * Soft-undo a mutation on a durable Workshop host session.
+ * Rebinds the client draft first (R9), then undoes when fingerprint matches.
+ */
+export async function undoWorkshopSessionMutation(
+  input: WorkshopSessionUndoInput,
+): Promise<WorkshopSessionUndoResult> {
+  const sessionId =
+    typeof input.sessionId === "string" ? input.sessionId.trim() : "";
+  if (!sessionId) {
+    throw new Error("sessionId is required");
+  }
+
+  const storeRoot = input.storeRoot ?? resolveWorkshopSessionStoreRoot();
+  getWorkshopSession(storeRoot, sessionId);
+
+  const registry = input.registry ?? getDefaultRegistry(input.host);
+  if (input.host && registry.host !== input.host) {
+    throw new Error("host does not match workshop chat session registry");
+  }
+
+  const { session } = registry.getOrOpen(sessionId, input.draft);
+  const undo = session.undoMutation(input.mutationId);
+  const draft = readDraftFromContext(session.getContext());
+  const pendingRaw = session.getPendingProposal();
+  const pending = pendingRaw
+    ? serializeWorkshopProposal(pendingRaw, draft)
+    : null;
+
+  if (undo.ok) {
+    return { ok: true, sessionId, draft, pending };
+  }
+  return {
+    ok: false,
+    sessionId,
+    draft,
+    pending,
+    reason: undo.reason,
+    ...(undo.notice !== undefined ? { notice: undo.notice } : {}),
+  };
+}
+
+/** Accept acknowledges a mutation card; draft is already applied. */
+export async function acceptWorkshopSessionMutation(
+  input: WorkshopSessionAcceptInput,
+): Promise<WorkshopSessionAcceptResult> {
+  const sessionId =
+    typeof input.sessionId === "string" ? input.sessionId.trim() : "";
+  if (!sessionId) {
+    throw new Error("sessionId is required");
+  }
+
+  const storeRoot = input.storeRoot ?? resolveWorkshopSessionStoreRoot();
+  getWorkshopSession(storeRoot, sessionId);
+
+  const registry = input.registry ?? getDefaultRegistry(input.host);
+  if (input.host && registry.host !== input.host) {
+    throw new Error("host does not match workshop chat session registry");
+  }
+
+  const { session } = registry.getOrOpen(sessionId, input.draft);
+  const accepted = session.acceptProposal(input.mutationId);
+  const draft = readDraftFromContext(session.getContext());
+  const pendingRaw = session.getPendingProposal();
+  const pending = pendingRaw
+    ? serializeWorkshopProposal(pendingRaw, draft)
+    : null;
+
+  if (accepted.ok) {
+    return { ok: true, sessionId, draft, pending };
+  }
+  return {
+    ok: false,
+    sessionId,
+    draft,
+    pending,
+    reason: accepted.reason,
+    ...(accepted.notice !== undefined ? { notice: accepted.notice } : {}),
   };
 }
 

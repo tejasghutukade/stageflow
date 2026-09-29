@@ -641,10 +641,10 @@ export type WorkshopChatProposalPayload = {
 
 export type WorkshopChatWireEvent =
   | { type: "message"; role: "assistant" | "user" | "system"; text: string }
+  /** Mutation receipt for Accept/Reject UX (draft already mutated). */
   | {
       type: "proposal";
       proposal: WorkshopChatProposalPayload;
-      autoApplied?: boolean;
     }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "validation"; result: unknown }
