@@ -28,6 +28,17 @@ export type OperatorAgentModel = {
     contextSnapshot: unknown;
     tools: OperatorAgentToolContext;
   }): Promise<OperatorAgentModelTurn>;
+  /**
+   * Optional restart seed (KTD7): inject prior transcript into a new backend
+   * session before the first complete for this host session.
+   */
+  prepareRestart?(input: {
+    tools: OperatorAgentToolContext;
+    profile: OperatorAgentProfile;
+    transcript: readonly { role: string; text: string }[];
+  }): Promise<void>;
+  /** Optional: dispose backend resources bound to this tool context. */
+  releaseTools?(tools: OperatorAgentToolContext): void | Promise<void>;
 };
 
 function createSession(
@@ -108,6 +119,15 @@ function createSession(
       return mutations.get(lastMutationId) ?? null;
     },
     getMutation: (mutationId) => mutations.get(mutationId) ?? null,
+    async prepareRestart(transcript) {
+      if (closed) return;
+      if (!model.prepareRestart) return;
+      await model.prepareRestart({
+        profile,
+        tools: toolContext,
+        transcript,
+      });
+    },
     async send(message: string): Promise<OperatorAgentSessionEvent[]> {
       if (closed) {
         return [{ type: "error", message: "session is closed" }];
@@ -154,6 +174,7 @@ function createSession(
       closed = true;
       mutations.clear();
       lastMutationId = null;
+      void model.releaseTools?.(toolContext);
     },
   };
 }

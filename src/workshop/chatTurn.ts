@@ -115,21 +115,25 @@ export class WorkshopChatSessionRegistry {
   /**
    * Reuse the open host session when present; otherwise open a new one and
    * bind the client-posted draft. Always rebinds draft on each call (R9).
+   * Returns whether this call created a new host session (restart / first open).
    */
-  getOrOpen(sessionId: string, draft: DraftPackage): OperatorAgentSession {
+  getOrOpen(
+    sessionId: string,
+    draft: DraftPackage,
+  ): { session: OperatorAgentSession; created: boolean } {
     const existing = this.sessions.get(sessionId);
     if (existing) {
       existing.agentSession.setContext(
         withDraft(existing.agentSession.getContext(), draft),
       );
-      return existing.agentSession;
+      return { session: existing.agentSession, created: false };
     }
     const agentSession = this.host.openSession({
       profileId: WORKSHOP_AUTHOR_PROFILE_ID,
       context: createWorkshopDraftContext(draft),
     });
     this.sessions.set(sessionId, { sessionId, agentSession });
-    return agentSession;
+    return { session: agentSession, created: true };
   }
 
   close(sessionId: string): void {
@@ -293,7 +297,7 @@ export async function runWorkshopChatTurn(
 
   const storeRoot = input.storeRoot ?? resolveWorkshopSessionStoreRoot();
   // Fail closed: chat never creates missing sessions (prefer New → create).
-  getWorkshopSession(storeRoot, sessionId);
+  const storeRecord = getWorkshopSession(storeRoot, sessionId);
 
   const model = resolveWorkshopModel({
     sessionOverride: input.model,
@@ -306,7 +310,18 @@ export async function runWorkshopChatTurn(
     throw new Error("host does not match workshop chat session registry");
   }
 
-  const agentSession = registry.getOrOpen(sessionId, input.draft);
+  const { session: agentSession, created } = registry.getOrOpen(
+    sessionId,
+    input.draft,
+  );
+  // KTD7: process restart → new host session; replay disk transcript into Pi.
+  if (
+    created &&
+    storeRecord.transcript.length > 0 &&
+    typeof agentSession.prepareRestart === "function"
+  ) {
+    await agentSession.prepareRestart(storeRecord.transcript);
+  }
   const rawEvents = await agentSession.send(message);
   const draft = readDraftFromContext(agentSession.getContext());
   const pendingRaw = agentSession.getPendingProposal();

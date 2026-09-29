@@ -75,6 +75,13 @@ export type OperatorAgentSession = {
   /** Latest undoable mutation (Accept-card payload), or null. */
   getPendingProposal(): OperatorAgentProposal | null;
   getMutation(mutationId: string): OperatorAgentProposal | null;
+  /**
+   * Seed backend from prior transcript after process restart (KTD7).
+   * No-op for fake / models without prepareRestart.
+   */
+  prepareRestart?(
+    transcript: readonly { role: string; text: string }[],
+  ): Promise<void>;
   send(message: string): Promise<OperatorAgentSessionEvent[]>;
   /** Confirm mutation (soft UX); draft already applied — does not re-apply. */
   acceptProposal(proposalId?: string): AcceptProposalResult;

@@ -132,6 +132,11 @@ export function createFakeOperatorAgentModel(
 export type WorkshopOperatorHostOptions = WorkshopAuthorProfileOptions & {
   script?: FakeOperatorTurn[];
   retriever?: DocsRetriever;
+  /**
+   * Inject a model (e.g. live Pi). When omitted, uses the fake scripted model
+   * — keep as the test / default path (R13).
+   */
+  model?: OperatorAgentModel;
 };
 
 export function createWorkshopOperatorHost(
@@ -141,7 +146,7 @@ export function createWorkshopOperatorHost(
     ? { script: scriptOrOptions }
     : (scriptOrOptions ?? {});
   const host = createOperatorAgentHost(
-    createFakeOperatorAgentModel(options.script),
+    options.model ?? createFakeOperatorAgentModel(options.script),
     [
       createWorkshopAuthorProfile({
         retriever: options.retriever,

@@ -26,6 +26,16 @@ export {
   type WorkshopOperatorHostOptions,
 } from "./fakeHost.js";
 export {
+  createLiveWorkshopOperatorHost,
+  createPiOperatorAgentModel,
+  type LiveWorkshopOperatorHostOptions,
+  type PiOperatorAgentModel,
+  type PiOperatorAgentModelOptions,
+  type PiOperatorOpenSessionInput,
+  type PiOperatorSessionHandle,
+  type WorkshopTranscriptSeedMessage,
+} from "./piModel.js";
+export {
   createFailingDocsRetriever,
   createFilesystemDocsRetriever,
   createStubDocsRetriever,

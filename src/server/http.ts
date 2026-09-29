@@ -51,7 +51,7 @@ import {
   resolveWorkshopSessionStoreRoot,
 } from "../workshop/sessionStore.js";
 import {
-  createWorkshopOperatorHost,
+  createLiveWorkshopOperatorHost,
   type OperatorAgentHost,
 } from "../operatorAgent/index.js";
 import { browseCatalog } from "../config/browseCatalog.js";
@@ -299,7 +299,8 @@ export type OperatorRouteDeps = {
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
   /**
    * Optional Operator Agent Host for Workshop chat (tests inject the fake host).
-   * Distinct from stage-execution AgentPort. Defaults to Workshop Author fake host.
+   * Distinct from stage-execution AgentPort. Defaults to live Pi Workshop Author
+   * (fake remains available via createWorkshopOperatorHost / test injection).
    */
   workshopOperatorHost?: OperatorAgentHost;
   /**
@@ -332,7 +333,11 @@ export function createOperatorRoutes(
   const workshopChatRegistry =
     deps.workshopChatRegistry ??
     new WorkshopChatSessionRegistry(
-      workshopOperatorHost ?? createWorkshopOperatorHost(),
+      workshopOperatorHost ??
+        createLiveWorkshopOperatorHost({
+          cwd,
+          projectRoot: cwd,
+        }),
     );
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();
