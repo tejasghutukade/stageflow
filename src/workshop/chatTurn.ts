@@ -26,7 +26,6 @@ export type WorkshopChatWireEvent =
   | {
       type: "proposal";
       proposal: WorkshopChatProposalPayload;
-      autoApplied?: boolean;
     }
   | { type: "tool_result"; name: string; result: unknown }
   | { type: "validation"; result: unknown }
@@ -35,6 +34,7 @@ export type WorkshopChatWireEvent =
 export type WorkshopChatTurnInput = {
   draft: DraftPackage;
   message: string;
+  /** @deprecated Ignored — mutations apply immediately (Accept = soft undo). */
   autoApply?: boolean;
   /** Session model override from Workshop chrome. */
   model?: string | null;
@@ -47,7 +47,9 @@ export type WorkshopChatTurnInput = {
 export type WorkshopChatTurnResult = {
   events: WorkshopChatWireEvent[];
   draft: DraftPackage;
+  /** Latest undoable mutation card, or null after Accept/undo. */
   pending: WorkshopChatProposalPayload | null;
+  /** Always false — auto-apply removed; mutations apply immediately. */
   autoApply: boolean;
   model: string;
 };
@@ -123,9 +125,6 @@ export function toWorkshopChatWireEvent(
     return {
       type: "proposal",
       proposal: serializeWorkshopProposal(event.proposal, fallbackDraft),
-      ...(event.autoApplied !== undefined
-        ? { autoApplied: event.autoApplied }
-        : {}),
     };
   }
   if (event.type === "message") {
@@ -151,6 +150,7 @@ export function toWorkshopChatWireEvent(
 /**
  * One Workshop Author turn on the Operator Agent Host (not AgentPort).
  * Stateless: opens a session, sends, returns wire events + draft snapshot.
+ * Mutations apply immediately; `pending` is the undo receipt for Accept/Reject.
  */
 export async function runWorkshopChatTurn(
   input: WorkshopChatTurnInput,
@@ -170,7 +170,6 @@ export async function runWorkshopChatTurn(
     profileId: WORKSHOP_AUTHOR_PROFILE_ID,
     context: createWorkshopDraftContext(input.draft),
   });
-  session.setAutoApply(Boolean(input.autoApply));
 
   try {
     const rawEvents = await session.send(message);
@@ -185,7 +184,7 @@ export async function runWorkshopChatTurn(
       pending: pendingRaw
         ? serializeWorkshopProposal(pendingRaw, input.draft)
         : null,
-      autoApply: session.getAutoApply(),
+      autoApply: false,
       model,
     };
   } finally {

@@ -33,7 +33,7 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(profiles[0]!.greeting).toBe(WORKSHOP_AUTHOR_GREETING);
   });
 
-  it("Accept applies a proposal to the virtual draft; Reject leaves it unchanged", async () => {
+  it("mutates the draft immediately; Reject / undoMutation restores when unchanged", async () => {
     const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
     const session = host.openSession({
       profileId: WORKSHOP_AUTHOR_PROFILE_ID,
@@ -46,89 +46,38 @@ describe("Operator Agent Host — Workshop Author", () => {
 
     const events = await session.send("intake form review");
     expect(events.some((e) => e.type === "proposal")).toBe(true);
-    const pending = session.getPendingProposal();
-    expect(pending).not.toBeNull();
-    expect(pending!.summary).toMatch(/Add stage/i);
-    expect(pending!.artifacts?.length).toBeGreaterThan(0);
-    expect(pending!.affectedStageIds?.length).toBeGreaterThan(0);
 
-    expect(session.rejectProposal(pending!.id)).toBe(true);
+    const draftAfter = readDraftFromContext(session.getContext());
+    expect(draftAfter.pipeline.stages.length).toBe(1);
+    expect(draftAfter.stages?.length).toBe(1);
+
+    const mutation = session.getPendingProposal();
+    expect(mutation).not.toBeNull();
+    expect(mutation!.summary).toMatch(/Add stage/i);
+    expect(mutation!.artifacts?.length).toBeGreaterThan(0);
+    expect(mutation!.affectedStageIds?.length).toBeGreaterThan(0);
+    expect(mutation!.appliedFingerprint).toBeTruthy();
+
+    expect(session.rejectProposal(mutation!.id)).toEqual({ ok: true });
     expect(session.getPendingProposal()).toBeNull();
     expect(readDraftFromContext(session.getContext()).pipeline.stages).toEqual(
       [],
     );
 
     await session.send("intake form review");
+    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
+      1,
+    );
     const again = session.getPendingProposal();
     expect(again).not.toBeNull();
     expect(session.acceptProposal(again!.id)).toEqual({ ok: true });
     expect(session.getPendingProposal()).toBeNull();
-
-    const draft = readDraftFromContext(session.getContext());
-    expect(draft.pipeline.stages.length).toBe(1);
-    expect(draft.stages?.length).toBe(1);
-    expect(typeof draft.pipeline.stages[0]!.id).toBe("string");
-  });
-
-  it("auto-apply flag applies proposals to the draft without pending Accept and never implies disk write", async () => {
-    const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
-    const session = host.openSession({
-      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
-      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
-    });
-
-    expect(session.getAutoApply()).toBe(false);
-    session.setAutoApply(true);
-    expect(session.getAutoApply()).toBe(true);
-
-    const events = await session.send("intake form review");
-    const proposalEvent = events.find((e) => e.type === "proposal");
-    expect(proposalEvent?.type).toBe("proposal");
-    if (proposalEvent?.type === "proposal") {
-      expect(proposalEvent.autoApplied).toBe(true);
-      expect(proposalEvent.proposal.artifacts?.length).toBeGreaterThan(0);
-    }
-    expect(session.getPendingProposal()).toBeNull();
-
-    const draft = readDraftFromContext(session.getContext());
-    expect(draft.pipeline.stages.length).toBe(1);
-    // Auto-apply only mutates the virtual draft — Save remains a separate API.
-    expect(Object.keys(session.getContext() as object)).not.toContain(
-      "savedPath",
+    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
+      1,
     );
   });
 
-  it("natural-language requests flip the same auto-apply setting as the toggle", async () => {
-    const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
-    const session = host.openSession({
-      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
-      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
-    });
-
-    const enabled = await session.send("just apply changes");
-    expect(session.getAutoApply()).toBe(true);
-    expect(
-      enabled.some(
-        (e) =>
-          e.type === "message" &&
-          e.role === "system" &&
-          /auto-apply chat edits is on/i.test(e.text),
-      ),
-    ).toBe(true);
-
-    const disabled = await session.send("disable auto-apply");
-    expect(session.getAutoApply()).toBe(false);
-    expect(
-      disabled.some(
-        (e) =>
-          e.type === "message" &&
-          e.role === "system" &&
-          /auto-apply chat edits is off/i.test(e.text),
-      ),
-    ).toBe(true);
-  });
-
-  it("rejects a stale proposal when the live draft changes before Accept", async () => {
+  it("undoMutation fails closed when the draft changed after apply", async () => {
     const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
     const session = host.openSession({
       profileId: WORKSHOP_AUTHOR_PROFILE_ID,
@@ -136,8 +85,11 @@ describe("Operator Agent Host — Workshop Author", () => {
     });
 
     await session.send("intake form review");
-    const pending = session.getPendingProposal();
-    expect(pending).not.toBeNull();
+    const mutation = session.getPendingProposal();
+    expect(mutation).not.toBeNull();
+    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
+      1,
+    );
 
     const edited = emptyDraftPackage("demo");
     edited.pipeline.stages = [
@@ -156,19 +108,34 @@ describe("Operator Agent Host — Workshop Author", () => {
     ];
     session.setContext(withDraft(session.getContext(), edited));
 
-    const result = session.acceptProposal(pending!.id);
+    const result = session.undoMutation(mutation!.id);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.reason).toBe("stale");
+    expect(result.reason).toBe("conflict");
     expect(result.notice).toMatch(/draft changed/i);
-    expect(session.getPendingProposal()).toBeNull();
 
     const draft = readDraftFromContext(session.getContext());
     expect(draft.pipeline.stages).toEqual(edited.pipeline.stages);
     expect(draft.pipeline.stages[0]!.id).toBe("manual");
   });
 
-  it("Accept applies a task create/fill proposal like stage proposals", async () => {
+  it("fake model create_stage path puts a stage on the draft before Accept", async () => {
+    const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    await session.send("intake form review");
+    expect(session.getPendingProposal()).not.toBeNull();
+    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
+      1,
+    );
+    expect(typeof readDraftFromContext(session.getContext()).pipeline.stages[0]!
+      .id).toBe("string");
+  });
+
+  it("mutates task drafts immediately; undo restores prior task state", async () => {
     const host = createWorkshopOperatorHost([{ type: "propose_task" }]);
     const session = host.openSession({
       profileId: WORKSHOP_AUTHOR_PROFILE_ID,
@@ -178,13 +145,14 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(readDraftFromContext(session.getContext()).task).toBeUndefined();
 
     await session.send('create a task "release brief"');
-    const pending = session.getPendingProposal();
-    expect(pending).not.toBeNull();
-    expect(pending!.summary).toMatch(/Create task/i);
-    expect(pending!.artifacts.some((a) => a.kind === "added")).toBe(true);
-    expect(pending!.affectedStageIds).toEqual([]);
+    const mutation = session.getPendingProposal();
+    expect(mutation).not.toBeNull();
+    expect(mutation!.summary).toMatch(/Create task/i);
+    expect(readDraftFromContext(session.getContext()).task?.filename).toBe(
+      "release-brief.task.yaml",
+    );
 
-    expect(session.rejectProposal(pending!.id)).toBe(true);
+    expect(session.undoMutation(mutation!.id)).toEqual({ ok: true });
     expect(readDraftFromContext(session.getContext()).task).toBeUndefined();
 
     await session.send('create a task "release brief"');

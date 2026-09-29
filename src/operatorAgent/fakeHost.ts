@@ -40,7 +40,7 @@ export type FakeOperatorTurn =
 
 /**
  * Deterministic Operator Agent Host for Workshop and tests.
- * Does not call a live provider — scripted turns or auto stage/task proposals.
+ * Does not call a live provider — scripted turns or auto stage/task mutations.
  */
 export function createFakeOperatorAgentModel(
   script: FakeOperatorTurn[] = [{ type: "propose_stage" }],
@@ -102,7 +102,9 @@ export function createFakeOperatorAgentModel(
             {
               type: "message",
               role: "assistant",
-              text: turn.message ?? turn.proposal.summary,
+              text:
+                turn.message ??
+                `Applied to draft: ${turn.proposal.summary}. Accept confirms; Reject undoes when the draft is unchanged.`,
             },
             { type: "proposal", proposal: turn.proposal },
           ],
@@ -113,15 +115,12 @@ export function createFakeOperatorAgentModel(
         turn.type === "propose_task" || isTaskProposalIntent(message)
           ? proposeTaskFromUserMessage(tools, message)
           : proposeStageFromUserMessage(tools, message);
-      const autoApplied = tools.getAutoApply();
       return {
         events: [
           {
             type: "message",
             role: "assistant",
-            text: autoApplied
-              ? `Applied to draft: ${proposal.summary}. Nothing was written to disk — Save when you are ready.`
-              : `I propose: ${proposal.summary}. Review the per-artifact diff and Accept to update the draft, or Reject to leave it unchanged.`,
+            text: `Applied to draft: ${proposal.summary}. Accept confirms; Reject undoes when the draft is unchanged. Nothing was written to disk — Save when you are ready.`,
           },
           { type: "proposal", proposal },
         ],

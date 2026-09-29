@@ -10,6 +10,7 @@ export type {
   OperatorAgentToolContext,
   OperatorAgentToolResult,
   ProposalArtifactDiff,
+  UndoMutationResult,
   WorkshopDraftContext,
 } from "./types.js";
 export {
@@ -45,13 +46,12 @@ export {
 } from "./draftContext.js";
 export {
   affectedStageIds,
-  autoApplyStatusMessage,
   diffDraftPackages,
   draftFingerprint,
   enrichProposal,
-  isProposalStale,
-  parseAutoApplyIntent,
+  isMutationConflict,
   STALE_PROPOSAL_NOTICE,
+  UNDO_MUTATION_CONFLICT_NOTICE,
 } from "./proposals.js";
 export {
   buildStageAddProposal,

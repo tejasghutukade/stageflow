@@ -73,7 +73,8 @@ describe("POST /api/workshop/chat", () => {
     expect(
       result.body.events.some((e: { type: string }) => e.type === "proposal"),
     ).toBe(true);
-    expect(result.body.draft.pipeline.stages).toEqual([]);
+    expect(result.body.draft.pipeline.stages.length).toBe(1);
+    expect(result.body.pending?.nextDraft.pipeline.stages.length).toBe(1);
   });
 
   it("prefers session model override over settings default", async () => {

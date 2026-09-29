@@ -26,7 +26,7 @@ describe("runWorkshopChatTurn", () => {
     expect(result.pending).not.toBeNull();
     expect(result.pending!.summary).toMatch(/Add stage/i);
     expect(result.pending!.nextDraft.pipeline.stages.length).toBe(1);
-    expect(result.draft.pipeline.stages).toEqual([]);
+    expect(result.draft.pipeline.stages.length).toBe(1);
     expect(result.events.some((e) => e.type === "message")).toBe(true);
     expect(result.events.some((e) => e.type === "proposal")).toBe(true);
   });
@@ -55,36 +55,18 @@ describe("runWorkshopChatTurn", () => {
     expect(result.model).toBe(DEFAULT_WORKSHOP_MODEL);
   });
 
-  it("handles auto-apply NL and proposal auto-apply on the host", async () => {
+  it("applies mutations immediately and returns an undo pending card", async () => {
     const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
-    const enabled = await runWorkshopChatTurn({
-      draft: emptyDraftPackage("demo"),
-      message: "just apply changes",
-      host,
-    });
-    expect(enabled.autoApply).toBe(true);
-    expect(
-      enabled.events.some(
-        (e) =>
-          e.type === "message" &&
-          e.role === "system" &&
-          /auto-apply chat edits is on/i.test(e.text),
-      ),
-    ).toBe(true);
-
-    const applied = await runWorkshopChatTurn({
+    const result = await runWorkshopChatTurn({
       draft: emptyDraftPackage("demo"),
       message: "intake form review",
-      autoApply: true,
-      host: createWorkshopOperatorHost([{ type: "propose_stage" }]),
+      host,
     });
-    expect(applied.pending).toBeNull();
-    expect(applied.draft.pipeline.stages.length).toBe(1);
-    expect(
-      applied.events.some(
-        (e) => e.type === "proposal" && e.autoApplied === true,
-      ),
-    ).toBe(true);
+    expect(result.autoApply).toBe(false);
+    expect(result.draft.pipeline.stages.length).toBe(1);
+    expect(result.pending).not.toBeNull();
+    expect(result.pending!.nextDraft.pipeline.stages.length).toBe(1);
+    expect(result.events.some((e) => e.type === "proposal")).toBe(true);
   });
 });
 

@@ -202,7 +202,8 @@ const readDraftTool: OperatorAgentTool = {
 
 const proposeDraftTool: OperatorAgentTool = {
   name: "propose_draft",
-  description: "Emit a structured proposal that replaces the draft on Accept",
+  description:
+    "Apply a structured draft update immediately (Accept confirms; Reject soft-undos when unchanged)",
   handler(args, ctx): OperatorAgentToolResult {
     const summary =
       typeof args.summary === "string" && args.summary.trim()

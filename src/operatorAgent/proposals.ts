@@ -13,12 +13,20 @@ export type AcceptProposalResult =
   | { ok: true }
   | {
       ok: false;
-      reason: "none" | "id_mismatch" | "stale";
+      reason: "none" | "id_mismatch";
       notice?: string;
     };
 
-const STALE_NOTICE =
-  "Proposal discarded: the draft changed while it was pending. Rejected to avoid clobbering your edits.";
+export type UndoMutationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "none" | "id_mismatch" | "conflict";
+      notice?: string;
+    };
+
+const UNDO_CONFLICT_NOTICE =
+  "Undo blocked: the draft changed after this mutation. Ask the agent to reverse the change instead of rejecting.";
 
 export function draftFingerprint(draft: DraftPackage): string {
   return JSON.stringify(draft);
@@ -175,6 +183,8 @@ export function enrichProposal(
     baseContext,
     baseFingerprint:
       proposal.baseFingerprint ?? draftFingerprint(baseDraft),
+    appliedFingerprint:
+      proposal.appliedFingerprint ?? draftFingerprint(nextDraft),
     artifacts:
       proposal.artifacts ?? diffDraftPackages(baseDraft, nextDraft),
     affectedStageIds:
@@ -182,53 +192,20 @@ export function enrichProposal(
   };
 }
 
-export function isProposalStale(
-  proposal: OperatorAgentProposal,
+/** True when the live draft no longer matches the post-apply fingerprint. */
+export function isMutationConflict(
+  mutation: OperatorAgentProposal,
   currentContext: unknown,
 ): boolean {
   const current = draftFingerprint(readDraftFromContext(currentContext));
-  if (proposal.baseFingerprint) {
-    return proposal.baseFingerprint !== current;
+  if (mutation.appliedFingerprint) {
+    return mutation.appliedFingerprint !== current;
   }
-  if (proposal.baseContext !== undefined) {
-    return (
-      draftFingerprint(readDraftFromContext(proposal.baseContext)) !== current
-    );
-  }
-  return false;
+  const next = draftFingerprint(readDraftFromContext(mutation.nextContext));
+  return next !== current;
 }
 
-export const STALE_PROPOSAL_NOTICE = STALE_NOTICE;
+export const UNDO_MUTATION_CONFLICT_NOTICE = UNDO_CONFLICT_NOTICE;
 
-/** Parse clear NL requests that flip auto-apply. Returns null if not an auto-apply command. */
-export function parseAutoApplyIntent(message: string): boolean | null {
-  const text = message.trim().toLowerCase();
-  if (!text) return null;
-
-  if (
-    /\b(disable|turn off|stop)\s+auto-?apply\b/.test(text) ||
-    /\bauto-?apply\s+(off|disabled)\b/.test(text) ||
-    /\brequire\s+(my\s+)?accept\b/.test(text) ||
-    /\bdon'?t\s+auto-?apply\b/.test(text)
-  ) {
-    return false;
-  }
-
-  if (
-    /\b(enable|turn on|start)\s+auto-?apply\b/.test(text) ||
-    /\bauto-?apply\s+(on|enabled|chat edits)\b/.test(text) ||
-    /\bjust\s+apply\s+(changes|edits|proposals)\b/.test(text) ||
-    /\bapply\s+(changes|edits)\s+automatically\b/.test(text) ||
-    /\bauto-?apply\s+chat\s+edits\b/.test(text)
-  ) {
-    return true;
-  }
-
-  return null;
-}
-
-export function autoApplyStatusMessage(enabled: boolean): string {
-  return enabled
-    ? "Auto-apply chat edits is on. Further proposals will update the draft without Accept. Save remains explicit — nothing is written to disk until you Save."
-    : "Auto-apply chat edits is off. Proposals will wait for Accept or Reject.";
-}
+/** @deprecated Prefer UNDO_MUTATION_CONFLICT_NOTICE — kept for callers mid-migration. */
+export const STALE_PROPOSAL_NOTICE = UNDO_CONFLICT_NOTICE;

@@ -1,10 +1,11 @@
+import { readDraftFromContext } from "./draftContext.js";
 import {
-  autoApplyStatusMessage,
+  draftFingerprint,
   enrichProposal,
-  isProposalStale,
-  parseAutoApplyIntent,
-  STALE_PROPOSAL_NOTICE,
+  isMutationConflict,
+  UNDO_MUTATION_CONFLICT_NOTICE,
   type AcceptProposalResult,
+  type UndoMutationResult,
 } from "./proposals.js";
 import type {
   OperatorAgentHost,
@@ -26,7 +27,6 @@ export type OperatorAgentModel = {
     message: string;
     contextSnapshot: unknown;
     tools: OperatorAgentToolContext;
-    autoApply: boolean;
   }): Promise<OperatorAgentModelTurn>;
 };
 
@@ -36,31 +36,65 @@ function createSession(
   model: OperatorAgentModel,
 ): OperatorAgentSession {
   let context = initialContext;
-  let pending: OperatorAgentProposal | null = null;
-  let autoApply = false;
   let closed = false;
+  const mutations = new Map<string, OperatorAgentProposal>();
+  let lastMutationId: string | null = null;
   let lastEmitted: OperatorAgentProposal | null = null;
-  let lastEmitAutoApplied = false;
 
   const toolContext: OperatorAgentToolContext = {
     getContext: () => context,
     setContext: (next) => {
       context = next;
     },
-    getAutoApply: () => autoApply,
     emitProposal: (proposal) => {
       const enriched = enrichProposal(proposal, context);
-      lastEmitted = enriched;
-      if (autoApply) {
-        context = profile.contextAdapter.applyProposal(context, enriched);
-        pending = null;
-        lastEmitAutoApplied = true;
-        return;
-      }
-      pending = enriched;
-      lastEmitAutoApplied = false;
+      context = profile.contextAdapter.applyProposal(context, enriched);
+      const applied: OperatorAgentProposal = {
+        ...enriched,
+        appliedFingerprint: draftFingerprint(readDraftFromContext(context)),
+      };
+      mutations.set(applied.id, applied);
+      lastMutationId = applied.id;
+      lastEmitted = applied;
     },
   };
+
+  function resolveMutation(
+    mutationId?: string,
+  ):
+    | { ok: true; mutation: OperatorAgentProposal }
+    | { ok: false; reason: "none" | "id_mismatch" } {
+    if (mutations.size === 0) return { ok: false, reason: "none" };
+    const id = mutationId ?? lastMutationId;
+    if (!id) return { ok: false, reason: "none" };
+    const mutation = mutations.get(id);
+    if (!mutation) {
+      if (mutationId !== undefined) return { ok: false, reason: "id_mismatch" };
+      return { ok: false, reason: "none" };
+    }
+    return { ok: true, mutation };
+  }
+
+  function undoMutation(mutationId?: string): UndoMutationResult {
+    const resolved = resolveMutation(mutationId);
+    if (!resolved.ok) return resolved;
+    const { mutation } = resolved;
+    if (isMutationConflict(mutation, context)) {
+      return {
+        ok: false,
+        reason: "conflict",
+        notice: UNDO_MUTATION_CONFLICT_NOTICE,
+      };
+    }
+    if (mutation.baseContext !== undefined) {
+      context = mutation.baseContext;
+    }
+    mutations.delete(mutation.id);
+    if (lastMutationId === mutation.id) {
+      lastMutationId = [...mutations.keys()].at(-1) ?? null;
+    }
+    return { ok: true };
+  }
 
   return {
     profileId: profile.id,
@@ -69,34 +103,21 @@ function createSession(
     setContext: (next) => {
       context = next;
     },
-    getPendingProposal: () => pending,
-    getAutoApply: () => autoApply,
-    setAutoApply: (enabled) => {
-      autoApply = enabled;
+    getPendingProposal: () => {
+      if (!lastMutationId) return null;
+      return mutations.get(lastMutationId) ?? null;
     },
+    getMutation: (mutationId) => mutations.get(mutationId) ?? null,
     async send(message: string): Promise<OperatorAgentSessionEvent[]> {
       if (closed) {
         return [{ type: "error", message: "session is closed" }];
       }
-      const intent = parseAutoApplyIntent(message);
-      if (intent !== null) {
-        autoApply = intent;
-        return [
-          {
-            type: "message",
-            role: "system",
-            text: autoApplyStatusMessage(intent),
-          },
-        ];
-      }
       lastEmitted = null;
-      lastEmitAutoApplied = false;
       const turn = await model.complete({
         profile,
         message,
         contextSnapshot: profile.contextAdapter.serialize(context),
         tools: toolContext,
-        autoApply,
       });
       const events: OperatorAgentSessionEvent[] = [];
       for (const event of turn.events) {
@@ -104,7 +125,6 @@ function createSession(
           events.push({
             type: "proposal",
             proposal: lastEmitted ?? enrichProposal(event.proposal, context),
-            autoApplied: lastEmitAutoApplied,
           });
         } else {
           events.push(event);
@@ -113,31 +133,22 @@ function createSession(
       return events;
     },
     acceptProposal(proposalId?: string): AcceptProposalResult {
-      if (!pending) return { ok: false, reason: "none" };
-      if (proposalId !== undefined && pending.id !== proposalId) {
-        return { ok: false, reason: "id_mismatch" };
+      const resolved = resolveMutation(proposalId);
+      if (!resolved.ok) return resolved;
+      mutations.delete(resolved.mutation.id);
+      if (lastMutationId === resolved.mutation.id) {
+        lastMutationId = [...mutations.keys()].at(-1) ?? null;
       }
-      if (isProposalStale(pending, context)) {
-        pending = null;
-        return {
-          ok: false,
-          reason: "stale",
-          notice: STALE_PROPOSAL_NOTICE,
-        };
-      }
-      context = profile.contextAdapter.applyProposal(context, pending);
-      pending = null;
       return { ok: true };
     },
-    rejectProposal(proposalId?: string): boolean {
-      if (!pending) return false;
-      if (proposalId !== undefined && pending.id !== proposalId) return false;
-      pending = null;
-      return true;
+    rejectProposal(proposalId?: string): UndoMutationResult {
+      return undoMutation(proposalId);
     },
+    undoMutation,
     close(): void {
       closed = true;
-      pending = null;
+      mutations.clear();
+      lastMutationId = null;
     },
   };
 }

@@ -23,7 +23,6 @@ function emptyToolContext(): OperatorAgentToolContext {
       context = next;
     },
     emitProposal: () => {},
-    getAutoApply: () => false,
   };
 }
 
@@ -128,6 +127,9 @@ describe("Workshop Author playbook + docs retrieval", () => {
 
     const proposed = await session.send("intake form review");
     expect(proposed.some((e) => e.type === "proposal")).toBe(true);
+    expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
+      1,
+    );
     expect(session.acceptProposal()).toEqual({ ok: true });
     expect(readDraftFromContext(session.getContext()).pipeline.stages.length).toBe(
       1,
