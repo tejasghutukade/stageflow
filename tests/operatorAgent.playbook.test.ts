@@ -45,15 +45,28 @@ describe("Workshop Author playbook + docs retrieval", () => {
     expect(playbook).toMatch(/explain-only|no first-class Workshop editors/i);
   });
 
-  it("wires retrieve_docs onto the Workshop Author profile tools", () => {
+  it("wires primary Author tools and excludes disk/shell builtins", () => {
     const profile = createWorkshopAuthorProfile();
     expect(profile.playbook).toBe(WORKSHOP_AUTHOR_PLAYBOOK);
     expect(profile.tools.map((t) => t.name)).toEqual([
       "read_draft",
-      "propose_draft",
       "validate_draft",
+      "create_pipeline",
+      "edit_pipeline",
+      "create_stage",
+      "edit_stage",
+      "create_task",
+      "edit_task",
+      "save",
+      "propose_draft",
       "retrieve_docs",
     ]);
+    for (const forbidden of ["bash", "write", "edit"] as const) {
+      expect(profile.tools.some((t) => t.name === forbidden)).toBe(false);
+    }
+    expect(profile.playbook).toMatch(/clarify/i);
+    expect(profile.playbook).toMatch(/create_stage/);
+    expect(profile.playbook).toMatch(/never use bash\/write\/edit/i);
   });
 
   it("retrieves stubbed docs/examples without a live provider", async () => {

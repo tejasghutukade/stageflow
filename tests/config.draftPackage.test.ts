@@ -668,3 +668,81 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
     }
   });
 });
+
+describe("Workshop Author save tool facade", () => {
+  it("save tool validate-then-writes via createDraftPackage and refuses without destination", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const {
+        createSaveTool,
+        createWorkshopDraftContext,
+        emptyDraftPackage,
+      } = await import("../src/operatorAgent/index.js");
+
+      const save = createSaveTool({ projectRoot: root });
+      let context: unknown = createWorkshopDraftContext(
+        emptyDraftPackage("tool-save"),
+        { projectRoot: root },
+      );
+      const ctx = {
+        getContext: () => context,
+        setContext: (next: unknown) => {
+          context = next;
+        },
+        emitProposal: () => {},
+      };
+
+      const missing = await save.handler({}, ctx);
+      expect(missing.ok).toBe(false);
+      expect(missing.error).toMatch(/destination is required/i);
+
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "tool-save",
+          stages: [{ id: "clarify", uses: "./clarify.yaml", entry: true }],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Clarify",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+      context = createWorkshopDraftContext(draft, {
+        destination: { directory: "pipelines" },
+        projectRoot: root,
+      });
+
+      const written = await save.handler({ mode: "create" }, ctx);
+      expect(written.ok).toBe(true);
+      const yaml = await readFile(
+        path.join(root, "pipelines", "tool-save.pipeline.yaml"),
+        "utf8",
+      );
+      expect(yaml).toContain("tool-save");
+
+      context = createWorkshopDraftContext(
+        {
+          pipeline: {
+            id: "tool-save-bad",
+            stages: [{ id: "plan", system_prompt: "x", model: MODEL }],
+          },
+        },
+        {
+          destination: { directory: "pipelines" },
+          projectRoot: root,
+        },
+      );
+      const blocked = await save.handler({ mode: "create" }, ctx);
+      expect(blocked.ok).toBe(false);
+    } finally {
+      await cleanup();
+    }
+  });
+});

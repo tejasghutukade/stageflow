@@ -17,10 +17,13 @@ export function emptyDraftPackage(id = "untitled"): DraftPackage {
   };
 }
 
+export type WorkshopDraftContextExtras = Omit<WorkshopDraftContext, "draft">;
+
 export function createWorkshopDraftContext(
   draft: DraftPackage = emptyDraftPackage(),
+  extras: WorkshopDraftContextExtras = {},
 ): WorkshopDraftContext {
-  return { draft };
+  return { draft, ...extras };
 }
 
 export function isWorkshopDraftContext(
@@ -55,6 +58,26 @@ export function withDraft(
     return { ...context, draft };
   }
   return { draft };
+}
+
+export function withDestination(
+  context: unknown,
+  destination: WorkshopDraftContext["destination"],
+): WorkshopDraftContext {
+  const base = isWorkshopDraftContext(context)
+    ? context
+    : { draft: readDraftFromContext(context) };
+  return { ...base, destination };
+}
+
+export function withProjectRoot(
+  context: unknown,
+  projectRoot: string,
+): WorkshopDraftContext {
+  const base = isWorkshopDraftContext(context)
+    ? context
+    : { draft: readDraftFromContext(context) };
+  return { ...base, projectRoot };
 }
 
 export const workshopDraftContextAdapter: OperatorAgentContextAdapter = {

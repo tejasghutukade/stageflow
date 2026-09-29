@@ -24,9 +24,30 @@ import type {
   OperatorAgentToolResult,
 } from "../types.js";
 import { WORKSHOP_AUTHOR_PLAYBOOK } from "./workshopAuthorPlaybook.js";
+import {
+  buildCreateStageDraft,
+  buildCreateTaskDraft,
+  createSaveTool,
+  createWorkshopAuthorMutatingTools,
+  WORKSHOP_AUTHOR_TOOL_NAMES,
+  WORKSHOP_FORBIDDEN_AGENT_TOOLS,
+  type WorkshopAuthorToolOptions,
+} from "./workshopAuthorTools.js";
 
 export const WORKSHOP_AUTHOR_PROFILE_ID = "workshop-author";
 export { WORKSHOP_AUTHOR_PLAYBOOK };
+export {
+  WORKSHOP_AUTHOR_TOOL_NAMES,
+  WORKSHOP_FORBIDDEN_AGENT_TOOLS,
+  buildCreateStageDraft,
+  buildCreateTaskDraft,
+  buildEditStageDraft,
+  buildEditTaskDraft,
+  buildCreatePipelineDraft,
+  buildEditPipelineDraft,
+  createSaveTool,
+  createWorkshopAuthorMutatingTools,
+} from "./workshopAuthorTools.js";
 
 const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
 
@@ -57,46 +78,57 @@ export function buildStageAddProposal(
   draft: DraftPackage,
   userText: string,
 ): OperatorAgentProposal {
-  const existingIds = new Set(
-    draft.pipeline.stages.map((s) => (typeof s.id === "string" ? s.id : "")),
-  );
-  let stageId = slugifyStageId(userText.split(/\s+/).slice(0, 3).join(" "));
-  if (existingIds.has(stageId) || stageId === "untitled") {
-    stageId = `${stageId}-${existingIds.size + 1}`;
-  }
-
-  const stageBody: Record<string, unknown> = {
-    id: stageId,
+  const built = buildCreateStageDraft(draft, {
+    summary: userText.trim() || "workshop draft",
     system_prompt: `Stage for: ${userText.trim() || "workshop draft"}`,
-    model: DEFAULT_MODEL,
-    ...REQUIRED_IO,
-  };
-
-  const usesPath = `./${stageId}.yaml`;
-  const nextDraft: DraftPackage = {
-    ...draft,
-    pipeline: {
-      ...draft.pipeline,
+  });
+  if (!built.ok) {
+    const stageId = slugifyStageId(userText.split(/\s+/).slice(0, 3).join(" "));
+    const usesPath = `./${stageId}.yaml`;
+    const nextDraft: DraftPackage = {
+      ...draft,
+      pipeline: {
+        ...draft.pipeline,
+        stages: [
+          ...draft.pipeline.stages,
+          {
+            id: stageId,
+            uses: usesPath,
+            ...(draft.pipeline.stages.length === 0 ? { entry: true } : {}),
+          },
+        ],
+      },
       stages: [
-        ...draft.pipeline.stages,
+        ...(draft.stages ?? []),
         {
-          id: stageId,
-          uses: usesPath,
-          ...(draft.pipeline.stages.length === 0 ? { entry: true } : {}),
+          path: usesPath,
+          body: {
+            id: stageId,
+            system_prompt: `Stage for: ${userText.trim() || "workshop draft"}`,
+            model: DEFAULT_MODEL,
+            ...REQUIRED_IO,
+          },
         },
       ],
-    },
-    stages: [...(draft.stages ?? []), { path: usesPath, body: stageBody }],
-  };
-
+    };
+    return {
+      id: nextProposalId(),
+      summary: `Add stage “${stageId}”`,
+      nextContext: nextDraft,
+      baseContext: { draft },
+      baseFingerprint: draftFingerprint(draft),
+      artifacts: diffDraftPackages(draft, nextDraft),
+      affectedStageIds: affectedStageIds(draft, nextDraft),
+    };
+  }
   return {
     id: nextProposalId(),
-    summary: `Add stage “${stageId}”`,
-    nextContext: nextDraft,
+    summary: `Add stage “${built.stageId}”`,
+    nextContext: built.nextDraft,
     baseContext: { draft },
     baseFingerprint: draftFingerprint(draft),
-    artifacts: diffDraftPackages(draft, nextDraft),
-    affectedStageIds: affectedStageIds(draft, nextDraft),
+    artifacts: diffDraftPackages(draft, built.nextDraft),
+    affectedStageIds: affectedStageIds(draft, built.nextDraft),
   };
 }
 
@@ -164,19 +196,21 @@ export function buildTaskAddProposal(
   if (!taskId) taskId = "task";
   if (!goal) goal = "Describe the workflow goal";
 
-  const filename = `${taskId}.task.yaml`;
+  const built = buildCreateTaskDraft(draft, { id: taskId, goal });
+  const nextDraft = built.ok
+    ? built.nextDraft
+    : {
+        ...draft,
+        task: {
+          filename: `${taskId}.task.yaml`,
+          body: {
+            ...(draft.task?.body ?? {}),
+            id: taskId,
+            goal,
+          },
+        },
+      };
   const filling = Boolean(draft.task);
-  const nextDraft: DraftPackage = {
-    ...draft,
-    task: {
-      filename,
-      body: {
-        ...(draft.task?.body ?? {}),
-        id: taskId,
-        goal,
-      },
-    },
-  };
 
   return {
     id: nextProposalId(),
@@ -203,7 +237,7 @@ const readDraftTool: OperatorAgentTool = {
 const proposeDraftTool: OperatorAgentTool = {
   name: "propose_draft",
   description:
-    "Apply a structured draft update immediately (Accept confirms; Reject soft-undos when unchanged)",
+    "Legacy bulk draft replace. Prefer create_*/edit_* tools. Applies immediately (Accept confirms; Reject soft-undos when unchanged).",
   handler(args, ctx): OperatorAgentToolResult {
     const summary =
       typeof args.summary === "string" && args.summary.trim()
@@ -221,7 +255,7 @@ const proposeDraftTool: OperatorAgentTool = {
       id: nextProposalId(),
       summary,
       nextContext: nextDraft,
-      baseContext: { draft: current },
+      baseContext: ctx.getContext(),
       baseFingerprint: draftFingerprint(current),
       artifacts: diffDraftPackages(current, nextDraft),
       affectedStageIds: affectedStageIds(current, nextDraft),
@@ -285,17 +319,20 @@ function createRetrieveDocsTool(retriever: DocsRetriever): OperatorAgentTool {
   };
 }
 
-export type WorkshopAuthorProfileOptions = {
+export type WorkshopAuthorProfileOptions = WorkshopAuthorToolOptions & {
   retriever?: DocsRetriever;
 };
 
 export function createWorkshopAuthorTools(
   retriever: DocsRetriever = createFilesystemDocsRetriever(),
+  options: WorkshopAuthorToolOptions = {},
 ): OperatorAgentTool[] {
   return [
     readDraftTool,
-    proposeDraftTool,
     validateDraftTool,
+    ...createWorkshopAuthorMutatingTools(),
+    createSaveTool(options),
+    proposeDraftTool,
     createRetrieveDocsTool(retriever),
   ];
 }
@@ -312,7 +349,9 @@ export function createWorkshopAuthorProfile(
     id: WORKSHOP_AUTHOR_PROFILE_ID,
     title: "Workshop Author",
     playbook: WORKSHOP_AUTHOR_PLAYBOOK,
-    tools: createWorkshopAuthorTools(retriever),
+    tools: createWorkshopAuthorTools(retriever, {
+      projectRoot: options.projectRoot,
+    }),
     contextAdapter: workshopDraftContextAdapter,
     greeting: WORKSHOP_AUTHOR_GREETING,
   };
@@ -324,6 +363,7 @@ export function proposeStageFromUserMessage(
 ): OperatorAgentProposal {
   const draft = readDraftFromContext(ctx.getContext());
   const proposal = buildStageAddProposal(draft, message);
+  proposal.baseContext = ctx.getContext();
   ctx.emitProposal(proposal);
   return proposal;
 }
@@ -334,6 +374,21 @@ export function proposeTaskFromUserMessage(
 ): OperatorAgentProposal {
   const draft = readDraftFromContext(ctx.getContext());
   const proposal = buildTaskAddProposal(draft, message);
+  proposal.baseContext = ctx.getContext();
   ctx.emitProposal(proposal);
   return proposal;
+}
+
+export function assertWorkshopAuthorToolsExcludeDiskShell(
+  tools: readonly { name: string }[],
+): void {
+  const names = tools.map((t) => t.name);
+  const forbidden = WORKSHOP_FORBIDDEN_AGENT_TOOLS.filter((name) =>
+    names.includes(name),
+  );
+  if (forbidden.length > 0) {
+    throw new Error(
+      `Workshop Author tools must not include disk/shell builtins: ${forbidden.join(", ")}`,
+    );
+  }
 }

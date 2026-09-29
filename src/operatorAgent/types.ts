@@ -100,6 +100,8 @@ export type WorkshopDraftContext = {
     directory: string;
     pipelineFilename?: string;
   };
+  /** Catalog write root for the save tool (usually the operator project). */
+  projectRoot?: string;
 };
 
 export type { AcceptProposalResult, ProposalArtifactDiff, UndoMutationResult };

@@ -40,7 +40,9 @@ export {
   emptyDraftPackage,
   isWorkshopDraftContext,
   readDraftFromContext,
+  withDestination,
   withDraft,
+  withProjectRoot,
   workshopDraftContextAdapter,
   WORKSHOP_AUTHOR_GREETING,
 } from "./draftContext.js";
@@ -54,6 +56,7 @@ export {
   UNDO_MUTATION_CONFLICT_NOTICE,
 } from "./proposals.js";
 export {
+  assertWorkshopAuthorToolsExcludeDiskShell,
   buildStageAddProposal,
   buildTaskAddProposal,
   createWorkshopAuthorProfile,
@@ -63,6 +66,19 @@ export {
   proposeTaskFromUserMessage,
   WORKSHOP_AUTHOR_PLAYBOOK,
   WORKSHOP_AUTHOR_PROFILE_ID,
+  WORKSHOP_AUTHOR_TOOL_NAMES,
+  WORKSHOP_FORBIDDEN_AGENT_TOOLS,
   workshopAuthorTools,
   type WorkshopAuthorProfileOptions,
 } from "./profiles/workshopAuthor.js";
+export {
+  buildCreatePipelineDraft,
+  buildCreateStageDraft,
+  buildCreateTaskDraft,
+  buildEditPipelineDraft,
+  buildEditStageDraft,
+  buildEditTaskDraft,
+  createSaveTool,
+  createWorkshopAuthorMutatingTools,
+  WORKSHOP_AUTHOR_MUTATING_TOOLS,
+} from "./profiles/workshopAuthorTools.js";

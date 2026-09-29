@@ -120,8 +120,10 @@ function createSession(
         tools: toolContext,
       });
       const events: OperatorAgentSessionEvent[] = [];
+      let sawProposal = false;
       for (const event of turn.events) {
         if (event.type === "proposal") {
+          sawProposal = true;
           events.push({
             type: "proposal",
             proposal: lastEmitted ?? enrichProposal(event.proposal, context),
@@ -129,6 +131,9 @@ function createSession(
         } else {
           events.push(event);
         }
+      }
+      if (!sawProposal && lastEmitted) {
+        events.push({ type: "proposal", proposal: lastEmitted });
       }
       return events;
     },

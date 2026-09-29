@@ -33,6 +33,145 @@ describe("Operator Agent Host — Workshop Author", () => {
     expect(profiles[0]!.greeting).toBe(WORKSHOP_AUTHOR_GREETING);
   });
 
+  it("create_stage tool mutates the draft immediately via emit path", async () => {
+    const host = createWorkshopOperatorHost([
+      {
+        type: "call_tool",
+        name: "create_stage",
+        args: {
+          id: "intake",
+          system_prompt: "Collect intake",
+          summary: "intake form review",
+        },
+        message: "Added intake stage.",
+      },
+    ]);
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    const events = await session.send("add intake");
+    expect(events.some((e) => e.type === "tool_result")).toBe(true);
+    expect(events.some((e) => e.type === "proposal")).toBe(true);
+
+    const draft = readDraftFromContext(session.getContext());
+    expect(draft.pipeline.stages.length).toBe(1);
+    expect(draft.pipeline.stages[0]!.id).toBe("intake");
+    expect(draft.stages?.[0]?.body.id).toBe("intake");
+    expect(session.getPendingProposal()?.summary).toMatch(/Add stage/i);
+
+    expect(session.undoMutation()).toEqual({ ok: true });
+    expect(readDraftFromContext(session.getContext()).pipeline.stages).toEqual(
+      [],
+    );
+  });
+
+  it("save writes a valid package and blocks invalid without allowInvalid", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await mkdir(path.join(root, "pipelines"), { recursive: true });
+      const valid: DraftPackage = {
+        pipeline: {
+          id: "workshop-save",
+          stages: [{ id: "clarify", uses: "./clarify.yaml", entry: true }],
+        },
+        stages: [
+          {
+            path: "./clarify.yaml",
+            body: {
+              id: "clarify",
+              system_prompt: "Clarify",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          },
+        ],
+      };
+
+      const host = createWorkshopOperatorHost([
+        {
+          type: "call_tool",
+          name: "save",
+          args: { directory: "pipelines", mode: "create" },
+        },
+      ]);
+      const session = host.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(valid, {
+          destination: { directory: "pipelines" },
+          projectRoot: root,
+        }),
+      });
+
+      const events = await session.send("save this");
+      const toolEvent = events.find((e) => e.type === "tool_result");
+      expect(toolEvent?.type).toBe("tool_result");
+      if (toolEvent?.type !== "tool_result") return;
+      expect(toolEvent.name).toBe("save");
+      expect(toolEvent.result.ok).toBe(true);
+      const yaml = await readFile(
+        path.join(root, "pipelines", "workshop-save.pipeline.yaml"),
+        "utf8",
+      );
+      expect(yaml).toContain("workshop-save");
+
+      const invalidHost = createWorkshopOperatorHost([
+        {
+          type: "call_tool",
+          name: "save",
+          args: { directory: "pipelines", mode: "create" },
+        },
+      ]);
+      const invalidSession = invalidHost.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(
+          {
+            pipeline: {
+              id: "broken-save",
+              stages: [{ id: "plan", system_prompt: "x", model: MODEL }],
+            },
+          },
+          {
+            destination: { directory: "pipelines" },
+            projectRoot: root,
+          },
+        ),
+      });
+      const blocked = await invalidSession.send("save invalid");
+      const blockedTool = blocked.find((e) => e.type === "tool_result");
+      expect(blockedTool?.type).toBe("tool_result");
+      if (blockedTool?.type !== "tool_result") return;
+      expect(blockedTool.result.ok).toBe(false);
+      expect(String(blockedTool.result.error)).toMatch(/validation|io|schema/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("save without destination fails clearly", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const host = createWorkshopOperatorHost([
+        { type: "call_tool", name: "save", args: {} },
+      ]);
+      const session = host.openSession({
+        profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+        context: createWorkshopDraftContext(emptyDraftPackage("demo"), {
+          projectRoot: root,
+        }),
+      });
+      const events = await session.send("save");
+      const toolEvent = events.find((e) => e.type === "tool_result");
+      expect(toolEvent?.type).toBe("tool_result");
+      if (toolEvent?.type !== "tool_result") return;
+      expect(toolEvent.result.ok).toBe(false);
+      expect(toolEvent.result.error).toMatch(/destination is required/i);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it("mutates the draft immediately; Reject / undoMutation restores when unchanged", async () => {
     const host = createWorkshopOperatorHost([{ type: "propose_stage" }]);
     const session = host.openSession({

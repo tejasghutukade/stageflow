@@ -142,7 +142,12 @@ export function createWorkshopOperatorHost(
     : (scriptOrOptions ?? {});
   const host = createOperatorAgentHost(
     createFakeOperatorAgentModel(options.script),
-    [createWorkshopAuthorProfile({ retriever: options.retriever })],
+    [
+      createWorkshopAuthorProfile({
+        retriever: options.retriever,
+        projectRoot: options.projectRoot,
+      }),
+    ],
   );
   return host;
 }
