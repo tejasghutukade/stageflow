@@ -39,8 +39,10 @@ import {
   type WorkshopAutosaveRecord,
 } from "../workshop/autosave.js";
 import {
+  acceptWorkshopSessionMutation,
   iterateWorkshopChatStreamFrames,
   runWorkshopChatTurn,
+  undoWorkshopSessionMutation,
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
@@ -2003,6 +2005,112 @@ export function createOperatorRoutes(
               return true;
             }
             throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionUndoMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/undo$/,
+        );
+        if (method === "POST" && workshopSessionUndoMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionUndoMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await undoWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return true;
+        }
+
+        const workshopSessionAcceptMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/accept$/,
+        );
+        if (method === "POST" && workshopSessionAcceptMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionAcceptMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await acceptWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
           }
           return true;
         }

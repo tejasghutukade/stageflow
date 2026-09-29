@@ -3108,6 +3108,47 @@ a.topbar__back { text-decoration: none; }
   background: var(--color-background-surface);
 }
 
+.workshop-lab__chat-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-shrink: 0;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+}
+
+.workshop-lab__chat-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.workshop-lab__chat-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  margin-left: auto;
+}
+
+.workshop-lab__icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: var(--spacing-8);
+  height: var(--spacing-8);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-element);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.workshop-lab__icon-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-overlay-hover);
+}
+
 .workshop-lab__chat-body {
   display: flex;
   flex-direction: column;
@@ -3316,6 +3357,162 @@ a.topbar__back { text-decoration: none; }
   background: var(--color-background-body);
 }
 
+.workshop-lab__proposal {
+  margin-top: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+}
+
+.workshop-lab__proposal[data-status="accepted"] {
+  border-color: var(--color-success);
+}
+
+.workshop-lab__proposal[data-status="rejected"] {
+  border-color: var(--color-border);
+  opacity: 0.72;
+}
+
+.workshop-lab__proposal-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin-bottom: var(--spacing-2);
+}
+
+.workshop-lab__proposal-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.workshop-lab__proposal-id {
+  font-family: var(--font-family-code);
+  font-size: var(--font-size-xs);
+}
+
+.workshop-lab__proposal-summary {
+  margin: 0 0 var(--spacing-3);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.workshop-lab__proposal-status {
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+
+.workshop-lab__proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.workshop-lab__map-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  flex: 1;
+  min-height: 0;
+  padding: var(--spacing-6);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.workshop-lab__map-empty p {
+  margin: 0;
+  max-width: 18rem;
+  font-size: var(--font-size-sm);
+}
+
+.workshop-lab__workspace.has-highlight .gnode:not(.selected):not([data-waiting="true"]) {
+  opacity: 0.45;
+}
+
+.workshop-lab__workspace.has-highlight .gnode.selected,
+.workshop-lab__workspace.has-highlight .gnode[data-waiting="true"] {
+  opacity: 1;
+}
+
+.workshop-lab__popup-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: var(--spacing-4);
+}
+
+.workshop-lab__popup-scrim {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.28);
+  cursor: default;
+}
+
+.workshop-lab__popup {
+  position: relative;
+  z-index: 1;
+  width: min(28rem, 100%);
+  max-height: min(80vh, 36rem);
+  overflow: auto;
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--color-border-emphasized);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  box-shadow: var(--shadow-med);
+}
+
+.workshop-lab__popup-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-bottom: var(--spacing-4);
+}
+
+.workshop-lab__popup-title {
+  margin: 0;
+  flex: 1;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+}
+
+.workshop-lab__popup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+}
+
+.workshop-lab__popup-field {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: var(--spacing-3);
+  align-items: start;
+}
+
+.workshop-lab__popup-field dt {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-code);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.workshop-lab__popup-field dd {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+}
+
 @media (max-width: 900px) {
   .workshop-lab__body {
     grid-template-columns: 1fr;
@@ -3340,4 +3537,77 @@ a.topbar__back { text-decoration: none; }
   .workshop-lab__chat {
     border-right: none;
   }
+}
+
+.workshop-lab__boot-error {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
+
+.workshop-lab__history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  max-height: 40%;
+  min-height: 8rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+  padding: var(--spacing-3);
+  overflow: auto;
+}
+
+.workshop-lab__history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.workshop-lab__history-empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.workshop-lab__history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.workshop-lab__history-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+  width: 100%;
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workshop-lab__history-item:hover {
+  background: var(--color-background-surface);
+  border-color: var(--color-border);
+}
+
+.workshop-lab__history-item[data-active="true"] {
+  border-color: var(--color-border-emphasized);
+  background: var(--color-background-surface);
+}
+
+.workshop-lab__history-item strong {
+  font-size: var(--font-size-sm);
+}
+
+.workshop-lab__history-item span {
+  font-size: var(--font-size-xs);
 }

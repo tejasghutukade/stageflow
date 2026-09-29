@@ -651,6 +651,7 @@ export type WorkshopChatWireEvent =
   | { type: "error"; message: string };
 
 export type WorkshopChatTurnPayload = {
+  sessionId: string;
   events: WorkshopChatWireEvent[];
   draft: DraftPackagePayload;
   pending: WorkshopChatProposalPayload | null;
@@ -659,6 +660,7 @@ export type WorkshopChatTurnPayload = {
 };
 
 export type WorkshopChatTurnInput = {
+  sessionId: string;
   message: string;
   draft: DraftPackagePayload;
   autoApply?: boolean;
@@ -675,6 +677,60 @@ export type WorkshopChatStreamFrame =
   | { type: "delta"; text: string }
   | { type: "event"; event: WorkshopChatWireEvent }
   | ({ type: "done" } & WorkshopChatTurnPayload);
+
+export type WorkshopSessionMessage = {
+  id: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  createdAt: string;
+};
+
+export type WorkshopSessionRecord = {
+  version: 1;
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  transcript: WorkshopSessionMessage[];
+  piSessionId: string | null;
+};
+
+export type WorkshopSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ListWorkshopSessionsResult =
+  | { ok: true; sessions: WorkshopSessionSummary[] }
+  | { ok: false; status: number; error: string };
+
+export type CreateWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string; code?: string };
+
+export type WorkshopSessionMutationResult =
+  | {
+      ok: true;
+      sessionId: string;
+      draft: DraftPackagePayload;
+      pending: WorkshopChatProposalPayload | null;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      reason?: "none" | "id_mismatch" | "conflict";
+      notice?: string;
+      draft?: DraftPackagePayload;
+      pending?: WorkshopChatProposalPayload | null;
+      sessionId?: string;
+    };
 
 export type CapacityHealth = {
   ok: true;

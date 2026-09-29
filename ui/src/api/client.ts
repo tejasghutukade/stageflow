@@ -34,9 +34,12 @@ import type {
   ClearWorkshopAutosaveResult,
   CreateDraftPackageInput,
   CreateDraftPackageResult,
+  CreateWorkshopSessionResult,
   DraftPackagePayload,
   DraftValidationResult,
   GetWorkshopAutosaveResult,
+  GetWorkshopSessionResult,
+  ListWorkshopSessionsResult,
   OpenDraftPackageInput,
   OpenDraftPackageResult,
   OverwriteDraftPackageInput,
@@ -50,6 +53,9 @@ import type {
   WorkshopChatTurnResult,
   WorkshopDiskChangeInput,
   WorkshopDiskChangeResult,
+  WorkshopSessionMutationResult,
+  WorkshopSessionRecord,
+  WorkshopSessionSummary,
 } from "./types";
 import { authorizationHeaders } from "./controlToken";
 
@@ -1024,6 +1030,7 @@ function isWorkshopChatTurnPayload(
   if (body === null || typeof body !== "object") return false;
   const record = body as Record<string, unknown>;
   return (
+    typeof record.sessionId === "string" &&
     Array.isArray(record.events) &&
     record.draft !== null &&
     typeof record.draft === "object" &&
@@ -1031,6 +1038,217 @@ function isWorkshopChatTurnPayload(
     typeof record.model === "string" &&
     (record.pending === null || typeof record.pending === "object")
   );
+}
+
+export async function listWorkshopSessions(): Promise<ListWorkshopSessionsResult> {
+  try {
+    const res = await fetch("/api/workshop/sessions", {
+      headers: { ...authorizationHeaders() },
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      sessions?: WorkshopSessionSummary[];
+      error?: string;
+    };
+    if (res.ok && Array.isArray(body.sessions)) {
+      return { ok: true, sessions: body.sessions };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function createWorkshopSession(input?: {
+  id?: string;
+}): Promise<CreateWorkshopSessionResult> {
+  try {
+    const res = await fetch("/api/workshop/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input?.id ? { id: input.id } : {}),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      session?: WorkshopSessionRecord;
+      error?: string;
+    };
+    if ((res.ok || res.status === 201) && body.session) {
+      return { ok: true, session: body.session };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function getWorkshopSession(
+  sessionId: string,
+): Promise<GetWorkshopSessionResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/sessions/${encodeURIComponent(sessionId)}`,
+      { headers: { ...authorizationHeaders() } },
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      session?: WorkshopSessionRecord;
+      error?: string;
+      code?: string;
+    };
+    if (res.ok && body.session) {
+      return { ok: true, session: body.session };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function undoWorkshopSessionMutation(input: {
+  sessionId: string;
+  draft: DraftPackagePayload;
+  mutationId?: string;
+}): Promise<WorkshopSessionMutationResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/sessions/${encodeURIComponent(input.sessionId)}/undo`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authorizationHeaders(),
+        },
+        body: JSON.stringify({
+          draft: input.draft,
+          ...(input.mutationId !== undefined
+            ? { mutationId: input.mutationId }
+            : {}),
+        }),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as WorkshopSessionMutationResult & {
+      error?: string;
+      notice?: string;
+      reason?: "none" | "id_mismatch" | "conflict";
+    };
+    if (res.ok && body.ok === true) {
+      return body;
+    }
+    if (body.ok === false || res.status >= 400) {
+      return {
+        ok: false,
+        status: res.status,
+        error:
+          body.notice ??
+          ("error" in body && typeof body.error === "string"
+            ? body.error
+            : `Request failed (${res.status})`),
+        ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+        ...(typeof body.notice === "string" ? { notice: body.notice } : {}),
+        ...(body.draft ? { draft: body.draft } : {}),
+        ...(body.pending !== undefined ? { pending: body.pending } : {}),
+        ...(typeof body.sessionId === "string"
+          ? { sessionId: body.sessionId }
+          : {}),
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function acceptWorkshopSessionMutation(input: {
+  sessionId: string;
+  draft: DraftPackagePayload;
+  mutationId?: string;
+}): Promise<WorkshopSessionMutationResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/sessions/${encodeURIComponent(input.sessionId)}/accept`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authorizationHeaders(),
+        },
+        body: JSON.stringify({
+          draft: input.draft,
+          ...(input.mutationId !== undefined
+            ? { mutationId: input.mutationId }
+            : {}),
+        }),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as WorkshopSessionMutationResult & {
+      error?: string;
+      notice?: string;
+      reason?: "none" | "id_mismatch" | "conflict";
+    };
+    if (res.ok && body.ok === true) {
+      return body;
+    }
+    if (body.ok === false || res.status >= 400) {
+      return {
+        ok: false,
+        status: res.status,
+        error:
+          body.notice ??
+          ("error" in body && typeof body.error === "string"
+            ? body.error
+            : `Request failed (${res.status})`),
+        ...(typeof body.reason === "string" ? { reason: body.reason } : {}),
+        ...(typeof body.notice === "string" ? { notice: body.notice } : {}),
+        ...(body.draft ? { draft: body.draft } : {}),
+        ...(body.pending !== undefined ? { pending: body.pending } : {}),
+        ...(typeof body.sessionId === "string"
+          ? { sessionId: body.sessionId }
+          : {}),
+      };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /** Full-turn Workshop Author chat via Operator Agent Host (JSON). */
@@ -1042,6 +1260,7 @@ export async function sendWorkshopChatTurn(
       method: "POST",
       headers: { "Content-Type": "application/json", ...authorizationHeaders() },
       body: JSON.stringify({
+        sessionId: input.sessionId,
         message: input.message,
         draft: input.draft,
         autoApply: input.autoApply === true,
@@ -1090,6 +1309,7 @@ export async function sendWorkshopChatTurnStreaming(
         ...authorizationHeaders(),
       },
       body: JSON.stringify({
+        sessionId: input.sessionId,
         message: input.message,
         draft: input.draft,
         autoApply: input.autoApply === true,
@@ -1110,9 +1330,9 @@ export async function sendWorkshopChatTurnStreaming(
     }
 
     if (!contentType.includes("ndjson") || !res.body) {
-      const body = (await res.json().catch(() => ({}))) as WorkshopChatTurnPayload & {
+      const body = (await res.json().catch(() => ({}))) as {
         error?: string;
-      };
+      } & Partial<WorkshopChatTurnPayload>;
       if (isWorkshopChatTurnPayload(body)) {
         return { ok: true, ...body };
       }
@@ -1149,6 +1369,7 @@ export async function sendWorkshopChatTurnStreaming(
           handlers.onEvent?.(frame.event);
         } else if (frame.type === "done") {
           donePayload = {
+            sessionId: frame.sessionId,
             events: frame.events ?? [],
             draft: frame.draft,
             pending: frame.pending,
@@ -1164,6 +1385,7 @@ export async function sendWorkshopChatTurnStreaming(
         const frame = JSON.parse(buffer.trim()) as WorkshopChatStreamFrame;
         if (frame.type === "done") {
           donePayload = {
+            sessionId: frame.sessionId,
             events: frame.events ?? [],
             draft: frame.draft,
             pending: frame.pending,

@@ -351,4 +351,51 @@ describe("Workshop sessions HTTP API", () => {
       expect(missing.body.code).toBe("workshop_session_not_found");
     });
   });
+
+  it("soft-undos a mutation via POST /sessions/:id/undo", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-undo-"));
+      const { server, base } = await withServer(repo.root, storeRoot);
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+
+      const created = await createSession(base, "http-sess-undo");
+      expect(created.status).toBe(201);
+
+      const chat = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "http-sess-undo",
+          message: "intake form review",
+          draft: { pipeline: { id: "demo", stages: [] } },
+        }),
+      });
+      expect(chat.status).toBe(200);
+      expect(chat.body.draft.pipeline.stages.length).toBe(1);
+      const mutationId = chat.body.pending?.id as string;
+      expect(mutationId).toBeTruthy();
+
+      const undone = await jsonFetch(
+        `${base}/api/workshop/sessions/http-sess-undo/undo`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mutationId,
+            draft: chat.body.draft,
+          }),
+        },
+      );
+      expect(undone.status).toBe(200);
+      expect(undone.body.ok).toBe(true);
+      expect(undone.body.draft.pipeline.stages).toEqual([]);
+    });
+  });
 });
