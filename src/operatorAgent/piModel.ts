@@ -452,7 +452,7 @@ export function createPiOperatorAgentModel(
       state.replayed = true;
     },
 
-    async complete({ profile, message, tools }) {
+    async complete({ profile, message, tools, onDelta }) {
       let state: BoundPiState;
       try {
         state = await ensureBound(profile, tools);
@@ -480,6 +480,7 @@ export function createPiOperatorAgentModel(
           const ame = e.assistantMessageEvent;
           if (ame?.type === "text_delta" && typeof ame.delta === "string") {
             assistantText += ame.delta;
+            onDelta?.(ame.delta);
           }
           return;
         }

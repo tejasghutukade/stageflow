@@ -157,6 +157,83 @@ describe("createPiOperatorAgentModel", () => {
     session.close();
   });
 
+  it("forwards Pi text_delta to onDelta mid-prompt before complete resolves", async () => {
+    const deltas: string[] = [];
+    let promptFinished = false;
+    const listeners = new Set<(event: unknown) => void>();
+    const multiHandle: PiOperatorSessionHandle = {
+      session: {
+        prompt: vi.fn(async () => {
+          for (const listener of listeners) {
+            listener({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "Hi " },
+            });
+          }
+          await new Promise((r) => setTimeout(r, 10));
+          expect(promptFinished).toBe(false);
+          for (const listener of listeners) {
+            listener({
+              type: "message_update",
+              assistantMessageEvent: { type: "text_delta", delta: "there" },
+            });
+          }
+          for (const listener of listeners) {
+            listener({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Hi there" }],
+              },
+            });
+          }
+          promptFinished = true;
+        }),
+        subscribe: vi.fn((listener: (event: unknown) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        }),
+        dispose: vi.fn(),
+        bindExtensions: vi.fn(async () => undefined),
+        setModel: vi.fn(async () => undefined),
+        setThinkingLevel: vi.fn(),
+        agent: { state: { messages: [] } },
+      },
+      sessionManager: {
+        appendCustomMessageEntry: vi.fn(),
+        buildSessionContext: vi.fn(() => ({ messages: [] })),
+        getSessionId: vi.fn(() => "pi-stream-session"),
+      },
+      piSessionId: "pi-stream-session",
+      shutdown: vi.fn(async () => undefined),
+    };
+    tempHandles.push(multiHandle);
+
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession: async () => multiHandle,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    const events = await session.send("hello", {
+      onDelta: (text) => {
+        expect(promptFinished).toBe(false);
+        deltas.push(text);
+      },
+    });
+    expect(deltas).toEqual(["Hi ", "there"]);
+    expect(events.some((e) => e.type === "message")).toBe(true);
+    const msg = events.find((e) => e.type === "message");
+    if (msg?.type === "message") {
+      expect(msg.text).toBe("Hi there");
+    }
+    session.close();
+  });
+
   it("missing auth surfaces a clear actionable error", async () => {
     const host = createLiveWorkshopOperatorHost({
       cwd: process.cwd(),

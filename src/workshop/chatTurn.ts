@@ -71,6 +71,11 @@ export type WorkshopChatTurnInput = {
   registry?: WorkshopChatSessionRegistry;
   /** Session store root; defaults to `$STAGEFLOW_HOME`. */
   storeRoot?: string;
+  /**
+   * Mid-turn assistant text callback. Invoked as model deltas arrive (before
+   * the turn promise resolves). HTTP uses this to flush NDJSON `delta` frames.
+   */
+  onDelta?: (text: string) => void;
 };
 
 export type WorkshopChatTurnResult = {
@@ -334,7 +339,10 @@ export async function runWorkshopChatTurn(
   ) {
     await agentSession.prepareRestart(storeRecord.transcript);
   }
-  const rawEvents = await agentSession.send(message);
+  const rawEvents = await agentSession.send(
+    message,
+    input.onDelta ? { onDelta: input.onDelta } : undefined,
+  );
   const draft = readDraftFromContext(agentSession.getContext());
   const pendingRaw = agentSession.getPendingProposal();
   const events = rawEvents.map((event) =>

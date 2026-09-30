@@ -2141,6 +2141,103 @@ export function createOperatorRoutes(
             return true;
           }
           const settingsDefault = readFactorySettings(cwd).workshopModel;
+          const accept = String(req.headers.accept ?? "");
+          const wantsStream =
+            body.stream === true ||
+            accept.includes("application/x-ndjson") ||
+            accept.includes("text/event-stream");
+
+          // Fail closed on missing sessions before opening an NDJSON body.
+          try {
+            getWorkshopSession(workshopSessionStoreRoot(), body.sessionId);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+
+          if (wantsStream) {
+            res.writeHead(200, {
+              "Content-Type": "application/x-ndjson; charset=utf-8",
+              "Cache-Control": "no-store",
+            });
+            const writeFrame = async (frame: unknown): Promise<void> => {
+              if (req.aborted || res.writableEnded || res.destroyed) return;
+              const line = `${JSON.stringify(frame)}\n`;
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) =>
+                  res.once("drain", resolve),
+                );
+              }
+            };
+            let streamedDelta = false;
+            let writeChain: Promise<void> = Promise.resolve();
+            const enqueueFrame = (frame: unknown): void => {
+              writeChain = writeChain.then(() => writeFrame(frame));
+            };
+            try {
+              const turn = await runWorkshopChatTurn({
+                sessionId: body.sessionId,
+                draft: draftParsed,
+                message: body.message,
+                autoApply: body.autoApply === true,
+                model:
+                  typeof body.model === "string" || body.model === null
+                    ? body.model
+                    : undefined,
+                settingsDefault: settingsDefault ?? null,
+                registry: workshopChatRegistry,
+                storeRoot: workshopSessionStoreRoot(),
+                onDelta: (text) => {
+                  streamedDelta = true;
+                  enqueueFrame({ type: "delta", text });
+                },
+              });
+              await writeChain;
+              if (streamedDelta) {
+                for (const event of turn.events) {
+                  await writeFrame({ type: "event", event });
+                }
+                await writeFrame({
+                  type: "done",
+                  sessionId: turn.sessionId,
+                  events: turn.events,
+                  draft: turn.draft,
+                  pending: turn.pending,
+                  autoApply: turn.autoApply,
+                  model: turn.model,
+                });
+              } else {
+                for (const frame of iterateWorkshopChatStreamFrames(turn)) {
+                  await writeFrame(frame);
+                }
+              }
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            } catch (err) {
+              await writeChain.catch(() => undefined);
+              const message = err instanceof Error ? err.message : String(err);
+              await writeFrame({
+                type: "event",
+                event: { type: "error", message },
+              });
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            }
+            return true;
+          }
+
           let turn;
           try {
             turn = await runWorkshopChatTurn({
@@ -2171,44 +2268,6 @@ export function createOperatorRoutes(
             json(res, 400, {
               error: err instanceof Error ? err.message : String(err),
             });
-            return true;
-          }
-
-          const accept = String(req.headers.accept ?? "");
-          const wantsStream =
-            body.stream === true ||
-            accept.includes("application/x-ndjson") ||
-            accept.includes("text/event-stream");
-
-          if (wantsStream) {
-            res.writeHead(200, {
-              "Content-Type": "application/x-ndjson; charset=utf-8",
-              "Cache-Control": "no-store",
-            });
-            try {
-              for (const frame of iterateWorkshopChatStreamFrames(turn)) {
-                if (req.aborted || res.writableEnded || res.destroyed) {
-                  break;
-                }
-                const line = `${JSON.stringify(frame)}\n`;
-                if (!res.write(line)) {
-                  await new Promise<void>((resolve) =>
-                    res.once("drain", resolve),
-                  );
-                }
-              }
-              if (!res.writableEnded && !res.destroyed) {
-                res.end();
-              }
-            } catch (err) {
-              if (res.headersSent) {
-                res.destroy(
-                  err instanceof Error ? err : new Error(String(err)),
-                );
-              } else {
-                throw err;
-              }
-            }
             return true;
           }
 

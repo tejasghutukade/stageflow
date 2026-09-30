@@ -82,7 +82,10 @@ export type OperatorAgentSession = {
   prepareRestart?(
     transcript: readonly { role: string; text: string }[],
   ): Promise<void>;
-  send(message: string): Promise<OperatorAgentSessionEvent[]>;
+  send(
+    message: string,
+    options?: { onDelta?: (text: string) => void },
+  ): Promise<OperatorAgentSessionEvent[]>;
   /** Confirm mutation (soft UX); draft already applied — does not re-apply. */
   acceptProposal(proposalId?: string): AcceptProposalResult;
   /** Soft-undo the mutation when the applied fingerprint still matches. */

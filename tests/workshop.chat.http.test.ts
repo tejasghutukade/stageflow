@@ -3,7 +3,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import { createWorkshopOperatorHost } from "../src/operatorAgent/index.js";
+import {
+  createWorkshopOperatorHost,
+  type OperatorAgentModel,
+} from "../src/operatorAgent/index.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { writeFactorySettings } from "../src/runtime/settingsFile.js";
@@ -19,7 +22,11 @@ async function jsonFetch(url: string, init?: RequestInit) {
   return { status: res.status, body, headers: res.headers };
 }
 
-async function withServer(cwd: string, storeRoot: string) {
+async function withServer(
+  cwd: string,
+  storeRoot: string,
+  workshopOperatorHost?: ReturnType<typeof createWorkshopOperatorHost>,
+) {
   const store = createRunStore({ rootDir: storeRoot });
   await store.ensureProject(cwd);
   const started = await startUiServer({
@@ -29,10 +36,12 @@ async function withServer(cwd: string, storeRoot: string) {
     store,
     port: 0,
     uiDistDir: path.join(storeRoot, "missing-ui"),
-    workshopOperatorHost: createWorkshopOperatorHost([
-      { type: "propose_stage" },
-      { type: "echo" },
-    ]),
+    workshopOperatorHost:
+      workshopOperatorHost ??
+      createWorkshopOperatorHost([
+        { type: "propose_stage" },
+        { type: "echo" },
+      ]),
   });
   const addr = started.server.address();
   if (!addr || typeof addr === "string") {
@@ -164,6 +173,251 @@ describe("POST /api/workshop/chat", () => {
       );
       expect(frames.at(-1)?.type).toBe("done");
       expect(frames.at(-1)?.sessionId).toBe("http-sess-stream");
+    });
+  });
+
+  it("characterization: fake host still post-hoc chunks after the turn (no mid-turn onDelta)", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let completeEntered = false;
+      const model: OperatorAgentModel = {
+        async complete() {
+          completeEntered = true;
+          await gate;
+          return {
+            events: [
+              {
+                type: "message",
+                role: "assistant",
+                text: "abcdefghijklmnopqrstuvwxyz0123",
+              },
+            ],
+          };
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-sess-posthoc");
+      const resPromise = fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({
+          sessionId: "http-sess-posthoc",
+          message: "hello",
+          draft: { pipeline: { id: "demo", stages: [] } },
+          stream: true,
+        }),
+      });
+      for (let i = 0; i < 40 && !completeEntered; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(completeEntered).toBe(true);
+      // Headers open early; body stays empty until the turn finishes (no onDelta).
+      release();
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const frames = text
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as { type: string; text?: string; sessionId?: string },
+        );
+      const deltas = frames.filter((f) => f.type === "delta");
+      expect(deltas.length).toBeGreaterThanOrEqual(1);
+      expect(frames.at(-1)?.type).toBe("done");
+    });
+  });
+
+  it("flushes ≥2 mid-turn NDJSON delta frames before done", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const model: OperatorAgentModel = {
+        async complete({ onDelta }) {
+          onDelta?.("alpha-");
+          await new Promise((r) => setTimeout(r, 25));
+          onDelta?.("beta");
+          await new Promise((r) => setTimeout(r, 25));
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "alpha-beta" },
+            ],
+          };
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-sess-mid");
+      const res = await fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({
+          sessionId: "http-sess-mid",
+          message: "stream please",
+          draft: { pipeline: { id: "demo", stages: [] } },
+          stream: true,
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toBeTruthy();
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const frames: Array<{ type: string; text?: string }> = [];
+      let sawTwoDeltasBeforeDone = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const frame = JSON.parse(line) as { type: string; text?: string };
+          frames.push(frame);
+          const deltaCount = frames.filter((f) => f.type === "delta").length;
+          if (deltaCount >= 2 && !frames.some((f) => f.type === "done")) {
+            sawTwoDeltasBeforeDone = true;
+          }
+        }
+      }
+      if (buffer.trim()) {
+        frames.push(JSON.parse(buffer.trim()) as { type: string; text?: string });
+      }
+      expect(frames.filter((f) => f.type === "delta").map((f) => f.text)).toEqual([
+        "alpha-",
+        "beta",
+      ]);
+      expect(sawTwoDeltasBeforeDone).toBe(true);
+      expect(frames.at(-1)?.type).toBe("done");
+      // Mid-turn path skips duplicate post-hoc chunking of the same text.
+      expect(frames.filter((f) => f.type === "delta")).toHaveLength(2);
+    });
+  });
+
+  it("emits an error event frame when the mid-stream turn fails", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const model: OperatorAgentModel = {
+        async complete({ onDelta }) {
+          onDelta?.("partial");
+          throw new Error("model exploded mid-turn");
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-sess-err");
+      const res = await fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({
+          sessionId: "http-sess-err",
+          message: "boom",
+          draft: { pipeline: { id: "demo", stages: [] } },
+          stream: true,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const frames = text
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              type: string;
+              text?: string;
+              event?: { type: string; message?: string };
+            },
+        );
+      expect(frames.some((f) => f.type === "delta" && f.text === "partial")).toBe(
+        true,
+      );
+      expect(
+        frames.some(
+          (f) =>
+            f.type === "event" &&
+            f.event?.type === "error" &&
+            typeof f.event.message === "string" &&
+            /model exploded mid-turn/i.test(f.event.message),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("non-stream JSON clients still receive a coherent turn payload", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const { server, base } = await withServer(repo.root, storeRoot);
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-sess-json");
+      const result = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "http-sess-json",
+          message: "hello",
+          draft: { pipeline: { id: "demo", stages: [] } },
+        }),
+      });
+      expect(result.status).toBe(200);
+      expect(result.headers.get("content-type")).toMatch(/json/);
+      expect(result.body.sessionId).toBe("http-sess-json");
+      expect(Array.isArray(result.body.events)).toBe(true);
     });
   });
 

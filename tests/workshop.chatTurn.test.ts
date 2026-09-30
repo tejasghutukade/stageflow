@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createWorkshopOperatorHost,
   emptyDraftPackage,
+  proposeStageFromUserMessage,
+  type OperatorAgentModel,
 } from "../src/operatorAgent/index.js";
 import {
   chunkAssistantText,
@@ -223,7 +225,7 @@ describe("runWorkshopChatTurn", () => {
 });
 
 describe("workshop chat stream frames", () => {
-  it("chunks assistant text then emits events and done with sessionId", async () => {
+  it("characterization: post-hoc path chunks assistant text only after a completed turn", async () => {
     await withIsolatedHome(async () => {
       const storeRoot = resolveWorkshopSessionStoreRoot();
       createWorkshopSession(storeRoot, { id: "sess-stream" });
@@ -237,8 +239,11 @@ describe("workshop chat stream frames", () => {
         registry,
         storeRoot,
       });
+      // Baseline: iterateWorkshopChatStreamFrames only runs on a finished turn.
+      expect(result.events.some((e) => e.type === "message")).toBe(true);
       const frames = [...iterateWorkshopChatStreamFrames(result)];
-      expect(frames.some((f) => f.type === "delta")).toBe(true);
+      const deltas = frames.filter((f) => f.type === "delta");
+      expect(deltas.length).toBeGreaterThanOrEqual(1);
       expect(frames.some((f) => f.type === "event")).toBe(true);
       const done = frames.find((f) => f.type === "done");
       expect(done?.type).toBe("done");
@@ -247,6 +252,94 @@ describe("workshop chat stream frames", () => {
         expect(done.model).toBe(DEFAULT_WORKSHOP_MODEL);
         expect(done.draft.pipeline.id).toBe("demo");
       }
+      // Chunk size stays ~28 chars for post-hoc progressive feel.
+      const long = "x".repeat(60);
+      expect(chunkAssistantText(long, 28)).toEqual([
+        "x".repeat(28),
+        "x".repeat(28),
+        "x".repeat(4),
+      ]);
+    });
+  });
+
+  it("forwards mid-turn onDelta callbacks before the turn resolves", async () => {
+    await withIsolatedHome(async () => {
+      const storeRoot = resolveWorkshopSessionStoreRoot();
+      createWorkshopSession(storeRoot, { id: "sess-mid-delta" });
+      const deltas: string[] = [];
+      let completeResolved = false;
+      const model: OperatorAgentModel = {
+        async complete({ onDelta }) {
+          onDelta?.("Hel");
+          await new Promise((r) => setTimeout(r, 15));
+          expect(completeResolved).toBe(false);
+          onDelta?.("lo!");
+          await new Promise((r) => setTimeout(r, 15));
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "Hello!" },
+            ],
+          };
+        },
+      };
+      const host = createWorkshopOperatorHost({ model });
+      const registry = new WorkshopChatSessionRegistry(host);
+      const resultPromise = runWorkshopChatTurn({
+        sessionId: "sess-mid-delta",
+        draft: emptyDraftPackage("demo"),
+        message: "hi",
+        host,
+        registry,
+        storeRoot,
+        onDelta: (text) => {
+          expect(completeResolved).toBe(false);
+          deltas.push(text);
+        },
+      });
+      const result = await resultPromise;
+      completeResolved = true;
+      expect(deltas).toEqual(["Hel", "lo!"]);
+      expect(result.events).toEqual([
+        { type: "message", role: "assistant", text: "Hello!" },
+      ]);
+    });
+  });
+
+  it("tool-only / empty-text turn yields events without inventing Done.", async () => {
+    await withIsolatedHome(async () => {
+      const storeRoot = resolveWorkshopSessionStoreRoot();
+      createWorkshopSession(storeRoot, { id: "sess-tool-only" });
+      const deltas: string[] = [];
+      const model: OperatorAgentModel = {
+        async complete({ tools }) {
+          proposeStageFromUserMessage(tools, "intake form");
+          return { events: [] };
+        },
+      };
+      const host = createWorkshopOperatorHost({ model });
+      const registry = new WorkshopChatSessionRegistry(host);
+      const result = await runWorkshopChatTurn({
+        sessionId: "sess-tool-only",
+        draft: emptyDraftPackage("demo"),
+        message: "intake form",
+        host,
+        registry,
+        storeRoot,
+        onDelta: (text) => deltas.push(text),
+      });
+      expect(deltas).toEqual([]);
+      expect(result.events.some((e) => e.type === "proposal")).toBe(true);
+      expect(
+        result.events.some(
+          (e) =>
+            e.type === "message" &&
+            typeof e.text === "string" &&
+            e.text === "Done.",
+        ),
+      ).toBe(false);
+      const frames = [...iterateWorkshopChatStreamFrames(result)];
+      expect(frames.some((f) => f.type === "delta")).toBe(false);
+      expect(frames.at(-1)?.type).toBe("done");
     });
   });
 

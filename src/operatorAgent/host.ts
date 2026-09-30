@@ -21,13 +21,22 @@ export type OperatorAgentModelTurn = {
   events: OperatorAgentSessionEvent[];
 };
 
+export type OperatorAgentModelCompleteInput = {
+  profile: OperatorAgentProfile;
+  message: string;
+  contextSnapshot: unknown;
+  tools: OperatorAgentToolContext;
+  /**
+   * Optional mid-turn assistant text callback (Workshop progressive NDJSON).
+   * Invoked as Pi `text_delta` (or equivalent) arrives — before complete resolves.
+   */
+  onDelta?: (text: string) => void;
+};
+
 export type OperatorAgentModel = {
-  complete(input: {
-    profile: OperatorAgentProfile;
-    message: string;
-    contextSnapshot: unknown;
-    tools: OperatorAgentToolContext;
-  }): Promise<OperatorAgentModelTurn>;
+  complete(
+    input: OperatorAgentModelCompleteInput,
+  ): Promise<OperatorAgentModelTurn>;
   /**
    * Optional restart seed (KTD7): inject prior transcript into a new backend
    * session before the first complete for this host session.
@@ -128,7 +137,10 @@ function createSession(
         transcript,
       });
     },
-    async send(message: string): Promise<OperatorAgentSessionEvent[]> {
+    async send(
+      message: string,
+      options?: { onDelta?: (text: string) => void },
+    ): Promise<OperatorAgentSessionEvent[]> {
       if (closed) {
         return [{ type: "error", message: "session is closed" }];
       }
@@ -138,6 +150,7 @@ function createSession(
         message,
         contextSnapshot: profile.contextAdapter.serialize(context),
         tools: toolContext,
+        ...(options?.onDelta ? { onDelta: options.onDelta } : {}),
       });
       const events: OperatorAgentSessionEvent[] = [];
       let sawProposal = false;
