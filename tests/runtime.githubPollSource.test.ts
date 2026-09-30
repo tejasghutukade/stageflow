@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ import {
   type GithubPullItem,
 } from "../src/runtime/githubPollSource.js";
 import type { TriggerFireEvent } from "../src/runtime/triggerPort.js";
+import { clearFindManifestRootCacheForTests } from "../src/project/findManifestRoot.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import { initTempGitRepo } from "./helpers/projectContext.js";
 
@@ -131,6 +132,48 @@ describe("GithubPollSource", () => {
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();
+    }
+  });
+
+  it("discovers and fires triggers from a catalog root with no git repo at all", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-github-source-nogit-"));
+    try {
+      await seedCatalog(root, ["github-dynamic.trigger.yaml"]);
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+
+      const store = createRunStore({ rootDir: await mkdtempHome() });
+      const seedPr = makePr({ number: 1, updated_at: "2026-01-01T00:00:00.000Z" });
+      const newPr = makePr({
+        number: 2,
+        title: "Add widget",
+        created_at: "2026-01-02T00:00:00.000Z",
+        updated_at: "2026-01-02T00:00:00.000Z",
+      });
+
+      const { client } = scriptedClient([
+        { status: 200, etag: "W/\"etag-1\"", items: [seedPr] },
+        { status: 200, etag: "W/\"etag-2\"", items: [newPr, seedPr] },
+      ]);
+
+      const source = new GithubPollSource({
+        store,
+        cwd: root,
+        env: { GH_TOKEN: "test-token" },
+        createGithubClient: () => client,
+      });
+      const onFire = vi.fn(async (_event: TriggerFireEvent) => {});
+
+      await source.tick(onFire);
+      expect(onFire).not.toHaveBeenCalled();
+
+      await source.tick(onFire);
+      expect(onFire).toHaveBeenCalledTimes(1);
+      expect(onFire.mock.calls[0][0].triggerId).toBe("github-dynamic");
+    } finally {
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+      await rm(root, { recursive: true, force: true });
     }
   });
 

@@ -198,10 +198,10 @@ export function registerTriggerTools(server: McpServer, deps: McpToolDeps): void
       }
 
       const stageflowCtx = await resolveStageflowContext(wireRoot.path);
-      if (!stageflowCtx.isGitProject) {
+      if (stageflowCtx.manifestStatus !== "ok") {
         return textResult(
           {
-            error: "Project root not found; initialize stageflow.yaml in a git repo",
+            error: "Project root not found; initialize stageflow.yaml",
             status: 400,
           },
           true,

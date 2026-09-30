@@ -81,9 +81,9 @@ export async function handleTriggerRoutes(
       return true;
     }
     const stageflowCtx = await resolveStageflowContext(triggerWriteRoot);
-    if (!stageflowCtx.isGitProject) {
+    if (stageflowCtx.manifestStatus !== "ok") {
       json(res, 400, {
-        error: "Project root not found; initialize stageflow.yaml in a git repo",
+        error: "Project root not found; initialize stageflow.yaml",
       });
       return true;
     }

@@ -89,7 +89,7 @@ function bakedModels(): string[] {
 function catalogReadyFromStageflow(
   ctx: StageflowContext,
 ): ctx is StageflowContext & { manifest: LoadedManifest } {
-  return ctx.isGitProject && ctx.manifestStatus === "ok" && ctx.manifest !== null;
+  return ctx.manifestStatus === "ok" && ctx.manifest !== null;
 }
 
 function catalogReady(ctx: CatalogContext): ctx is CatalogContext & {
@@ -210,7 +210,7 @@ export async function browseCatalog(
       ? await resolveStageflowContext(invocationCwd)
       : invocationCwd;
   const base = {
-    projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+    projectRoot: ctx.manifestStatus === "not_git" ? null : ctx.projectRoot,
     manifest: ctx.manifest,
     manifestStatus: ctx.manifestStatus,
     issues: ctx.manifestIssues,

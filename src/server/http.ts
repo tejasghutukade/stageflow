@@ -1306,10 +1306,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(stageWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -1357,10 +1356,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(pipelineWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }

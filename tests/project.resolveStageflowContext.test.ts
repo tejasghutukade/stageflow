@@ -4,6 +4,7 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { clearFindManifestRootCacheForTests } from "../src/project/findManifestRoot.js";
 import { clearFindProjectRootCacheForTests } from "../src/project/findProjectRoot.js";
 import {
   globalStageflowHome,
@@ -110,6 +111,42 @@ describe("resolveStageflowContext", () => {
       expect(ctx.manifest?.manifest.catalog.pipelines).toContain("pipelines");
     } finally {
       clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("resolves manifest root without git", async () => {
+    await withIsolatedHome(async (home) => {
+      const outside = path.join(home, "no-git-project");
+      await mkdir(outside, { recursive: true });
+      await seedManifestRepo(outside);
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+      const nested = path.join(outside, "pipelines");
+      const ctx = await resolveStageflowContext(nested);
+      expect(ctx.manifestStatus).toBe("ok");
+      expect(ctx.isGitProject).toBe(false);
+      expect(ctx.projectRoot).toBe(realpathSync(outside));
+      expect(ctx.manifest?.manifest.catalog.pipelines).toContain("pipelines");
+    });
+  });
+
+  it("resolves manifest root nested inside a git repo, independent of the outer git root", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      const nestedProject = path.join(root, "packages", "sub-project");
+      await mkdir(nestedProject, { recursive: true });
+      await seedManifestRepo(nestedProject);
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
+      const ctx = await resolveStageflowContext(path.join(nestedProject, "pipelines"));
+      expect(ctx.manifestStatus).toBe("ok");
+      expect(ctx.isGitProject).toBe(true);
+      expect(ctx.projectRoot).toBe(realpathSync(nestedProject));
+      expect(ctx.projectRoot).not.toBe(realpathSync(root));
+    } finally {
+      clearFindProjectRootCacheForTests();
+      clearFindManifestRootCacheForTests();
       await cleanup();
     }
   });
