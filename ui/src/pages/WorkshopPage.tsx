@@ -3,7 +3,6 @@ import {
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadMessageLike,
-  type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import {
   createContext,
@@ -33,10 +32,12 @@ import {
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
 import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
-import { WorkshopChatIsland } from "../workshop/WorkshopChatIsland";
+import {
+  WorkshopChatIsland,
+  type WorkshopMutationCardProps,
+} from "../workshop/WorkshopChatIsland";
 import {
   buildDraftMutationToolParts,
-  buildDraftMutationTools,
   mutationCardActionsLocked,
 } from "../workshop/draftMutationTools";
 import {
@@ -85,7 +86,7 @@ const EMPTY_DRAFT: DraftPackagePayload = {
   pipeline: { id: "untitled", stages: [] },
 };
 
-const GREETING =
+export const GREETING =
   "What are we building? Describe a workflow and I’ll sketch stages on the studio as we go.";
 
 const EMPTY_PROJECTION: PipelineTrackProjection = { nodes: [], edges: [] };
@@ -123,18 +124,6 @@ function transcriptToSeedMessages(
         : "assistant",
     content: msg.text,
   }));
-}
-
-function WorkshopWelcome() {
-  return (
-    <div className="aui-thread-welcome-root">
-      <div className="aui-thread-welcome-center">
-        <div className="aui-thread-welcome-message">
-          <p className="aui-thread-welcome-message-inner">{GREETING}</p>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function stageBodyFor(
@@ -414,16 +403,7 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
   };
 }
 
-function MutationCardToolUI({
-  args,
-}: ToolCallMessagePartProps<
-  {
-    mutationId: string;
-    summary: string;
-    affectedStageIds: string[];
-  },
-  { status: "applied" }
->) {
+function MutationCardToolUI({ args }: WorkshopMutationCardProps) {
   const api = useWorkshopMutation();
   const threadRunning = useAuiState((s) => s.thread.isRunning);
   const mutationId =
@@ -826,11 +806,6 @@ export function WorkshopPage() {
     [liveRefs],
   );
 
-  const draftMutationTools = useMemo(
-    () => buildDraftMutationTools(MutationCardToolUI),
-    [],
-  );
-
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -1111,8 +1086,8 @@ export function WorkshopPage() {
                   key={`${sessionId}:${threadEpoch}`}
                   seedMessages={seedMessages}
                   adapter={chatAdapter}
-                  tools={draftMutationTools}
-                  Welcome={WorkshopWelcome}
+                  greeting={GREETING}
+                  MutationCard={MutationCardToolUI}
                   composerActions={
                     <WorkshopModelPicker
                       model={chatModel}
