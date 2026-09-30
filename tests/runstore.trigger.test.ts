@@ -126,4 +126,34 @@ describe("triggers registry", () => {
       store.setTriggerNextRun("no-such-trigger", "2026-01-01T00:02:00.000Z"),
     ).rejects.toThrow(/Trigger not found/);
   });
+
+  it("getTriggerAdapterState returns null for an unset key", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-trigger-adapter-miss-"));
+    const store = createRunStore({ rootDir: home });
+    expect(await store.getTriggerAdapterState("t1", "cursor")).toBeNull();
+  });
+
+  it("setTriggerAdapterState/getTriggerAdapterState round-trips a value", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-trigger-adapter-roundtrip-"));
+    const store = createRunStore({ rootDir: home });
+    await store.setTriggerAdapterState("t1", "cursor", "etag-abc");
+    expect(await store.getTriggerAdapterState("t1", "cursor")).toBe("etag-abc");
+  });
+
+  it("setTriggerAdapterState overwrites an existing key (upsert)", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-trigger-adapter-upsert-"));
+    const store = createRunStore({ rootDir: home });
+    await store.setTriggerAdapterState("t1", "cursor", "etag-abc");
+    await store.setTriggerAdapterState("t1", "cursor", "etag-xyz");
+    expect(await store.getTriggerAdapterState("t1", "cursor")).toBe("etag-xyz");
+  });
+
+  it("setTriggerAdapterState keeps state for different trigger_ids with the same key separate", async () => {
+    const home = mkdtempSync(path.join(tmpdir(), "sf-trigger-adapter-collide-"));
+    const store = createRunStore({ rootDir: home });
+    await store.setTriggerAdapterState("t1", "cursor", "etag-t1");
+    await store.setTriggerAdapterState("t2", "cursor", "etag-t2");
+    expect(await store.getTriggerAdapterState("t1", "cursor")).toBe("etag-t1");
+    expect(await store.getTriggerAdapterState("t2", "cursor")).toBe("etag-t2");
+  });
 });

@@ -80,11 +80,15 @@ function parseEventField(raw: unknown): ParsedField<TriggerEvent> {
   if (raw.match !== undefined && !isPlainObject(raw.match)) {
     return { ok: false, message: "event.match must be an object" };
   }
+  if (raw.config !== undefined && !isPlainObject(raw.config)) {
+    return { ok: false, message: "event.config must be an object" };
+  }
   return {
     ok: true,
     value: {
       source: raw.source,
       ...(isPlainObject(raw.match) ? { match: raw.match } : {}),
+      ...(isPlainObject(raw.config) ? { config: raw.config } : {}),
     },
   };
 }

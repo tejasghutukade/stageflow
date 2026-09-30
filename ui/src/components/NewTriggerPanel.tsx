@@ -439,6 +439,14 @@ export function NewTriggerPanel({ isOpen, onClose, onCreated }: NewTriggerPanelP
                   No event adapter reads this yet; the trigger will not fire on its own until one lands.
                 </p>
               )}
+              <p className="muted" style={{ fontSize: "var(--font-size-sm)", marginTop: "var(--spacing-1)" }}>
+                Adapter-specific settings (a GitHub poller's <span className="mono">repo</span>, a
+                webhook's <span className="mono">secretRef</span>/<span className="mono">header</span>, an
+                email adapter's <span className="mono">host</span>/<span className="mono">port</span>/
+                <span className="mono">user</span>/<span className="mono">secretRef</span>) live in{" "}
+                <span className="mono">event.config</span>, which this console doesn't have a
+                builder for yet — author it via YAML, HTTP, or MCP directly.
+              </p>
             </div>
           ) : null}
 

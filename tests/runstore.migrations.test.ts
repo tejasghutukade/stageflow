@@ -23,6 +23,7 @@ import { MIGRATION_005 } from "../src/runstore/sqlite/migrations/005-config-orig
 import { MIGRATION_006 } from "../src/runstore/sqlite/migrations/006-pipeline-body-and-caller.js";
 import { MIGRATION_007 } from "../src/runstore/sqlite/migrations/007-projects-registry.js";
 import { MIGRATION_008 } from "../src/runstore/sqlite/migrations/008-triggers-table.js";
+import { MIGRATION_009 } from "../src/runstore/sqlite/migrations/009-trigger-next-run.js";
 import { StoreSchemaError } from "../src/runstore/sqlite/storeSchemaError.js";
 
 type TableInfoRow = {
@@ -169,6 +170,9 @@ describe("sqlite store migrations", () => {
     expect(ledger[8]?.version).toBe(9);
     expect(ledger[8]?.name).toBe("009_trigger_next_run");
     expect(ledger[8]?.min_stageflow_version).toBe(PACKAGE_VERSION);
+    expect(ledger[9]?.version).toBe(10);
+    expect(ledger[9]?.name).toBe("010_trigger_adapter_state");
+    expect(ledger[9]?.min_stageflow_version).toBe(PACKAGE_VERSION);
     const cols = (
       db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]
     ).map((c) => c.name);
@@ -205,6 +209,14 @@ describe("sqlite store migrations", () => {
         "created_at",
         "updated_at",
       ]),
+    );
+    const adapterState = (
+      db.prepare(`PRAGMA table_info(trigger_adapter_state)`).all() as {
+        name: string;
+      }[]
+    ).map((c) => c.name);
+    expect(adapterState).toEqual(
+      expect.arrayContaining(["trigger_id", "key", "value", "updated_at"]),
     );
     const skipGates = (
       db.prepare(`PRAGMA table_info(runs)`).all() as TableInfoRow[]
@@ -467,6 +479,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       { version: 7, name: "007_projects_registry" },
       { version: 8, name: "008_triggers_table" },
       { version: 9, name: "009_trigger_next_run" },
+      { version: 10, name: "010_trigger_adapter_state" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
@@ -847,6 +860,57 @@ CREATE TABLE runs (
       .prepare(`SELECT next_run_at FROM triggers WHERE id = 't1'`)
       .get() as { next_run_at: string | null };
     expect(row.next_run_at).toBeNull();
+    after.close();
+  });
+
+  it("migrates a v9 database to current and adds the trigger_adapter_state table", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-migrate-v9-v10-"));
+    const storeRoot = storeRootFor(root);
+    await mkdir(storeRoot, { recursive: true });
+    const dbPath = path.join(storeRoot, "state.db");
+    const db = new Database(dbPath);
+    applyPendingMigrations(db, {
+      migrations: [
+        MIGRATION_001,
+        MIGRATION_002,
+        MIGRATION_003,
+        MIGRATION_004,
+        MIGRATION_005,
+        MIGRATION_006,
+        MIGRATION_007,
+        MIGRATION_008,
+        MIGRATION_009,
+      ],
+    });
+    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    const before = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trigger_adapter_state'`,
+      )
+      .get();
+    expect(before).toBeUndefined();
+    db.close();
+
+    createRunStore({ rootDir: root, kind: "sqlite", openerMode: "migrate" });
+
+    const after = new Database(dbPath);
+    expect(after.pragma("user_version", { simple: true })).toBe(
+      CURRENT_SCHEMA_VERSION,
+    );
+    const cols = (
+      after.prepare(`PRAGMA table_info(trigger_adapter_state)`).all() as TableInfoRow[]
+    ).map((c) => c.name);
+    expect(cols).toEqual(
+      expect.arrayContaining(["trigger_id", "key", "value", "updated_at"]),
+    );
+    const pkCols = (
+      after.prepare(`PRAGMA table_info(trigger_adapter_state)`).all() as TableInfoRow[]
+    )
+      .filter((c) => c.pk > 0)
+      .map((c) => c.name)
+      .sort();
+    expect(pkCols).toEqual(["key", "trigger_id"]);
+    expect(after.prepare(`SELECT * FROM trigger_adapter_state`).all()).toEqual([]);
     after.close();
   });
 });

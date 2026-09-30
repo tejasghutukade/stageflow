@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BearerAuth, ControlScope } from "./controlToken.js";
 
-export type CallerSurface = "mcp" | "rest" | "cli" | "a2a";
+export type CallerSurface = "mcp" | "rest" | "cli" | "a2a" | "webhook";
 
 export type RequestAuthContext = {
   scope: ControlScope;

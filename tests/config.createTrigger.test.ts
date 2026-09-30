@@ -177,6 +177,47 @@ describe("parseCreateTriggerBody", () => {
     });
   });
 
+  it("passes through event.config alongside match", () => {
+    expect(
+      parseCreateTriggerBody({
+        directory: "triggers",
+        id: "on-webhook",
+        pipeline: "hello",
+        task: "my-task",
+        kind: "event",
+        event: {
+          source: "webhook",
+          match: { action: "opened" },
+          config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
+        },
+      }),
+    ).toEqual({
+      directory: "triggers",
+      id: "on-webhook",
+      pipeline: "hello",
+      task: "my-task",
+      kind: "event",
+      event: {
+        source: "webhook",
+        match: { action: "opened" },
+        config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
+      },
+    });
+  });
+
+  it("rejects a non-object event.config", () => {
+    expect(
+      parseCreateTriggerBody({
+        directory: "triggers",
+        id: "on-webhook",
+        pipeline: "hello",
+        task: "my-task",
+        kind: "event",
+        event: { source: "webhook", config: "nope" },
+      }),
+    ).toEqual({ ok: false, status: 400, error: "event.config must be an object" });
+  });
+
   it("passes through enabled when a boolean, rejects otherwise", () => {
     expect(
       parseCreateTriggerBody({
@@ -462,6 +503,105 @@ describe("createTrigger", () => {
         status: 422,
         error: 'Trigger references unknown pipeline "does-not-exist"',
       });
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("creates an event trigger with webhook config that round-trips through YAML", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const created = await createTrigger(root, {
+        directory: "triggers",
+        id: "on-webhook",
+        pipeline: "hello",
+        kind: "event",
+        event: {
+          source: "webhook",
+          config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
+        },
+      });
+
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.trigger).toMatchObject({
+        id: "on-webhook",
+        kind: "event",
+        event: {
+          source: "webhook",
+          config: { secretRef: "WEBHOOK_SECRET", header: "x-signature" },
+        },
+      });
+
+      const filePath = path.join(root, "triggers", "on-webhook.trigger.yaml");
+      const reloaded = await loadTriggerOutcome(filePath);
+      expect(reloaded.ok).toBe(true);
+      if (reloaded.ok) {
+        expect(reloaded.value.event?.config).toEqual({
+          secretRef: "WEBHOOK_SECRET",
+          header: "x-signature",
+        });
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("creates an event trigger with email config (numeric port) that round-trips through YAML", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const created = await createTrigger(root, {
+        directory: "triggers",
+        id: "on-email",
+        pipeline: "hello",
+        kind: "event",
+        event: {
+          source: "email.message",
+          config: {
+            host: "imap.example.com",
+            port: 993,
+            user: "notifications@example.com",
+            secretRef: "EMAIL_PASSWORD",
+          },
+        },
+      });
+
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      expect(created.trigger).toMatchObject({
+        id: "on-email",
+        kind: "event",
+        event: {
+          source: "email.message",
+          config: {
+            host: "imap.example.com",
+            port: 993,
+            user: "notifications@example.com",
+            secretRef: "EMAIL_PASSWORD",
+          },
+        },
+      });
+
+      const filePath = path.join(root, "triggers", "on-email.trigger.yaml");
+      const reloaded = await loadTriggerOutcome(filePath);
+      expect(reloaded.ok).toBe(true);
+      if (reloaded.ok) {
+        expect(reloaded.value.event?.config).toEqual({
+          host: "imap.example.com",
+          port: 993,
+          user: "notifications@example.com",
+          secretRef: "EMAIL_PASSWORD",
+        });
+        expect(typeof reloaded.value.event?.config?.port).toBe("number");
+      }
     } finally {
       clearFindProjectRootCacheForTests();
       await cleanup();

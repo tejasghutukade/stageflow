@@ -447,7 +447,7 @@ There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `PO
 | `show` | One trigger's catalog fields plus `last_fired_at` / `last_run_id` when it has fired before, and `next_run_at` for a `schedule`-kind trigger |
 | `fire` | Resolve the trigger's `pipeline`/`task` refs and start a real run through the same `start_run` path the CLI/MCP/console use |
 
-`kind: manual` triggers only run when fired explicitly. `kind: schedule` triggers also fire on their own on a running Host, per their `cron`/`timezone` (catch-up-once-on-boot if the Host was down past the due time — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); firing one manually with `sf trigger fire` still works the same as any other trigger. `kind: event` triggers load and validate but have no adapter driving them yet (see [Architecture](architecture.md)).
+`kind: manual` triggers only run when fired explicitly. `kind: schedule` triggers also fire on their own on a running Host, per their `cron`/`timezone` (catch-up-once-on-boot if the Host was down past the due time — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); firing one manually with `sf trigger fire` still works the same as any other trigger. `kind: event` triggers with `event.source: github.*` fire on their own via the GitHub poll adapter, and with `event.source: webhook` fire on an inbound `POST /api/triggers/:id/webhook` request (see below) — other `event.source` values still only load and validate, with no adapter driving them yet (see [Architecture](architecture.md)).
 
 ### `sf trigger list`
 
@@ -505,6 +505,8 @@ A disabled trigger (`enabled: false`) fails fire with a reason mentioning "disab
 Without `--json`, both print as `<code>: <reason>` on stderr.
 
 HTTP: `GET /api/triggers`, `GET /api/triggers/:id`, `POST /api/triggers/:id/fire` with an optional `task` body field (`202` with `{ runId, queued?, queuePosition?, queuedCode? }` on accept, `422` with `{ error, code }` on a mode mismatch). Same mutate / loopback gating notes as other mutating Host verbs (see [`sf runs`](#sf-runs) above).
+
+There is also `POST /api/triggers/:id/webhook`, for a `webhook`-sourced `event`-kind trigger — see [YAML catalog — Webhook adapter](yaml-catalog.md#webhook-adapter-eventsource-webhook). It has no `sf trigger`/CLI or MCP counterpart: it's called by whatever external service sends the webhook, not by an operator, and it authenticates via the trigger's own HMAC signature rather than a bearer token.
 
 ## `sf envelope get`
 
@@ -933,6 +935,7 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off) |
 | `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per attempt (default `3`) |
 | `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` | `schedule`-kind trigger poll interval (default `30000`); `0` disables the schedule adapter — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) |
+| `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` | GitHub `event`-kind trigger poll interval (default `60000`); `0` disables the GitHub poll adapter — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 

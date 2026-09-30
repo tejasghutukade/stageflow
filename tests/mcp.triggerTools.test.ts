@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -38,6 +39,10 @@ async function seedCatalog(root: string): Promise<void> {
     path.join(root, "triggers", "manual-hello-world.trigger.yaml"),
     await readFile(triggerFixture, "utf8"),
   );
+}
+
+function sign(secret: string, body: string): string {
+  return createHmac("sha256", secret).update(body).digest("hex");
 }
 
 function successEnvelope(summary: string) {
@@ -273,6 +278,132 @@ describe("MCP trigger tools", () => {
         const dynamicWrittenPath = path.join(root, "triggers", "dynamic-created.trigger.yaml");
         const dynamicWritten = await readFile(dynamicWrittenPath, "utf8");
         expect(dynamicWritten).not.toContain("task:");
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("create_trigger passes through event.config; the created trigger fires end to end via POST /:id/webhook", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    const secret = "mcp-created-webhook-secret-please-ignore";
+    const priorSecret = process.env.MCP_CREATED_WEBHOOK_SECRET;
+    process.env.MCP_CREATED_WEBHOOK_SECRET = secret;
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-create-webhook-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
+      const agent = scriptedFakeAgent([successEnvelope("clarified")]);
+      const service = await startTestService(store, agent, root);
+      try {
+        const created = await mcpCall(service.baseUrl, "create_trigger", {
+          directory: "triggers",
+          id: "mcp-on-webhook",
+          pipeline: "hello",
+          task: "my-task",
+          kind: "event",
+          event: {
+            source: "webhook",
+            config: { secretRef: "MCP_CREATED_WEBHOOK_SECRET", header: "x-signature" },
+          },
+        });
+        expect(created.isError).toBe(false);
+        expect(created.payload.event).toEqual({
+          source: "webhook",
+          config: { secretRef: "MCP_CREATED_WEBHOOK_SECRET", header: "x-signature" },
+        });
+
+        const writtenPath = path.join(root, "triggers", "mcp-on-webhook.trigger.yaml");
+        const written = await readFile(writtenPath, "utf8");
+        expect(written).toContain("secretRef: MCP_CREATED_WEBHOOK_SECRET");
+
+        const body = JSON.stringify({ action: "opened", number: 1 });
+        const fireRes = await fetch(`${service.baseUrl}/api/triggers/mcp-on-webhook/webhook`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-signature": sign(secret, body),
+          },
+          body,
+        });
+        expect(fireRes.status).toBe(201);
+        const fired = (await fireRes.json()) as { fired: boolean; runId: string };
+        expect(fired.fired).toBe(true);
+        const run = await store.readRun(fired.runId);
+        expect(run.pipeline_id).toBe("hello");
+      } finally {
+        await service.stop();
+      }
+    } finally {
+      if (priorSecret === undefined) delete process.env.MCP_CREATED_WEBHOOK_SECRET;
+      else process.env.MCP_CREATED_WEBHOOK_SECRET = priorSecret;
+      clearFindProjectRootCacheForTests();
+      await cleanup();
+    }
+  });
+
+  it("create_trigger passes through email event.config (numeric port); get_trigger shows it intact", async () => {
+    const { root, cleanup } = await initTempGitRepo();
+    try {
+      await seedCatalog(root);
+      clearFindProjectRootCacheForTests();
+
+      const homeRoot = await mkdtemp(path.join(tmpdir(), "sf-mcp-trigger-create-email-"));
+      const store = createRunStore({ rootDir: homeRoot });
+      await store.ensureProject(root);
+      const agent = scriptedFakeAgent([successEnvelope("clarified")]);
+      const service = await startTestService(store, agent, root);
+      try {
+        const created = await mcpCall(service.baseUrl, "create_trigger", {
+          directory: "triggers",
+          id: "mcp-on-email",
+          pipeline: "hello",
+          task: "my-task",
+          kind: "event",
+          event: {
+            source: "email.message",
+            config: {
+              host: "imap.example.com",
+              port: 993,
+              user: "notifications@example.com",
+              secretRef: "EMAIL_PASSWORD",
+            },
+          },
+        });
+        expect(created.isError).toBe(false);
+        expect(created.payload.event).toEqual({
+          source: "email.message",
+          config: {
+            host: "imap.example.com",
+            port: 993,
+            user: "notifications@example.com",
+            secretRef: "EMAIL_PASSWORD",
+          },
+        });
+
+        const writtenPath = path.join(root, "triggers", "mcp-on-email.trigger.yaml");
+        const written = await readFile(writtenPath, "utf8");
+        expect(written).toContain("port: 993");
+        expect(written).toContain("secretRef: EMAIL_PASSWORD");
+
+        const fetched = await mcpCall(service.baseUrl, "get_trigger", { id: "mcp-on-email" });
+        expect(fetched.isError).toBe(false);
+        expect(fetched.payload.event).toEqual({
+          source: "email.message",
+          config: {
+            host: "imap.example.com",
+            port: 993,
+            user: "notifications@example.com",
+            secretRef: "EMAIL_PASSWORD",
+          },
+        });
+        expect(typeof fetched.payload.event.config.port).toBe("number");
       } finally {
         await service.stop();
       }

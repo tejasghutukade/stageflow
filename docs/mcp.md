@@ -369,13 +369,15 @@ Both come back as `{ "error": "…", "code": "trigger.task_override_not_allowed"
 
 Create a new `*.trigger.yaml` in the catalog: same validation/write path as `POST /api/triggers` (`src/config/createTrigger.ts`), called in-process rather than over HTTP. Validates `id` format/uniqueness, that `pipeline` (and `task`, when supplied) resolve to real catalog ids, and kind-specific shape (`schedule.cron` must parse via `croner`; `event.source` is required), writes `<directory>/<id>.trigger.yaml`, then re-loads it to confirm it round-trips before returning.
 
-**Input:** `{ project_root?, directory, id, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match? }, enabled? }` (`enabled` defaults to `true`). `project_root` selects the catalog root to write into, same as `start_run`; required when multiple writable roots are configured.
+**Input:** `{ project_root?, directory, id, pipeline, task?, kind: "manual" | "schedule" | "event", schedule?: { cron, timezone? }, event?: { source, match?, config? }, enabled? }` (`enabled` defaults to `true`). `project_root` selects the catalog root to write into, same as `start_run`; required when multiple writable roots are configured. `event.config` is passed through opaquely — it's how an `event`-kind trigger carries adapter-specific settings (the GitHub poller's `repo`/`secretRef`, the webhook adapter's `secretRef`/`header`/`scheme`, the email adapter's `host`/`port`/`user`/`secretRef` — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); this tool doesn't validate its contents beyond requiring an object.
 
 `task` is now optional: set it to create a catalog-mode trigger (always runs that task); omit it to create a dynamic-mode trigger, whose task must instead be supplied when it's fired (`fire_trigger`'s `task` param, `sf trigger fire --task-inline`, or `POST .../fire` with a `task` body).
 
 **Success:** the created trigger, same per-trigger shape as `list_triggers`.
 
 Fails `400` for a malformed body or a read-only/unknown `project_root` (`catalog_root_read_only` / `unknown_project_root`), `409` when `id` already exists, `422` when `pipeline` or a supplied `task` reference unknown catalog ids or `schedule.cron` fails to parse.
+
+Note: `POST /api/triggers/:id/webhook` (the inbound endpoint for a `webhook`-sourced `event`-kind trigger — see [YAML catalog — Webhook adapter](yaml-catalog.md#webhook-adapter-eventsource-webhook)) has no MCP tool. It's invoked by whatever external service sends the webhook, not by an MCP client, and authenticates via the trigger's own HMAC signature rather than MCP's bearer token.
 
 ### `list_runs`
 

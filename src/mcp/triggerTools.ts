@@ -52,6 +52,7 @@ const taskFileSchema = z.object({
 const triggerEventSchema = z.object({
   source: z.string(),
   match: z.record(z.string(), z.unknown()).optional(),
+  config: z.record(z.string(), z.unknown()).optional(),
 });
 
 const createTriggerSchema = z.object({

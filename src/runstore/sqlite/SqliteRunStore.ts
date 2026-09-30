@@ -1378,6 +1378,30 @@ export class SqliteRunStore implements RunStore {
     }
   }
 
+  async getTriggerAdapterState(triggerId: string, key: string): Promise<string | null> {
+    await this.ready();
+    const row = this.db
+      .prepare(
+        `SELECT value FROM trigger_adapter_state WHERE trigger_id = ? AND key = ?`,
+      )
+      .get(triggerId, key) as { value: string } | undefined;
+    return row ? row.value : null;
+  }
+
+  async setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void> {
+    await this.ready();
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT INTO trigger_adapter_state (trigger_id, key, value, updated_at)
+         VALUES (@trigger_id, @key, @value, @updated_at)
+         ON CONFLICT(trigger_id, key) DO UPDATE SET
+           value = @value,
+           updated_at = @updated_at`,
+      )
+      .run({ trigger_id: triggerId, key, value, updated_at: now });
+  }
+
   async readRun(runId: string): Promise<RunDetail> {
     await this.ready();
     const row = this.getRunRow(runId);

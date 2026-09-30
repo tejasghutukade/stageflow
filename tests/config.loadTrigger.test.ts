@@ -42,6 +42,25 @@ describe("coerceTriggerFile", () => {
     expect(eventTrigger?.event).toEqual({ source: "github", match: { type: "issue" } });
   });
 
+  it("parses event.config alongside event.match, passed through unchanged", () => {
+    const trigger = coerceTriggerFile({
+      id: "on-pr-closed",
+      pipeline: "hello-world",
+      kind: "event",
+      event: {
+        source: "github.pull_request",
+        config: { repo: "owner/repo", secretRef: "GH_TOKEN" },
+        match: { action: "closed" },
+      },
+      enabled: true,
+    });
+    expect(trigger?.event).toEqual({
+      source: "github.pull_request",
+      config: { repo: "owner/repo", secretRef: "GH_TOKEN" },
+      match: { action: "closed" },
+    });
+  });
+
   it("parses a trigger with task omitted (dynamic mode)", () => {
     const trigger = coerceTriggerFile({
       id: "dynamic-hello",

@@ -20,6 +20,7 @@ function parseEvent(raw: unknown): TriggerEvent | undefined {
   return {
     source: raw.source,
     ...(isPlainObject(raw.match) ? { match: raw.match } : {}),
+    ...(isPlainObject(raw.config) ? { config: raw.config } : {}),
   };
 }
 

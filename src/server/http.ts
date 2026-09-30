@@ -165,6 +165,15 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+/** Raw bytes, unparsed — for callers (webhook signature verification) that need the exact wire body. */
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
 function contentTypeFor(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
@@ -1417,6 +1426,7 @@ export function createOperatorRoutes(
             store,
             json,
             readJsonBody,
+            readRawBody,
             auditLog,
           })
         ) {

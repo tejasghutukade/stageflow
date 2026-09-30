@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { fireTrigger } from "../runtime/triggerRunner.js";
+import { findTriggerDefinition } from "../runtime/triggerCatalog.js";
+import { matchesEventFilter } from "../runtime/triggerEventMatch.js";
+import { verifyHmacSignature } from "../runtime/webhookSignature.js";
 import { mapStartFailure } from "./operatorResults.js";
 import { writeAudit } from "../logging/audit.js";
 import type { Logger } from "../logging/logger.js";
@@ -17,6 +20,9 @@ import {
   resolveWritableCatalogRoot,
 } from "../config/catalogRelativePath.js";
 import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { catalogContextFromStageflow } from "../config/resolveCatalogContext.js";
+import { getCatalogScanPaths } from "../config/browseCatalog.js";
+import { readSecretFromEnvOrFile } from "../config/secretFromEnvOrFile.js";
 import { coerceTaskFile } from "../config/loadTask.js";
 import type { TaskFile } from "../types/task.js";
 export type { TriggerListItem } from "../config/triggerCatalog.js";
@@ -27,6 +33,7 @@ export type TriggerRoutesCtx = {
   store: RunStore;
   json: (res: ServerResponse, status: number, body: unknown) => void;
   readJsonBody: (req: IncomingMessage) => Promise<unknown>;
+  readRawBody: (req: IncomingMessage) => Promise<Buffer>;
   auditLog: Logger;
 };
 
@@ -35,7 +42,7 @@ export async function handleTriggerRoutes(
   res: ServerResponse,
   ctx: TriggerRoutesCtx,
 ): Promise<boolean> {
-  const { cwd, manager, store, json, readJsonBody, auditLog } = ctx;
+  const { cwd, manager, store, json, readJsonBody, readRawBody, auditLog } = ctx;
   const method = req.method ?? "GET";
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 
@@ -154,6 +161,123 @@ export async function handleTriggerRoutes(
       outcome: "ok",
     });
     json(res, 202, {
+      runId: result.runId,
+      ...(result.queued === true
+        ? {
+            queued: true,
+            queuePosition: result.queuePosition,
+            ...(result.queuedCode !== undefined
+              ? { queuedCode: result.queuedCode }
+              : {}),
+          }
+        : {}),
+    });
+    return true;
+  }
+
+  const webhookMatch = pathname.match(/^\/api\/triggers\/([^/]+)\/webhook$/);
+  if (method === "POST" && webhookMatch) {
+    const id = decodeURIComponent(webhookMatch[1] ?? "");
+    const callerId = callerIdFromRequestAuth();
+
+    const catalogCtx = catalogContextFromStageflow(await resolveStageflowContext(cwd));
+    const scanPaths = await getCatalogScanPaths(catalogCtx);
+    const found = scanPaths
+      ? await findTriggerDefinition(scanPaths.triggerPaths, id)
+      : undefined;
+    if (!found) {
+      json(res, 404, { error: `Trigger not found: ${id}` });
+      return true;
+    }
+    const { definition: trigger } = found;
+
+    const config = trigger.event?.config;
+    const secretRef = typeof config?.secretRef === "string" ? config.secretRef : undefined;
+    const header = typeof config?.header === "string" ? config.header : undefined;
+    if (secretRef === undefined || header === undefined) {
+      json(res, 400, { error: "this trigger has no webhook signing configured" });
+      return true;
+    }
+    const scheme = config?.scheme === "base64" ? "base64" : "hex";
+
+    let secret: string | undefined;
+    try {
+      secret = readSecretFromEnvOrFile(process.env, secretRef);
+    } catch {
+      secret = undefined;
+    }
+    if (secret === undefined) {
+      json(res, 400, { error: "this trigger has no webhook signing configured" });
+      return true;
+    }
+
+    const rawBody = await readRawBody(req);
+    const headerValue = req.headers[header.toLowerCase()];
+    const signature = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+    if (
+      typeof signature !== "string" ||
+      signature.length === 0 ||
+      !verifyHmacSignature(rawBody, signature, secret, scheme)
+    ) {
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: "webhook",
+        action: "trigger_webhook",
+        outcome: "error",
+        error_code: "webhook.signature_invalid",
+      });
+      json(res, 401, { error: "Invalid webhook signature" });
+      return true;
+    }
+
+    let payload: unknown;
+    try {
+      payload = rawBody.length === 0 ? {} : JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      json(res, 400, { error: "Invalid JSON body" });
+      return true;
+    }
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      json(res, 400, { error: "Invalid JSON body: expected an object" });
+      return true;
+    }
+    const payloadRecord = payload as Record<string, unknown>;
+
+    if (!matchesEventFilter(trigger.event?.match, payloadRecord)) {
+      json(res, 200, { fired: false });
+      return true;
+    }
+
+    const task: TaskFile | undefined =
+      trigger.task === undefined
+        ? {
+            id: `${id}-webhook-${Date.now()}`,
+            goal: `Handle webhook event for trigger "${id}"`,
+            input: payloadRecord,
+          }
+        : undefined;
+
+    const result = await fireTrigger(id, store, manager, { cwd, task });
+    if (!result.ok) {
+      writeAudit(auditLog, {
+        caller_id: callerId,
+        surface: "webhook",
+        action: "trigger_webhook",
+        outcome: "error",
+        error_code: result.code,
+      });
+      json(res, result.status ?? 500, mapStartFailure(result));
+      return true;
+    }
+    writeAudit(auditLog, {
+      caller_id: callerId,
+      surface: "webhook",
+      action: "trigger_webhook",
+      target_run_id: result.runId,
+      outcome: "ok",
+    });
+    json(res, 201, {
+      fired: true,
       runId: result.runId,
       ...(result.queued === true
         ? {

@@ -6,6 +6,7 @@ export type TriggerSchedule = {
 export type TriggerEvent = {
   source: string;
   match?: Record<string, unknown>;
+  config?: Record<string, unknown>;
 };
 
 export type TriggerFile = {

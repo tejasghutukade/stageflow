@@ -632,6 +632,10 @@ export interface RunStore {
   recordTriggerFired(id: string, runId: string): Promise<void>;
   /** Persist the next computed fire time for a schedule-kind trigger. Throws if the trigger is missing. */
   setTriggerNextRun(id: string, nextRunAt: string): Promise<void>;
+  /** Read a single adapter-owned state value for a trigger, or null if unset. */
+  getTriggerAdapterState(triggerId: string, key: string): Promise<string | null>;
+  /** Upsert a single adapter-owned state value for a trigger. */
+  setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
   createFeedbackLoop(
