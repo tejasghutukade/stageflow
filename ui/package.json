@@ -15,6 +15,8 @@
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.22",
+    "@assistant-ui/react-markdown": "^0.14.17",
+    "@assistant-ui/styles": "^0.3.7",
     "@astryxdesign/core": "0.4.0",
     "@astryxdesign/theme-neutral": "0.4.0",
     "@stylexjs/stylex": "^0.19.0",

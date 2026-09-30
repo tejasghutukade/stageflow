@@ -1,17 +1,9 @@
 import {
-  ActionBarPrimitive,
-  AssistantRuntimeProvider,
-  ComposerPrimitive,
-  MessagePrimitive,
-  ThreadPrimitive,
-  useLocalRuntime,
-  useMessagePartText,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadMessageLike,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
-import { Markdown } from "@astryxdesign/core/Markdown";
 import {
   createContext,
   useCallback,
@@ -38,6 +30,7 @@ import {
 import { SpatialRunMap } from "../components/SpatialRunMap";
 import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
 import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
+import { WorkshopChatIsland } from "../workshop/WorkshopChatIsland";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -493,67 +486,6 @@ function MutationCardToolUI({
   );
 }
 
-function LabAssistantText() {
-  const { text } = useMessagePartText();
-  return (
-    <div className="workshop-lab__bubble-md">
-      <Markdown headingLevelStart={3} contentWidth="100%">
-        {text}
-      </Markdown>
-    </div>
-  );
-}
-
-function LabUserText() {
-  const { text } = useMessagePartText();
-  return <p>{text}</p>;
-}
-
-function LabUserMessage() {
-  return (
-    <MessagePrimitive.Root className="workshop-lab__msg" data-role="user">
-      <div className="workshop-lab__bubble" data-role="user">
-        <div className="eyebrow">you</div>
-        <MessagePrimitive.Parts components={{ Text: LabUserText }} />
-      </div>
-    </MessagePrimitive.Root>
-  );
-}
-
-function LabAssistantMessage() {
-  return (
-    <MessagePrimitive.Root className="workshop-lab__msg" data-role="assistant">
-      <div className="workshop-lab__bubble" data-role="assistant">
-        <div className="eyebrow">assistant</div>
-        <MessagePrimitive.Parts
-          components={{
-            Text: LabAssistantText,
-            tools: {
-              by_name: {
-                draft_mutation: MutationCardToolUI,
-              },
-            },
-          }}
-        />
-        <ActionBarPrimitive.Root className="workshop-lab__action-bar">
-          <ActionBarPrimitive.Copy className="btn btn--ghost workshop-lab__action">
-            Copy
-          </ActionBarPrimitive.Copy>
-        </ActionBarPrimitive.Root>
-      </div>
-    </MessagePrimitive.Root>
-  );
-}
-
-function LabWelcome() {
-  return (
-    <div className="workshop-lab__welcome">
-      <div className="eyebrow">Workshop</div>
-      <p>What are we building?</p>
-    </div>
-  );
-}
-
 function HistoryIcon() {
   return (
     <svg
@@ -690,38 +622,6 @@ function HistoryPanel({
   );
 }
 
-function LabThread() {
-  return (
-    <ThreadPrimitive.Root className="workshop-lab__thread">
-      <ThreadPrimitive.Viewport className="workshop-lab__transcript">
-        <ThreadPrimitive.Empty>
-          <LabWelcome />
-        </ThreadPrimitive.Empty>
-        <ThreadPrimitive.Messages
-          components={{
-            UserMessage: LabUserMessage,
-            AssistantMessage: LabAssistantMessage,
-          }}
-        />
-        <ThreadPrimitive.ScrollToBottom className="btn btn--ghost workshop-lab__scroll-bottom">
-          ↓ Latest
-        </ThreadPrimitive.ScrollToBottom>
-      </ThreadPrimitive.Viewport>
-      <ComposerPrimitive.Root className="workshop-lab__composer">
-        <ComposerPrimitive.Input
-          className="input workshop-lab__composer-input"
-          placeholder="Describe a stage or workflow change…"
-          rows={3}
-          submitMode="enter"
-        />
-        <ComposerPrimitive.Send className="btn btn--primary">
-          Send
-        </ComposerPrimitive.Send>
-      </ComposerPrimitive.Root>
-    </ThreadPrimitive.Root>
-  );
-}
-
 function StageDetailPopup({
   stage,
   onClose,
@@ -809,24 +709,6 @@ function MapEmptyState() {
   );
 }
 
-function WorkshopChatRuntime({
-  seedMessages,
-  liveRefs,
-}: {
-  seedMessages: ThreadMessageLike[];
-  liveRefs: LiveChatRefs;
-}) {
-  const labChatModel = useMemo(() => createLiveChatModel(liveRefs), [liveRefs]);
-  const runtime = useLocalRuntime(labChatModel, {
-    initialMessages: seedMessages,
-  });
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <LabThread />
-    </AssistantRuntimeProvider>
-  );
-}
-
 export function WorkshopPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftPackagePayload>(EMPTY_DRAFT);
@@ -876,6 +758,20 @@ export function WorkshopPage() {
       registerMutations,
     }),
     [applyDraft, registerMutations],
+  );
+
+  const chatAdapter = useMemo(
+    () => createLiveChatModel(liveRefs),
+    [liveRefs],
+  );
+
+  const draftMutationTools = useMemo(
+    () => ({
+      by_name: {
+        draft_mutation: MutationCardToolUI,
+      },
+    }),
+    [],
   );
 
   const startNewSession = useCallback(async () => {
@@ -1127,10 +1023,11 @@ export function WorkshopPage() {
           <div className="workshop-lab__chat-body">
             <WorkshopMutationContext.Provider value={mutationApi}>
               {sessionId ? (
-                <WorkshopChatRuntime
+                <WorkshopChatIsland
                   key={`${sessionId}:${threadEpoch}`}
                   seedMessages={seedMessages}
-                  liveRefs={liveRefs}
+                  adapter={chatAdapter}
+                  tools={draftMutationTools}
                 />
               ) : (
                 <div className="workshop-lab__welcome">
