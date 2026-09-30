@@ -127,6 +127,7 @@ Implement the chat side on a new **Operator Agent Host** (name may vary in code)
 
 - Route/mode in the existing operator console (same chrome), labeled **Workshop**.
 - Layout: chat | editable DAG + inspector; task panel first-class.
+- **Chat island (presentation):** Workshop chat uses a stock assistant-ui Thread island (`WorkshopChatIsland` + registry Thread under `.aui-root`) styled with `@assistant-ui/styles`. Astryx / `console.css` remain for rail, map, and page chrome outside the island. The **Operator Agent Host** remains the brain (`useLocalRuntime` + `ChatModelAdapter` → Workshop chat HTTP); soft-undo / immediate draft mutate is unchanged (see Live Author protocol above). Approach recorded in `docs/plans/2026-09-29-1948-feat-workshop-assistant-ui-richness-plan.md` (supersedes `.scratch/workshop/assistant-ui-plan.md` primitives+Astryx-only / `ExternalStoreRuntime` preference for the chat pane).
 - Core editable surface area only in v1 inspectors; advanced features explain-only via agent/docs.
 - Validate toolbar button shares the same validate function as the agent tool.
 - Keep existing New pipeline / New stage wizards.
