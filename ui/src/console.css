@@ -3237,6 +3237,17 @@ a.topbar__back { text-decoration: none; }
   height: 100%;
 }
 
+.workshop-lab__aui-island .workshop-lab__proposal {
+  margin-top: var(--spacing-3);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.workshop-lab__aui-island .workshop-lab__proposal-actions .btn {
+  font: inherit;
+}
+
 .workshop-lab__welcome {
   align-self: center;
   max-width: 28rem;
@@ -3267,6 +3278,14 @@ a.topbar__back { text-decoration: none; }
 .workshop-lab__proposal[data-status="rejected"] {
   border-color: var(--color-border);
   opacity: 0.72;
+}
+
+.workshop-lab__proposal[data-status="conflict"] {
+  border-color: var(--color-warning);
+}
+
+.workshop-lab__proposal[data-status="conflict"] .workshop-lab__proposal-status {
+  color: var(--color-warning);
 }
 
 .workshop-lab__proposal-head {

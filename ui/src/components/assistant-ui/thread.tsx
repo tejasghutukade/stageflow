@@ -148,7 +148,7 @@ function AssistantMessage() {
         <MessagePrimitive.Parts
           components={{
             Text: MarkdownText,
-            tools,
+            ...(tools ? { tools } : {}),
           }}
         />
         <MessageError />

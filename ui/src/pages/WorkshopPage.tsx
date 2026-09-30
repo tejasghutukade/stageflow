@@ -31,6 +31,10 @@ import { SpatialRunMap } from "../components/SpatialRunMap";
 import { layoutSpatialTrack } from "../track/layoutPipelineTrack";
 import type { SpatialNodeChrome } from "../workspace/resolveRunWorkspace";
 import { WorkshopChatIsland } from "../workshop/WorkshopChatIsland";
+import {
+  buildDraftMutationToolParts,
+  buildDraftMutationTools,
+} from "../workshop/draftMutationTools";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -379,22 +383,7 @@ function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
         yield {
           content: [
             { type: "text", text: finalText },
-            ...proposals.map((proposal, index) => ({
-              type: "tool-call" as const,
-              toolCallId: `mutation-${proposal.id}-${index}`,
-              toolName: "draft_mutation",
-              args: {
-                mutationId: proposal.id,
-                summary: proposal.summary,
-                affectedStageIds: proposal.affectedStageIds,
-              },
-              argsText: JSON.stringify({
-                mutationId: proposal.id,
-                summary: proposal.summary,
-                affectedStageIds: proposal.affectedStageIds,
-              }),
-              result: { status: "applied" as const },
-            })),
+            ...buildDraftMutationToolParts(proposals),
           ],
         };
         return;
@@ -440,7 +429,11 @@ function MutationCardToolUI({
   };
 
   return (
-    <div className="workshop-lab__proposal" data-status={status}>
+    <div
+      className="workshop-lab__proposal"
+      data-status={status}
+      data-tool="draft_mutation"
+    >
       <div className="workshop-lab__proposal-head">
         <div className="eyebrow">Draft mutation</div>
         <strong className="workshop-lab__proposal-title">{summary}</strong>
@@ -766,11 +759,7 @@ export function WorkshopPage() {
   );
 
   const draftMutationTools = useMemo(
-    () => ({
-      by_name: {
-        draft_mutation: MutationCardToolUI,
-      },
-    }),
+    () => buildDraftMutationTools(MutationCardToolUI),
     [],
   );
 

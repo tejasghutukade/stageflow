@@ -21,7 +21,8 @@ export type WorkshopChatIslandProps = {
 /**
  * Stageflow-owned runtime + stock Thread island under `.aui-root`.
  *
- * U2 hook: pass `tools.by_name.draft_mutation` (MutationCardToolUI).
+ * Pass `tools` from `buildDraftMutationTools(MutationCardToolUI)` so Accept/Reject
+ * cards render in-thread via stock `tools.by_name.draft_mutation`.
  * U3: remount via parent `key={`${sessionId}:${threadEpoch}`}`; place model
  * picker beside Composer outside registry internals (or as `children` above Thread).
  */
