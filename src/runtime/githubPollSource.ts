@@ -57,19 +57,27 @@ export type GithubPollClient = {
   }): Promise<GithubPollResponse>;
 };
 
-function defaultCreateGithubClient(token: string): GithubPollClient {
+export function defaultCreateGithubClient(token: string): GithubPollClient {
   const octokit = new Octokit({ auth: token });
   return {
     async listPulls({ owner, repo, etag }) {
-      const response = await octokit.rest.pulls.list({
-        owner,
-        repo,
-        state: "all",
-        sort: "updated",
-        direction: "desc",
-        per_page: 30,
-        ...(etag !== undefined ? { headers: { "If-None-Match": etag } } : {}),
-      });
+      let response;
+      try {
+        response = await octokit.rest.pulls.list({
+          owner,
+          repo,
+          state: "all",
+          sort: "updated",
+          direction: "desc",
+          per_page: 30,
+          ...(etag !== undefined ? { headers: { "If-None-Match": etag } } : {}),
+        });
+      } catch (err) {
+        if (err !== null && typeof err === "object" && "status" in err && err.status === 304) {
+          return { status: 304, items: [] };
+        }
+        throw err;
+      }
       const responseEtag = response.headers.etag;
       return {
         status: response.status,

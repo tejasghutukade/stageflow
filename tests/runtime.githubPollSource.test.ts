@@ -4,8 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRunStore } from "../src/runstore/createStore.js";
+
+const { mockPullsList } = vi.hoisted(() => ({ mockPullsList: vi.fn() }));
+vi.mock("octokit", () => ({
+  Octokit: class {
+    rest = { pulls: { list: mockPullsList } };
+  },
+}));
+
 import {
   GithubPollSource,
+  defaultCreateGithubClient,
   type GithubPollClient,
   type GithubPollResponse,
   type GithubPullItem,
@@ -267,5 +276,25 @@ describe("GithubPollSource", () => {
       clearFindProjectRootCacheForTests();
       await cleanup();
     }
+  });
+});
+
+describe("defaultCreateGithubClient", () => {
+  it("translates octokit's thrown 304 into a resolved not-modified response", async () => {
+    mockPullsList.mockRejectedValueOnce(Object.assign(new Error("Not modified"), { status: 304 }));
+    const client = defaultCreateGithubClient("fake-token");
+
+    const response = await client.listPulls({ owner: "acme", repo: "widgets", etag: '"abc"' });
+
+    expect(response).toEqual({ status: 304, items: [] });
+  });
+
+  it("still propagates a genuine error", async () => {
+    mockPullsList.mockRejectedValueOnce(Object.assign(new Error("Bad credentials"), { status: 401 }));
+    const client = defaultCreateGithubClient("fake-token");
+
+    await expect(client.listPulls({ owner: "acme", repo: "widgets" })).rejects.toThrow(
+      "Bad credentials",
+    );
   });
 });
