@@ -2146,6 +2146,19 @@ export function createOperatorRoutes(
             body.stream === true ||
             accept.includes("application/x-ndjson") ||
             accept.includes("text/event-stream");
+          const chatTurnBase = {
+            sessionId: body.sessionId,
+            draft: draftParsed,
+            message: body.message,
+            autoApply: body.autoApply === true,
+            model:
+              typeof body.model === "string" || body.model === null
+                ? body.model
+                : undefined,
+            settingsDefault: settingsDefault ?? null,
+            registry: workshopChatRegistry,
+            storeRoot: workshopSessionStoreRoot(),
+          };
 
           // Fail closed on missing sessions before opening an NDJSON body.
           try {
@@ -2186,40 +2199,17 @@ export function createOperatorRoutes(
             };
             try {
               const turn = await runWorkshopChatTurn({
-                sessionId: body.sessionId,
-                draft: draftParsed,
-                message: body.message,
-                autoApply: body.autoApply === true,
-                model:
-                  typeof body.model === "string" || body.model === null
-                    ? body.model
-                    : undefined,
-                settingsDefault: settingsDefault ?? null,
-                registry: workshopChatRegistry,
-                storeRoot: workshopSessionStoreRoot(),
+                ...chatTurnBase,
                 onDelta: (text) => {
                   streamedDelta = true;
                   enqueueFrame({ type: "delta", text });
                 },
               });
               await writeChain;
-              if (streamedDelta) {
-                for (const event of turn.events) {
-                  await writeFrame({ type: "event", event });
-                }
-                await writeFrame({
-                  type: "done",
-                  sessionId: turn.sessionId,
-                  events: turn.events,
-                  draft: turn.draft,
-                  pending: turn.pending,
-                  autoApply: turn.autoApply,
-                  model: turn.model,
-                });
-              } else {
-                for (const frame of iterateWorkshopChatStreamFrames(turn)) {
-                  await writeFrame(frame);
-                }
+              for (const frame of iterateWorkshopChatStreamFrames(turn, {
+                chunkAssistantText: !streamedDelta,
+              })) {
+                await writeFrame(frame);
               }
               if (!res.writableEnded && !res.destroyed) {
                 res.end();
@@ -2240,19 +2230,7 @@ export function createOperatorRoutes(
 
           let turn;
           try {
-            turn = await runWorkshopChatTurn({
-              sessionId: body.sessionId,
-              draft: draftParsed,
-              message: body.message,
-              autoApply: body.autoApply === true,
-              model:
-                typeof body.model === "string" || body.model === null
-                  ? body.model
-                  : undefined,
-              settingsDefault: settingsDefault ?? null,
-              registry: workshopChatRegistry,
-              storeRoot: workshopSessionStoreRoot(),
-            });
+            turn = await runWorkshopChatTurn(chatTurnBase);
           } catch (err) {
             if (
               err instanceof WorkshopSessionStoreError &&

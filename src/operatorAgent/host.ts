@@ -150,7 +150,7 @@ function createSession(
         message,
         contextSnapshot: profile.contextAdapter.serialize(context),
         tools: toolContext,
-        ...(options?.onDelta ? { onDelta: options.onDelta } : {}),
+        onDelta: options?.onDelta,
       });
       const events: OperatorAgentSessionEvent[] = [];
       let sawProposal = false;

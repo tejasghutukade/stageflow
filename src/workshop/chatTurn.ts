@@ -339,10 +339,9 @@ export async function runWorkshopChatTurn(
   ) {
     await agentSession.prepareRestart(storeRecord.transcript);
   }
-  const rawEvents = await agentSession.send(
-    message,
-    input.onDelta ? { onDelta: input.onDelta } : undefined,
-  );
+  const rawEvents = await agentSession.send(message, {
+    onDelta: input.onDelta,
+  });
   const draft = readDraftFromContext(agentSession.getContext());
   const pendingRaw = agentSession.getPendingProposal();
   const events = rawEvents.map((event) =>
@@ -383,9 +382,15 @@ export function chunkAssistantText(
 
 export function* iterateWorkshopChatStreamFrames(
   result: WorkshopChatTurnResult,
+  options?: { chunkAssistantText?: boolean },
 ): Generator<WorkshopChatStreamFrame> {
+  const chunkText = options?.chunkAssistantText !== false;
   for (const event of result.events) {
-    if (event.type === "message" && event.role === "assistant") {
+    if (
+      chunkText &&
+      event.type === "message" &&
+      event.role === "assistant"
+    ) {
       for (const text of chunkAssistantText(event.text)) {
         yield { type: "delta", text };
       }
