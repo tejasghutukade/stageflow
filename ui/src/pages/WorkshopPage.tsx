@@ -17,6 +17,8 @@ import {
 import {
   acceptWorkshopSessionMutation,
   createWorkshopSession,
+  fetchModels,
+  fetchSettings,
   getWorkshopSession,
   listWorkshopSessions,
   sendWorkshopChatTurnStreaming,
@@ -35,6 +37,10 @@ import {
   buildDraftMutationToolParts,
   buildDraftMutationTools,
 } from "../workshop/draftMutationTools";
+import {
+  DEFAULT_WORKSHOP_MODEL,
+  resolveWorkshopModel,
+} from "../workshop/modelSettings";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -65,9 +71,10 @@ type MutationApi = {
   reject: (mutationId: string) => Promise<void>;
 };
 
-type LiveChatRefs = {
+export type LiveChatRefs = {
   sessionId: MutableRefObject<string | null>;
   draft: MutableRefObject<DraftPackagePayload>;
+  model: MutableRefObject<string>;
   setDraft: (draft: DraftPackagePayload) => void;
   registerMutations: (proposals: WorkshopChatProposalPayload[]) => void;
 };
@@ -279,7 +286,7 @@ function assistantTextFromEvents(
   return parts.join("\n\n").trim();
 }
 
-function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
+export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
   return {
     async *run({ messages }) {
       const userText = extractUserText(messages);
@@ -324,6 +331,7 @@ function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
           sessionId,
           message: userText,
           draft: refs.draft.current,
+          model: refs.model.current,
         },
         {
           onDelta: (text) => {
@@ -702,6 +710,45 @@ function MapEmptyState() {
   );
 }
 
+function WorkshopModelPicker({
+  model,
+  models,
+  settingsDefault,
+  onChange,
+}: {
+  model: string;
+  models: string[];
+  settingsDefault: string | null;
+  onChange: (model: string) => void;
+}) {
+  const options =
+    models.length > 0
+      ? models
+      : [resolveWorkshopModel({ settingsDefault })];
+
+  return (
+    <label className="workshop-lab__model">
+      <span className="muted">Model</span>
+      <select
+        className="select workshop-lab__model-select"
+        value={model}
+        aria-label="Workshop chat model"
+        title={`Effective: ${model}`}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {!options.includes(model) ? (
+          <option value={model}>{model}</option>
+        ) : null}
+        {options.map((id) => (
+          <option key={id} value={id}>
+            {id === settingsDefault ? `${id} (default)` : id}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 export function WorkshopPage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftPackagePayload>(EMPTY_DRAFT);
@@ -719,11 +766,16 @@ export function WorkshopPage() {
   const [historySessions, setHistorySessions] = useState<
     WorkshopSessionSummary[]
   >([]);
+  const [chatModel, setChatModel] = useState(DEFAULT_WORKSHOP_MODEL);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [settingsDefault, setSettingsDefault] = useState<string | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
   const draftRef = useRef<DraftPackagePayload>(EMPTY_DRAFT);
+  const modelRef = useRef<string>(DEFAULT_WORKSHOP_MODEL);
   sessionIdRef.current = sessionId;
   draftRef.current = draft;
+  modelRef.current = chatModel;
 
   const applyDraft = useCallback((next: DraftPackagePayload) => {
     draftRef.current = next;
@@ -747,6 +799,7 @@ export function WorkshopPage() {
     () => ({
       sessionId: sessionIdRef,
       draft: draftRef,
+      model: modelRef,
       setDraft: applyDraft,
       registerMutations,
     }),
@@ -762,6 +815,33 @@ export function WorkshopPage() {
     () => buildDraftMutationTools(MutationCardToolUI),
     [],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [settings, models] = await Promise.all([
+          fetchSettings(),
+          fetchModels(),
+        ]);
+        if (cancelled) return;
+        const nextDefault = settings.workshopModel ?? null;
+        setSettingsDefault(nextDefault);
+        setAvailableModels(models.models);
+        setChatModel((current) =>
+          current === DEFAULT_WORKSHOP_MODEL
+            ? resolveWorkshopModel({ settingsDefault: nextDefault })
+            : current,
+        );
+      } catch {
+        if (cancelled) return;
+        setAvailableModels([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const startNewSession = useCallback(async () => {
     setBootError(null);
@@ -1017,7 +1097,14 @@ export function WorkshopPage() {
                   seedMessages={seedMessages}
                   adapter={chatAdapter}
                   tools={draftMutationTools}
-                />
+                >
+                  <WorkshopModelPicker
+                    model={chatModel}
+                    models={availableModels}
+                    settingsDefault={settingsDefault}
+                    onChange={setChatModel}
+                  />
+                </WorkshopChatIsland>
               ) : (
                 <div className="workshop-lab__welcome">
                   <div className="eyebrow">Workshop</div>

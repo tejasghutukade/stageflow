@@ -3224,17 +3224,51 @@ a.topbar__back { text-decoration: none; }
 }
 
 .workshop-lab__aui-island {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-height: 0;
   width: 100%;
 }
 
-.workshop-lab__aui-island > .aui-thread-root {
+.workshop-lab__aui-thread-wrap {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  width: 100%;
+}
+
+.workshop-lab__aui-island .aui-thread-root {
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
   height: 100%;
+}
+
+.workshop-lab__composer-chrome {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-4) var(--spacing-3);
+  background: var(--color-background-body);
+}
+
+.workshop-lab__model {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+}
+
+.workshop-lab__model-select {
+  max-width: 16rem;
 }
 
 .workshop-lab__aui-island .workshop-lab__proposal {

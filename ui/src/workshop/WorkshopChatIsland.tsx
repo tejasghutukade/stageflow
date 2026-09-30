@@ -20,11 +20,8 @@ export type WorkshopChatIslandProps = {
 
 /**
  * Stageflow-owned runtime + stock Thread island under `.aui-root`.
- *
- * Pass `tools` from `buildDraftMutationTools(MutationCardToolUI)` so Accept/Reject
- * cards render in-thread via stock `tools.by_name.draft_mutation`.
- * U3: remount via parent `key={`${sessionId}:${threadEpoch}`}`; place model
- * picker beside Composer outside registry internals (or as `children` above Thread).
+ * Remount via parent `key={`${sessionId}:${threadEpoch}`}`.
+ * Model picker lives in `children` (composer-adjacent chrome, outside registry Composer).
  */
 export function WorkshopChatIsland({
   seedMessages,
@@ -39,8 +36,12 @@ export function WorkshopChatIsland({
   return (
     <div className="aui-root workshop-lab__aui-island">
       <AssistantRuntimeProvider runtime={runtime}>
-        {children}
-        <Thread tools={tools} />
+        <div className="workshop-lab__aui-thread-wrap">
+          <Thread tools={tools} />
+        </div>
+        {children ? (
+          <div className="workshop-lab__composer-chrome">{children}</div>
+        ) : null}
       </AssistantRuntimeProvider>
     </div>
   );
