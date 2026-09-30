@@ -109,13 +109,13 @@ function titleCase(id: string): string {
 }
 
 function emptySeedMessages(): ThreadMessageLike[] {
-  return [{ role: "assistant", content: GREETING }];
+  return [];
 }
 
 function transcriptToSeedMessages(
   transcript: Array<{ role: string; text: string }>,
 ): ThreadMessageLike[] {
-  if (transcript.length === 0) return emptySeedMessages();
+  if (transcript.length === 0) return [];
   return transcript.map((msg) => ({
     role:
       msg.role === "user" || msg.role === "system" || msg.role === "assistant"
@@ -123,6 +123,18 @@ function transcriptToSeedMessages(
         : "assistant",
     content: msg.text,
   }));
+}
+
+function WorkshopWelcome() {
+  return (
+    <div className="aui-thread-welcome-root">
+      <div className="aui-thread-welcome-center">
+        <div className="aui-thread-welcome-message">
+          <p className="aui-thread-welcome-message-inner">{GREETING}</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function stageBodyFor(
@@ -549,7 +561,7 @@ function LabChatHeader({
 }) {
   return (
     <header className="workshop-lab__chat-header">
-      <div className="workshop-lab__chat-title">Workshop</div>
+      <div className="workshop-lab__chat-title">Chat</div>
       <div className="workshop-lab__chat-actions">
         <button
           type="button"
@@ -759,8 +771,7 @@ export function WorkshopPage() {
   const [mutationCards, setMutationCards] = useState<
     Map<string, MutationCardState>
   >(() => new Map());
-  const [seedMessages, setSeedMessages] =
-    useState<ThreadMessageLike[]>(emptySeedMessages);
+  const [seedMessages, setSeedMessages] = useState<ThreadMessageLike[]>([]);
   const [threadEpoch, setThreadEpoch] = useState(0);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -1101,14 +1112,16 @@ export function WorkshopPage() {
                   seedMessages={seedMessages}
                   adapter={chatAdapter}
                   tools={draftMutationTools}
-                >
-                  <WorkshopModelPicker
-                    model={chatModel}
-                    models={availableModels}
-                    settingsDefault={settingsDefault}
-                    onChange={setChatModel}
-                  />
-                </WorkshopChatIsland>
+                  Welcome={WorkshopWelcome}
+                  composerActions={
+                    <WorkshopModelPicker
+                      model={chatModel}
+                      models={availableModels}
+                      settingsDefault={settingsDefault}
+                      onChange={setChatModel}
+                    />
+                  }
+                />
               ) : (
                 <div className="workshop-lab__welcome">
                   <div className="eyebrow">Workshop</div>

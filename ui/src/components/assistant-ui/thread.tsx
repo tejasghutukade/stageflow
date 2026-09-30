@@ -1,4 +1,5 @@
 import "@assistant-ui/styles/index.css";
+import "./workshop-embed.css";
 
 import {
   ActionBarPrimitive,
@@ -13,6 +14,7 @@ import {
   useContext,
   type ComponentType,
   type FC,
+  type ReactNode,
 } from "react";
 import { MarkdownText } from "./markdown-text";
 
@@ -25,6 +27,7 @@ export type ThreadProps = {
   tools?: ThreadToolUIs;
   Welcome?: ComponentType;
   placeholder?: string;
+  composerActions?: ReactNode;
 };
 
 const ThreadToolsContext = createContext<ThreadToolUIs | undefined>(undefined);
@@ -163,7 +166,13 @@ function AssistantMessage() {
   );
 }
 
-function Composer({ placeholder }: { placeholder: string }) {
+function Composer({
+  placeholder,
+  actions,
+}: {
+  placeholder: string;
+  actions?: ReactNode;
+}) {
   return (
     <ComposerPrimitive.Root className="aui-composer-root">
       <div
@@ -178,7 +187,7 @@ function Composer({ placeholder }: { placeholder: string }) {
           aria-label="Message input"
         />
         <div className="aui-composer-action-wrapper">
-          <div />
+          <div className="workshop-lab__composer-actions">{actions}</div>
           <ComposerPrimitive.Send
             className="aui-composer-send"
             aria-label="Send message"
@@ -204,6 +213,7 @@ export function Thread({
   tools,
   Welcome = DefaultWelcome,
   placeholder = "Describe a stage or workflow change…",
+  composerActions,
 }: ThreadProps) {
   return (
     <ThreadToolsContext.Provider value={tools}>
@@ -228,7 +238,7 @@ export function Thread({
             >
               <ArrowDownIcon />
             </ThreadPrimitive.ScrollToBottom>
-            <Composer placeholder={placeholder} />
+            <Composer placeholder={placeholder} actions={composerActions} />
           </ThreadPrimitive.ViewportFooter>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
