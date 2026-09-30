@@ -27,18 +27,3 @@
   min-height: 0;
   width: 100%;
 }
-
-.workshop-lab__aui-island .aui-thread-root {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  height: 100%;
-}
-
-.workshop-lab__composer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   DRAFT_MUTATION_TOOL_NAME,
   buildDraftMutationToolParts,
-  buildDraftMutationTools,
   mutationCardActionsLocked,
 } from "./draftMutationTools";
 
@@ -12,14 +11,6 @@ describe("draftMutationTools", () => {
     expect(mutationCardActionsLocked(true, false)).toBe(true);
     expect(mutationCardActionsLocked(false, true)).toBe(true);
     expect(mutationCardActionsLocked(true, true)).toBe(true);
-  });
-
-  it("registers draft_mutation on tools.by_name for stock Thread", () => {
-    const Stub = () => null;
-    const tools = buildDraftMutationTools(Stub);
-    expect(Object.keys(tools.by_name)).toEqual([DRAFT_MUTATION_TOOL_NAME]);
-    expect(tools.by_name[DRAFT_MUTATION_TOOL_NAME]).toBe(Stub);
-    expect(DRAFT_MUTATION_TOOL_NAME).toBe("draft_mutation");
   });
 
   it("synthesizes tool-call parts named draft_mutation", () => {

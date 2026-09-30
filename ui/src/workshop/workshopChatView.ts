@@ -1,5 +1,7 @@
 import { DRAFT_MUTATION_TOOL_NAME } from "./draftMutationTools";
 
+export const CHAT_FAILED_PREFIX = "Chat failed:";
+
 export function maySend(text: string): boolean {
   return text.trim().length > 0;
 }
@@ -45,11 +47,11 @@ function normalizeRole(role: string): "user" | "assistant" | "system" {
 
 function asParts(
   content: string | readonly WorkshopChatPartInput[],
-): WorkshopChatPartInput[] {
+): readonly WorkshopChatPartInput[] {
   if (typeof content === "string") {
     return content ? [{ type: "text", text: content }] : [];
   }
-  return [...content];
+  return content;
 }
 
 function mutationArgsFrom(
@@ -79,7 +81,7 @@ export function mapWorkshopChatParts(
         part.type === "text" && typeof part.text === "string",
     );
     const failure = textParts.find((part) =>
-      part.text.startsWith("Chat failed:"),
+      part.text.startsWith(CHAT_FAILED_PREFIX),
     );
     if (failure) {
       out.push({ kind: "text", role, text: failure.text });

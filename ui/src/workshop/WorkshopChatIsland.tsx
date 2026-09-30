@@ -17,11 +17,9 @@ import { Markdown } from "@astryxdesign/core/Markdown";
 import { Stack, StackItem } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import {
-  Fragment,
   type ComponentType,
   type ReactNode,
 } from "react";
-import { DRAFT_MUTATION_TOOL_NAME } from "./draftMutationTools";
 import {
   mapWorkshopChatParts,
   maySend,
@@ -42,6 +40,16 @@ export type WorkshopChatIslandProps = {
   /** Model picker (and similar) rendered in the composer footer. */
   composerActions?: ReactNode;
 };
+
+function bubbleGroup(
+  index: number,
+  total: number,
+): "first" | "middle" | "last" | undefined {
+  if (total === 1) return undefined;
+  if (index === 0) return "first";
+  if (index === total - 1) return "last";
+  return "middle";
+}
 
 function messageContent(
   message: ThreadMessageLike & { content?: unknown; parts?: unknown },
@@ -137,15 +145,7 @@ function WorkshopAstryxColumn({
         {texts.map((text, index) => (
           <ChatMessageBubble
             key={index}
-            group={
-              texts.length === 1
-                ? undefined
-                : index === 0
-                  ? "first"
-                  : index === texts.length - 1
-                    ? "last"
-                    : "middle"
-            }
+            group={bubbleGroup(index, texts.length)}
           >
             {text}
           </ChatMessageBubble>
@@ -192,12 +192,10 @@ function WorkshopAstryxColumn({
       );
       continue;
     }
-    if (part.kind === DRAFT_MUTATION_TOOL_NAME) {
+    if (part.kind === "draft_mutation") {
       flushUser();
       pendingAssistant.push(
-        <Fragment key={part.toolCallId}>
-          <MutationCard args={part.args} />
-        </Fragment>,
+        <MutationCard key={part.toolCallId} args={part.args} />,
       );
     }
   }

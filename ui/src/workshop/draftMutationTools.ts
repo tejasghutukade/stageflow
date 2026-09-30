@@ -1,5 +1,3 @@
-import type { ToolCallMessagePartComponent } from "@assistant-ui/react";
-
 /** Tool name synthesized into assistant message parts for Accept/Reject cards. */
 export const DRAFT_MUTATION_TOOL_NAME = "draft_mutation" as const;
 
@@ -28,19 +26,6 @@ export function mutationCardActionsLocked(
   busy: boolean,
 ): boolean {
   return threadRunning || busy;
-}
-
-/** Stock Thread `MessagePrimitive.Parts` tools map for `draft_mutation`. */
-export function buildDraftMutationTools(
-  DraftMutationToolUI: ToolCallMessagePartComponent,
-): {
-  by_name: Record<string, ToolCallMessagePartComponent | undefined>;
-} {
-  return {
-    by_name: {
-      [DRAFT_MUTATION_TOOL_NAME]: DraftMutationToolUI,
-    },
-  };
 }
 
 /** Synthesize in-thread tool-call parts from host proposals (end-of-turn). */

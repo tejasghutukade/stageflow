@@ -36,6 +36,7 @@ import {
   WorkshopChatIsland,
   type WorkshopMutationCardProps,
 } from "../workshop/WorkshopChatIsland";
+import { CHAT_FAILED_PREFIX } from "../workshop/workshopChatView";
 import {
   buildDraftMutationToolParts,
   mutationCardActionsLocked,
@@ -86,7 +87,7 @@ const EMPTY_DRAFT: DraftPackagePayload = {
   pipeline: { id: "untitled", stages: [] },
 };
 
-export const GREETING =
+const GREETING =
   "What are we building? Describe a workflow and I’ll sketch stages on the studio as we go.";
 
 const EMPTY_PROJECTION: PipelineTrackProjection = { nodes: [], edges: [] };
@@ -369,7 +370,7 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
             content: [
               {
                 type: "text",
-                text: `Chat failed: ${result.error}`,
+                text: `${CHAT_FAILED_PREFIX} ${result.error}`,
               },
             ],
           };
