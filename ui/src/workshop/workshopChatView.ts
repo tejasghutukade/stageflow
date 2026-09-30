@@ -1,4 +1,7 @@
-import { DRAFT_MUTATION_TOOL_NAME } from "./draftMutationTools";
+import {
+  DRAFT_MUTATION_TOOL_NAME,
+  type DraftMutationToolPart,
+} from "./draftMutationTools";
 
 export const CHAT_FAILED_PREFIX = "Chat failed:";
 
@@ -15,11 +18,7 @@ export type WorkshopChatTextBody = {
 export type WorkshopChatMutationCardInput = {
   kind: "draft_mutation";
   toolCallId: string;
-  args: {
-    mutationId: string;
-    summary: string;
-    affectedStageIds: string[];
-  };
+  args: DraftMutationToolPart["args"];
 };
 
 export type WorkshopChatViewPart =
@@ -85,10 +84,11 @@ export function mapWorkshopChatParts(
     );
     if (failure) {
       out.push({ kind: "text", role, text: failure.text });
-    } else {
-      const text = textParts.map((part) => part.text).join("");
-      if (text) out.push({ kind: "text", role, text });
+      continue;
     }
+
+    const text = textParts.map((part) => part.text).join("");
+    if (text) out.push({ kind: "text", role, text });
 
     for (const part of parts) {
       if (part.type !== "tool-call") continue;

@@ -114,4 +114,47 @@ describe("mapWorkshopChatParts", () => {
       },
     ]);
   });
+
+  it("maps plain string content to a text body and empty string to nothing", () => {
+    expect(
+      mapWorkshopChatParts([{ role: "user", content: "Hello from string" }]),
+    ).toEqual([
+      { kind: "text", role: "user", text: "Hello from string" },
+    ]);
+    expect(mapWorkshopChatParts([{ role: "user", content: "" }])).toEqual([]);
+  });
+
+  it("skips draft_mutation tool-calls when Chat failed text is present", () => {
+    const parts = mapWorkshopChatParts([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Chat failed: host unavailable" },
+          {
+            type: "tool-call",
+            toolCallId: "mutation-mut-1-0",
+            toolName: "draft_mutation",
+            args: {
+              mutationId: "mut-1",
+              summary: "Add stage intake",
+              affectedStageIds: ["intake"],
+            },
+            argsText: JSON.stringify({
+              mutationId: "mut-1",
+              summary: "Add stage intake",
+              affectedStageIds: ["intake"],
+            }),
+          },
+        ],
+      },
+    ]);
+
+    expect(parts).toEqual([
+      {
+        kind: "text",
+        role: "assistant",
+        text: "Chat failed: host unavailable",
+      },
+    ]);
+  });
 });
