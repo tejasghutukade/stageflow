@@ -70,6 +70,18 @@ describe("parseHash", () => {
     });
   });
 
+  it("falls aui sample hash through to today", () => {
+    expect(parseHash("#/aui")).toEqual({ name: "today" });
+  });
+
+  it("falls astryx sample hash through to today", () => {
+    expect(parseHash("#/astryx")).toEqual({ name: "today" });
+  });
+
+  it("falls unknown hashes through to today", () => {
+    expect(parseHash("#/not-a-real-route")).toEqual({ name: "today" });
+  });
+
   it("parses New Run query params used by the Workshop Run shortcut", () => {
     const path = newRunPath({
       pipeline: "pipelines/demo.pipeline.yaml",
