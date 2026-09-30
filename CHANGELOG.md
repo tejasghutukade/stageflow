@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-09-30
+
 ### Fixed
 
 - Project root resolution no longer requires git. `resolveStageflowContext` now finds the nearest `stageflow.yaml` first (like a `package.json` for npm), the same way for catalog discovery, trigger-adapter discovery, and stage/pipeline/trigger creation. `isGitProject` is still reported and still gates anything that genuinely needs git (checkout, worktrees), but no longer blocks reading or writing a catalog that has no git repo behind it. Previously, none of the three trigger adapters (schedule, GitHub poll, email) could discover triggers in a non-git catalog root at all.
