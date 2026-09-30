@@ -46,6 +46,7 @@ import {
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
+import { resolveWorkshopModel } from "../workshop/modelSettings.js";
 import {
   createWorkshopSession,
   getWorkshopSession,
@@ -2183,13 +2184,45 @@ export function createOperatorRoutes(
               "Content-Type": "application/x-ndjson; charset=utf-8",
               "Cache-Control": "no-store",
             });
+            const resolvedModel = resolveWorkshopModel({
+              sessionOverride:
+                typeof body.model === "string" || body.model === null
+                  ? body.model
+                  : undefined,
+              settingsDefault: settingsDefault ?? null,
+            });
             const writeFrame = async (frame: unknown): Promise<void> => {
               if (req.aborted || res.writableEnded || res.destroyed) return;
               const line = `${JSON.stringify(frame)}\n`;
               if (!res.write(line)) {
-                await new Promise<void>((resolve) =>
-                  res.once("drain", resolve),
-                );
+                await new Promise<void>((resolve) => {
+                  const onDrain = () => {
+                    cleanup();
+                    resolve();
+                  };
+                  const onAbort = () => {
+                    cleanup();
+                    if (!res.writableEnded && !res.destroyed) {
+                      res.destroy();
+                    }
+                    resolve();
+                  };
+                  const cleanup = () => {
+                    res.off("drain", onDrain);
+                    req.off("aborted", onAbort);
+                    req.off("close", onAbort);
+                    res.off("close", onAbort);
+                    res.off("error", onAbort);
+                  };
+                  res.once("drain", onDrain);
+                  req.once("aborted", onAbort);
+                  req.once("close", onAbort);
+                  res.once("close", onAbort);
+                  res.once("error", onAbort);
+                  if (req.aborted || res.writableEnded || res.destroyed) {
+                    onAbort();
+                  }
+                });
               }
             };
             let streamedDelta = false;
@@ -2217,9 +2250,19 @@ export function createOperatorRoutes(
             } catch (err) {
               await writeChain.catch(() => undefined);
               const message = err instanceof Error ? err.message : String(err);
+              const errorEvent = { type: "error" as const, message };
               await writeFrame({
                 type: "event",
-                event: { type: "error", message },
+                event: errorEvent,
+              });
+              await writeFrame({
+                type: "done",
+                sessionId: body.sessionId,
+                events: [errorEvent],
+                draft: draftParsed,
+                pending: null,
+                autoApply: false,
+                model: resolvedModel,
               });
               if (!res.writableEnded && !res.destroyed) {
                 res.end();

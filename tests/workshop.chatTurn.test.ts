@@ -3,6 +3,7 @@ import {
   createWorkshopOperatorHost,
   emptyDraftPackage,
   proposeStageFromUserMessage,
+  readDraftFromContext,
   type OperatorAgentModel,
 } from "../src/operatorAgent/index.js";
 import {
@@ -10,6 +11,7 @@ import {
   iterateWorkshopChatStreamFrames,
   resetWorkshopChatSessionsForTests,
   runWorkshopChatTurn,
+  undoWorkshopSessionMutation,
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
 } from "../src/workshop/chatTurn.js";
@@ -220,6 +222,79 @@ describe("runWorkshopChatTurn", () => {
       expect(second.draft.pipeline.stages.map((s) => s.id)).toEqual([
         "from-client",
       ]);
+    });
+  });
+
+  it("rejects mid-stream undo without rebinding a stale draft", async () => {
+    await withIsolatedHome(async () => {
+      const storeRoot = resolveWorkshopSessionStoreRoot();
+      createWorkshopSession(storeRoot, { id: "sess-inflight-undo" });
+      let releaseSend!: () => void;
+      const sendGate = new Promise<void>((resolve) => {
+        releaseSend = resolve;
+      });
+      let markEntered!: () => void;
+      const enteredSend = new Promise<void>((resolve) => {
+        markEntered = resolve;
+      });
+      const model: OperatorAgentModel = {
+        async complete({ tools }) {
+          proposeStageFromUserMessage(tools, "intake form review");
+          markEntered();
+          await sendGate;
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "working" },
+            ],
+          };
+        },
+      };
+      const host = createWorkshopOperatorHost({ model });
+      const registry = new WorkshopChatSessionRegistry(host);
+      const liveDraft = emptyDraftPackage("live-host");
+      liveDraft.pipeline.stages = [
+        { id: "live-stage", name: "Live", prompt: "keep" },
+      ];
+
+      const turnPromise = runWorkshopChatTurn({
+        sessionId: "sess-inflight-undo",
+        draft: liveDraft,
+        message: "intake form review",
+        host,
+        registry,
+        storeRoot,
+      });
+
+      await enteredSend;
+      expect(registry.isTurnInFlight("sess-inflight-undo")).toBe(true);
+
+      const staleDraft = emptyDraftPackage("stale-client");
+      staleDraft.pipeline.stages = [
+        { id: "stale", name: "Stale", prompt: "wipe" },
+      ];
+      const undo = await undoWorkshopSessionMutation({
+        sessionId: "sess-inflight-undo",
+        draft: staleDraft,
+        host,
+        registry,
+        storeRoot,
+      });
+
+      expect(undo.ok).toBe(false);
+      if (undo.ok) throw new Error("expected conflict");
+      expect(undo.reason).toBe("conflict");
+      expect(undo.notice).toMatch(/in progress/i);
+      expect(undo.draft.pipeline.id).not.toBe("stale-client");
+
+      const hostDraft = readDraftFromContext(
+        registry.get("sess-inflight-undo")!.getContext(),
+      );
+      expect(hostDraft.pipeline.id).not.toBe("stale-client");
+      expect(hostDraft.pipeline.stages.map((s) => s.id)).not.toContain("stale");
+
+      releaseSend();
+      await turnPromise;
+      expect(registry.isTurnInFlight("sess-inflight-undo")).toBe(false);
     });
   });
 });

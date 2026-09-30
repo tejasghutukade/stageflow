@@ -22,6 +22,14 @@ export type DraftMutationToolPart = {
   result: { status: "applied" };
 };
 
+/** Disable Accept/Reject while the thread is streaming or a decide is in flight. */
+export function mutationCardActionsLocked(
+  threadRunning: boolean,
+  busy: boolean,
+): boolean {
+  return threadRunning || busy;
+}
+
 /** Stock Thread `MessagePrimitive.Parts` tools map for `draft_mutation`. */
 export function buildDraftMutationTools(
   DraftMutationToolUI: ToolCallMessagePartComponent,

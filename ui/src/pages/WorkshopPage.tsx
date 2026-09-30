@@ -1,4 +1,5 @@
 import {
+  useAuiState,
   type ChatModelAdapter,
   type ChatModelRunOptions,
   type ThreadMessageLike,
@@ -36,6 +37,7 @@ import { WorkshopChatIsland } from "../workshop/WorkshopChatIsland";
 import {
   buildDraftMutationToolParts,
   buildDraftMutationTools,
+  mutationCardActionsLocked,
 } from "../workshop/draftMutationTools";
 import {
   DEFAULT_WORKSHOP_MODEL,
@@ -411,6 +413,7 @@ function MutationCardToolUI({
   { status: "applied" }
 >) {
   const api = useWorkshopMutation();
+  const threadRunning = useAuiState((s) => s.thread.isRunning);
   const mutationId =
     typeof args?.mutationId === "string" ? args.mutationId : "";
   const card = mutationId ? api.getCard(mutationId) : undefined;
@@ -424,9 +427,10 @@ function MutationCardToolUI({
       : (card?.proposal.affectedStageIds ?? []);
   const status = card?.status ?? "pending";
   const [busy, setBusy] = useState(false);
+  const locked = mutationCardActionsLocked(threadRunning, busy);
 
   const decide = async (next: "accepted" | "rejected") => {
-    if (!mutationId || busy || status !== "pending") return;
+    if (!mutationId || locked || status !== "pending") return;
     setBusy(true);
     try {
       if (next === "accepted") await api.accept(mutationId);
@@ -460,7 +464,7 @@ function MutationCardToolUI({
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy}
+            disabled={locked}
             onClick={() => void decide("accepted")}
           >
             Accept
@@ -468,7 +472,7 @@ function MutationCardToolUI({
           <button
             type="button"
             className="btn btn--ghost"
-            disabled={busy}
+            disabled={locked}
             onClick={() => void decide("rejected")}
           >
             Reject

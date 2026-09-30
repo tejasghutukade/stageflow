@@ -115,8 +115,12 @@ export type WorkshopLiveSessionHandle = {
  * In-memory map of Workshop session id → open OperatorAgentSession.
  * Survives across chat turns until process restart (disk transcript remains).
  */
+const TURN_IN_FLIGHT_UNDO_NOTICE =
+  "Cannot undo while a chat turn is in progress.";
+
 export class WorkshopChatSessionRegistry {
   private readonly sessions = new Map<string, WorkshopLiveSessionHandle>();
+  private readonly turnsInFlight = new Set<string>();
 
   constructor(readonly host: OperatorAgentHost) {}
 
@@ -126,6 +130,18 @@ export class WorkshopChatSessionRegistry {
 
   get(sessionId: string): OperatorAgentSession | undefined {
     return this.sessions.get(sessionId)?.agentSession;
+  }
+
+  isTurnInFlight(sessionId: string): boolean {
+    return this.turnsInFlight.has(sessionId);
+  }
+
+  beginTurn(sessionId: string): void {
+    this.turnsInFlight.add(sessionId);
+  }
+
+  endTurn(sessionId: string): void {
+    this.turnsInFlight.delete(sessionId);
   }
 
   /**
@@ -157,6 +173,7 @@ export class WorkshopChatSessionRegistry {
     if (!handle) return;
     handle.agentSession.close();
     this.sessions.delete(sessionId);
+    this.turnsInFlight.delete(sessionId);
   }
 
   clear(): void {
@@ -164,6 +181,7 @@ export class WorkshopChatSessionRegistry {
       handle.agentSession.close();
     }
     this.sessions.clear();
+    this.turnsInFlight.clear();
   }
 }
 
@@ -339,9 +357,15 @@ export async function runWorkshopChatTurn(
   ) {
     await agentSession.prepareRestart(storeRecord.transcript);
   }
-  const rawEvents = await agentSession.send(message, {
-    onDelta: input.onDelta,
-  });
+  registry.beginTurn(sessionId);
+  let rawEvents: OperatorAgentSessionEvent[];
+  try {
+    rawEvents = await agentSession.send(message, {
+      onDelta: input.onDelta,
+    });
+  } finally {
+    registry.endTurn(sessionId);
+  }
   const draft = readDraftFromContext(agentSession.getContext());
   const pendingRaw = agentSession.getPendingProposal();
   const events = rawEvents.map((event) =>
@@ -454,13 +478,36 @@ export type WorkshopSessionAcceptResult =
       sessionId: string;
       draft: DraftPackage;
       pending: WorkshopChatProposalPayload | null;
-      reason: "none" | "id_mismatch";
+      reason: "none" | "id_mismatch" | "conflict";
       notice?: string;
     };
+
+function snapshotLiveSession(
+  registry: WorkshopChatSessionRegistry,
+  sessionId: string,
+  fallbackDraft: DraftPackage,
+): {
+  draft: DraftPackage;
+  pending: WorkshopChatProposalPayload | null;
+} {
+  const session = registry.get(sessionId);
+  if (!session) {
+    return { draft: fallbackDraft, pending: null };
+  }
+  const draft = readDraftFromContext(session.getContext());
+  const pendingRaw = session.getPendingProposal();
+  return {
+    draft,
+    pending: pendingRaw
+      ? serializeWorkshopProposal(pendingRaw, draft)
+      : null,
+  };
+}
 
 /**
  * Soft-undo a mutation on a durable Workshop host session.
  * Rebinds the client draft first (R9), then undoes when fingerprint matches.
+ * Fail-closed during an in-flight chat turn: no rebind, conflict.
  */
 export async function undoWorkshopSessionMutation(
   input: WorkshopSessionUndoInput,
@@ -477,6 +524,18 @@ export async function undoWorkshopSessionMutation(
   const registry = input.registry ?? getDefaultRegistry(input.host);
   if (input.host && registry.host !== input.host) {
     throw new Error("host does not match workshop chat session registry");
+  }
+
+  if (registry.isTurnInFlight(sessionId)) {
+    const snap = snapshotLiveSession(registry, sessionId, input.draft);
+    return {
+      ok: false,
+      sessionId,
+      draft: snap.draft,
+      pending: snap.pending,
+      reason: "conflict",
+      notice: TURN_IN_FLIGHT_UNDO_NOTICE,
+    };
   }
 
   const { session } = registry.getOrOpen(sessionId, input.draft);
@@ -516,6 +575,18 @@ export async function acceptWorkshopSessionMutation(
   const registry = input.registry ?? getDefaultRegistry(input.host);
   if (input.host && registry.host !== input.host) {
     throw new Error("host does not match workshop chat session registry");
+  }
+
+  if (registry.isTurnInFlight(sessionId)) {
+    const snap = snapshotLiveSession(registry, sessionId, input.draft);
+    return {
+      ok: false,
+      sessionId,
+      draft: snap.draft,
+      pending: snap.pending,
+      reason: "conflict",
+      notice: TURN_IN_FLIGHT_UNDO_NOTICE,
+    };
   }
 
   const { session } = registry.getOrOpen(sessionId, input.draft);

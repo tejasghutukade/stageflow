@@ -389,6 +389,29 @@ describe("POST /api/workshop/chat", () => {
             /model exploded mid-turn/i.test(f.event.message),
         ),
       ).toBe(true);
+      const done = frames.at(-1) as {
+        type: string;
+        sessionId?: string;
+        events?: Array<{ type: string; message?: string }>;
+        pending?: unknown;
+        autoApply?: boolean;
+        model?: string;
+        draft?: { pipeline?: { id?: string } };
+      };
+      expect(done?.type).toBe("done");
+      expect(done.sessionId).toBe("http-sess-err");
+      expect(done.pending).toBeNull();
+      expect(done.autoApply).toBe(false);
+      expect(typeof done.model).toBe("string");
+      expect(done.draft?.pipeline?.id).toBe("demo");
+      expect(
+        done.events?.some(
+          (e) =>
+            e.type === "error" &&
+            typeof e.message === "string" &&
+            /model exploded mid-turn/i.test(e.message),
+        ),
+      ).toBe(true);
     });
   });
 

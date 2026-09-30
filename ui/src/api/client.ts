@@ -1299,6 +1299,7 @@ export async function sendWorkshopChatTurnStreaming(
     onEvent?: (event: WorkshopChatTurnPayload["events"][number]) => void;
   } = {},
 ): Promise<WorkshopChatTurnResult> {
+  let openedNdjson = false;
   try {
     const res = await fetch("/api/workshop/chat", {
       method: "POST",
@@ -1341,10 +1342,36 @@ export async function sendWorkshopChatTurnStreaming(
       };
     }
 
+    openedNdjson = true;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let donePayload: WorkshopChatTurnPayload | null = null;
+    const doneBox: { current: WorkshopChatTurnPayload | null } = { current: null };
+    let streamError: string | null = null;
+
+    const consumeFrame = (frame: WorkshopChatStreamFrame): void => {
+      if (frame.type === "delta") {
+        handlers.onDelta?.(frame.text);
+      } else if (frame.type === "event") {
+        handlers.onEvent?.(frame.event);
+        if (
+          frame.event.type === "error" &&
+          typeof frame.event.message === "string" &&
+          frame.event.message
+        ) {
+          streamError = frame.event.message;
+        }
+      } else if (frame.type === "done") {
+        doneBox.current = {
+          sessionId: frame.sessionId,
+          events: frame.events ?? [],
+          draft: frame.draft,
+          pending: frame.pending,
+          autoApply: frame.autoApply,
+          model: frame.model,
+        };
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -1355,54 +1382,44 @@ export async function sendWorkshopChatTurnStreaming(
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        let frame: WorkshopChatStreamFrame;
         try {
-          frame = JSON.parse(trimmed) as WorkshopChatStreamFrame;
+          consumeFrame(JSON.parse(trimmed) as WorkshopChatStreamFrame);
         } catch {
           continue;
-        }
-        if (frame.type === "delta") {
-          handlers.onDelta?.(frame.text);
-        } else if (frame.type === "event") {
-          handlers.onEvent?.(frame.event);
-        } else if (frame.type === "done") {
-          donePayload = {
-            sessionId: frame.sessionId,
-            events: frame.events ?? [],
-            draft: frame.draft,
-            pending: frame.pending,
-            autoApply: frame.autoApply,
-            model: frame.model,
-          };
         }
       }
     }
 
     if (buffer.trim()) {
       try {
-        const frame = JSON.parse(buffer.trim()) as WorkshopChatStreamFrame;
-        if (frame.type === "done") {
-          donePayload = {
-            sessionId: frame.sessionId,
-            events: frame.events ?? [],
-            draft: frame.draft,
-            pending: frame.pending,
-            autoApply: frame.autoApply,
-            model: frame.model,
-          };
-        }
+        consumeFrame(JSON.parse(buffer.trim()) as WorkshopChatStreamFrame);
       } catch {
         /* ignore trailing partial */
       }
     }
 
-    if (donePayload && isWorkshopChatTurnPayload(donePayload)) {
-      return { ok: true, ...donePayload };
+    if (doneBox.current) {
+      return { ok: true, ...doneBox.current };
     }
 
-    // Stream ended without a usable done frame — fall back to JSON turn.
-    return sendWorkshopChatTurn(input);
+    if (streamError) {
+      return { ok: false, status: res.status, error: streamError };
+    }
+
+    return {
+      ok: false,
+      status: res.status,
+      error: "Stream ended without a done frame",
+    };
   } catch {
+    // JSON fallback only when the server never opened NDJSON.
+    if (openedNdjson) {
+      return {
+        ok: false,
+        status: 0,
+        error: "Workshop chat stream failed",
+      };
+    }
     return sendWorkshopChatTurn(input);
   }
 }
