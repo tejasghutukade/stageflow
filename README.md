@@ -2,6 +2,7 @@
 
 Open-source runtime for **configurable multi-stage agent workflows** with typed handoffs, DAG execution, human gates, MCP, CI, and a local operator console.
 
+[![Site](https://stage-flow.dev)](stage-flow.dev)
 [![npm version](https://img.shields.io/npm/v/stageflow)](https://www.npmjs.com/package/stageflow)
 [![npm downloads](https://img.shields.io/npm/dm/stageflow)](https://www.npmjs.com/package/stageflow)
 ![Node >=20](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)
