@@ -5,6 +5,7 @@ import { registerCheckoutTools } from "./checkoutTools.js";
 import { registerControlTools } from "./controlTools.js";
 import { registerProjectMcpTools } from "./projectMcpTools.js";
 import { registerProviderTools } from "./providerTools.js";
+import { registerTriggerTools } from "./triggerTools.js";
 import type { McpToolDeps } from "./deps.js";
 import { textResult } from "./toolResults.js";
 import { DEFAULT_TIMEOUT_MS, waitRun } from "./waitRun.js";
@@ -22,6 +23,7 @@ export function registerMcpTools(server: McpServer, deps: McpToolDeps): void {
   registerCheckoutTools(server, deps);
   registerProviderTools(server, deps);
   registerProjectMcpTools(server, deps);
+  registerTriggerTools(server, deps);
 
   server.registerTool(
     "wait_run",

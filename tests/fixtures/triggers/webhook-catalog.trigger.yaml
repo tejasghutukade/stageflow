@@ -1,0 +1,10 @@
+id: webhook-catalog
+pipeline: hello
+task: my-task
+kind: event
+enabled: true
+event:
+  source: webhook
+  config:
+    secretRef: WEBHOOK_SECRET
+    header: x-signature

@@ -8,6 +8,12 @@ export type TaskLoadCode =
   | "task.ref_without_repository"
   | "task.repository_invalid";
 
+export type TriggerLoadCode =
+  | "trigger.invalid_shape"
+  | "trigger.load_error"
+  | "trigger.unknown_pipeline"
+  | "trigger.unknown_task";
+
 export type LoadIssue =
   | {
       code: ValidationFindingCode;
@@ -27,6 +33,12 @@ export type LoadIssue =
       message: string;
       category: "task";
       taskId?: string;
+    }
+  | {
+      code: TriggerLoadCode;
+      message: string;
+      category: "trigger";
+      triggerId?: string;
     }
   | {
       code: ValidationFindingCode | string;

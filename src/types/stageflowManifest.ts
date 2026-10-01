@@ -3,9 +3,11 @@ export type StageflowManifestVersion = 1;
 export type StageflowManifestCatalog = {
   pipelines: string[];
   tasks: string[];
+  triggers?: string[];
   patterns?: {
     pipeline?: string;
     task?: string;
+    trigger?: string;
   };
   exclude?: string[];
 };
@@ -26,5 +28,6 @@ export type LoadedManifest = {
   patterns: {
     pipeline: string;
     task: string;
+    trigger: string;
   };
 };

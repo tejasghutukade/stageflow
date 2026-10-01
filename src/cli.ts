@@ -36,6 +36,7 @@ import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js"
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { RUN_STAGE_USAGE, runRunStageCommand } from "./cli/runStageCommand.js";
 import { RUNS_USAGE, runRunsCommand } from "./cli/runsCommand.js";
+import { TRIGGER_USAGE, runTriggerCommand } from "./cli/triggerCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
@@ -140,6 +141,8 @@ ${EXPORT_ALL_USAGE}
 
 ${RUNS_USAGE}
 
+${TRIGGER_USAGE}
+
 ${PROVIDERS_USAGE}
 
 ${SKILLS_USAGE}`;
@@ -197,6 +200,7 @@ function parseArgs(argv: string[]): {
     command === "restore" ||
     command === "export" ||
     command === "runs" ||
+    command === "trigger" ||
     command === "skills"
   ) {
     return { help: false, command };
@@ -539,6 +543,12 @@ async function main(argv: string[]): Promise<number> {
 
     if (parsed.command === "runs") {
       return runRunsCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
+    }
+
+    if (parsed.command === "trigger") {
+      return runTriggerCommand(argv.slice(3), {
         cwd: ctx.invocationCwd,
       });
     }

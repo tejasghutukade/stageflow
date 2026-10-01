@@ -23,6 +23,17 @@ import {
 import { RunManager } from "../runtime/runManager.js";
 import { PI_CODING_AGENT_DIR_ENV } from "../runtime/stageRoots.js";
 import {
+  ScheduleSource,
+  triggerTickIntervalMsFromEnv,
+} from "../runtime/scheduleSource.js";
+import {
+  GithubPollSource,
+  githubPollIntervalMsFromEnv,
+} from "../runtime/githubPollSource.js";
+import { EmailSource } from "../runtime/emailSource.js";
+import { fireTrigger } from "../runtime/triggerRunner.js";
+import type { TriggerFireEvent } from "../runtime/triggerPort.js";
+import {
   createRunChangeBus,
   getRunChangeBusFromWrappedStore,
   isRunStoreWrapped,
@@ -84,6 +95,12 @@ export type StageflowHostBootstrap = {
   /** Periodic retention GC handle when enabled; already `.unref()`'d. */
   gcInterval?: NodeJS.Timeout;
   stopGcInterval: () => void;
+  /** Stops the schedule-trigger tick loop started at boot. */
+  stopScheduleSource: () => void;
+  /** Stops the GitHub poll-trigger loop started at boot. */
+  stopGithubPollSource: () => void;
+  /** Stops the email-trigger IMAP/IDLE listeners started at boot. */
+  stopEmailSource: () => void;
   /** Filesystem classification for `$STAGEFLOW_HOME` (Slot 8). */
   storeFilesystem?: StoreFilesystemClassification;
   /**
@@ -253,6 +270,9 @@ export async function bootstrapStageflowHost(
         close: async () => {},
       },
       stopGcInterval: () => {},
+      stopScheduleSource: () => {},
+      stopGithubPollSource: () => {},
+      stopEmailSource: () => {},
       storeFilesystem,
       serveBlocked,
       ...(hostConfig !== undefined ? { hostConfig } : {}),
@@ -351,6 +371,71 @@ export async function bootstrapStageflowHost(
   const stopGcInterval = () => {
     if (gcInterval !== undefined) clearInterval(gcInterval);
   };
+
+  const scheduleSource = new ScheduleSource({
+    store,
+    cwd,
+    intervalMs: triggerTickIntervalMsFromEnv(env),
+    logError: (message) => bootLog.error("trigger.schedule_source_failed", message),
+  });
+  const onTriggerFire = async (event: TriggerFireEvent) => {
+    try {
+      const result = await fireTrigger(event.triggerId, store, manager, {
+        cwd,
+        task: event.task,
+      });
+      if (!result.ok) {
+        bootLog.error(
+          "trigger.fire_failed",
+          `trigger "${event.triggerId}" fire failed: ${result.reason}`,
+        );
+      }
+    } catch (err) {
+      bootLog.error(
+        "trigger.fire_failed",
+        `trigger "${event.triggerId}" fire threw: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  };
+  try {
+    // Boot-time catch-up: fire once for any schedule trigger whose next_run_at
+    // already passed while the Host was down, then reschedule from now —
+    // before starting the periodic ticker so this pass never races it.
+    await scheduleSource.tick(onTriggerFire);
+  } catch (err) {
+    bootLog.error(
+      "trigger.schedule_catchup_failed",
+      `boot catch-up tick failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  await scheduleSource.start(onTriggerFire);
+  const stopScheduleSource = () => {
+    void scheduleSource.stop();
+  };
+
+  const githubPollSource = new GithubPollSource({
+    store,
+    cwd,
+    intervalMs: githubPollIntervalMsFromEnv(env),
+    logError: (message) => bootLog.error("trigger.github_poll_source_failed", message),
+  });
+  await githubPollSource.start(onTriggerFire);
+  const stopGithubPollSource = () => {
+    void githubPollSource.stop();
+  };
+
+  const emailSource = new EmailSource({
+    store,
+    cwd,
+    logError: (message) => bootLog.error("trigger.email_source_failed", message),
+  });
+  await emailSource.start(onTriggerFire);
+  const stopEmailSource = () => {
+    void emailSource.stop();
+  };
+
   const mcpStateless = resolveMcpStateless({
     mcpStateless: options.mcpStateless,
   });
@@ -392,6 +477,9 @@ export async function bootstrapStageflowHost(
     ...(providerBoot !== undefined ? { providerBoot } : {}),
     ...(gcInterval !== undefined ? { gcInterval } : {}),
     stopGcInterval,
+    stopScheduleSource,
+    stopGithubPollSource,
+    stopEmailSource,
     storeFilesystem,
   };
 }

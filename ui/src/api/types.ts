@@ -651,3 +651,42 @@ export type ProjectMcpRowStatus =
   | "not-yet-probed"
   | "probing"
   | ProjectMcpProbeStatus;
+
+export type TriggerSchedule = {
+  cron: string;
+  timezone?: string;
+};
+
+export type TriggerEvent = {
+  source: string;
+  match?: Record<string, unknown>;
+};
+
+export type TriggerListItem = {
+  id: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled: boolean;
+  definition_ref: string;
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+};
+
+export type CreateTriggerInput = {
+  directory: string;
+  id: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled?: boolean;
+};
+
+export type CreateTriggerResult =
+  | { ok: true; trigger: TriggerListItem }
+  | { ok: false; status: number; error: string };

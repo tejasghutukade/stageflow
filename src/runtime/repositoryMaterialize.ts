@@ -40,6 +40,8 @@ export type StartFailureCode =
   | "task.repository_invalid"
   | "task.invalid_shape"
   | "task.load_error"
+  | "trigger.task_override_not_allowed"
+  | "trigger.task_required"
   | "start.token_rejected"
   | "inline_pipeline_too_large"
   | "skills_invalid_name"

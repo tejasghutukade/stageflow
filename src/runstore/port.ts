@@ -351,6 +351,24 @@ export type CreateForkGenerationInput = Omit<
 
 export type ForkGenerationPatch = Partial<Pick<ForkGenerationRecord, "status">>;
 
+/** Durable registration of a catalog-owned `*.trigger.yaml` definition. */
+export type TriggerRecord = {
+  id: string;
+  definition_ref: string;
+  enabled: boolean;
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpsertTriggerInput = {
+  id: string;
+  definitionRef: string;
+  enabled: boolean;
+};
+
 export type CompactStage = {
   id: string;
   status: StageSnapshot["status"];
@@ -606,6 +624,18 @@ export interface RunStore {
   ensureProject(absPath: string): Promise<string>;
   /** Absolute roots from the durable projects registry. */
   listRegisteredProjects(): Promise<string[]>;
+  /** Idempotent create-or-update of a trigger's catalog registration. */
+  upsertTrigger(input: UpsertTriggerInput): Promise<TriggerRecord>;
+  getTrigger(id: string): Promise<TriggerRecord | null>;
+  listTriggers(): Promise<TriggerRecord[]>;
+  /** Record a fire: stamps last_fired_at/last_run_id. Throws if the trigger is missing. */
+  recordTriggerFired(id: string, runId: string): Promise<void>;
+  /** Persist the next computed fire time for a schedule-kind trigger. Throws if the trigger is missing. */
+  setTriggerNextRun(id: string, nextRunAt: string): Promise<void>;
+  /** Read a single adapter-owned state value for a trigger, or null if unset. */
+  getTriggerAdapterState(triggerId: string, key: string): Promise<string | null>;
+  /** Upsert a single adapter-owned state value for a trigger. */
+  setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void>;
   readRun(runId: string): Promise<RunDetail>;
   updatePipelineDag(runId: string, dag: RunPipelineDagSnapshot): Promise<void>;
   createFeedbackLoop(

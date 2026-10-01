@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-09-30
+
+### Fixed
+
+- Project root resolution no longer requires git. `resolveStageflowContext` now finds the nearest `stageflow.yaml` first (like a `package.json` for npm), the same way for catalog discovery, trigger-adapter discovery, and stage/pipeline/trigger creation. `isGitProject` is still reported and still gates anything that genuinely needs git (checkout, worktrees), but no longer blocks reading or writing a catalog that has no git repo behind it. Previously, none of the three trigger adapters (schedule, GitHub poll, email) could discover triggers in a non-git catalog root at all.
+
+## [0.28.0] - 2026-09-30
+
+### Added
+
+- Pipeline trigger and scheduler backbone: `kind: event` / `kind: schedule` trigger YAML, `TriggerSourcePort` adapter seam, and dynamic task mode (a firing event can build a one-off `TaskFile` instead of requiring a pre-authored task).
+- Three trigger adapters, each a real `TriggerSourcePort` implementation: a GitHub poll connector (ETag-conditional, grouped by repo so N triggers on one repo cost one API call), a generic webhook adapter (per-trigger URL, HMAC-SHA256 verified), and an email connector (IMAP IDLE, connections pooled per mailbox, bounded-backoff reconnect).
+- Generic `trigger_adapter_state` store table for adapter-persisted cursors (ETags, UID watermarks) shared across all three adapters.
+
+### Fixed
+
+- `event.config` was silently dropped on trigger creation (both HTTP and MCP); it now passes through opaquely to adapters.
+- `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` and `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` are now recognized Host env keys; setting either to tune an adapter's interval no longer crashes boot.
+- The GitHub poll adapter no longer logs an error on every "nothing changed since last poll" tick — Octokit throws on HTTP 304, which was being caught and logged as a failure instead of handled as the expected no-op.
+
 ## [0.27.1] - 2026-09-26
 
 ### Fixed
