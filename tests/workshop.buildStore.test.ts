@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { loadStageflowManifestOutcome } from "../src/config/loadStageflowManifest.js";
+import { listPipelines } from "../src/config/listConfig.js";
 import {
   createWorkshopBuild,
+  focusUnboundWorkshopBuild,
   getWorkshopBuild,
   listWorkshopBuilds,
+  listWorkshopPickerRows,
   resolveWorkshopBuildStoreRoot,
   updateWorkshopBuild,
   workshopBuildFilePath,
@@ -149,6 +155,255 @@ describe("workshop build store", () => {
           relativePath: "pipelines/release.pipeline.yaml",
         }),
       ).toThrow(WorkshopBuildStoreError);
+    });
+  });
+});
+
+const SHARED_PIPELINE = `id: shared-flow
+stages:
+  - id: step
+    system_prompt: ok
+    model: cursor/auto
+    io:
+      input:
+        schema:
+          type: object
+      output:
+        schema:
+          type: object
+`;
+
+async function writePickerFixture(): Promise<{
+  root: string;
+  cleanup: () => Promise<void>;
+}> {
+  const root = await mkdtemp(path.join(tmpdir(), "sf-picker-"));
+  await mkdir(path.join(root, "pipelines"), { recursive: true });
+  await writeFile(
+    path.join(root, "stageflow.yaml"),
+    "version: 1\ncatalog:\n  pipelines:\n    - pipelines\n  tasks: []\n",
+    "utf8",
+  );
+  await writeFile(
+    path.join(root, "pipelines", "one.pipeline.yaml"),
+    SHARED_PIPELINE,
+    "utf8",
+  );
+  await writeFile(
+    path.join(root, "pipelines", "two.pipeline.yaml"),
+    SHARED_PIPELINE,
+    "utf8",
+  );
+  return {
+    root,
+    cleanup: () => rm(root, { recursive: true, force: true }),
+  };
+}
+
+async function listFixturePipelines(projectRoot: string) {
+  const manifest = await loadStageflowManifestOutcome(projectRoot);
+  if (!manifest.ok) {
+    throw new Error(manifest.issues[0]?.message ?? "manifest failed");
+  }
+  return listPipelines({ projectRoot, manifest: manifest.value });
+}
+
+describe("workshop picker", () => {
+  it("lists an untitled build and each catalog path once, keeping a tied build id", async () => {
+    await withIsolatedHome(async () => {
+      const fixture = await writePickerFixture();
+      try {
+        const pipelines = await listFixturePipelines(fixture.root);
+        expect(pipelines.map((pipeline) => pipeline.id)).toEqual([
+          "shared-flow",
+          "shared-flow",
+        ]);
+        expect(new Set(pipelines.map((pipeline) => pipeline.path)).size).toBe(2);
+
+        const [tiedPipeline, unboundPipeline] = [...pipelines].sort((a, b) =>
+          a.path.localeCompare(b.path),
+        );
+        expect(tiedPipeline).toBeDefined();
+        expect(unboundPipeline).toBeDefined();
+
+        const storeRoot = resolveWorkshopBuildStoreRoot();
+        const untitled = createWorkshopBuild(storeRoot, {
+          id: "build-untitled",
+          draft: {
+            pipeline: {
+              id: "notes",
+              stages: [{ id: "scratch" }],
+            },
+          },
+        });
+        const tied = createWorkshopBuild(storeRoot, {
+          id: "build-tied-file",
+          draft: {
+            pipeline: {
+              id: "shared-flow",
+              stages: [{ id: "workshop-copy" }],
+            },
+          },
+          projectRoot: fixture.root,
+          relativePath: tiedPipeline!.path,
+        });
+
+        const rows = listWorkshopPickerRows(
+          storeRoot,
+          pipelines.map((pipeline) => ({
+            project_root: fixture.root,
+            path: pipeline.path,
+            id: pipeline.id,
+          })),
+        );
+
+        expect(rows).toContainEqual({
+          id: untitled.id,
+          name: "notes",
+          projectRoot: null,
+          relativePath: null,
+        });
+        expect(
+          rows.filter(
+            (row) =>
+              row.projectRoot === fixture.root &&
+              row.relativePath === tiedPipeline!.path,
+          ),
+        ).toEqual([
+          {
+            id: tied.id,
+            name: "shared-flow",
+            projectRoot: fixture.root,
+            relativePath: tiedPipeline!.path,
+          },
+        ]);
+        expect(rows).toContainEqual({
+          id: null,
+          name: "shared-flow",
+          projectRoot: fixture.root,
+          relativePath: unboundPipeline!.path,
+        });
+        expect(
+          rows
+            .filter((row) => row.name === "shared-flow")
+            .map((row) => row.relativePath)
+            .sort(),
+        ).toEqual([tiedPipeline!.path, unboundPipeline!.path].sort());
+        expect(rows).toHaveLength(3);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  });
+
+  it("reuses one build id for an unbound path and keeps the stored draft", async () => {
+    await withIsolatedHome(async () => {
+      const fixture = await writePickerFixture();
+      try {
+        const pipelines = await listFixturePipelines(fixture.root);
+        const unbound = pipelines.find((pipeline) =>
+          pipeline.path.endsWith("two.pipeline.yaml"),
+        );
+        expect(unbound).toBeDefined();
+        const storeRoot = resolveWorkshopBuildStoreRoot();
+
+        const other = createWorkshopBuild(storeRoot, {
+          id: "build-other-project",
+          draft: {
+            pipeline: {
+              id: "remote-flow",
+              stages: [{ id: "kept" }],
+            },
+          },
+          projectRoot: "/other/project",
+          relativePath: "pipelines/elsewhere.pipeline.yaml",
+        });
+        const listed = listWorkshopPickerRows(storeRoot, [
+          {
+            project_root: fixture.root,
+            path: unbound!.path,
+            id: unbound!.id,
+          },
+        ]);
+        expect(listed).toContainEqual({
+          id: other.id,
+          name: "remote-flow",
+          projectRoot: "/other/project",
+          relativePath: "pipelines/elsewhere.pipeline.yaml",
+        });
+
+        const fromOther = await focusUnboundWorkshopBuild(storeRoot, {
+          projectRoot: "/other/project",
+          relativePath: "pipelines/elsewhere.pipeline.yaml",
+        });
+        expect(fromOther.ok).toBe(true);
+        if (!fromOther.ok) return;
+        expect(fromOther.build.id).toBe(other.id);
+        expect(fromOther.build.draft).toEqual(other.draft);
+        expect(fromOther.created).toBe(false);
+
+        const first = await focusUnboundWorkshopBuild(storeRoot, {
+          projectRoot: fixture.root,
+          relativePath: unbound!.path,
+        });
+        expect(first.ok).toBe(true);
+        if (!first.ok) return;
+        expect(first.created).toBe(true);
+        expect(first.build.projectRoot).toBe(fixture.root);
+        expect(first.build.relativePath).toBe(unbound!.path);
+        expect(first.build.draft.pipeline.id).toBe("shared-flow");
+        expect(first.build.draft.pipeline.stages[0]?.id).toBe("step");
+
+        const mutated = {
+          pipeline: {
+            id: "shared-flow",
+            stages: [{ id: "edited-in-workshop" }],
+          },
+        };
+        updateWorkshopBuild(storeRoot, first.build.id, { draft: mutated });
+        await writeFile(
+          path.join(fixture.root, unbound!.path),
+          SHARED_PIPELINE.replace("id: step", "id: on-disk"),
+          "utf8",
+        );
+
+        const second = await focusUnboundWorkshopBuild(storeRoot, {
+          projectRoot: fixture.root,
+          relativePath: `./${unbound!.path}`,
+        });
+        expect(second.ok).toBe(true);
+        if (!second.ok) return;
+        expect(second.created).toBe(false);
+        expect(second.build.id).toBe(first.build.id);
+        expect(second.build.draft).toEqual(mutated);
+        expect(
+          listWorkshopBuilds(storeRoot).filter(
+            (build) => build.relativePath === unbound!.path,
+          ),
+        ).toHaveLength(1);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  });
+
+  it("does not create a build when the pipeline file cannot be opened", async () => {
+    await withIsolatedHome(async () => {
+      const fixture = await writePickerFixture();
+      try {
+        const storeRoot = resolveWorkshopBuildStoreRoot();
+        const before = listWorkshopBuilds(storeRoot);
+        const failed = await focusUnboundWorkshopBuild(storeRoot, {
+          projectRoot: fixture.root,
+          relativePath: "pipelines/missing.pipeline.yaml",
+        });
+        expect(failed.ok).toBe(false);
+        if (failed.ok) return;
+        expect(failed.status).toBe(404);
+        expect(listWorkshopBuilds(storeRoot)).toEqual(before);
+      } finally {
+        await fixture.cleanup();
+      }
     });
   });
 });

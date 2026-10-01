@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import {
+  loadDraftPackage,
   parseDraftPackageBody,
   type DraftPackage,
 } from "../config/draftPackage.js";
@@ -223,30 +224,173 @@ export function getWorkshopBuild(
   return record;
 }
 
-export function listWorkshopBuilds(storeRoot: string): WorkshopBuildSummary[] {
+function listWorkshopBuildRecords(storeRoot: string): WorkshopBuildRecord[] {
   const dir = workshopBuildsDir(storeRoot);
   if (!existsSync(dir)) return [];
-  const summaries: WorkshopBuildSummary[] = [];
+  const records: WorkshopBuildRecord[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     const id = entry.name.slice(0, -".json".length);
     const record = readWorkshopBuild(storeRoot, id);
     if (!record) continue;
-    summaries.push({
-      id: record.id,
-      createdAt: record.createdAt,
-      updatedAt: record.updatedAt,
-      projectRoot: record.projectRoot,
-      relativePath: record.relativePath,
-    });
+    records.push(record);
   }
-  summaries.sort((a, b) => {
+  records.sort((a, b) => {
     if (a.updatedAt !== b.updatedAt) {
       return a.updatedAt < b.updatedAt ? 1 : -1;
     }
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
-  return summaries;
+  return records;
+}
+
+export function listWorkshopBuilds(storeRoot: string): WorkshopBuildSummary[] {
+  return listWorkshopBuildRecords(storeRoot).map((record) => ({
+    id: record.id,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    projectRoot: record.projectRoot,
+    relativePath: record.relativePath,
+  }));
+}
+
+export type WorkshopPickerCatalogPipeline = {
+  project_root: string;
+  path: string;
+  id: string;
+};
+
+export type WorkshopPickerRow = {
+  id: string | null;
+  name: string;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type FocusUnboundWorkshopBuildInput = {
+  projectRoot: string;
+  relativePath: string;
+};
+
+export type FocusUnboundWorkshopBuildResult =
+  | { ok: true; created: boolean; build: WorkshopBuildRecord }
+  | { ok: false; status: 400 | 404; error: string };
+
+function normalizeProjectRoot(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (path.isAbsolute(trimmed)) return path.resolve(trimmed);
+  return trimmed.replace(/\\/g, "/");
+}
+
+function normalizeRelativePath(value: string | null | undefined): string | null {
+  if (value == null) return null;
+  let trimmed = value.trim().replace(/\\/g, "/");
+  if (!trimmed) return null;
+  while (trimmed.startsWith("./")) trimmed = trimmed.slice(2);
+  return trimmed || null;
+}
+
+function tieKey(
+  projectRoot: string | null,
+  relativePath: string | null,
+): string | null {
+  if (!projectRoot || !relativePath) return null;
+  return `${projectRoot}\0${relativePath}`;
+}
+
+function pickerName(id: string | null | undefined): string {
+  const trimmed = id?.trim() ?? "";
+  return trimmed ? trimmed : "Untitled";
+}
+
+function findTiedBuild(
+  storeRoot: string,
+  projectRoot: string,
+  relativePath: string,
+): WorkshopBuildRecord | null {
+  const key = tieKey(projectRoot, relativePath);
+  if (!key) return null;
+  for (const record of listWorkshopBuildRecords(storeRoot)) {
+    const recordKey = tieKey(
+      normalizeProjectRoot(record.projectRoot),
+      normalizeRelativePath(record.relativePath),
+    );
+    if (recordKey === key) return record;
+  }
+  return null;
+}
+
+export function listWorkshopPickerRows(
+  storeRoot: string,
+  pipelines: ReadonlyArray<WorkshopPickerCatalogPipeline>,
+): WorkshopPickerRow[] {
+  const rows: WorkshopPickerRow[] = [];
+  const tied = new Set<string>();
+  for (const record of listWorkshopBuildRecords(storeRoot)) {
+    const key = tieKey(
+      normalizeProjectRoot(record.projectRoot),
+      normalizeRelativePath(record.relativePath),
+    );
+    if (key) tied.add(key);
+    rows.push({
+      id: record.id,
+      name: pickerName(record.draft.pipeline.id),
+      projectRoot: record.projectRoot,
+      relativePath: record.relativePath,
+    });
+  }
+  for (const pipeline of pipelines) {
+    const projectRoot = normalizeProjectRoot(pipeline.project_root);
+    const relativePath = normalizeRelativePath(pipeline.path);
+    if (!projectRoot || !relativePath) continue;
+    const key = tieKey(projectRoot, relativePath);
+    if (key && tied.has(key)) continue;
+    rows.push({
+      id: null,
+      name: pickerName(pipeline.id),
+      projectRoot,
+      relativePath,
+    });
+  }
+  return rows;
+}
+
+export async function focusUnboundWorkshopBuild(
+  storeRoot: string,
+  input: FocusUnboundWorkshopBuildInput,
+): Promise<FocusUnboundWorkshopBuildResult> {
+  const projectRoot = normalizeProjectRoot(input.projectRoot);
+  const relativePath = normalizeRelativePath(input.relativePath);
+  if (!projectRoot || !relativePath) {
+    return {
+      ok: false,
+      status: 400,
+      error: "project root and path are required",
+    };
+  }
+  const existing = findTiedBuild(storeRoot, projectRoot, relativePath);
+  if (existing) {
+    return { ok: true, created: false, build: existing };
+  }
+
+  const loaded = await loadDraftPackage(projectRoot, relativePath);
+  if (!loaded.ok) {
+    return { ok: false, status: loaded.status, error: loaded.error };
+  }
+
+  const again = findTiedBuild(storeRoot, projectRoot, relativePath);
+  if (again) {
+    return { ok: true, created: false, build: again };
+  }
+
+  const build = createWorkshopBuild(storeRoot, {
+    draft: loaded.draft,
+    projectRoot,
+    relativePath,
+  });
+  return { ok: true, created: true, build };
 }
 
 export function updateWorkshopBuild(
