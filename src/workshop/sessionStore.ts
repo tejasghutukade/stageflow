@@ -28,6 +28,7 @@ export type WorkshopSessionRecord = {
   updatedAt: string;
   transcript: WorkshopSessionMessage[];
   piSessionId: string | null;
+  activeBuildId?: string;
 };
 
 export type WorkshopSessionSummary = {
@@ -148,6 +149,13 @@ export function parseWorkshopSessionRecord(
   if (value.piSessionId !== null && typeof value.piSessionId !== "string") {
     return null;
   }
+  if (
+    value.activeBuildId !== undefined &&
+    value.activeBuildId !== null &&
+    typeof value.activeBuildId !== "string"
+  ) {
+    return null;
+  }
 
   const transcript: WorkshopSessionMessage[] = [];
   for (const entry of value.transcript) {
@@ -155,6 +163,9 @@ export function parseWorkshopSessionRecord(
     if (!msg) return null;
     transcript.push(msg);
   }
+
+  const activeBuildId =
+    typeof value.activeBuildId === "string" ? value.activeBuildId.trim() : "";
 
   return {
     version: 1,
@@ -164,6 +175,7 @@ export function parseWorkshopSessionRecord(
     updatedAt: value.updatedAt,
     transcript,
     piSessionId: value.piSessionId,
+    ...(activeBuildId ? { activeBuildId } : {}),
   };
 }
 
@@ -181,6 +193,7 @@ function writeSession(
     updatedAt: record.updatedAt,
     transcript: record.transcript,
     piSessionId: record.piSessionId,
+    ...(record.activeBuildId ? { activeBuildId: record.activeBuildId } : {}),
   };
   writeFileSync(
     workshopSessionFilePath(storeRoot, record.id),
@@ -322,6 +335,27 @@ export function updateWorkshopSessionPiSessionId(
     piSessionId,
     updatedAt: (options?.now ?? new Date()).toISOString(),
   };
+  writeSession(storeRoot, next);
+  return next;
+}
+
+export function updateWorkshopSessionActiveBuildId(
+  storeRoot: string,
+  sessionId: string,
+  activeBuildId: string | null,
+  options?: { now?: Date },
+): WorkshopSessionRecord {
+  const record = getWorkshopSession(storeRoot, sessionId);
+  const trimmed = activeBuildId?.trim() ?? "";
+  const next: WorkshopSessionRecord = {
+    ...record,
+    updatedAt: (options?.now ?? new Date()).toISOString(),
+  };
+  if (trimmed) {
+    next.activeBuildId = trimmed;
+  } else {
+    delete next.activeBuildId;
+  }
   writeSession(storeRoot, next);
   return next;
 }

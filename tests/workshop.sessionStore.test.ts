@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   appendWorkshopSessionMessages,
   createWorkshopSession,
   getWorkshopSession,
   listWorkshopSessions,
+  parseWorkshopSessionRecord,
   resolveWorkshopSessionStoreRoot,
   truncateWorkshopSessionTitle,
   updateWorkshopSessionPiSessionId,
@@ -185,6 +186,102 @@ describe("workshop session store", () => {
       expect(updated.updatedAt).toBe("2026-09-29T13:00:00.000Z");
       expect(JSON.parse(readFileSync(workshopSessionFilePath(storeRoot, "pi-1"), "utf8"))).not.toHaveProperty(
         "draft",
+      );
+    });
+  });
+
+  it("a session file with no activeBuildId loads as unlinked and still appears in the session list", async () => {
+    await withIsolatedHome(async () => {
+      const storeRoot = resolveWorkshopSessionStoreRoot();
+      const legacy = {
+        version: 1,
+        id: "legacy-unlinked",
+        title: "older chat",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-01T00:00:00.000Z",
+        transcript: [],
+        piSessionId: null,
+      };
+      const dir = path.join(storeRoot, "workshop", "sessions", "legacy-unlinked");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        path.join(dir, "session.json"),
+        `${JSON.stringify(legacy, null, 2)}\n`,
+        "utf8",
+      );
+
+      const loaded = getWorkshopSession(storeRoot, "legacy-unlinked");
+      expect(loaded.version).toBe(1);
+      expect(loaded.activeBuildId).toBeUndefined();
+      expect(loaded.title).toBe("older chat");
+
+      const listed = listWorkshopSessions(storeRoot);
+      expect(listed.map((session) => session.id)).toContain("legacy-unlinked");
+    });
+  });
+
+  it("parses version 1 and copies activeBuildId, treating a missing field as unlinked", () => {
+    const base = {
+      version: 1,
+      id: "sess-parse",
+      title: "",
+      createdAt: "2026-10-01T12:00:00.000Z",
+      updatedAt: "2026-10-01T12:00:00.000Z",
+      transcript: [],
+      piSessionId: null,
+    };
+
+    const linked = parseWorkshopSessionRecord({
+      ...base,
+      activeBuildId: "build-9",
+    });
+    expect(linked?.version).toBe(1);
+    expect(linked?.activeBuildId).toBe("build-9");
+
+    const unlinked = parseWorkshopSessionRecord(base);
+    expect(unlinked?.version).toBe(1);
+    expect(unlinked?.activeBuildId).toBeUndefined();
+  });
+
+  it("appending a transcript message to a session whose activeBuildId is set leaves that id in the file", async () => {
+    await withIsolatedHome(async () => {
+      const storeRoot = resolveWorkshopSessionStoreRoot();
+      const seeded = {
+        version: 1,
+        id: "sess-linked",
+        title: "",
+        createdAt: "2026-10-01T12:00:00.000Z",
+        updatedAt: "2026-10-01T12:00:00.000Z",
+        transcript: [],
+        piSessionId: null,
+        activeBuildId: "build-keep",
+      };
+      const dir = path.join(storeRoot, "workshop", "sessions", "sess-linked");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        workshopSessionFilePath(storeRoot, "sess-linked"),
+        `${JSON.stringify(seeded, null, 2)}\n`,
+        "utf8",
+      );
+
+      const appended = appendWorkshopSessionMessages(
+        storeRoot,
+        "sess-linked",
+        [{ id: "m1", role: "user", text: "keep the pipeline" }],
+        { now: new Date("2026-10-01T12:05:00.000Z") },
+      );
+
+      expect(appended.version).toBe(1);
+      expect(appended.activeBuildId).toBe("build-keep");
+      expect(appended.transcript.map((message) => message.id)).toEqual(["m1"]);
+
+      const raw = JSON.parse(
+        readFileSync(workshopSessionFilePath(storeRoot, "sess-linked"), "utf8"),
+      ) as Record<string, unknown>;
+      expect(raw.version).toBe(1);
+      expect(raw.activeBuildId).toBe("build-keep");
+      expect(getWorkshopSession(storeRoot, "sess-linked").activeBuildId).toBe(
+        "build-keep",
       );
     });
   });
