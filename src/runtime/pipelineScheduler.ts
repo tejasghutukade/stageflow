@@ -3,6 +3,11 @@ import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -99,6 +104,7 @@ type SchedulerPreparedPipeline = {
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  browser?: StageBrowserSupport;
 };
 
 export type { SchedulerPreparedPipeline };
@@ -1337,6 +1343,26 @@ export async function runPipelineDag(
       }
     };
 
+    let browserEnv: Record<string, string> | undefined;
+    try {
+      browserEnv = await resolveStageBrowserEnv(
+        prepared.browser ?? defaultStageBrowserSupport(),
+        {
+          runId: run.runId,
+          stageId,
+          runDir: run.workspaceDir,
+          browser: stage.browser,
+        },
+      );
+    } catch (err) {
+      cleanupAttemptCredentials();
+      await onStageFailure(
+        stageId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
@@ -1355,6 +1381,7 @@ export async function runPipelineDag(
           bindingKind: stageBinding.kind,
           grants,
           attemptHome,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
           ...(sessionMode !== undefined
             ? {
                 mode:
@@ -1414,6 +1441,7 @@ export async function runPipelineDag(
       stageEnv: {
         ...stageBinding.env,
         ...grants.env,
+        ...browserEnv,
         HOME: attemptHome,
       },
       ...(sessionMode !== undefined ? { sessionMode } : {}),

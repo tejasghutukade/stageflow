@@ -7,6 +7,7 @@ import {
   resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
+import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
@@ -46,6 +47,7 @@ export type StageLaunchInput = {
   bindingKind?: DerivedBindingKind;
   grants?: ResolvedStageGrants;
   attemptHome?: string;
+  browserEnv?: Record<string, string>;
 };
 
 export type StageLaunchResult =
@@ -405,6 +407,7 @@ export class StageProcessLauncher {
       cacheVars: ensureStageCacheDirs(),
       grants: input.grants,
       attemptHome: input.attemptHome,
+      runVars: input.browserEnv,
       packageVersion: PACKAGE_VERSION,
     });
     for (const warning of built.warnings) {
@@ -417,11 +420,22 @@ export class StageProcessLauncher {
       this.explicitChildExtras !== undefined
         ? { ...built.env, ...this.explicitChildExtras }
         : built.env;
-    const childEnv = overlayStageBindingEnv(
+    const overlaid = overlayStageBindingEnv(
       withExtras,
       input.env ?? {},
       input.bindingKind ?? "unbound",
     );
+    const childEnv =
+      input.browserEnv !== undefined
+        ? {
+            ...Object.fromEntries(
+              Object.entries(overlaid).filter(
+                ([name]) => !name.startsWith(BROWSER_ENV_PREFIX),
+              ),
+            ),
+            ...input.browserEnv,
+          }
+        : overlaid;
 
     const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,

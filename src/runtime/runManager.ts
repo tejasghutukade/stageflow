@@ -76,6 +76,12 @@ import {
   readStageExecutionMode,
   type StageExecutionMode,
 } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { registerNamedSecrets } from "../logging/namedSecrets.js";
@@ -579,6 +585,7 @@ export class RunManager {
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
+      browser?: StageBrowserSupport;
       a2aStore?: A2aStore;
       knownWritableProjectRoots?: () =>
         | Iterable<string>
@@ -2077,6 +2084,9 @@ export class RunManager {
         agent: this.options.agent,
         cwd: meta.project_root ?? this.projectRoot,
         operatorCatalog: this.options.operatorCatalog,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
@@ -2500,6 +2510,9 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
@@ -2565,10 +2578,23 @@ export class RunManager {
         runWorkspaceDir: workspaceDir,
         hostEnv: process.env,
       });
+      const resumedStage = loaded.stages.find(
+        (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
+      );
+      const browserEnv = await resolveStageBrowserEnv(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          stageId,
+          runDir: workspaceDir,
+          browser: resumedStage?.browser,
+        },
+      );
       const launchResult = await launcher.launch({
         runId,
         stageId,
         rootDir: runProjectRoot,
+        ...(browserEnv !== undefined ? { browserEnv } : {}),
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
@@ -2617,6 +2643,9 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         resumeFromStageId: stageId,
@@ -2976,6 +3005,9 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
         submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3555,6 +3587,9 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(runId);
       const started = await startPipeline({
         submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3681,6 +3716,9 @@ export class RunManager {
           checkoutRoot: loadedMeta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
