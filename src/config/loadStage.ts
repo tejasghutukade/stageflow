@@ -19,6 +19,7 @@ import { parsePreEmitChecks } from "./parsePreEmitChecks.js";
 import { readYamlObject } from "./readYamlObject.js";
 import { parseStageSecrets } from "../runtime/stageSecretDecl.js";
 import { parseToolRequires } from "./toolRequires.js";
+import { parseStageBrowser } from "./stageBrowser.js";
 import {
   classifyYamlDocument,
   compileTargetContract,
@@ -413,6 +414,12 @@ function parseStageFields(
   if (!requiresOutcome.ok) return requiresOutcome;
   if (requiresOutcome.value !== undefined) {
     stage.requires = requiresOutcome.value;
+  }
+
+  const browserOutcome = parseStageBrowser(raw.browser, label, entryId);
+  if (!browserOutcome.ok) return browserOutcome;
+  if (browserOutcome.value !== undefined) {
+    stage.browser = browserOutcome.value;
   }
 
   const agentField = parseAgentField(raw.agent);

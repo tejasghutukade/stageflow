@@ -1,0 +1,4 @@
+id: browser-uses-file
+stages:
+  - id: worker
+    uses: ./file-browser.stage.yaml

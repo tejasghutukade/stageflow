@@ -54,6 +54,7 @@ Optional top-level fields:
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
 | `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
+| `browser` | object | Browser session settings (see [Stage browser](#stage-browser)); adds the `agent-browser` requirement |
 | `requires` | array | Toolchain declarations `{ tool, version? }` checked before start (see [Toolchain requires](#toolchain-requires)) |
 
 Bare string stage refs are rejected.
@@ -69,7 +70,7 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
 **Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
@@ -807,6 +808,35 @@ MCP elicitation is unsupported — a passed server cannot ask the operator a que
 Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
+### Stage browser {#stage-browser}
+
+`browser:` gives a stage browser-session settings. Allowed on a pipeline stage entry (inline body or `uses:` wrapper) and in an external stage file; a pipeline-entry `browser` replaces the file value as a whole, like `mcp`.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `profile` | string | Optional profile name: 1-64 characters of letters, digits, `-`, `_` |
+| `headed` | boolean | Optional. Show the browser window (`true`) or run headless (`false`) |
+| `allow_domains` | non-empty list | Optional bare domains (`example.com`, `*.example.com`); no scheme, port, or path |
+| `check` | object | Optional login check: `url` (required), `logged_in_url` (glob), `logged_out_url` (glob or list of globs) |
+
+Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
+
+```yaml
+stages:
+  - id: read-feed
+    uses: ./read-feed.yaml
+    browser:
+      profile: work
+      headed: true
+      allow_domains: [example.com, "*.example.com"]
+      check:
+        url: https://example.com/feed
+        logged_in_url: https://example.com/feed*
+        logged_out_url: [https://example.com/login*]
+```
+
+Third-party sites can forbid automation in their terms; check the rules of any site before pointing a stage at it.
 
 ### Toolchain requires {#toolchain-requires}
 
