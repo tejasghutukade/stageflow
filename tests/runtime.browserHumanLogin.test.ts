@@ -70,7 +70,8 @@ function setup(options: {
   let urlIndex = 0;
   const runner: BrowserRunner = async (args, env) => {
     calls.push({ args, env: { ...env } });
-    if (args[0] === "open") urlIndex += 1;
+    if (args[0] === "get" && args[1] === "cdp-url") return { code: 0, stdout: "ws://127.0.0.1:41000/devtools/browser/anchor\n" };
+    if (args[0] === "open" && args[1] !== "about:blank") urlIndex += 1;
     if (args[0] === "get" && args[1] === "url") {
       const url = options.urls[Math.min(urlIndex - 1, options.urls.length - 1)]!;
       return { code: 0, stdout: `${url}\n` };
@@ -168,7 +169,7 @@ describe("browser human login stage", () => {
       await readFile(path.join(s.store.getWorkspaceDir(started.runId), "stages", "login", "browser-env.json"), "utf8"),
     ) as Record<string, string>;
     expect(loginEnv.AGENT_BROWSER_HEADED).toBe("1");
-    const opens = s.calls.filter((c) => c.args[0] === "open" && c.env.AGENT_BROWSER_HEADED === "1");
+    const opens = s.calls.filter((c) => c.args[0] === "open" && c.args[1] !== "about:blank" && c.env.AGENT_BROWSER_HEADED === "1");
     expect(opens.map((c) => c.args[1])).toEqual(["https://app.example.test/login"]);
     expect(s.prompts.login![0]).toMatch(/Human login/);
 

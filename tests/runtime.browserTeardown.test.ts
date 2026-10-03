@@ -71,7 +71,10 @@ function fakeRunner(calls: Call[]): BrowserRunner {
     if (args[0] === "close" && dir && session) {
       await rm(path.join(dir, `${session}.sock`), { force: true });
     }
-    return { code: 0 };
+    return {
+      code: 0,
+      stdout: args[0] === "get" && args[1] === "cdp-url" ? "ws://127.0.0.1:41000/devtools/browser/anchor\n" : "",
+    };
   };
 }
 
@@ -185,6 +188,7 @@ describe("browser teardown", () => {
     const env = await persistedEnv(store, started.runId, "s");
     expect(closes(calls).length).toBeGreaterThan(0);
     for (const c of closes(calls)) expect(c.env).toEqual(env);
+    for (const c of closes(calls)) expect(c.env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
     expect(existsSync(env.AGENT_BROWSER_SOCKET_DIR!)).toBe(false);
   });
 
@@ -211,7 +215,7 @@ describe("browser teardown", () => {
     );
     await started.done;
     const env = await persistedEnv(store, started.runId, "s");
-    expect(calls).toEqual([]);
+    expect(closes(calls)).toEqual([]);
     expect(existsSync(path.join(env.AGENT_BROWSER_SOCKET_DIR!, `${env.AGENT_BROWSER_SESSION}.sock`))).toBe(true);
   });
 

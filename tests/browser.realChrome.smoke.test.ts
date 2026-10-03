@@ -51,9 +51,8 @@ describe.skipIf(!enabled)("real Chrome smoke (STAGEFLOW_BROWSER_SMOKE=1)", () =>
   it("keeps the login across a Host close and a new stage with a new HOME", async () => {
     const profiles = createLocalProfileStore();
     const handle = await profiles.open({ scope: LOCAL_BROWSER_SCOPE, name: "smoke" });
-    const env = await createLocalBrowserHost().stageEnv({
+    const env = await createLocalBrowserHost().profileBrowserEnv({
       runId: "smoke-run",
-      stageId: "s1",
       browser: { profile: "smoke", headed: false },
       profile: handle,
     });

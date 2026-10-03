@@ -51,7 +51,10 @@ function setup(audit: AuditSink, blockedSites: string[] = []) {
   const support: StageBrowserSupport = {
     host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: path.join(root, "sock") }),
     profiles: createLocalProfileStore({ audit }),
-    runner: async () => ({ code: 0 }),
+    runner: async (args) => ({
+      code: 0,
+      stdout: args[1] === "cdp-url" ? "ws://127.0.0.1:41000/devtools/browser/anchor\n" : "",
+    }),
     closeWaitMs: 200,
     audit,
     blockedSites,
@@ -101,7 +104,8 @@ describe("browser stage with cookie-looking output", () => {
     expect(audit.records[1]).toMatchObject({ profile: "acct", runId: started.runId, stageId: "work" });
     expect(JSON.stringify(audit.records)).not.toContain(home);
     const envFile = await readFile(path.join(workspace, "stages", "work", "browser-env.json"), "utf8");
-    expect(envFile).toContain("AGENT_BROWSER_PROFILE");
+    expect(envFile).toContain("AGENT_BROWSER_CDP");
+    expect(envFile).not.toContain("AGENT_BROWSER_PROFILE");
   });
 
   it("stores cookie-like text unchanged for a NON-browser stage", async () => {

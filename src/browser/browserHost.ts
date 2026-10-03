@@ -13,10 +13,45 @@ export type BrowserStageRequest = {
   profile?: ProfileHandle;
   /** A human must see and use this browser; headless fallback does not apply. */
   humanLogin?: boolean;
+  /** Required for a stage with a profile: the shared browser's CDP address. */
+  cdpAddress?: string;
+};
+
+/** The shared browser of one (run, profile): its CDP address and the env that owns it. */
+export type ProfileBrowser = {
+  cdpAddress: string;
+  anchorEnv: BrowserEnv;
+};
+
+export type ProfileBrowserRequest = {
+  runId: string;
+  browser: StageBrowserConfig;
+  profile: ProfileHandle;
+  humanLogin?: boolean;
+  runner: BrowserRunner;
+  /** Persisted anchor from an earlier call; reused when still alive, else restarted. */
+  previous?: ProfileBrowser;
+};
+
+export type ProfileBrowserResult = ProfileBrowser & {
+  /** True when a previous anchor existed but its address changed or it was replaced. */
+  restarted: boolean;
 };
 
 export interface BrowserHost {
+  /**
+   * Starts or reuses the one browser for (run, profile) and returns its CDP
+   * address. Callers serialize per (run, profile) and persist the result.
+   */
+  ensureProfileBrowser(request: ProfileBrowserRequest): Promise<ProfileBrowserResult>;
+  /** Env of one stage's agent-browser session; with a profile it attaches to `cdpAddress` in its own tab. */
   stageEnv(request: BrowserStageRequest): Promise<BrowserEnv>;
+  /** Env of the session that owns the profile's browser (anchor, or `sf browser login`). */
+  profileBrowserEnv(
+    request: Omit<BrowserStageRequest, "stageId" | "cdpAddress"> & {
+      profile: ProfileHandle;
+    },
+  ): Promise<BrowserEnv>;
 }
 
 /** Runs `agent-browser <args>` with exactly `env` (plus PATH). Injectable for tests. */

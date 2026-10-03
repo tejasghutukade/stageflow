@@ -45,6 +45,7 @@ const ok = (payload: unknown) => ({ status: "success", summary: "ok", artifacts:
 function runnerFor(finalUrl: string, calls: Call[]): BrowserRunner {
   return async (args, env) => {
     calls.push({ args, env: { ...env } });
+    if (args[0] === "get" && args[1] === "cdp-url") return { code: 0, stdout: "ws://127.0.0.1:41000/devtools/browser/anchor\n" };
     if (args[0] === "get" && args[1] === "url") return { code: 0, stdout: `${finalUrl}\n` };
     return { code: 0 };
   };
@@ -116,9 +117,9 @@ describe("browser login check", () => {
     expect(status("login")).toBe("skipped");
     expect(status("work")).toBe("succeeded");
     expect(prompts.check).toContain(JSON.stringify({ logged_in: true, url: LOGGED_IN }));
-    expect(calls.find((c) => c.args[0] === "open")?.args[1]).toBe("https://app.example.test/home");
-    for (const c of calls) expect(c.env).toEqual(stored);
-    expect(calls.filter((c) => c.args[0] === "open")).toHaveLength(1);
+    expect(calls.find((c) => c.args[0] === "open" && c.args[1] !== "about:blank")?.args[1]).toBe("https://app.example.test/home");
+    for (const c of calls.filter((x) => x.env.AGENT_BROWSER_PROFILE === undefined)) expect(c.env).toEqual(stored);
+    expect(calls.filter((c) => c.args[0] === "open" && c.args[1] !== "about:blank")).toHaveLength(1);
   });
 
   it("logged-out profile: routes through login to work", async () => {

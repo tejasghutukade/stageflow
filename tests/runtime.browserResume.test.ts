@@ -55,6 +55,7 @@ describe("human login stage resume (process mode)", () => {
     const calls: Array<{ args: string[]; headed: boolean }> = [];
     const runner: BrowserRunner = async (args, env) => {
       calls.push({ args, headed: env.AGENT_BROWSER_HEADED === "1" });
+      if (args[0] === "get" && args[1] === "cdp-url") return { code: 0, stdout: "ws://127.0.0.1:41000/devtools/browser/anchor\n" };
       if (args[0] === "get" && args[1] === "url") {
         return { code: 0, stdout: "https://app.example.test/login\n" };
       }
@@ -117,7 +118,7 @@ describe("human login stage resume (process mode)", () => {
         (await store.readRun(started.runId)).stages.find((s) => s.stage_id === "login")?.status ===
         "waiting_for_input",
     );
-    const headedOpens = () => calls.filter((c) => c.headed && c.args[0] === "open").map((c) => c.args[1]);
+    const headedOpens = () => calls.filter((c) => c.headed && c.args[0] === "open" && c.args[1] !== "about:blank").map((c) => c.args[1]);
     expect(headedOpens()).toEqual(["https://app.example.test/login"]);
 
     const answered = await manager.deliverAnswer(started.runId, "login", {

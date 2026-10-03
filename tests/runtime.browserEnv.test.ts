@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
-import type { StageBrowserSupport } from "../src/browser/browserHost.js";
+import type { BrowserRunner, StageBrowserSupport } from "../src/browser/browserHost.js";
 import { createFakeRemoteBrowserHost } from "../src/browser/fakeRemoteBrowserHost.js";
 import { createLocalBrowserHost } from "../src/browser/localBrowserHost.js";
 import { createLocalProfileStore } from "../src/browser/localProfileStore.js";
@@ -114,9 +114,25 @@ async function waitForStatus(
   throw new Error(`timeout waiting for ${status}`);
 }
 
-const localSupport = (opts: Parameters<typeof createLocalBrowserHost>[0] = {}): StageBrowserSupport => ({
+type RunnerCall = { args: string[]; env: Record<string, string> };
+const CDP = "ws://127.0.0.1:41000/devtools/browser/anchor-1";
+
+/** Fake agent-browser: `get cdp-url` answers with the anchor address. */
+function fakeRunner(calls: RunnerCall[], cdp: () => string = () => CDP): BrowserRunner {
+  return async (args, env) => {
+    calls.push({ args, env: { ...env } });
+    return { code: 0, stdout: args[0] === "get" && args[1] === "cdp-url" ? `${cdp()}\n` : "" };
+  };
+}
+
+const localSupport = (
+  opts: Parameters<typeof createLocalBrowserHost>[0] = {},
+  calls: RunnerCall[] = [],
+  cdp?: () => string,
+): StageBrowserSupport => ({
   host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, ...opts }),
   profiles: createLocalProfileStore(),
+  runner: fakeRunner(calls, cdp),
 });
 
 async function run(
@@ -153,12 +169,13 @@ describe("browser env reaches the stage worker environment", () => {
     await started.done;
 
     const login = envOf(launched, "login");
-    expect(login.AGENT_BROWSER_PROFILE).toBe(path.join(home, "browser", "local", "acct", "profile"));
-    expect(login.AGENT_BROWSER_SESSION).toBe("sf-acct");
+    expect(login).not.toHaveProperty("AGENT_BROWSER_PROFILE");
+    expect(login.AGENT_BROWSER_CDP).toBe(CDP);
+    expect(login.AGENT_BROWSER_PIN_TAB).toBe("1");
+    expect(login.AGENT_BROWSER_SESSION).toMatch(/^sf-acct-[0-9a-f]{6}$/);
     expect(login.AGENT_BROWSER_HEADED).toBe("1");
     expect(login.AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe("0");
     expect(login.AGENT_BROWSER_CONFIG).toBeTruthy();
-    expect(login).not.toHaveProperty("AGENT_BROWSER_CDP");
 
     const plain = envOf(launched, "plain");
     expect(Object.keys(plain).filter((k) => k.startsWith("AGENT_BROWSER_"))).toEqual([]);
@@ -172,9 +189,9 @@ describe("browser env reaches the stage worker environment", () => {
     ]);
     await started.done;
     const login = envOf(launched, "login");
-    expect(login.AGENT_BROWSER_PROFILE).not.toBe("/ambient/profile");
+    expect(login).not.toHaveProperty("AGENT_BROWSER_PROFILE");
     expect(login.AGENT_BROWSER_SESSION).not.toBe("ambient-session");
-    expect(login).not.toHaveProperty("AGENT_BROWSER_CDP");
+    expect(login.AGENT_BROWSER_CDP).toBe(CDP);
   });
 
   it("keeps the socket path under the limit with a deeply nested STAGEFLOW_HOME", async () => {
@@ -254,5 +271,128 @@ describe("browser env reaches the stage worker environment", () => {
     const env = envOf(launched, "login");
     expect(env.AGENT_BROWSER_CDP).toBe("wss://browsers.example/s1");
     expect(env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
+  });
+});
+
+describe("shared browser (anchor) per run and profile", () => {
+  const anchorOpens = (calls: RunnerCall[]) =>
+    calls.filter((c) => c.args[0] === "open" && c.args[1] === "about:blank");
+  const readJson = async (file: string) => JSON.parse(await readFile(file, "utf8"));
+
+  it("gives parallel stages of one run the same CDP address, own sessions, pin-tab and no profile var; starts the anchor once", async () => {
+    const calls: RunnerCall[] = [];
+    const { launched, started, store } = await run(localSupport({}, calls), [
+      stage("a", { browser: { profile: "acct" } }),
+      stage("b", { browser: { profile: "acct" } }),
+      stage("c", { browser: { profile: "acct" } }),
+    ]);
+    await started.done;
+
+    const envs = ["a", "b", "c"].map((id) => envOf(launched, id));
+    for (const env of envs) {
+      expect(env.AGENT_BROWSER_CDP).toBe(CDP);
+      expect(env.AGENT_BROWSER_PIN_TAB).toBe("1");
+      expect(env).not.toHaveProperty("AGENT_BROWSER_PROFILE");
+      expect(env.AGENT_BROWSER_SESSION).toMatch(/^sf-acct-[0-9a-f]{6}$/);
+    }
+    expect(new Set(envs.map((e) => e.AGENT_BROWSER_SESSION)).size).toBe(3);
+    expect(new Set(envs.map((e) => e.AGENT_BROWSER_SOCKET_DIR)).size).toBe(3);
+
+    const opens = anchorOpens(calls);
+    expect(opens).toHaveLength(1);
+    expect(opens[0]!.env.AGENT_BROWSER_PROFILE).toBe(path.join(home, "browser", "local", "acct", "profile"));
+    expect(opens[0]!.env.AGENT_BROWSER_SESSION).toBe("sf-acct");
+    expect(opens[0]!.env.AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe("0");
+    expect(opens[0]!.env).not.toHaveProperty("AGENT_BROWSER_CDP");
+
+    const anchorFile = path.join(store.getWorkspaceDir(started.runId), "browser", "acct", "anchor.json");
+    const persisted = await readJson(anchorFile);
+    expect(persisted).toMatchObject({ cdpAddress: CDP, runId: started.runId, profile: "acct", restarts: 0 });
+    expect(persisted.anchorEnv.AGENT_BROWSER_PROFILE).toBeTruthy();
+    expect((await stat(anchorFile)).mode & 0o777).toBe(0o600);
+    const owner = await readJson(path.join(persisted.anchorEnv.AGENT_BROWSER_SOCKET_DIR, "owner.json"));
+    expect(owner).toMatchObject({ runId: started.runId, anchor: true, profile: "acct" });
+  });
+
+  it("gives a different run its own anchor", async () => {
+    const calls: RunnerCall[] = [];
+    const support = localSupport({}, calls);
+    const first = await run(support, [stage("a", { browser: { profile: "acct" } })]);
+    await first.started.done;
+    const second = await run(support, [stage("a", { browser: { profile: "acct" } })]);
+    await second.started.done;
+    expect(anchorOpens(calls)).toHaveLength(2);
+  });
+
+  it("reuses the persisted anchor and refreshes the stage env when the anchor restarted", async () => {
+    const calls: RunnerCall[] = [];
+    let current = CDP;
+    const support = localSupport({}, calls, () => current);
+    const { store, launched, launcher, started, root } = await run(
+      support,
+      [stage("login", { browser: { profile: "acct" } })],
+      "login",
+    );
+    await started.done;
+    await waitForStatus(store, started.runId, "failed");
+    const before = envOf(launched, "login", 1);
+    const workspace = store.getWorkspaceDir(started.runId);
+
+    current = "ws://127.0.0.1:42000/devtools/browser/anchor-2";
+    const manager = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store,
+      cwd: root,
+      executionMode: "process",
+      stageProcessLauncher: launcher,
+      browser: support,
+    });
+    expect((await manager.retryStage(started.runId, "login")).ok).toBe(true);
+    await waitForStatus(store, started.runId, "succeeded");
+
+    expect(anchorOpens(calls)).toHaveLength(1);
+    const after = envOf(launched, "login", 2);
+    expect(after.AGENT_BROWSER_CDP).toBe(current);
+    for (const key of Object.keys(before).filter((k) => k.startsWith("AGENT_BROWSER_") && k !== "AGENT_BROWSER_CDP")) {
+      expect(after[key]).toBe(before[key]);
+    }
+    const stageFile = await readJson(path.join(workspace, "stages", "login", "browser-env.json"));
+    expect(stageFile.AGENT_BROWSER_CDP).toBe(current);
+    const anchor = await readJson(path.join(workspace, "browser", "acct", "anchor.json"));
+    expect(anchor).toMatchObject({ cdpAddress: current, restarts: 1 });
+  });
+
+  it("leaves profile-less stages unchanged: own browser, no anchor, no CDP", async () => {
+    const calls: RunnerCall[] = [];
+    const { launched, started, store } = await run(localSupport({}, calls), [
+      stage("scrape", { browser: { allow_domains: ["example.com"] } }),
+    ]);
+    await started.done;
+    const env = envOf(launched, "scrape");
+    expect(env).not.toHaveProperty("AGENT_BROWSER_CDP");
+    expect(env).not.toHaveProperty("AGENT_BROWSER_PIN_TAB");
+    expect(env.AGENT_BROWSER_ALLOWED_DOMAINS).toBe("example.com");
+    expect(calls.filter((c) => c.args[0] !== "close")).toEqual([]);
+    await expect(stat(path.join(store.getWorkspaceDir(started.runId), "browser"))).rejects.toThrow();
+  });
+
+  it("with a remote host all profile stages share the remote address and have their own session", async () => {
+    const { launched, started } = await run(
+      {
+        host: createFakeRemoteBrowserHost("wss://browsers.example/s1"),
+        profiles: createInMemoryProfileStore(),
+      },
+      [
+        stage("a", { browser: { profile: "acct" } }),
+        stage("b", { browser: { profile: "acct" } }),
+      ],
+    );
+    await started.done;
+    const [a, b] = [envOf(launched, "a"), envOf(launched, "b")];
+    expect(a.AGENT_BROWSER_CDP).toBe("wss://browsers.example/s1");
+    expect(b.AGENT_BROWSER_CDP).toBe(a.AGENT_BROWSER_CDP);
+    expect(a.AGENT_BROWSER_PIN_TAB).toBe("1");
+    expect(a.AGENT_BROWSER_SESSION).not.toBe(b.AGENT_BROWSER_SESSION);
+    expect(a).not.toHaveProperty("AGENT_BROWSER_PROFILE");
   });
 });

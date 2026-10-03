@@ -246,3 +246,22 @@ These resolve conflicts found in ticket 00. They are the implementer's defaults.
 3. **Profile-less stages.** A `browser` field with no profile gives a throw-away browser (agent-browser temp profile, deleted on close). No lock is taken. This follows from agent-browser behavior and is cheap, so it is implemented and flagged. Spec story 11 stays open for the user to confirm.
 4. **Env stability.** Every agent-browser command in a session must carry the same launch environment. The Host computes it once, stores it, and reuses it for resume workers. The Host pins `AGENT_BROWSER_CONFIG` to an empty file, sets `IDLE_TIMEOUT_MS=0`, and does not use `--restore`, `auth`, or `--state`.
 5. **Join topology.** Pattern for check, login, work: only the edge check to login has an `if` on `logged_in`. The edges check to work and login to work have no `if`.
+
+## Revision 2: one shared browser per run and profile (supersedes earlier lock and teardown decisions)
+
+Decided with the user after the code review. This replaces: the stage-level profile lock (story 27-29), "close the browser after every stage" (stories 23, 25 for profile stages), and the per-stage `AGENT_BROWSER_PROFILE` launch.
+
+**Rules**
+1. **Run-scoped profile lease.** A profile is leased to one RUN, from the first stage that needs it until the run ends (success, failure, cancel, or abandon). All stages of that run share the lease. Stages of the same run are never blocked by each other, including parallel stages.
+2. **Other runs wait for the whole run.** A different run that needs the same profile waits in a queue until the lease holder's run is terminal. The waiting stage shows the holder run id.
+3. **One Chrome per run and profile (the anchor).** The Host starts one anchor agent-browser session with the profile (headed or headless as configured). The anchor owns Chrome and keeps it open for the whole run, so session-only cookies survive between stages. The Host reads its CDP address (`agent-browser get cdp-url`).
+4. **Each stage gets its own tab.** A stage runs its own agent-browser session attached to the anchor with the CDP address and `AGENT_BROWSER_PIN_TAB=1`. The stage env has no `AGENT_BROWSER_PROFILE`. The session name is unique per stage. All tabs share the same cookies and login, like several tabs in one browser window. Parallel stages do not interfere.
+5. **Hand-over between stages.** The shared browser context is the hand-over: cookies, storage, and the login pass from stage to stage with no extra step. Passing one exact open page to the next stage is out of scope; a stage can pass a URL in its envelope.
+6. **Teardown.** When a stage ends, the Host closes that stage's tab and its agent-browser session. Chrome stays open. The Host closes the anchor (gracefully) and releases the lease when the run reaches a terminal state, is cancelled, or is abandoned. A run that waits at a gate keeps the anchor open and the lease held. The orphan sweep closes anchors and stage sessions of runs that no longer exist.
+7. **Profile-less stages** keep their own throw-away browser and take no lease.
+8. **Remote readiness.** The stage env is just a CDP address, a session name, and pin-tab. A remote browser host (service) can supply a CDP address in place of the local anchor with no stage-side change.
+9. **Soft allowlist** unchanged: agent-browser rejects its native allowlist with `--cdp`, so profile stages keep the soft check.
+
+**Spike evidence (this revision, agent-browser 0.38.2):** an anchor session with a profile exposes a `ws://127.0.0.1:<port>/devtools/browser/<id>` address through `get cdp-url`. Two sessions attached with `--cdp` and pin-tab each got their own tab and kept it through parallel navigation. All tabs saw the same cookies, including the session-only cookie. Closing one stage session left Chrome and the other stage working. It left that stage's tab open, so the Host must close the tab first. Closing the anchor ended Chrome, and the persistent cookie survived a reopen.
+
+**Risks:** the CDP port is bound to 127.0.0.1 without a token, so any local process can drive the browser while a run is active (single-user laptop only; the hosted service must isolate it in a sandbox). If the anchor dies mid-run, the lease holder's stages lose their browser; the Host must restart the anchor and refresh the persisted stage env.

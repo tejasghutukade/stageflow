@@ -122,7 +122,10 @@ function setup(locks: ProfileLock, behaviors: Record<string, Behavior> = {}) {
   const browser: StageBrowserSupport = {
     host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot }),
     profiles: createLocalProfileStore(),
-    runner: async () => ({ code: 0 }),
+    runner: async (args) => ({
+      code: 0,
+      stdout: args[1] === "cdp-url" ? "ws://127.0.0.1:41000/devtools/browser/anchor\n" : "",
+    }),
     closeWaitMs: 200,
     socketRoot,
     locks,

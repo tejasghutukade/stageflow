@@ -25,6 +25,9 @@ export type BrowserSessionOwner = {
   stageId: string;
   runDir: string;
   env: BrowserEnv;
+  /** The run's shared browser for `profile`; stage sessions attach to it. */
+  anchor?: true;
+  profile?: string;
 };
 
 export const defaultBrowserRunner: BrowserRunner = (args, env, options) =>

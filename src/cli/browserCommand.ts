@@ -272,9 +272,8 @@ async function envFor(
   browser: StageBrowserConfig,
   humanLogin = false,
 ): Promise<BrowserEnv> {
-  return deps.host.stageEnv({
+  return deps.host.profileBrowserEnv({
     runId: newOwner().runId,
-    stageId: STAGE_ID,
     browser,
     profile: handle,
     ...(humanLogin ? { humanLogin: true } : {}),

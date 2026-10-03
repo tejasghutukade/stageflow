@@ -11,6 +11,7 @@ import {
   type BrowserEnv,
   type StageBrowserSupport,
 } from "./browserHost.js";
+import { ensureRunProfileBrowser } from "./anchor.js";
 import { defaultBrowserRunner, writeSessionOwner } from "./browserTeardown.js";
 import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
@@ -84,21 +85,44 @@ export async function resolveStageBrowserEnv(
           name: browser.profile,
         })
       : undefined;
+  const anchor =
+    profile !== undefined
+      ? await ensureRunProfileBrowser(support, {
+          runId: input.runId,
+          runDir: input.runDir,
+          browser,
+          profile,
+          ...(input.humanLogin === true ? { humanLogin: true } : {}),
+        })
+      : undefined;
   const fresh = await support.host.stageEnv({
     runId: input.runId,
     stageId: input.stageId,
     browser,
     ...(profile !== undefined ? { profile } : {}),
+    ...(anchor !== undefined ? { cdpAddress: anchor.cdpAddress } : {}),
     ...(input.humanLogin === true ? { humanLogin: true } : {}),
   });
 
   const persisted = await readPersistedBrowserEnv(file);
-  const env = persisted ?? fresh;
-  if (persisted === undefined) {
+  let env = persisted ?? fresh;
+  const writeEnv = async (value: BrowserEnv) => {
     await mkdir(dir, { recursive: true });
     const tmp = `${file}.${process.pid}.tmp`;
-    await writeFile(tmp, `${JSON.stringify(fresh, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     await rename(tmp, file);
+  };
+  if (
+    persisted !== undefined &&
+    anchor !== undefined &&
+    persisted.AGENT_BROWSER_CDP !== anchor.cdpAddress
+  ) {
+    // The shared browser was restarted: only the attach address changes.
+    env = { ...persisted, AGENT_BROWSER_CDP: anchor.cdpAddress };
+    await writeEnv(env);
+  }
+  if (persisted === undefined) {
+    await writeEnv(fresh);
     if (browser.profile !== undefined) {
       await safeAudit(support.audit, {
         event: "profile_used",
