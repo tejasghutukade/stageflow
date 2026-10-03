@@ -42,6 +42,10 @@ import {
 } from "../config/resolveStageMcpServers.js";
 import { attemptArtifactsDir, attemptStreamLogPath } from "../runstore/workspaceLayout.js";
 import {
+  redactBrowserActivityEvent,
+  redactBrowserSecrets,
+} from "../agent/streamLogRedact.js";
+import {
   createStageStreamLogWriter,
   type StageStreamLogWriter,
 } from "./stageStreamLog.js";
@@ -669,9 +673,13 @@ export async function openStageAttempt(
 
   const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;
-  const streamWriter = (input.streamLogWriterFactory ?? createStageStreamLogWriter)(
-    attemptStreamLogPath(input.workspaceDir, stageId, attempt),
-  );
+  const streamLogPath = attemptStreamLogPath(input.workspaceDir, stageId, attempt);
+  const streamWriter = input.streamLogWriterFactory
+    ? input.streamLogWriterFactory(streamLogPath)
+    : createStageStreamLogWriter(
+        streamLogPath,
+        input.stage.browser !== undefined ? { redact: redactBrowserSecrets } : {},
+      );
   const resumeToken =
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, stageId, attempt);
@@ -725,7 +733,11 @@ export async function openStageAttempt(
       resumeToken,
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
-        input.onActivity?.(event);
+        input.onActivity?.(
+          input.stage.browser !== undefined
+            ? redactBrowserActivityEvent(event)
+            : event,
+        );
         void streamWriter.flush();
       },
       onAssistantTextDelta: streamWriter.onDelta,

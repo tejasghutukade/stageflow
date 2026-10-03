@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { stageDir } from "../runstore/paths.js";
@@ -13,7 +13,8 @@ import {
 } from "./browserHost.js";
 import { defaultBrowserRunner, writeSessionOwner } from "./browserTeardown.js";
 import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
-import { ensureStageLoginCheck } from "./loginCheck.js";
+import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
+import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
@@ -24,7 +25,7 @@ export async function readStagePersistedBrowserEnv(
   runDir: string,
   stageId: string,
 ): Promise<BrowserEnv | undefined> {
-  return readPersisted(path.join(stageDir(runDir, stageId), BROWSER_ENV_FILENAME));
+  return readPersistedBrowserEnv(path.join(stageDir(runDir, stageId), BROWSER_ENV_FILENAME));
 }
 
 let defaultSupport: StageBrowserSupport | undefined;
@@ -35,18 +36,6 @@ export function defaultStageBrowserSupport(): StageBrowserSupport {
     profiles: createLocalProfileStore(),
   };
   return defaultSupport;
-}
-
-async function readPersisted(file: string): Promise<BrowserEnv | undefined> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as BrowserEnv;
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  return undefined;
 }
 
 /**
@@ -65,6 +54,8 @@ export async function resolveStageBrowserEnv(
     attempt?: number;
     /** Human login stage: needs a screen, opens the login page, skips the pre-agent check. */
     humanLogin?: boolean;
+    /** Resume worker: the operator's window is already open; do not navigate it. */
+    resuming?: boolean;
   },
 ): Promise<BrowserEnv | undefined> {
   const { browser } = input;
@@ -75,11 +66,13 @@ export async function resolveStageBrowserEnv(
     if (!screen.hasDisplay) throw noScreenError(screen.docker);
   }
 
-  assertBrowserSitesAllowed(
-    input.stageId,
-    browser,
-    support.blockedSites ?? loadHostConfig().browserBlockedSites,
-  );
+  if ((browser.allow_domains?.length ?? 0) > 0 || browser.check !== undefined) {
+    assertBrowserSitesAllowed(
+      input.stageId,
+      browser,
+      support.blockedSites ?? loadHostConfig().browserBlockedSites,
+    );
+  }
 
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
@@ -99,7 +92,7 @@ export async function resolveStageBrowserEnv(
     ...(input.humanLogin === true ? { humanLogin: true } : {}),
   });
 
-  const persisted = await readPersisted(file);
+  const persisted = await readPersistedBrowserEnv(file);
   const env = persisted ?? fresh;
   if (persisted === undefined) {
     await mkdir(dir, { recursive: true });
@@ -135,9 +128,11 @@ export async function resolveStageBrowserEnv(
     env,
   }).catch(() => undefined);
   if (input.humanLogin === true) {
-    const url = loginPageUrl(browser);
+    const url = input.resuming === true ? undefined : loginPageUrl(browser);
     if (url !== undefined) {
-      const opened = await (support.runner ?? defaultBrowserRunner)(["open", url], env);
+      const opened = await (support.runner ?? defaultBrowserRunner)(["open", url], env, {
+        timeoutMs: OPEN_COMMAND_TIMEOUT_MS,
+      });
       if (opened.code !== 0) {
         throw new Error(`could not open the login page ${url}`);
       }

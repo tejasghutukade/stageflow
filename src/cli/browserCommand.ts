@@ -23,7 +23,7 @@ import {
   type ProfileStore,
   validateProfileName,
 } from "../browser/profileStore.js";
-import { createRunLiveness } from "../browser/runLiveness.js";
+import { cliRunLive, createRunLiveness } from "../browser/runLiveness.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore, storeNeedsHostMigration } from "../runstore/createStore.js";
 import { resolveStoreRoot } from "../runstore/paths.js";
@@ -85,17 +85,6 @@ class CliError extends Error {
     readonly exit: number,
   ) {
     super(message);
-  }
-}
-
-function cliRunLive(runId: string): boolean | undefined {
-  const match = /^cli-(\d+)-/.exec(runId);
-  if (match === null) return undefined;
-  try {
-    process.kill(Number(match[1]), 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 

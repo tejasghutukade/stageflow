@@ -104,6 +104,22 @@ describe("browser stage with cookie-looking output", () => {
     expect(envFile).toContain("AGENT_BROWSER_PROFILE");
   });
 
+  it("stores cookie-like text unchanged for a NON-browser stage", async () => {
+    const { store } = setup(createMemoryAuditSink());
+    const started = await startPipeline({
+      agent: scriptedFakeAgent([emit]),
+      store,
+      taskYaml: "id: t\ngoal: g\n",
+      pipeline: pipeline(undefined),
+      cwd: root,
+      executionMode: "inprocess",
+    } as never);
+    await started.done;
+    const envelope = await store.readEnvelope(started.runId, "work");
+    expect(envelope?.summary).toContain(COOKIE);
+    expect(JSON.stringify(envelope?.payload)).toContain(COOKIE);
+  });
+
   it("fails the stage with a clear error when allow_domains hits a Host-blocked site", async () => {
     const audit = createMemoryAuditSink();
     const { support, store } = setup(audit, ["blocked.example"]);

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -140,5 +140,27 @@ describe("local ProfileLock", () => {
     );
     expect(results.filter((r) => r.status === "acquired")).toHaveLength(1);
     expect(await lock.holder(a)).toBeDefined();
+  });
+});
+
+describe("local ProfileLock corrupt lock file", () => {
+  const writeCorrupt = async (content: string) => {
+    const file = path.join(home, "browser", "locks", "local", "acct.lock");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, content);
+    return file;
+  };
+
+  it.each(["", "not json", "{}"])("treats %j as stale on acquire", async (content) => {
+    await writeCorrupt(content);
+    const lock = createLocalProfileLock();
+    expect((await lock.acquire(a, ownerA)).status).toBe("acquired");
+    expect(await lock.holder(a)).toEqual(ownerA);
+  });
+
+  it("reclaimStale drops it", async () => {
+    const file = await writeCorrupt("");
+    expect(await createLocalProfileLock().reclaimStale(async () => true)).toBe(1);
+    await expect(readFile(file)).rejects.toThrow();
   });
 });

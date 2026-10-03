@@ -23,13 +23,15 @@ export type LoginCheckResult = LoginCheckMatch & {
 };
 
 const DEFAULT_WAIT_MS = 15_000;
+const WAIT_TIMEOUT_MARGIN_MS = 15_000;
+export const OPEN_COMMAND_TIMEOUT_MS = 60_000;
 const DEFAULT_SETTLE_MS = 300;
 const MAX_URL_READS = 4;
 
 /** `*` matches any run of characters (including `/`), `?` one character. Whole-URL match. */
 function globToRegExp(glob: string): RegExp {
   let source = "";
-  for (const ch of glob) {
+  for (const ch of glob.replace(/\*+/g, "*")) {
     if (ch === "*") source += ".*";
     else if (ch === "?") source += ".";
     else source += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
@@ -85,14 +87,16 @@ export async function runLoginCheck(
   runner: BrowserRunner,
   options: LoginCheckOptions = {},
 ): Promise<LoginCheckMatch & { url: string }> {
-  const opened = await runner(["open", check.url], env);
+  const opened = await runner(["open", check.url], env, {
+    timeoutMs: OPEN_COMMAND_TIMEOUT_MS,
+  });
   if (opened.code !== 0) {
     throw new Error(`login check: could not open ${check.url}`);
   }
-  await runner(
-    ["wait", "--load", "networkidle", "--timeout", String(options.waitMs ?? DEFAULT_WAIT_MS)],
-    env,
-  ).catch(() => undefined);
+  const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
+  await runner(["wait", "--load", "networkidle", "--timeout", String(waitMs)], env, {
+    timeoutMs: waitMs + WAIT_TIMEOUT_MARGIN_MS,
+  }).catch(() => undefined);
 
   const settleMs = options.settleMs ?? DEFAULT_SETTLE_MS;
   let url = await readUrl(env, runner);

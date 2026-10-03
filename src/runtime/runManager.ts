@@ -77,6 +77,7 @@ import {
   type StageExecutionMode,
 } from "./stageConcurrency.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
 import {
   defaultStageBrowserSupport,
   resolveStageBrowserEnv,
@@ -2646,6 +2647,12 @@ export class RunManager {
           runDir: workspaceDir,
           browser: resumedStage?.browser,
           attempt,
+          humanLogin: isHumanLoginStage(
+            meta.pipeline_dag,
+            definitionIdForInstance(meta.pipeline_dag, stageId),
+            resumedStage?.browser,
+          ),
+          resuming: true,
         },
       );
       const launchResult = await launcher.launch({

@@ -41,6 +41,46 @@ async function readHolder(file: string): Promise<ProfileLockOwner | undefined> {
   return undefined;
 }
 
+/** A lock file that exists but cannot be parsed (crash, disk full, manual edit). */
+async function isCorrupt(file: string): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await readFile(file, "utf8");
+  } catch {
+    return false;
+  }
+  return readHolderFrom(raw) === undefined;
+}
+
+function readHolderFrom(raw: string): ProfileLockOwner | undefined {
+  try {
+    const parsed = JSON.parse(raw) as ProfileLockOwner;
+    if (typeof parsed.runId === "string" && typeof parsed.stageId === "string") {
+      return { runId: parsed.runId, stageId: parsed.stageId };
+    }
+  } catch {
+    // unparseable
+  }
+  return undefined;
+}
+
+/** Removes a corrupt lock file via rename-away; restores it if it turned out valid. */
+async function dropCorrupt(file: string): Promise<boolean> {
+  const tomb = `${file}.${process.pid}.${randomUUID()}.stale`;
+  try {
+    await rename(file, tomb);
+  } catch {
+    return true;
+  }
+  if ((await readHolder(tomb)) !== undefined) {
+    await link(tomb, file).catch(() => undefined);
+    await rm(tomb, { force: true });
+    return false;
+  }
+  await rm(tomb, { force: true });
+  return true;
+}
+
 /** `link` fails with EEXIST when the lock exists, and the content is complete at creation. */
 async function createExclusive(
   file: string,
@@ -139,7 +179,10 @@ export function createLocalProfileLock(
             };
           }
           const current = await readHolder(file);
-          if (current === undefined) continue;
+          if (current === undefined) {
+            if (await isCorrupt(file)) await dropCorrupt(file);
+            continue;
+          }
           if (sameOwner(current, owner)) {
             return {
               status: "acquired" as const,
@@ -179,7 +222,13 @@ export function createLocalProfileLock(
       let dropped = 0;
       for (const file of await lockFiles()) {
         const current = await readHolder(file);
-        if (current === undefined || (await isRunLive(current.runId))) continue;
+        if (current === undefined) {
+          if (await isCorrupt(file)) {
+            if (await serialized(file, () => dropCorrupt(file))) dropped += 1;
+          }
+          continue;
+        }
+        if (await isRunLive(current.runId)) continue;
         if (await serialized(file, () => dropStale(file, current))) dropped += 1;
       }
       return dropped;

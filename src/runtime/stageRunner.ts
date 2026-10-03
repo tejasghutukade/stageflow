@@ -35,7 +35,7 @@ import {
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
-import { redact } from "../logging/redact.js";
+import { BROWSER_STAGE_PATTERNS, redact } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import { isStageTimeoutReason } from "../agent/stageTimeout.js";
 
@@ -140,8 +140,10 @@ async function finalizeStageResult(options: {
   result: StageRunResult;
   activityChain: Promise<void>;
   attemptCtx?: StageAttemptContext;
+  browser?: boolean;
 }): Promise<StageRunResult> {
-  const { store, runId, stageId, result, activityChain, attemptCtx } = options;
+  const { store, runId, stageId, result, activityChain, attemptCtx, browser } =
+    options;
   const attemptOpt = attemptCtx?.eventOptions();
   await activityChain;
 
@@ -149,9 +151,12 @@ async function finalizeStageResult(options: {
     await store.writeEnvelope(
       runId,
       stageId,
-      redact(result.envelope as unknown as Record<string, unknown>, {
-        namedSecrets: getNamedSecrets(),
-      }) as unknown as StageEnvelope,
+      browser
+        ? (redact(result.envelope as unknown as Record<string, unknown>, {
+            patterns: BROWSER_STAGE_PATTERNS,
+            namedSecrets: getNamedSecrets(),
+          }) as unknown as StageEnvelope)
+        : result.envelope,
       attemptOpt,
     );
   }
@@ -425,6 +430,7 @@ export async function runStage(
       result,
       activityChain,
       attemptCtx,
+      browser: stage.browser !== undefined,
     });
   } finally {
     const timedOut = isStageTimeoutReason(

@@ -2,7 +2,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { redactString } from "../src/logging/redact.js";
+import { BROWSER_STAGE_PATTERNS, redactString } from "../src/logging/redact.js";
+import { redactBrowserSecrets } from "../src/agent/streamLogRedact.js";
 import { createStageStreamLogWriter } from "../src/runtime/stageStreamLog.js";
 
 const LI_AT = "AQEDAR0v3xYz9abcDEF1234567890ghIJKlmnOPqrSTuv";
@@ -25,13 +26,18 @@ const samples: Array<[string, string, string]> = [
 
 describe("browser output redaction", () => {
   it.each(samples)("redacts %s", (_label, text, secret) => {
-    const out = redactString(text);
+    const out = redactString(text, { patterns: BROWSER_STAGE_PATTERNS });
     expect(out).not.toContain(secret);
     expect(out).toContain("[redacted]");
   });
 
   it("leaves ordinary prose alone", () => {
     const text = "Opened https://example.com and the author wrote a title.";
+    expect(redactString(text, { patterns: BROWSER_STAGE_PATTERNS })).toBe(text);
+  });
+
+  it("does not apply browser patterns to the global default", () => {
+    const text = `{"name":"li_at","value":"${LI_AT}","domain":".example.com"}`;
     expect(redactString(text)).toBe(text);
   });
 });
@@ -47,7 +53,10 @@ describe("stream log", () => {
 
   it("never persists cookie values from agent-browser output", async () => {
     const file = path.join(dir, "stream.log");
-    const writer = createStageStreamLogWriter(file, { flushThrottleMs: 1 });
+    const writer = createStageStreamLogWriter(file, {
+      flushThrottleMs: 1,
+      redact: redactBrowserSecrets,
+    });
     for (const [, text] of samples) writer.onDelta(`${text}\n`);
     await writer.flush();
     const log = await readFile(file, "utf8");

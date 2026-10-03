@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { loginCheckIssue, matchLoginState } from "../src/browser/loginCheck.js";
+import {
+  loginCheckIssue,
+  matchLoginState,
+  OPEN_COMMAND_TIMEOUT_MS,
+  runLoginCheck,
+} from "../src/browser/loginCheck.js";
 
 const check = {
   logged_in_url: "https://app.example.test/home*",
@@ -53,6 +58,33 @@ describe("matchLoginState", () => {
     expect(match("https://a.test/v1/x", { logged_in_url: "https://a.test/v?/*" }).logged_in).toBe(true);
     expect(match("https://a.test/v12/x", { logged_in_url: "https://a.test/v?/*" }).state).toBe("unknown");
     expect(match("https://a.test/a/b/c", { logged_in_url: "https://a.test/*" }).logged_in).toBe(true);
+  });
+});
+
+describe("glob edge cases", () => {
+  it("collapses consecutive * so long inputs do not backtrack", () => {
+    const glob = "https://a.test/" + "*".repeat(40) + "z";
+    const t = Date.now();
+    expect(match("https://a.test/" + "x".repeat(5000), { logged_in_url: glob }).state).toBe("unknown");
+    expect(Date.now() - t).toBeLessThan(500);
+    expect(match("https://a.test/xyz", { logged_in_url: "https://a.test/***z" }).logged_in).toBe(true);
+  });
+});
+
+describe("runLoginCheck timeouts", () => {
+  it("gives open and wait larger per-call timeouts than the default", async () => {
+    const calls: Array<{ args: string[]; timeoutMs?: number }> = [];
+    await runLoginCheck(
+      {},
+      { url: "https://a.test/home", logged_in_url: "https://a.test/home*" },
+      async (args, _env, options) => {
+        calls.push({ args, timeoutMs: options?.timeoutMs });
+        return { code: 0, stdout: "https://a.test/home\n" };
+      },
+      { waitMs: 1000, settleMs: 0 },
+    );
+    expect(calls.find((c) => c.args[0] === "open")?.timeoutMs).toBe(OPEN_COMMAND_TIMEOUT_MS);
+    expect(calls.find((c) => c.args[0] === "wait")?.timeoutMs).toBe(16_000);
   });
 });
 

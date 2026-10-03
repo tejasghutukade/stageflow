@@ -23,6 +23,8 @@ export interface BrowserHost {
 export type BrowserRunner = (
   args: string[],
   env: BrowserEnv,
+  /** Per-call limit; the default runner allows 20 s. */
+  options?: { timeoutMs?: number },
 ) => Promise<{ code: number | null; stdout?: string }>;
 
 export type StageBrowserSupport = {

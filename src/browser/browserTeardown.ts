@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
+import { readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { stageDir } from "../runstore/paths.js";
 import type { StageLogEvent } from "../runstore/port.js";
 import { auditStageNavigations } from "./navigationAudit.js";
@@ -26,14 +27,14 @@ export type BrowserSessionOwner = {
   env: BrowserEnv;
 };
 
-export const defaultBrowserRunner: BrowserRunner = (args, env) =>
+export const defaultBrowserRunner: BrowserRunner = (args, env, options) =>
   new Promise((resolve) => {
     execFile(
       "agent-browser",
       args,
       {
         env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
-        timeout: CLOSE_COMMAND_TIMEOUT_MS,
+        timeout: options?.timeoutMs ?? CLOSE_COMMAND_TIMEOUT_MS,
       },
       (err, stdout) => {
         const code = (err as NodeJS.ErrnoException | null)?.code;
@@ -120,14 +121,10 @@ export async function closeBrowserSession(
 
 async function readEnvFile(file: string): Promise<BrowserEnv | undefined> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as BrowserEnv;
-    }
+    return await readPersistedBrowserEnv(file);
   } catch {
-    // no browser env persisted: not a browser stage
+    return undefined;
   }
-  return undefined;
 }
 
 /** No-op for stages that never resolved a browser env. */

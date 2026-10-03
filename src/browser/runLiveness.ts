@@ -9,8 +9,8 @@ export function createRunLiveness(source: {
   readRunMeta(runId: string): Promise<{ status?: RunStatus }>;
 }): RunLiveness {
   return async (runId) => {
-    const cli = /^cli-(\d+)-/.exec(runId);
-    if (cli) return pidAlive(Number(cli[1]));
+    const cli = cliRunLive(runId);
+    if (cli !== undefined) return cli;
     try {
       const status = (await source.readRunMeta(runId)).status;
       return (
@@ -25,6 +25,12 @@ export function createRunLiveness(source: {
       throw err;
     }
   };
+}
+
+/** `cli-<pid>-...` runs are live while that process is; undefined for other run ids. */
+export function cliRunLive(runId: string): boolean | undefined {
+  const match = /^cli-(\d+)-/.exec(runId);
+  return match === null ? undefined : pidAlive(Number(match[1]));
 }
 
 function pidAlive(pid: number): boolean {
