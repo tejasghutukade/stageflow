@@ -90,3 +90,7 @@ Hosted use is not built. The seams are in place: the owner scope (set by the Hos
 ## Sites can forbid automation
 
 Many sites forbid bots and scraping in their terms and can limit or close accounts that break them. For example, the LinkedIn User Agreement prohibits bots and scraping, and LinkedIn can restrict accounts. If you point a stage at such a site, keep volume low, stay read-only, and accept the risk yourself. Stageflow does not judge a site's terms. The example in this repo uses a neutral local site on purpose.
+
+## Session-only cookies
+
+The Host closes the browser when a stage ends. Chrome keeps persistent cookies on close and drops session-only cookies. A real-Chrome test confirmed this. A site whose login depends on a session-only cookie asks for a new login in the next stage. LinkedIn's main login cookie is persistent, so it survives. Check the cookie type of your site before you rely on a saved login. A later change can keep the browser open across the stages of one run.
