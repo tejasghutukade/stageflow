@@ -16,6 +16,7 @@ import {
   loginCheckPromptBlock,
   readStageLoginCheck,
 } from "../browser/loginCheck.js";
+import { humanLoginPromptBlock, isHumanLoginStage } from "../browser/humanLogin.js";
 import {
   BROWSER_SKILL_NAME,
   resolveBuiltinSkillFile,
@@ -437,7 +438,12 @@ async function openStageWithOperatorCatalog(
     }
   }
   let loginCheck: Awaited<ReturnType<typeof readStageLoginCheck>>;
-  if (input.stage.browser?.check !== undefined) {
+  const humanLogin = isHumanLoginStage(
+    resolveOptions.dag,
+    input.stage.id,
+    input.stage.browser,
+  );
+  if (input.stage.browser?.check !== undefined && !humanLogin) {
     loginCheck = await readStageLoginCheck(
       resolveOptions.workspaceDir,
       stageIdForManifest,
@@ -454,7 +460,7 @@ async function openStageWithOperatorCatalog(
         system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}`,
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url)}` : ""}`,
         ...(loginCheck !== undefined
           ? {
               pre_emit_checks: [

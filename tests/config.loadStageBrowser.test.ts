@@ -111,6 +111,8 @@ describe("stage browser field", () => {
     ["check without url", ["check:", "  logged_in_url: https://x/*"]],
     ["check unknown key", ["check:", "  url: https://x/", "  selector: a"]],
     ["empty logged_out_url list", ["check:", "  url: https://x/", "  logged_out_url: []"]],
+    ["empty login_url", ['login_url: ""']],
+    ["non-string login_url", ["login_url: 3"]],
     ["non-object browser", ["- a"]],
   ];
 
@@ -172,5 +174,53 @@ describe("stage browser field", () => {
       ].join("\n"),
     );
     await expect(loadPipeline(file)).rejects.toThrow(/browser/);
+  });
+});
+
+describe("browser login_url and browser_login verify", () => {
+  const stage = (browser: string[], verify: string[]) => [
+    "id: p",
+    "stages:",
+    "  - id: login",
+    "    system_prompt: x",
+    "    model: anthropic/claude-sonnet-4-5",
+    "    gate_kinds: [confirm]",
+    "    io:",
+    "      input:",
+    "        schema:",
+    "          type: object",
+    "      output:",
+    "        schema:",
+    "          type: object",
+    "    browser:",
+    ...browser.map((l) => `      ${l}`),
+    "    verify:",
+    ...verify.map((l) => `      ${l}`),
+    "",
+  ];
+  const load = async (lines: string[]) => {
+    const dir = await mkdtemp(path.join(tmpdir(), "sf-browser-login-"));
+    const file = path.join(dir, "p.pipeline.yaml");
+    await writeFile(file, lines.join("\n"));
+    return loadPipeline(file);
+  };
+  const check = ["check:", "  url: https://x.test/home", "  logged_in_url: https://x.test/home*"];
+  const verify = ["- id: in", "  type: browser_login"];
+
+  it("loads login_url and the browser_login check", async () => {
+    const loaded = await load(stage(["profile: acct", "login_url: https://x.test/login", ...check], verify));
+    expect(loaded.stages[0]?.browser?.login_url).toBe("https://x.test/login");
+    expect(loaded.dag.nodes[0]?.completion?.checks).toEqual([{ id: "in", type: "browser_login" }]);
+  });
+
+  it("requires browser.check and a visible browser", async () => {
+    await expect(load(stage(["profile: acct"], verify))).rejects.toThrow(/browser\.check/);
+    await expect(load(stage(["profile: acct", "headed: false", ...check], verify))).rejects.toThrow(/visible browser/);
+  });
+
+  it("rejects browser_login on emit", async () => {
+    await expect(
+      load(stage(["profile: acct", ...check], [...verify, "  when: [emit]"])),
+    ).rejects.toThrow(/browser_login|emit/);
   });
 });

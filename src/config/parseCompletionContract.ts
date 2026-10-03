@@ -160,6 +160,12 @@ function parseCheck(
     return loadSuccess({ id, type: "payload_schema" });
   }
 
+  if (raw.type === "browser_login") {
+    const unknown = hasOnlyKeys(raw, ["id", "type"]);
+    if (unknown) return failure(stageId, "completion", `checks[${index}]: unknown key "${unknown}"`);
+    return loadSuccess({ id, type: "browser_login" });
+  }
+
   if (raw.type === "gate") {
     const unknown = hasOnlyKeys(raw, ["id", "type", "kind"]);
     if (unknown) return failure(stageId, "completion", `checks[${index}]: unknown key "${unknown}"`);

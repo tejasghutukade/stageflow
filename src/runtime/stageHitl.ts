@@ -1,3 +1,4 @@
+import { parseHostGateContext } from "../browser/gateHandoff.js";
 import type { OpaqueAnswer, OpaqueWaitRequest, StageHandle } from "../agent/port.js";
 import {
   appendOperatorAnswer,
@@ -68,7 +69,10 @@ export function tryParsePendingPrompt(
     return undefined;
   }
   try {
-    return normalizePromptIds(parseAskOperatorParams(pendingRequest));
+    return {
+      ...normalizePromptIds(parseAskOperatorParams(pendingRequest)),
+      ...parseHostGateContext(pendingRequest),
+    };
   } catch {
     return undefined;
   }

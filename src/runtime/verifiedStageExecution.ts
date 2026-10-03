@@ -26,6 +26,14 @@ import {
   writeCompletionCheckoutBaseline,
 } from "./completionCheckoutBaseline.js";
 import { createGitCheckoutCapability } from "./gitCheckoutCapability.js";
+import type { BrowserRunner } from "../browser/browserHost.js";
+import { readStagePersistedBrowserEnv } from "../browser/stageBrowserEnv.js";
+import { defaultBrowserRunner } from "../browser/browserTeardown.js";
+import {
+  runLoginCheck,
+  type LoginCheckConfig,
+  type LoginCheckOptions,
+} from "../browser/loginCheck.js";
 import type { StageRoots } from "./stageRoots.js";
 
 /** Sidecar written before completion command checks so they can inspect fork_choice. */
@@ -87,6 +95,11 @@ export function createVerifiedStageExecution(options: {
   dag?: ResolvedPipelineDag;
   roots: StageRoots;
   commandEnv?: NodeJS.ProcessEnv;
+  browserLogin?: {
+    check: LoginCheckConfig;
+    runner?: BrowserRunner;
+    options?: LoginCheckOptions;
+  };
 }): VerifiedStageExecution {
   const { store, runId, stageId, attempt, stage, dag, roots, commandEnv } =
     options;
@@ -156,6 +169,25 @@ export function createVerifiedStageExecution(options: {
           checkoutBefore,
           checkoutError,
           checklistAttestations: candidate.envelope.checklist_attestations,
+          ...(options.browserLogin !== undefined
+            ? {
+                browserLogin: async () => {
+                  const env = await readStagePersistedBrowserEnv(
+                    roots.runWorkspaceDir,
+                    stageId,
+                  );
+                  if (env === undefined) {
+                    throw new Error("browser session env is missing for this stage");
+                  }
+                  return runLoginCheck(
+                    env,
+                    options.browserLogin!.check,
+                    options.browserLogin!.runner ?? defaultBrowserRunner,
+                    options.browserLogin!.options,
+                  );
+                },
+              }
+            : {}),
           onCheckStart: async (check) => {
             await store.upsertVerificationCheckResult(runId, stageId, {
               check_id: check.id,

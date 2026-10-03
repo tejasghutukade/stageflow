@@ -12,6 +12,7 @@ import {
   teardownRunBrowsers,
   teardownStageBrowser,
 } from "../browser/browserTeardown.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
 import { createRunLiveness } from "../browser/runLiveness.js";
 import {
   acquireStageProfile,
@@ -1389,6 +1390,7 @@ export async function runPipelineDag(
           runDir: run.workspaceDir,
           browser: stage.browser,
           attempt,
+          humanLogin: isHumanLoginStage(dag, definitionId, stage.browser),
         },
       );
     } catch (err) {
@@ -1475,6 +1477,7 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      ...(prepared.browser !== undefined ? { browser: prepared.browser } : {}),
       stageEnv: {
         ...stageBinding.env,
         ...grants.env,

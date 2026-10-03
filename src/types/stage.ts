@@ -34,6 +34,8 @@ export type StageBrowserConfig = {
   profile?: string;
   headed?: boolean;
   allow_domains?: string[];
+  /** Page the Host opens for a human login stage; defaults to `check.url`. */
+  login_url?: string;
   check?: {
     url: string;
     logged_in_url?: string;

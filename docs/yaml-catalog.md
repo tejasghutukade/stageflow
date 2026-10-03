@@ -246,6 +246,7 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `artifact` | `id`, `when` | `basename` (emit), `path` / `nonempty` (after) | `emit`, `after`, or both — **required** |
 | `command` | `id`, `run` | `cwd`, `timeout_ms` | `after` only |
 | `checklist` | `id`, `items` | — | `after` only |
+| `browser_login` | `id` | — | `after` only; needs `browser.check` on the stage and `headed` not `false`; see [Human login stage](#browser-human-login) |
 | `payload_schema` | `id` | — | `after` only; requires `io.output.schema` (optional re-check; emit already validates when that schema is present) |
 | `checkout_changes` | `id` | `path_fields` | `after` only |
 
@@ -818,6 +819,7 @@ Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.
 | `profile` | string | Optional profile name: 1-64 characters of letters, digits, `-`, `_` |
 | `headed` | boolean | Optional. Show the browser window (`true`) or run headless (`false`) |
 | `allow_domains` | non-empty list | Optional bare domains (`example.com`, `*.example.com`); no scheme, port, or path |
+| `login_url` | string | Optional. Page a [human login stage](#browser-human-login) opens; defaults to `check.url` |
 | `check` | object | Optional login check: `url` (required), `logged_in_url` (glob), `logged_out_url` (glob or list of globs) |
 
 Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
@@ -860,6 +862,32 @@ stages:
 ```
 
 See `tests/fixtures/pipelines/browser-login-check.pipeline.yaml` for the full check, login, work topology.
+
+#### Human login stage {#browser-human-login}
+
+A stage with `browser` whose `verify` has `type: browser_login` is a **human login stage**. It needs `browser.check` (the same check used by the check stage) and must not set `headed: false`.
+
+```yaml
+  - id: login
+    system_prompt: Ask the operator to log in.
+    gate_kinds: [confirm]
+    browser:
+      profile: work
+      login_url: https://example.com/login   # optional; defaults to check.url
+      check: { url: https://example.com/feed, logged_in_url: "https://example.com/feed*", logged_out_url: ["https://example.com/login*"] }
+    verify:
+      - id: logged-in
+        type: browser_login                  # after-phase only; no other keys
+    on_verify_fail: { mode: repair, max_attempts: 3, retry_safety: idempotent, include_failed_checks: true }
+    route:
+      - to: work
+```
+
+Before the agent starts, the Host opens `login_url` in a visible window (no headless fallback, and no pre-agent login check) and the stage prompt tells the agent to call `ask_operator` with `kind: confirm` and leave the browser open. The window and the profile lock stay held while the stage waits. After the operator accepts and the agent emits, the Host re-runs the login check in the same session; `browser_login` passes only when the result is logged in. A wrong confirm fails the after-phase check, and `on_verify_fail` with `mode: repair` runs the stage again (a new attempt, a new gate, the same session) up to `max_attempts`. `on_verify_fail` is a recovery policy for the same stage, not a route target, so this self-loop is its native form. When the check stage already finds a valid login, its `if` route skips the login stage and the work stage still joins (see the fixture `tests/fixtures/pipelines/browser-human-login.pipeline.yaml`).
+
+If the Host has no screen (Linux without `DISPLAY` / `WAYLAND_DISPLAY`) the stage fails before the agent starts: "A visible browser is needed for login, but this Host has no screen. A live view handoff is not available yet." In Docker the message adds a hint to log in on a machine with a screen first.
+
+Every gate (`ask_operator` prompt) of a stage with `browser` carries Host-injected fields: `handoff: { kind: "local_window" }`, `site` (host of `check.url`, else the first `allow_domains` entry, else the host of `login_url`), and `profile` (the profile name, never a path). The agent cannot set or omit them; gates of stages without `browser` never have them. See [HITL — gate handoff](hitl.md#gate-handoff).
 
 Third-party sites can forbid automation in their terms; check the rules of any site before pointing a stage at it.
 

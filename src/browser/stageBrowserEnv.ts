@@ -11,13 +11,21 @@ import {
   type BrowserEnv,
   type StageBrowserSupport,
 } from "./browserHost.js";
-import { writeSessionOwner } from "./browserTeardown.js";
+import { defaultBrowserRunner, writeSessionOwner } from "./browserTeardown.js";
+import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
 import { ensureStageLoginCheck } from "./loginCheck.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
 
 export { BROWSER_ENV_FILENAME };
+
+export async function readStagePersistedBrowserEnv(
+  runDir: string,
+  stageId: string,
+): Promise<BrowserEnv | undefined> {
+  return readPersisted(path.join(stageDir(runDir, stageId), BROWSER_ENV_FILENAME));
+}
 
 let defaultSupport: StageBrowserSupport | undefined;
 
@@ -55,10 +63,17 @@ export async function resolveStageBrowserEnv(
     browser: StageBrowserConfig | undefined;
     /** Attempt the login check result belongs to; defaults to 1. */
     attempt?: number;
+    /** Human login stage: needs a screen, opens the login page, skips the pre-agent check. */
+    humanLogin?: boolean;
   },
 ): Promise<BrowserEnv | undefined> {
   const { browser } = input;
   if (browser === undefined) return undefined;
+
+  if (input.humanLogin === true) {
+    const screen = (support.display ?? defaultDisplayProbe)();
+    if (!screen.hasDisplay) throw noScreenError(screen.docker);
+  }
 
   assertBrowserSitesAllowed(
     input.stageId,
@@ -81,6 +96,7 @@ export async function resolveStageBrowserEnv(
     stageId: input.stageId,
     browser,
     ...(profile !== undefined ? { profile } : {}),
+    ...(input.humanLogin === true ? { humanLogin: true } : {}),
   });
 
   const persisted = await readPersisted(file);
@@ -118,7 +134,15 @@ export async function resolveStageBrowserEnv(
     runDir: input.runDir,
     env,
   }).catch(() => undefined);
-  if (browser.check !== undefined) {
+  if (input.humanLogin === true) {
+    const url = loginPageUrl(browser);
+    if (url !== undefined) {
+      const opened = await (support.runner ?? defaultBrowserRunner)(["open", url], env);
+      if (opened.code !== 0) {
+        throw new Error(`could not open the login page ${url}`);
+      }
+    }
+  } else if (browser.check !== undefined) {
     await ensureStageLoginCheck({
       runDir: input.runDir,
       stageId: input.stageId,

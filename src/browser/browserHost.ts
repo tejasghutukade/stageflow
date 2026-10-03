@@ -11,6 +11,8 @@ export type BrowserStageRequest = {
   stageId: string;
   browser: StageBrowserConfig;
   profile?: ProfileHandle;
+  /** A human must see and use this browser; headless fallback does not apply. */
+  humanLogin?: boolean;
 };
 
 export interface BrowserHost {
@@ -41,6 +43,8 @@ export type StageBrowserSupport = {
   audit?: AuditSink;
   /** Host-blocked sites; defaults to `browser.blocked_sites` from Host config. */
   blockedSites?: readonly string[];
+  /** Screen detection for human login stages; defaults to the real Host. */
+  display?: () => { hasDisplay: boolean; docker: boolean };
 };
 
 export const BROWSER_ENV_PREFIX = "AGENT_BROWSER_";

@@ -50,7 +50,9 @@ export function createLocalBrowserHost(
   return {
     async stageEnv(request: BrowserStageRequest): Promise<BrowserEnv> {
       const { browser, profile } = request;
-      const headed = (browser.headed ?? true) && hasDisplay(platform, hostEnv);
+      const headed =
+        request.humanLogin === true ||
+        ((browser.headed ?? true) && hasDisplay(platform, hostEnv));
 
       const identity = profile
         ? `profile:${profile.key.scope}/${profile.key.name}:${profile.profileDir}`

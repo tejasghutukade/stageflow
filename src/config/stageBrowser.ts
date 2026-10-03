@@ -4,7 +4,7 @@ import { mergeToolRequires, type ToolRequirement } from "./toolRequires.js";
 
 export const BROWSER_TOOL_NAME = "agent-browser";
 
-const ALLOWED_KEYS = new Set(["profile", "headed", "allow_domains", "check"]);
+const ALLOWED_KEYS = new Set(["profile", "headed", "allow_domains", "login_url", "check"]);
 const CHECK_KEYS = new Set(["url", "logged_in_url", "logged_out_url"]);
 const REJECTED_KEYS = new Set(["path", "scope", "secret"]);
 const PROFILE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -107,7 +107,7 @@ export function parseStageBrowser(
       return fail(
         label,
         stageId,
-        `unknown key "${key}" (allowed: profile, headed, allow_domains, check)`,
+        `unknown key "${key}" (allowed: profile, headed, allow_domains, login_url, check)`,
       );
     }
   }
@@ -152,6 +152,13 @@ export function parseStageBrowser(
       domains.push(item.trim());
     }
     browser.allow_domains = domains;
+  }
+
+  if (raw.login_url !== undefined) {
+    if (!nonEmptyString(raw.login_url)) {
+      return fail(label, stageId, "login_url must be a non-empty string");
+    }
+    browser.login_url = raw.login_url.trim();
   }
 
   if (raw.check !== undefined) {
