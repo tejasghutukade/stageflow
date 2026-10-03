@@ -3,12 +3,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stageDir } from "../runstore/paths.js";
+import type { StageLogEvent } from "../runstore/port.js";
+import { auditStageNavigations } from "./navigationAudit.js";
 import {
   BROWSER_ENV_FILENAME,
+  BROWSER_POLICY_FILENAME,
   type BrowserEnv,
   type BrowserRunner,
   type StageBrowserSupport,
 } from "./browserHost.js";
+import { stageProfileLock } from "./stageProfileLock.js";
 
 export const BROWSER_OWNER_FILENAME = "owner.json";
 const DEFAULT_CLOSE_WAIT_MS = 10_000;
@@ -126,35 +130,46 @@ async function readEnvFile(file: string): Promise<BrowserEnv | undefined> {
 /** No-op for stages that never resolved a browser env. */
 export async function teardownStageBrowser(
   support: StageBrowserSupport,
-  input: { runDir: string; stageId: string },
+  input: { runId: string; runDir: string; stageId: string },
 ): Promise<void> {
   const env = await readEnvFile(
     path.join(stageDir(input.runDir, input.stageId), BROWSER_ENV_FILENAME),
   );
-  if (env === undefined) return;
-  await closeBrowserSession(env, {
-    ...(support.runner !== undefined ? { runner: support.runner } : {}),
-    ...(support.closeWaitMs !== undefined
-      ? { closeWaitMs: support.closeWaitMs }
-      : {}),
-  });
+  try {
+    if (env === undefined) return;
+    await closeBrowserSession(env, {
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined
+        ? { closeWaitMs: support.closeWaitMs }
+        : {}),
+    });
+  } finally {
+    await stageProfileLock(support)
+      .releaseOwner({ runId: input.runId, stageId: input.stageId })
+      .catch(() => undefined);
+  }
 }
 
 export async function teardownRunBrowsers(
   support: StageBrowserSupport,
-  runDir: string,
+  run: { runId: string; runDir: string },
   only?: (stageId: string) => boolean,
 ): Promise<void> {
-  let ids: string[];
+  let ids: string[] = [];
   try {
-    ids = await readdir(path.join(runDir, "stages"));
+    ids = await readdir(path.join(run.runDir, "stages"));
   } catch {
-    return;
+    // no stage dirs: nothing to close
   }
   for (const stageId of ids) {
     if (only !== undefined && !only(stageId)) continue;
-    await teardownStageBrowser(support, { runDir, stageId }).catch(
+    await teardownStageBrowser(support, { ...run, stageId }).catch(
       () => undefined,
     );
+  }
+  if (only === undefined) {
+    await stageProfileLock(support)
+      .releaseOwner({ runId: run.runId })
+      .catch(() => undefined);
   }
 }

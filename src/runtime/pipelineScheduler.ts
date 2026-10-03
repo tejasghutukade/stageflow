@@ -12,6 +12,11 @@ import {
   teardownRunBrowsers,
   teardownStageBrowser,
 } from "../browser/browserTeardown.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  profileWaitingMessage,
+} from "../browser/stageProfileLock.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -1276,6 +1281,33 @@ export async function runPipelineDag(
     }
 
     const attempt = await resolveLaunchAttempt(stageId);
+    if (stage.browser?.profile !== undefined) {
+      const profile = stage.browser.profile;
+      const acquired = await acquireStageProfile(
+        prepared.browser ?? defaultStageBrowserSupport(),
+        {
+          profile,
+          owner: { runId: run.runId, stageId },
+          isRunLive: createRunLiveness(store),
+          halted: () => options.schedulingHalt?.halted === true,
+          onWaiting: (holder) =>
+            store.appendStageEvent(
+              run.runId,
+              stageId,
+              {
+                event: "message",
+                role: "host",
+                text: profileWaitingMessage(profile, holder),
+              },
+              { attempt },
+            ),
+        },
+      );
+      if (acquired === "halted") {
+        states.set(stageId, "skipped");
+        return;
+      }
+    }
     const attemptCtx = attemptContext(attempt);
     const prep = launchFor(feedbackSchedule, stageId);
     const feedbackLoopContext = prep?.feedbackLoopContext;
@@ -1495,7 +1527,7 @@ export async function runPipelineDag(
         if (state === "succeeded" || state === "failed") {
           await teardownStageBrowser(
             prepared.browser ?? defaultStageBrowserSupport(),
-            { runDir: run.workspaceDir, stageId },
+            { runId: run.runId, runDir: run.workspaceDir, stageId },
           ).catch(() => undefined);
         }
       })
@@ -1585,7 +1617,7 @@ export async function runPipelineDag(
   if (!(hasWaiting && !schedulingHalted) && !options.schedulingHalt?.hostShutdown) {
     await teardownRunBrowsers(
       prepared.browser ?? defaultStageBrowserSupport(),
-      run.workspaceDir,
+      { runId: run.runId, runDir: run.workspaceDir },
     );
   }
   if (hasWaiting && !schedulingHalted) {

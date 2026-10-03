@@ -1,4 +1,6 @@
 import Database from "better-sqlite3";
+import { redact } from "../../logging/redact.js";
+import { getNamedSecrets } from "../../logging/namedSecrets.js";
 import { existsSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
@@ -320,6 +322,14 @@ function forkGenerationFromRow(row: ForkGenerationRow): ForkGenerationRecord {
     updated_at: row.updated_at,
   };
 }
+
+/** Tool/message previews can carry cookie or token values from browser commands. */
+const REDACTED_ACTIVITY_EVENTS = new Set([
+  "message",
+  "tool_start",
+  "tool_end",
+  "tool_progress",
+]);
 
 export class SqliteRunStore implements RunStore {
   private readonly db: Database.Database;
@@ -1125,9 +1135,12 @@ export class SqliteRunStore implements RunStore {
     await this.ensureAttemptWorkspace(runId, stageId, attempt);
     const at = new Date().toISOString();
     const eventName = event.event;
-    const rest: Record<string, unknown> = { ...event };
+    let rest: Record<string, unknown> = { ...event };
     delete rest.event;
     delete rest.at;
+    if (REDACTED_ACTIVITY_EVENTS.has(eventName)) {
+      rest = redact(rest, { namedSecrets: getNamedSecrets() });
+    }
     this.db
       .prepare(
         `INSERT INTO stage_events (run_id, stage_id, attempt, at, event, payload_json)

@@ -1,9 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { loadHostConfig } from "../config/hostConfig.js";
 import { stageDir } from "../runstore/paths.js";
 import type { StageBrowserConfig } from "../types/stage.js";
+import { safeAudit } from "./auditSink.js";
+import { assertBrowserSitesAllowed } from "./sitePolicy.js";
 import {
   BROWSER_ENV_FILENAME,
+  BROWSER_POLICY_FILENAME,
   type BrowserEnv,
   type StageBrowserSupport,
 } from "./browserHost.js";
@@ -53,6 +57,12 @@ export async function resolveStageBrowserEnv(
   const { browser } = input;
   if (browser === undefined) return undefined;
 
+  assertBrowserSitesAllowed(
+    input.stageId,
+    browser,
+    support.blockedSites ?? loadHostConfig().browserBlockedSites,
+  );
+
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
 
@@ -77,6 +87,27 @@ export async function resolveStageBrowserEnv(
     const tmp = `${file}.${process.pid}.tmp`;
     await writeFile(tmp, `${JSON.stringify(fresh, null, 2)}\n`, { mode: 0o600 });
     await rename(tmp, file);
+    if (browser.profile !== undefined) {
+      await safeAudit(support.audit, {
+        event: "profile_used",
+        scope: LOCAL_BROWSER_SCOPE,
+        profile: browser.profile,
+        runId: input.runId,
+        stageId: input.stageId,
+      });
+    }
+    if (browser.profile !== undefined && (browser.allow_domains?.length ?? 0) > 0) {
+      await writeFile(
+        path.join(dir, BROWSER_POLICY_FILENAME),
+        `${JSON.stringify({
+          runId: input.runId,
+          stageId: input.stageId,
+          profile: browser.profile,
+          allow_domains: browser.allow_domains,
+        })}\n`,
+        { mode: 0o600 },
+      );
+    }
   }
   await writeSessionOwner({
     runId: input.runId,

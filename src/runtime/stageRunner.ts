@@ -29,6 +29,8 @@ import {
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import { redact } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import { isStageTimeoutReason } from "../agent/stageTimeout.js";
 
 export type RunStageOutcome = StageRunResult | { waiting: true };
@@ -136,7 +138,14 @@ async function finalizeStageResult(options: {
   await activityChain;
 
   if (result.envelope) {
-    await store.writeEnvelope(runId, stageId, result.envelope, attemptOpt);
+    await store.writeEnvelope(
+      runId,
+      stageId,
+      redact(result.envelope as unknown as Record<string, unknown>, {
+        namedSecrets: getNamedSecrets(),
+      }) as unknown as StageEnvelope,
+      attemptOpt,
+    );
   }
 
   if (!result.ok) {

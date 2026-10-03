@@ -85,6 +85,11 @@ import {
   teardownRunBrowsers,
   teardownStageBrowser,
 } from "../browser/browserTeardown.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  stageProfileLock,
+} from "../browser/stageProfileLock.js";
 import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
@@ -939,22 +944,12 @@ export class RunManager {
 
   async sweepBrowserSessions(): Promise<{ closed: string[] }> {
     const support = this.options.browser ?? defaultStageBrowserSupport();
+    const isRunLive = createRunLiveness(this.options.store);
+    await stageProfileLock(support)
+      .reclaimStale(isRunLive)
+      .catch(() => 0);
     return sweepOrphanBrowserSessions({
-      isRunLive: async (runId) => {
-        try {
-          const status = (await this.options.store.readRunMeta(runId)).status;
-          return (
-            status === undefined ||
-            status === "created" ||
-            status === "queued" ||
-            status === "running"
-          );
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-          if (/not found/i.test(String((err as Error)?.message))) return false;
-          throw err;
-        }
-      },
+      isRunLive,
       ...(support.runner !== undefined ? { runner: support.runner } : {}),
       ...(support.closeWaitMs !== undefined
         ? { closeWaitMs: support.closeWaitMs }
@@ -1300,7 +1295,11 @@ export class RunManager {
     }
     await teardownStageBrowser(
       this.options.browser ?? defaultStageBrowserSupport(),
-      { runDir: this.options.store.getWorkspaceDir(runId), stageId },
+      {
+        runId,
+        runDir: this.options.store.getWorkspaceDir(runId),
+        stageId,
+      },
     ).catch(() => undefined);
 
     await markStageInterrupted({
@@ -1385,7 +1384,7 @@ export class RunManager {
     }
     await teardownRunBrowsers(
       this.options.browser ?? defaultStageBrowserSupport(),
-      this.options.store.getWorkspaceDir(runId),
+      { runId, runDir: this.options.store.getWorkspaceDir(runId) },
     );
 
     const detail = await this.options.store.readRun(runId);
@@ -2622,6 +2621,23 @@ export class RunManager {
       const resumedStage = loaded.stages.find(
         (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
       );
+      if (resumedStage?.browser?.profile !== undefined) {
+        await acquireStageProfile(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            profile: resumedStage.browser.profile,
+            owner: { runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => true,
+          },
+        ).then((outcome) => {
+          if (outcome === "halted") {
+            throw new Error(
+              `browser profile "${resumedStage.browser?.profile}" is held by another stage`,
+            );
+          }
+        });
+      }
       const browserEnv = await resolveStageBrowserEnv(
         this.options.browser ?? defaultStageBrowserSupport(),
         {
@@ -2652,7 +2668,7 @@ export class RunManager {
       }
       await teardownStageBrowser(
         this.options.browser ?? defaultStageBrowserSupport(),
-        { runDir: workspaceDir, stageId },
+        { runId, runDir: workspaceDir, stageId },
       ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
