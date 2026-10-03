@@ -8,6 +8,10 @@ import {
   resolveStageBrowserEnv,
 } from "../browser/stageBrowserEnv.js";
 import type { StageBrowserSupport } from "../browser/browserHost.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -1485,10 +1489,20 @@ export async function runPipelineDag(
     states.set(stageId, "active");
     launchedIds.add(stageId);
     activeCount += 1;
-    const taskPromise = launchStage(stageId).finally(() => {
-      activeCount -= 1;
-      inFlight.delete(taskPromise);
-    });
+    const taskPromise = launchStage(stageId)
+      .then(async () => {
+        const state = states.get(stageId);
+        if (state === "succeeded" || state === "failed") {
+          await teardownStageBrowser(
+            prepared.browser ?? defaultStageBrowserSupport(),
+            { runDir: run.workspaceDir, stageId },
+          ).catch(() => undefined);
+        }
+      })
+      .finally(() => {
+        activeCount -= 1;
+        inFlight.delete(taskPromise);
+      });
     inFlight.add(taskPromise);
   };
 
@@ -1568,6 +1582,12 @@ export async function runPipelineDag(
   }
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
+  if (!(hasWaiting && !schedulingHalted) && !options.schedulingHalt?.hostShutdown) {
+    await teardownRunBrowsers(
+      prepared.browser ?? defaultStageBrowserSupport(),
+      run.workspaceDir,
+    );
+  }
   if (hasWaiting && !schedulingHalted) {
     return {
       ok: false,

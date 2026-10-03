@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "skills",
+    "builtin-skills",
     "examples",
     "README.md",
     "LICENSE"

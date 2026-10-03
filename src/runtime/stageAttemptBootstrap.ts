@@ -13,6 +13,10 @@ import {
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
 import {
+  BROWSER_SKILL_NAME,
+  resolveBuiltinSkillFile,
+} from "../config/builtinSkills.js";
+import {
   resolveSkillByName,
   type SkillOrigin,
 } from "../config/listSkills.js";
@@ -190,6 +194,26 @@ async function resolveStageSkillForRun(
   };
 }
 
+/** Browser stages get the `browser` skill (run > checkout > host > built-in). A missing skill is not an error. */
+async function resolveBrowserSkillFile(
+  stage: Pick<StageConfig, "skill" | "browser">,
+  catalog: OperatorCatalog | undefined,
+  options: Parameters<typeof resolveStageSkillForRun>[2],
+): Promise<string | undefined> {
+  if (stage.browser === undefined || stage.skill === BROWSER_SKILL_NAME) {
+    return undefined;
+  }
+  const resolved = await resolveStageSkillForRun(
+    { skill: BROWSER_SKILL_NAME },
+    catalog,
+    options,
+  );
+  if (resolved.ok && resolved.skillFilePath !== undefined) {
+    return resolved.skillFilePath;
+  }
+  return resolveBuiltinSkillFile(BROWSER_SKILL_NAME);
+}
+
 async function resolveAttemptMcpServers(
   allowlist: readonly string[] | undefined,
   factoryCwd: string | undefined,
@@ -317,6 +341,17 @@ async function openStageWithOperatorCatalog(
     workspaceDir: resolveOptions.workspaceDir,
   });
   if (!skill.ok) return skill;
+  const browserSkillFilePath = await resolveBrowserSkillFile(
+    input.stage,
+    catalog,
+    {
+      bindingKind: resolveOptions.bindingKind,
+      checkoutRoot: resolveOptions.checkoutRoot,
+      factoryCwd,
+      trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
+      workspaceDir: resolveOptions.workspaceDir,
+    },
+  );
   let resolvedMcpServers: ResolvedMcpServers | undefined;
   const origins: ConfigOriginRecord[] = [];
   try {
@@ -409,6 +444,9 @@ async function openStageWithOperatorCatalog(
       },
       ...(skill.skillFilePath !== undefined
         ? { skillFilePath: skill.skillFilePath }
+        : {}),
+      ...(browserSkillFilePath !== undefined
+        ? { browserSkillFilePath }
         : {}),
       ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
       onResolvedModel: async (info) => {

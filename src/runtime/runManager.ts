@@ -81,6 +81,11 @@ import {
   defaultStageBrowserSupport,
   resolveStageBrowserEnv,
 } from "../browser/stageBrowserEnv.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { logger as rootLogger } from "../logging/logger.js";
@@ -932,6 +937,34 @@ export class RunManager {
       .some((entry) => entry.runId === runId && entry.stageId === stageId);
   }
 
+  async sweepBrowserSessions(): Promise<{ closed: string[] }> {
+    const support = this.options.browser ?? defaultStageBrowserSupport();
+    return sweepOrphanBrowserSessions({
+      isRunLive: async (runId) => {
+        try {
+          const status = (await this.options.store.readRunMeta(runId)).status;
+          return (
+            status === undefined ||
+            status === "created" ||
+            status === "queued" ||
+            status === "running"
+          );
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+          if (/not found/i.test(String((err as Error)?.message))) return false;
+          throw err;
+        }
+      },
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined
+        ? { closeWaitMs: support.closeWaitMs }
+        : {}),
+      ...(support.socketRoot !== undefined
+        ? { socketRoot: support.socketRoot }
+        : {}),
+    });
+  }
+
   async reconcileOrphanedStages(): Promise<{
     reconciled: Array<{ runId: string; stageId: string; reason: string }>;
   }> {
@@ -1265,6 +1298,10 @@ export class RunManager {
         await this.stageProcessLauncher.cancelRun(runId);
       }
     }
+    await teardownStageBrowser(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      { runDir: this.options.store.getWorkspaceDir(runId), stageId },
+    ).catch(() => undefined);
 
     await markStageInterrupted({
       store: this.options.store,
@@ -1346,6 +1383,10 @@ export class RunManager {
     if (this.stageProcessLauncher !== undefined) {
       await this.stageProcessLauncher.cancelRun(runId);
     }
+    await teardownRunBrowsers(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      this.options.store.getWorkspaceDir(runId),
+    );
 
     const detail = await this.options.store.readRun(runId);
     for (const stage of detail.stages) {
@@ -2609,6 +2650,10 @@ export class RunManager {
       if (launchResult.type === "waiting") {
         return { ok: true };
       }
+      await teardownStageBrowser(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        { runDir: workspaceDir, stageId },
+      ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
         await store.appendStageEvent(

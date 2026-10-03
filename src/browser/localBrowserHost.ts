@@ -21,7 +21,7 @@ export type LocalBrowserHostOptions = {
   emptyConfigPath?: string;
 };
 
-function defaultSocketRoot(platform: NodeJS.Platform): string {
+export function defaultSocketRoot(platform: NodeJS.Platform): string {
   const uid = typeof process.getuid === "function" ? process.getuid() : "u";
   const base = platform === "win32" ? os.tmpdir() : "/tmp";
   return path.join(base, `sfb-${uid}`);
