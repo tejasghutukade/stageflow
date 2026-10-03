@@ -37,7 +37,7 @@ export function createInMemoryProfileLock(
       if (current !== undefined && !sameOwner(current, owner)) {
         return { status: "queued", holder: { ...current } };
       }
-      held.set(k, { ...owner });
+      if (current === undefined) held.set(k, { ...owner });
       return {
         status: "acquired",
         release: async () => releaseIfHeldBy(k, owner),

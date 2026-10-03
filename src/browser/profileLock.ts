@@ -1,6 +1,10 @@
 import { type ProfileKey, validateProfileKey } from "./profileStore.js";
 
-export type ProfileLockOwner = { runId: string; stageId: string };
+/**
+ * A profile is leased to a run. `stageId` is informational (the stage that
+ * first took the lease) and never part of identity.
+ */
+export type ProfileLockOwner = { runId: string; stageId?: string };
 
 export type ProfileLockAcquireResult =
   | { status: "acquired"; release(): Promise<void> }
@@ -10,16 +14,16 @@ export type RunLiveness = (runId: string) => Promise<boolean>;
 
 export interface ProfileLock {
   /**
-   * Re-acquiring as the current holder succeeds again (resumed attempts).
-   * A busy profile returns `queued` with the holder; callers retry.
+   * Any stage of the holder run joins the lease and succeeds at once. A
+   * profile leased to another run returns `queued` with the holder; callers retry.
    */
   acquire(
     key: ProfileKey,
     owner: ProfileLockOwner,
   ): Promise<ProfileLockAcquireResult>;
   holder(key: ProfileKey): Promise<ProfileLockOwner | undefined>;
-  /** Releases every lock held by this stage, or by the whole run when `stageId` is omitted. */
-  releaseOwner(owner: { runId: string; stageId?: string }): Promise<void>;
+  /** Releases every lease held by this run (run end, cancel, abandon, failure). */
+  releaseOwner(owner: { runId: string }): Promise<void>;
   /** Drops locks whose holder run is no longer live; returns the count dropped. */
   reclaimStale(isRunLive: RunLiveness): Promise<number>;
 }
@@ -33,7 +37,7 @@ export function sameOwner(
   a: ProfileLockOwner,
   b: ProfileLockOwner,
 ): boolean {
-  return a.runId === b.runId && a.stageId === b.stageId;
+  return a.runId === b.runId;
 }
 
 export function lockKey(key: ProfileKey): ProfileKey {
@@ -42,10 +46,7 @@ export function lockKey(key: ProfileKey): ProfileKey {
 
 export function ownerMatches(
   held: ProfileLockOwner,
-  target: { runId: string; stageId?: string },
+  target: { runId: string },
 ): boolean {
-  return (
-    held.runId === target.runId &&
-    (target.stageId === undefined || held.stageId === target.stageId)
-  );
+  return held.runId === target.runId;
 }

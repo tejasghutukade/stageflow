@@ -32,8 +32,10 @@ function lockFile(key: ProfileKey): string {
 async function readHolder(file: string): Promise<ProfileLockOwner | undefined> {
   try {
     const parsed = JSON.parse(await readFile(file, "utf8")) as ProfileLockOwner;
-    if (typeof parsed.runId === "string" && typeof parsed.stageId === "string") {
-      return { runId: parsed.runId, stageId: parsed.stageId };
+    if (typeof parsed.runId === "string") {
+      return typeof parsed.stageId === "string"
+        ? { runId: parsed.runId, stageId: parsed.stageId }
+        : { runId: parsed.runId };
     }
   } catch {
     // missing or unreadable: treated as free by callers that re-check
@@ -55,8 +57,10 @@ async function isCorrupt(file: string): Promise<boolean> {
 function readHolderFrom(raw: string): ProfileLockOwner | undefined {
   try {
     const parsed = JSON.parse(raw) as ProfileLockOwner;
-    if (typeof parsed.runId === "string" && typeof parsed.stageId === "string") {
-      return { runId: parsed.runId, stageId: parsed.stageId };
+    if (typeof parsed.runId === "string") {
+      return typeof parsed.stageId === "string"
+        ? { runId: parsed.runId, stageId: parsed.stageId }
+        : { runId: parsed.runId };
     }
   } catch {
     // unparseable
@@ -200,7 +204,7 @@ export function createLocalProfileLock(
         const holder = await readHolder(file);
         return {
           status: "queued" as const,
-          holder: holder ?? { runId: "unknown", stageId: "unknown" },
+          holder: holder ?? { runId: "unknown" },
         };
       });
     },

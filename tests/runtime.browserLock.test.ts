@@ -20,6 +20,7 @@ import type { InlinePipelineDefinition } from "../src/types/pipeline.js";
 
 type Behavior = "succeed" | "fail" | "wait" | "hang";
 type Span = { runId: string; stageId: string; start: number; end?: number };
+type Call = { args: string[]; env: Record<string, string> };
 
 let root: string;
 let socketRoot: string;
@@ -118,21 +119,26 @@ function setup(locks: ProfileLock, behaviors: Record<string, Behavior> = {}) {
   const store = createRunStore({ rootDir: path.join(root, "store") });
   const spans: Span[] = [];
   const children: EventEmitter[] = [];
+  const calls: Call[] = [];
   const launcher = launcherFor(store, spans, behaviors, children);
   const browser: StageBrowserSupport = {
     host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot }),
     profiles: createLocalProfileStore(),
-    runner: async (args) => ({
+    runner: async (args, env) => {
+      calls.push({ args, env: { ...env } });
+      return {
       code: 0,
       stdout: args[1] === "cdp-url" ? "ws://127.0.0.1:41000/devtools/browser/anchor\n" : "",
-    }),
+      };
+    },
     closeWaitMs: 200,
     socketRoot,
     locks,
     lockPollMs: 10,
   };
-  const startRun = (stages: unknown[]) =>
+  const startRun = (stages: unknown[], extra: { maxActiveStagesPerRun?: number } = {}) =>
     startPipeline({
+      ...extra,
       agent: scriptedFakeAgent([]),
       store,
       taskYaml: "id: t\ngoal: g\n",
@@ -142,7 +148,7 @@ function setup(locks: ProfileLock, behaviors: Record<string, Behavior> = {}) {
       stageProcessLauncher: launcher,
       browser,
     });
-  return { store, spans, launcher, browser, startRun, children };
+  return { store, spans, launcher, browser, startRun, children, calls };
 }
 
 async function waitFor(cond: () => boolean | Promise<boolean>) {
@@ -154,6 +160,12 @@ async function waitFor(cond: () => boolean | Promise<boolean>) {
   throw new Error("timeout");
 }
 
+const isAnchor = (c: Call) => c.env.AGENT_BROWSER_PROFILE !== undefined;
+const anchorOpens = (calls: Call[]) =>
+  calls.flatMap((c, i) => (isAnchor(c) && c.args[0] === "open" ? [i] : []));
+const anchorCloses = (calls: Call[]) =>
+  calls.flatMap((c, i) => (isAnchor(c) && c.args[0] === "close" ? [i] : []));
+
 const overlap = (a: Span, b: Span) =>
   a.start < (b.end ?? Infinity) && b.start < (a.end ?? Infinity);
 
@@ -163,12 +175,18 @@ const lockImplementations: Array<[string, () => ProfileLock]> = [
 ];
 
 describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n, makeLock) => {
-  it("runs two parallel stages on one profile one at a time", async () => {
-    const { spans, startRun } = setup(makeLock());
+  it("runs two parallel stages of one run on one profile at the same time, sharing one anchor", async () => {
+    const { spans, startRun, calls } = setup(makeLock());
     const started = await startRun([withProfile("a", "acct"), withProfile("b", "acct")]);
     expect((await started.done).outcome).toBe("succeeded");
     expect(spans).toHaveLength(2);
-    expect(overlap(spans[0]!, spans[1]!)).toBe(false);
+    expect(overlap(spans[0]!, spans[1]!)).toBe(true);
+    expect(anchorOpens(calls)).toHaveLength(1);
+    expect(anchorCloses(calls)).toHaveLength(1);
+    const sessions = new Set(
+      calls.filter((c) => c.env.AGENT_BROWSER_CDP !== undefined).map((c) => c.env.AGENT_BROWSER_SESSION),
+    );
+    expect(sessions.size).toBe(2);
   });
 
   it("runs stages with different profiles or no profile together", async () => {
@@ -187,7 +205,7 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
   });
 
   it("makes a second run wait, names the holder, then proceeds", async () => {
-    const { store, spans, startRun } = setup(makeLock());
+    const { store, spans, startRun, calls } = setup(makeLock());
     const first = await startRun([withProfile("a", "acct")]);
     await waitFor(() => spans.length === 1);
     const second = await startRun([withProfile("b", "acct")]);
@@ -199,7 +217,6 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
     const events = await store.listStageEvents(second.runId, "b");
     const waiting = events.find((e) => "text" in e && /waiting for browser profile/.test(String(e.text)));
     expect(String((waiting as { text: string }).text)).toContain(first.runId);
-    expect(String((waiting as { text: string }).text)).toContain("stage a");
     expect(spans.filter((s) => s.runId === second.runId)).toHaveLength(0);
 
     expect((await first.done).outcome).toBe("succeeded");
@@ -209,13 +226,49 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
       spans.find((s) => s.runId === second.runId)!,
     ];
     expect(s2.start).toBeGreaterThanOrEqual(s1.end!);
+    const opens = anchorOpens(calls);
+    const closes = anchorCloses(calls);
+    expect(opens).toHaveLength(2);
+    expect(closes).toHaveLength(2);
+    expect(closes[0]!).toBeLessThan(opens[1]!);
+  });
+
+  it("starts the waiting run only after a failed run, with the first anchor closed", async () => {
+    const { spans, startRun, calls } = setup(makeLock(), { a: "fail" });
+    const first = await startRun([withProfile("a", "acct")]);
+    await waitFor(() => spans.length === 1);
+    const second = await startRun([withProfile("b", "acct")]);
+    expect((await first.done).outcome).toBe("failed");
+    expect((await second.done).outcome).toBe("succeeded");
+    const opens = anchorOpens(calls);
+    expect(opens).toHaveLength(2);
+    expect(anchorCloses(calls)[0]!).toBeLessThan(opens[1]!);
+  });
+
+  it("does not let a stage queued behind another run hold an active slot of its run", async () => {
+    const locks = makeLock();
+    const { spans, startRun, store } = setup(locks);
+    const first = await startRun([withProfile("a", "acct")]);
+    await waitFor(() => spans.length === 1);
+    const second = await startRun(
+      [withProfile("b", "acct"), stage("c")],
+      { maxActiveStagesPerRun: 1 },
+    );
+    await waitFor(() => spans.some((x) => x.runId === second.runId && x.stageId === "c"));
+    const events = await store.listStageEvents(second.runId, "b");
+    expect(events.some((e) => "text" in e && /held by run/.test(String(e.text)))).toBe(true);
+    expect(spans.filter((x) => x.runId === second.runId && x.stageId === "b")).toHaveLength(0);
+    expect((await locks.holder({ scope: "local", name: "acct" }))?.runId).toBe(first.runId);
+    expect((await first.done).outcome).toBe("succeeded");
+    expect((await second.done).outcome).toBe("succeeded");
   });
 
   it("releases the profile after a failed stage", async () => {
     const locks = makeLock();
-    const { spans, startRun } = setup(locks, { a: "fail" });
+    const { spans, startRun, calls } = setup(locks, { a: "fail" });
     const first = await startRun([withProfile("a", "acct")]);
     await first.done;
+    expect(anchorCloses(calls)).toHaveLength(1);
     expect(await locks.holder({ scope: "local", name: "acct" })).toBeUndefined();
     const second = await startRun([withProfile("b", "acct")]);
     expect((await second.done).outcome).toBe("succeeded");
@@ -224,13 +277,12 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
 
   it("keeps the profile while the stage waits at a gate, and frees it on cancel", async () => {
     const locks = makeLock();
-    const { store, spans, launcher, browser, startRun } = setup(locks, { a: "wait" });
+    const { store, spans, launcher, browser, startRun, calls } = setup(locks, { a: "wait" });
     const first = await startRun([withProfile("a", "acct")]);
     await first.done;
-    expect(await locks.holder({ scope: "local", name: "acct" })).toEqual({
-      runId: first.runId,
-      stageId: "a",
-    });
+    expect((await locks.holder({ scope: "local", name: "acct" }))?.runId).toBe(first.runId);
+    expect(anchorOpens(calls)).toHaveLength(1);
+    expect(anchorCloses(calls)).toHaveLength(0);
 
     const second = await startRun([withProfile("b", "acct")]);
     await new Promise((r) => setTimeout(r, 4 * HOLD_MS));
@@ -245,10 +297,7 @@ describe.each(lockImplementations)("browser profile lock in pipelines: %s", (_n,
       browser,
     });
     expect((await manager.cancelRun(first.runId, "stop")).ok).toBe(true);
-    expect(await locks.holder({ scope: "local", name: "acct" })).not.toEqual({
-      runId: first.runId,
-      stageId: "a",
-    });
+    expect(anchorCloses(calls)).toHaveLength(1);
     expect((await second.done).outcome).toBe("succeeded");
   });
 

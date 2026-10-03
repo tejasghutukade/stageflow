@@ -1284,26 +1284,39 @@ export async function runPipelineDag(
     const attempt = await resolveLaunchAttempt(stageId);
     if (stage.browser?.profile !== undefined) {
       const profile = stage.browser.profile;
-      const acquired = await acquireStageProfile(
-        prepared.browser ?? defaultStageBrowserSupport(),
-        {
-          profile,
-          owner: { runId: run.runId, stageId },
-          isRunLive: createRunLiveness(store),
-          halted: () => options.schedulingHalt?.halted === true,
-          onWaiting: (holder) =>
-            store.appendStageEvent(
-              run.runId,
-              stageId,
-              {
-                event: "message",
-                role: "host",
-                text: profileWaitingMessage(profile, holder),
-              },
-              { attempt },
-            ),
-        },
-      );
+      // A stage queued behind another run's lease must not hold one of this
+      // run's active slots; it takes the slot back once it joins the lease.
+      let slotReleased = false;
+      let acquired: Awaited<ReturnType<typeof acquireStageProfile>>;
+      try {
+        acquired = await acquireStageProfile(
+          prepared.browser ?? defaultStageBrowserSupport(),
+          {
+            profile,
+            owner: { runId: run.runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => options.schedulingHalt?.halted === true,
+            onWaiting: async (holder) => {
+              if (!slotReleased) {
+                slotReleased = true;
+                activeCount -= 1;
+              }
+              await store.appendStageEvent(
+                run.runId,
+                stageId,
+                {
+                  event: "message",
+                  role: "host",
+                  text: profileWaitingMessage(profile, holder),
+                },
+                { attempt },
+              );
+            },
+          },
+        );
+      } finally {
+        if (slotReleased) activeCount += 1;
+      }
       if (acquired === "halted") {
         states.set(stageId, "skipped");
         return;

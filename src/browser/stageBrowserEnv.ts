@@ -1,4 +1,4 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadHostConfig } from "../config/hostConfig.js";
 import { stageDir } from "../runstore/paths.js";
@@ -12,7 +12,12 @@ import {
   type StageBrowserSupport,
 } from "./browserHost.js";
 import { ensureRunProfileBrowser } from "./anchor.js";
-import { defaultBrowserRunner, writeSessionOwner } from "./browserTeardown.js";
+import {
+  BROWSER_CLOSED_FILENAME,
+  closeBrowserSession,
+  defaultBrowserRunner,
+  writeSessionOwner,
+} from "./browserTeardown.js";
 import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
@@ -104,6 +109,7 @@ export async function resolveStageBrowserEnv(
     ...(input.humanLogin === true ? { humanLogin: true } : {}),
   });
 
+  await rm(path.join(dir, BROWSER_CLOSED_FILENAME), { force: true });
   const persisted = await readPersistedBrowserEnv(file);
   let env = persisted ?? fresh;
   const writeEnv = async (value: BrowserEnv) => {
@@ -117,7 +123,15 @@ export async function resolveStageBrowserEnv(
     anchor !== undefined &&
     persisted.AGENT_BROWSER_CDP !== anchor.cdpAddress
   ) {
-    // The shared browser was restarted: only the attach address changes.
+    // The shared browser was restarted: only the attach address changes. The
+    // old stage daemon is still attached to the dead address, so close it first.
+    await closeBrowserSession(persisted, {
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined ? { closeWaitMs: support.closeWaitMs } : {}),
+    }).catch(() => undefined);
+    if (persisted.AGENT_BROWSER_SOCKET_DIR !== undefined) {
+      await mkdir(persisted.AGENT_BROWSER_SOCKET_DIR, { recursive: true, mode: 0o700 });
+    }
     env = { ...persisted, AGENT_BROWSER_CDP: anchor.cdpAddress };
     await writeEnv(env);
   }

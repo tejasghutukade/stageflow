@@ -22,7 +22,10 @@ export type ProfileWaitInput = {
   onWaiting?: (holder: ProfileLockOwner) => Promise<void> | void;
 };
 
-/** Holds the profile for this stage until teardown, waiting for a busy one. */
+/**
+ * Joins the run's lease on the profile, or takes it, waiting while another run
+ * holds it. The lease is released at run end, never at stage end.
+ */
 export async function acquireStageProfile(
   support: StageBrowserSupport,
   input: ProfileWaitInput,
@@ -35,11 +38,7 @@ export async function acquireStageProfile(
     const result = await locks.acquire(key, input.owner);
     if (result.status === "acquired") return "acquired";
     if (input.halted?.()) return "halted";
-    if (
-      announced === undefined ||
-      announced.runId !== result.holder.runId ||
-      announced.stageId !== result.holder.stageId
-    ) {
+    if (announced === undefined || announced.runId !== result.holder.runId) {
       announced = result.holder;
       await input.onWaiting?.(result.holder);
     }
@@ -54,5 +53,5 @@ export function profileWaitingMessage(
   profile: string,
   holder: ProfileLockOwner,
 ): string {
-  return `waiting for browser profile "${profile}" held by run ${holder.runId} stage ${holder.stageId}`;
+  return `waiting for browser profile "${profile}" held by run ${holder.runId}`;
 }

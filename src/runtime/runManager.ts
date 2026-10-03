@@ -1322,6 +1322,15 @@ export class RunManager {
     const hasWaiting = after.stages.some(
       (s) => s.status === "waiting_for_input",
     );
+    if (
+      !hasWaiting &&
+      !(await createRunLiveness(this.options.store)(runId).catch(() => true))
+    ) {
+      await teardownRunBrowsers(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        { runId, runDir: this.options.store.getWorkspaceDir(runId) },
+      ).catch(() => undefined);
+    }
     if (!hasWaiting && this.active.has(runId)) {
       this.removeActiveEntry(runId, false);
     }
@@ -2634,7 +2643,7 @@ export class RunManager {
         ).then((outcome) => {
           if (outcome === "halted") {
             throw new Error(
-              `browser profile "${resumedStage.browser?.profile}" is held by another stage`,
+              `browser profile "${resumedStage.browser?.profile}" is held by another run`,
             );
           }
         });
@@ -2690,6 +2699,10 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          { runId, runDir: workspaceDir },
+        ).catch(() => undefined);
         return { ok: false, reason: launchResult.reason };
       }
 
@@ -2743,6 +2756,10 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          { runId, runDir: store.getWorkspaceDir(runId) },
+        ).catch(() => undefined);
       } catch {
         // ignore secondary failures
       }

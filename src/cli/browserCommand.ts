@@ -253,7 +253,7 @@ async function withProfile(
   const got = await deps.locks.acquire({ scope: LOCAL_BROWSER_SCOPE, name }, owner);
   if (got.status === "queued") {
     throw new CliError(
-      `Profile "${name}" is in use by run ${got.holder.runId} stage ${got.holder.stageId}. Try again when it finishes.`,
+      `Profile "${name}" is in use by run ${got.holder.runId}${got.holder.stageId !== undefined ? ` stage ${got.holder.stageId}` : ""}. Try again when it finishes.`,
       "profile_busy",
       BROWSER_EXIT.busy,
     );
@@ -316,12 +316,12 @@ async function profilesCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number>
 async function statusCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   const name = requireName(p);
   const exists = (await deps.store.list(LOCAL_BROWSER_SCOPE)).includes(name);
-  let lock: { run_id: string; stage_id: string; live: boolean } | null = null;
+  let lock: { run_id: string; stage_id: string | null; live: boolean } | null = null;
   const holder = await deps.locks.holder({ scope: LOCAL_BROWSER_SCOPE, name });
   if (holder !== undefined) {
     lock = {
       run_id: holder.runId,
-      stage_id: holder.stageId,
+      stage_id: holder.stageId ?? null,
       live: await deps.isRunLive(holder.runId).catch(() => true),
     };
   }
@@ -336,7 +336,7 @@ async function statusCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
     `exists: ${exists ? "yes" : "no"}`,
     lock === null
       ? "lock: free"
-      : `lock: held by run ${lock.run_id} stage ${lock.stage_id}${lock.live ? "" : " (stale)"}`,
+      : `lock: held by run ${lock.run_id}${lock.stage_id !== null ? ` stage ${lock.stage_id}` : ""}${lock.live ? "" : " (stale)"}`,
     `browser session: ${sessionOpen ? "open" : "closed"}`,
   ]);
   return BROWSER_EXIT.ok;

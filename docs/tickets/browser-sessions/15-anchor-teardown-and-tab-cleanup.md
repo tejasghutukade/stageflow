@@ -4,10 +4,10 @@
 
 **Blocked by:** 13, 14
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] After a stage ends, its tab is closed and Chrome and the other stages stay up.
-- [ ] After the run ends, fails, or is cancelled, Chrome is gone and the lease is free.
-- [ ] A run waiting at a gate keeps the anchor and lease.
-- [ ] The Host-start sweep closes anchors and stage sessions of dead runs and leaves live runs alone.
-- [ ] Session-only cookies survive from one stage to the next in a run.
+- [x] After a stage ends, its tab is closed and Chrome and the other stages stay up.
+- [x] After the run ends, fails, or is cancelled, Chrome is gone and the lease is free.
+- [x] A run waiting at a gate keeps the anchor and lease.
+- [x] The Host-start sweep closes anchors and stage sessions of dead runs and leaves live runs alone.
+- [x] Session-only cookies survive from one stage to the next in a run.

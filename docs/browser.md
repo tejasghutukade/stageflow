@@ -37,13 +37,13 @@ Runnable walkthrough: [`examples/browser-session/`](../examples/browser-session/
 
 ## Queueing and lock
 
-One profile can have one browser at a time. A stage that needs a busy profile waits in a queue. The run shows a "waiting for browser profile" state that names the run and stage that hold it. The lock is held from stage start to teardown, including while a gate waits for the operator. It is released on success, failure, cancel, and Host restart.
+A profile is leased to one run. Every stage of that run (including parallel stages) shares the lease and one browser, each in its own tab. A stage of a different run that needs the profile waits in a queue until the holder run is success, failed, cancelled, or abandoned, and shows a "waiting for browser profile" message that names the holder run. A waiting stage does not use one of its run's active stage slots. The lease stays held while a gate waits for the operator. Leases of dead runs are reclaimed at Host start and while waiting. Waiting has no time limit.
 
 Stages with no profile do not lock and can run in parallel.
 
 ## Teardown and orphan sweep
 
-The Host closes the browser when a stage succeeds, fails, times out, or is cancelled, and when the run ends. It does not rely on the stage worker, which can be killed. The browser stays open while a stage waits at a gate.
+When a stage succeeds, fails, times out, or is cancelled, the Host closes that stage's tab and its session; the shared browser and the other stages stay up, so session-only cookies carry to the next stage. When the run ends, fails, is cancelled, or is abandoned, the Host closes the shared browser gracefully and releases the lease. It does not rely on the stage worker, which can be killed. The browser stays open while a stage waits at a gate.
 
 When the Host starts, it closes browsers whose run no longer exists and removes their leftover socket files.
 

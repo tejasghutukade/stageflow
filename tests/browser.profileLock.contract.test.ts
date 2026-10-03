@@ -42,6 +42,7 @@ describe.each(implementations)("ProfileLock contract: $name", ({ make }) => {
     expect((await lock.acquire(a, ownerA)).status).toBe("acquired");
     const second = await lock.acquire(a, ownerB);
     expect(second).toEqual({ status: "queued", holder: ownerA });
+    expect(second.status === "queued" && second.holder.runId).toBe("r1");
     expect(await lock.holder(a)).toEqual(ownerA);
   });
 
@@ -73,16 +74,42 @@ describe.each(implementations)("ProfileLock contract: $name", ({ make }) => {
     expect((await lock.acquire(a, ownerA)).status).toBe("acquired");
   });
 
-  it("releaseOwner frees one stage's locks or a whole run's", async () => {
+  it("lets two stages of the same run both acquire (join), whatever their stage ids", async () => {
+    const lock = make();
+    const first = await lock.acquire(a, { runId: "r1", stageId: "s1" });
+    const second = await lock.acquire(a, { runId: "r1", stageId: "s2" });
+    const third = await lock.acquire(a, { runId: "r1" });
+    expect(first.status).toBe("acquired");
+    expect(second.status).toBe("acquired");
+    expect(third.status).toBe("acquired");
+    expect((await lock.holder(a))?.runId).toBe("r1");
+    expect((await lock.acquire(a, { runId: "r2", stageId: "s1" })).status).toBe("queued");
+  });
+
+  it("queues another run until releaseOwner({ runId }) of the holder run", async () => {
+    const lock = make();
+    await lock.acquire(a, { runId: "r1", stageId: "s1" });
+    await lock.acquire(a, { runId: "r1", stageId: "s2" });
+    const queued = await lock.acquire(a, ownerB);
+    expect(queued.status).toBe("queued");
+    if (queued.status === "queued") expect(queued.holder.runId).toBe("r1");
+    await lock.releaseOwner({ runId: "r1" });
+    expect(await lock.holder(a)).toBeUndefined();
+    expect((await lock.acquire(a, ownerB)).status).toBe("acquired");
+    expect((await lock.holder(a))?.runId).toBe("r2");
+  });
+
+  it("releaseOwner frees every profile of the run and no other run's", async () => {
     const lock = make();
     const b = { scope: "local", name: "other" };
+    const c = { scope: "local", name: "third" };
     await lock.acquire(a, ownerA);
     await lock.acquire(b, { runId: "r1", stageId: "s9" });
-    await lock.releaseOwner({ runId: "r1", stageId: "s1" });
-    expect(await lock.holder(a)).toBeUndefined();
-    expect(await lock.holder(b)).toBeDefined();
+    await lock.acquire(c, ownerB);
     await lock.releaseOwner({ runId: "r1" });
+    expect(await lock.holder(a)).toBeUndefined();
     expect(await lock.holder(b)).toBeUndefined();
+    expect((await lock.holder(c))?.runId).toBe("r2");
   });
 
   it("reclaims a lock whose holder run is dead on acquire", async () => {

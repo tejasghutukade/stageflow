@@ -174,7 +174,7 @@ describe("browser human login stage", () => {
     expect(s.prompts.login![0]).toMatch(/Human login/);
 
     expect(closes(s.calls).filter((c) => c.env.AGENT_BROWSER_HEADED === "1")).toEqual([]);
-    expect(await s.locks.holder({ scope: "local", name: "acct" })).toEqual({ runId: started.runId, stageId: "login" });
+    expect((await s.locks.holder({ scope: "local", name: "acct" }))?.runId).toBe(started.runId);
 
     const pending = (await s.store.readRun(started.runId)).stages.find((x) => x.stage_id === "login")!.pending_prompt!;
     await s.manager.deliverAnswer(started.runId, "login", { promptId: pending.id, kind: "confirm", decision: "accept" });

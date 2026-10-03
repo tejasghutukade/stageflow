@@ -52,9 +52,9 @@ async function waitFor(cond: () => boolean | Promise<boolean>) {
 describe("human login stage resume (process mode)", () => {
   it("does not re-open the login page or run the login check when resuming after the gate", async () => {
     const store = createRunStore({ rootDir: path.join(root, "store") });
-    const calls: Array<{ args: string[]; headed: boolean }> = [];
+    const calls: Array<{ args: string[]; headed: boolean; anchor: boolean }> = [];
     const runner: BrowserRunner = async (args, env) => {
-      calls.push({ args, headed: env.AGENT_BROWSER_HEADED === "1" });
+      calls.push({ args, headed: env.AGENT_BROWSER_HEADED === "1", anchor: env.AGENT_BROWSER_PROFILE !== undefined });
       if (args[0] === "get" && args[1] === "cdp-url") return { code: 0, stdout: "ws://127.0.0.1:41000/devtools/browser/anchor\n" };
       if (args[0] === "get" && args[1] === "url") {
         return { code: 0, stdout: "https://app.example.test/login\n" };
@@ -90,11 +90,12 @@ describe("human login stage resume (process mode)", () => {
       });
       return child;
     }) as never;
+    const locks = createInMemoryProfileLock();
     const support: StageBrowserSupport = {
       host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: path.join(root, "sock") }),
       profiles: createLocalProfileStore(),
       runner,
-      locks: createInMemoryProfileLock(),
+      locks,
       closeWaitMs: 100,
       socketRoot: path.join(root, "sock"),
       loginCheck: { settleMs: 0 },
@@ -120,6 +121,10 @@ describe("human login stage resume (process mode)", () => {
     );
     const headedOpens = () => calls.filter((c) => c.headed && c.args[0] === "open" && c.args[1] !== "about:blank").map((c) => c.args[1]);
     expect(headedOpens()).toEqual(["https://app.example.test/login"]);
+    const anchorCalls = (name: string) => calls.filter((c) => c.anchor && c.args[0] === name);
+    // The headless anchor of the check stage was replaced by the headed one the login stage needs.
+    expect(anchorCalls("close").map((c) => c.headed)).toEqual([false]);
+    expect((await locks.holder({ scope: "local", name: "acct" }))?.runId).toBe(started.runId);
 
     const answered = await manager.deliverAnswer(started.runId, "login", {
       promptId: "gate-1",
@@ -128,5 +133,14 @@ describe("human login stage resume (process mode)", () => {
     });
     expect(answered.ok).toBe(true);
     expect(headedOpens()).toEqual(["https://app.example.test/login"]);
+
+    await waitFor(
+      async () => (await store.readRun(started.runId)).stages.find((x) => x.stage_id === "work")?.status === "succeeded",
+    );
+    await waitFor(() => anchorCalls("close").length > 0);
+    // The resume worker joined the lease and left the shared browser up until run end.
+    expect(anchorCalls("open").filter((c) => c.args[1] === "about:blank")).toHaveLength(2);
+    expect(anchorCalls("close").map((c) => c.headed)).toEqual([false, true]);
+    await waitFor(async () => (await locks.holder({ scope: "local", name: "acct" })) === undefined);
   });
 });

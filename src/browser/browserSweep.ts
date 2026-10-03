@@ -47,10 +47,14 @@ export async function sweepOrphanBrowserSessions(
   } catch {
     return { closed };
   }
+  const owners: BrowserSessionOwner[] = [];
   for (const name of dirs) {
-    const dir = path.join(root, name);
-    const owner = await readOwner(dir);
-    if (owner === undefined) continue;
+    const owner = await readOwner(path.join(root, name));
+    if (owner !== undefined) owners.push(owner);
+  }
+  // Stage sessions attach to the anchor, so they go first.
+  owners.sort((x, y) => Number(x.anchor === true) - Number(y.anchor === true));
+  for (const owner of owners) {
     if (await options.isRunLive(owner.runId).catch(() => true)) continue;
     const { gone } = await closeBrowserSession(
       owner.env,
