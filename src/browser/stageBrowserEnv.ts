@@ -12,6 +12,7 @@ import {
   type StageBrowserSupport,
 } from "./browserHost.js";
 import { writeSessionOwner } from "./browserTeardown.js";
+import { ensureStageLoginCheck } from "./loginCheck.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
@@ -52,6 +53,8 @@ export async function resolveStageBrowserEnv(
     stageId: string;
     runDir: string;
     browser: StageBrowserConfig | undefined;
+    /** Attempt the login check result belongs to; defaults to 1. */
+    attempt?: number;
   },
 ): Promise<BrowserEnv | undefined> {
   const { browser } = input;
@@ -115,5 +118,16 @@ export async function resolveStageBrowserEnv(
     runDir: input.runDir,
     env,
   }).catch(() => undefined);
+  if (browser.check !== undefined) {
+    await ensureStageLoginCheck({
+      runDir: input.runDir,
+      stageId: input.stageId,
+      attempt: input.attempt ?? 1,
+      env,
+      check: browser.check,
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.loginCheck !== undefined ? { options: support.loginCheck } : {}),
+    });
+  }
   return env;
 }

@@ -2645,6 +2645,7 @@ export class RunManager {
           stageId,
           runDir: workspaceDir,
           browser: resumedStage?.browser,
+          attempt,
         },
       );
       const launchResult = await launcher.launch({

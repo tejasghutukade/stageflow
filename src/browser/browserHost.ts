@@ -21,7 +21,7 @@ export interface BrowserHost {
 export type BrowserRunner = (
   args: string[],
   env: BrowserEnv,
-) => Promise<{ code: number | null }>;
+) => Promise<{ code: number | null; stdout?: string }>;
 
 export type StageBrowserSupport = {
   host: BrowserHost;
@@ -33,6 +33,8 @@ export type StageBrowserSupport = {
   lockPollMs?: number;
   /** Upper bound for waiting on the daemon to exit after `close`. */
   closeWaitMs?: number;
+  /** Login-check bounds; defaults suit real browsers. */
+  loginCheck?: { waitMs?: number; settleMs?: number };
   /** Root holding per-session socket dirs; defaults to the local host's root. */
   socketRoot?: string;
   /** Defaults to the local audit log in the Stageflow home. */

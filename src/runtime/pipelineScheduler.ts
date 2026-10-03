@@ -1388,6 +1388,7 @@ export async function runPipelineDag(
           stageId,
           runDir: run.workspaceDir,
           browser: stage.browser,
+          attempt,
         },
       );
     } catch (err) {

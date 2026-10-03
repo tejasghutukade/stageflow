@@ -13,6 +13,10 @@ import {
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
 import {
+  loginCheckPromptBlock,
+  readStageLoginCheck,
+} from "../browser/loginCheck.js";
+import {
   BROWSER_SKILL_NAME,
   resolveBuiltinSkillFile,
 } from "../config/builtinSkills.js";
@@ -432,15 +436,39 @@ async function openStageWithOperatorCatalog(
       ).catch(() => null);
     }
   }
+  let loginCheck: Awaited<ReturnType<typeof readStageLoginCheck>>;
+  if (input.stage.browser?.check !== undefined) {
+    loginCheck = await readStageLoginCheck(
+      resolveOptions.workspaceDir,
+      stageIdForManifest,
+    );
+    if (loginCheck === undefined) {
+      return { ok: false, reason: "browser login check result is missing" };
+    }
+  }
   try {
     const handle = agent.openStage({
       ...input,
       stage: {
         ...input.stage,
-        system_prompt: stampStagePromptArtifactsDir(
+        system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        ),
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}`,
+        ...(loginCheck !== undefined
+          ? {
+              pre_emit_checks: [
+                ...(input.stage.pre_emit_checks ?? []),
+                {
+                  id: "browser_login_check",
+                  type: "browser_login_check" as const,
+                  state: loginCheck.state,
+                  logged_in: loginCheck.logged_in,
+                  url: loginCheck.url,
+                },
+              ],
+            }
+          : {}),
       },
       ...(skill.skillFilePath !== undefined
         ? { skillFilePath: skill.skillFilePath }

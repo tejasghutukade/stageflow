@@ -836,6 +836,31 @@ stages:
         logged_out_url: [https://example.com/login*]
 ```
 
+#### Login check stage {#browser-login-check}
+
+When a stage has `browser.check`, the Host (not the model) opens `check.url` with the stage's profile at stage start and matches the settled final address: `logged_out_url` wins over `logged_in_url`; neither matching is `unknown`. Globs match the whole URL; `*` matches any characters (including `/`), `?` one character. The result is stored as `browser-login-check.json` in the stage run dir and appended to the stage prompt. The stage must emit `payload: { logged_in, url }`; the Host rejects any envelope whose `logged_in` or `url` differs from its result. For `unknown`, the prompt tells the agent to inspect the page with the browser skill and decide; the Host then only requires a boolean `logged_in` and the same `url`.
+
+Write the check as a thin stage (no ready-made stage file ships). Route only the check-to-login edge on `logged_in`; the work stage is a join of check and login, so its inbound edges carry no `if`, and its `io.input` must be a subset of both parents' output:
+
+```yaml
+stages:
+  - id: check
+    entry: true
+    system_prompt: Report the Host login check result.
+    browser:
+      profile: work
+      check: { url: https://example.com/feed, logged_in_url: "https://example.com/feed*", logged_out_url: ["https://example.com/login*"] }
+    route:
+      - to: login
+        if: { field: logged_in, op: eq, value: false }
+      - to: work
+    io:
+      output:
+        schema: { type: object, required: [logged_in, url], properties: { logged_in: { type: boolean }, url: { type: string } } }
+```
+
+See `tests/fixtures/pipelines/browser-login-check.pipeline.yaml` for the full check, login, work topology.
+
 Third-party sites can forbid automation in their terms; check the rules of any site before pointing a stage at it.
 
 ### Toolchain requires {#toolchain-requires}

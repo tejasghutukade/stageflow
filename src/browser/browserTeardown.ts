@@ -35,9 +35,12 @@ export const defaultBrowserRunner: BrowserRunner = (args, env) =>
         env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", ...env },
         timeout: CLOSE_COMMAND_TIMEOUT_MS,
       },
-      (err) => {
+      (err, stdout) => {
         const code = (err as NodeJS.ErrnoException | null)?.code;
-        resolve({ code: err ? (typeof code === "number" ? code : 1) : 0 });
+        resolve({
+          code: err ? (typeof code === "number" ? code : 1) : 0,
+          stdout: String(stdout ?? ""),
+        });
       },
     );
   });
