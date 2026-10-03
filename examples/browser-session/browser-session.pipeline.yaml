@@ -1,0 +1,38 @@
+id: browser-session
+stages:
+  - id: check-login
+    uses: ./check-login.yaml
+    entry: true
+    browser:
+      profile: fixture-site
+      check:
+        url: http://localhost:4173/home
+        logged_in_url: http://localhost:4173/home*
+        logged_out_url: [http://localhost:4173/login*]
+    route:
+      - to: human-login
+        if:
+          field: logged_in
+          op: eq
+          value: false
+      - to: work
+  - id: human-login
+    uses: ./human-login.yaml
+    browser:
+      profile: fixture-site
+      login_url: http://localhost:4173/login
+      check:
+        url: http://localhost:4173/home
+        logged_in_url: http://localhost:4173/home*
+        logged_out_url: [http://localhost:4173/login*]
+    on_verify_fail:
+      mode: repair
+      max_attempts: 3
+      retry_safety: idempotent
+      include_failed_checks: true
+    route:
+      - to: work
+  - id: work
+    uses: ./work.yaml
+    browser:
+      profile: fixture-site

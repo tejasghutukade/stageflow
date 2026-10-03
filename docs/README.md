@@ -27,6 +27,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Envelopes](envelopes.md) | Stage handoff contract (`emit_stage_envelope`, artifacts) |
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
+| [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, Docker limit |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 
 ## Operating Stageflow

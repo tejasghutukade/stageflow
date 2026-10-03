@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Browser sessions: stage `browser` field (profile, headed, `allow_domains`, `check`), Host login check, human login stage with `browser_login` verify, profile lock and queue, teardown and orphan sweep, bundled `browser` skill, `browser.blocked_sites` host config, audit log. See `docs/browser.md` and `examples/browser-session/`.
+
 ## [0.27.1] - 2026-09-26
 
 ### Fixed

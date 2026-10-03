@@ -36,6 +36,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `agent/` | Pi coding agent adapter |
 | `mcp/` | MCP server and tools |
 | `server/` | HTTP routes for the operator console API |
+| `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
 | `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |
 | `envelope/` | Envelope schema and validation |
 

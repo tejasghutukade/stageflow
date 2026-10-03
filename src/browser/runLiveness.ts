@@ -9,6 +9,8 @@ export function createRunLiveness(source: {
   readRunMeta(runId: string): Promise<{ status?: RunStatus }>;
 }): RunLiveness {
   return async (runId) => {
+    const cli = /^cli-(\d+)-/.exec(runId);
+    if (cli) return pidAlive(Number(cli[1]));
     try {
       const status = (await source.readRunMeta(runId)).status;
       return (
@@ -23,4 +25,13 @@ export function createRunLiveness(source: {
       throw err;
     }
   };
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }

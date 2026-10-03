@@ -599,6 +599,48 @@ sf skills install --from-zip "https://github.com/tt-a1i/archify/releases/downloa
 
 See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding). Durable install in a container is [docker exec / image bake](docker.md#cli-via-docker-exec); harnesses prefer run-scoped `start_run.skills` when that lands ([MCP decision table](mcp.md#cli-only-capabilities-decision-table)).
 
+## `sf browser`
+
+Manage saved browser logins (profiles) used by stages with a `browser` field. Output never shows profile paths or cookie values.
+
+```bash
+sf browser profiles [--json]
+sf browser status <name> [--json]
+sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
+sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>] [--json]
+sf browser clear <name> [--yes] [--json]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `profiles` | Lists profile names and last use. Text is TSV `name\tlast_used` (`never` if unknown). JSON: `{ "profiles": [ { "name", "last_used" } ] }`. |
+| `status` | Shows whether the profile exists, who holds its lock (run and stage), and whether a browser session is open. JSON: `{ "name", "exists", "locked", "lock": { "run_id", "stage_id", "live" } \| null, "session_open" }`. |
+| `check` | Opens `--url` with the profile the same way a stage does and prints the Host-computed result. JSON: `{ "logged_in": true \| false \| null, "url", "state": "logged_in" \| "logged_out" \| "unknown" }`. Closes the session after. The profile must exist. |
+| `login` | Opens a visible window on `--url` and waits until the page address matches `--logged-in`, the timeout passes (default 300 s), the window is closed, or you press Ctrl-C. Then closes the session so the login is saved. Creates the profile if it is new. Needs a screen. |
+| `clear` | Closes any open session and deletes the profile. Asks to confirm on a terminal. Without a terminal it needs `--yes`. |
+
+| Flag | Description |
+|------|-------------|
+| `--logged-in` | Glob for addresses that mean logged in. `*` matches any text. |
+| `--logged-out` | Glob for addresses that mean logged out. Repeatable. Wins over `--logged-in`. |
+| `--headless` | `check` only: no visible window. |
+| `--yes` | `clear` only: skip the confirmation. |
+| `--timeout-sec` | `login` only: how long to wait. |
+
+`check`, `login`, and `clear` take the profile lock. If a live run holds the profile they stop with exit `2`. Locks left by dead runs or dead CLI calls are reclaimed.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Success. For `check`: logged in. |
+| `1` | Error: bad usage, missing profile, no screen for `login`, cancelled or unconfirmed `clear`. |
+| `2` | Profile is in use by a live run. |
+| `3` | `check`: logged out. |
+| `4` | `check`: unknown (patterns could not decide). |
+| `5` | `login`: not completed (timeout or window closed). |
+| `130` | `login`: stopped with Ctrl-C. |
+
+With `--json`, errors print `{ "error", "code" }` on stdout with the same exit codes. Codes: `not_found`, `profile_busy`, `confirmation_required`, `open_failed`, `invalid_profile_key`, `error`.
+
 ## `sf validate`
 
 Validate catalog YAML (pipelines, their stages, and tasks).
