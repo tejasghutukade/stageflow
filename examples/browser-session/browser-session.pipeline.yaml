@@ -15,7 +15,8 @@ stages:
           field: logged_in
           op: eq
           value: false
-      - to: work
+      - to: work-a
+      - to: work-b
   - id: human-login
     uses: ./human-login.yaml
     browser:
@@ -31,8 +32,19 @@ stages:
       retry_safety: idempotent
       include_failed_checks: true
     route:
-      - to: work
-  - id: work
-    uses: ./work.yaml
+      - to: work-a
+      - to: work-b
+  - id: work-a
+    uses: ./work-a.yaml
     browser:
       profile: fixture-site
+    route:
+      - to: merge
+  - id: work-b
+    uses: ./work-b.yaml
+    browser:
+      profile: fixture-site
+    route:
+      - to: merge
+  - id: merge
+    uses: ./merge.yaml

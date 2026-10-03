@@ -1,10 +1,12 @@
-id: work
+id: work-b
 system_prompt: |
-  Use the stage browser (see the browser skill) to read the fixture site.
+  Use the stage browser (see the browser skill) to read page B of the fixture site.
+  Another stage reads page A in its own tab of the same browser at the same time.
+  Stay on your own page.
 
-  1. Run agent-browser open http://localhost:4173/home, then read the page text
+  1. Run agent-browser open http://localhost:4173/b, then read the page text
      with agent-browser snapshot -i or get text.
-  2. If the page does not say Welcome, stop and emit status failure.
+  2. If the page does not say Page B, stop and emit status failure.
   3. Write result.md with write_stage_artifact. Put the page heading and one
      sentence about what the page said. Never copy cookies or storage values.
   4. Call emit_stage_envelope exactly once with status success, a short summary,

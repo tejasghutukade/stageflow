@@ -44,13 +44,13 @@ Profiles are keyed by **owner scope** and name. Locally the scope is one fixed v
 20. As an operator, I want to answer the login gate later (from the console or `sf runs`), so that a scheduled run can wait for me.
 21. As an operator, I want the next run to reuse my login, so that I log in only when the session ends.
 22. As an operator, I want the pipeline to ask me again only when the session is not valid, so that I am not asked for no reason.
-23. As an operator, I want the browser to close when the stage ends, so that no browser process stays on my computer.
+23. As an operator, I want a stage's browser tab and session to close when the stage ends, and the shared browser to close when the run ends, so that no browser process stays on my computer after the run.
 24. As an operator, I want the browser to close when I cancel a run, so that a cancelled run leaves nothing behind.
-25. As an operator, I want a stage that times out or fails to close its browser, so that failed runs do not leak processes.
+25. As an operator, I want a stage that times out or fails to close its tab and session, and a failed run to close the shared browser, so that failed runs do not leak processes.
 26. As an operator, I want Stageflow to close leftover browsers from dead runs when the Host starts, so that a crash does not leave browsers open.
-27. As an operator, I want a second run that needs a busy profile to wait in a queue, so that two browsers never use one profile at once.
+27. As an operator, I want a second run that needs a profile held by another run to wait in a queue until that run ends, so that two runs never use one profile at once.
 28. As an operator, I want to see a "waiting for browser profile" state with the name of the run that holds it, so that I know why a run has not started.
-29. As an operator, I want a stage that shares a profile with a running stage to wait, so that parallel branches do not break the login.
+29. As an operator, I want stages of the same run that share a profile to run in parallel without waiting for each other, so that parallel branches do not break the login or slow down.
 30. As an operator, I want to list my profiles, so that I know which logins Stageflow holds.
 31. As an operator, I want to check one profile from the command line, so that I can test a login without a pipeline.
 32. As an operator, I want to log in to a profile from the command line, so that I can prepare a login before a scheduled run.
@@ -82,6 +82,8 @@ Profiles are keyed by **owner scope** and name. Locally the scope is one fixed v
 58. As a maintainer, I want tests to run with no real browser by default, so that CI is fast and stable.
 59. As a maintainer, I want one opt-in smoke test with real Chrome and a local fixture login server, so that I can check the real tool before a release.
 60. As a maintainer, I want the docs and an example pipeline to use a neutral site, so that the project does not promote rule-breaking use of any third-party site.
+61. As a pipeline author, I want parallel stages that name the same profile to share one login in their own browser tabs, so that fan-out branches can work on different pages at the same time.
+62. As an operator, I want the shared browser to stay open for the whole run, so that session-only cookies and the login carry from stage to stage.
 
 ## Implementation Decisions
 

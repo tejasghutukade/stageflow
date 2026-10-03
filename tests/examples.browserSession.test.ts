@@ -7,11 +7,21 @@ import { createFixtureServer } from "../examples/browser-session/fixture-server.
 const EXAMPLE = path.join(process.cwd(), "examples", "browser-session");
 
 describe("examples/browser-session pipeline", () => {
-  it("loads with the check, login, work join topology", async () => {
+  it("loads with the check, login, two parallel work stages, merge topology", async () => {
     const loaded = await loadPipeline(path.join(EXAMPLE, "browser-session.pipeline.yaml"));
     const byId = new Map(loaded.stages.map((s) => [s.id, s]));
-    expect([...byId.keys()]).toEqual(["check-login", "human-login", "work"]);
+    expect([...byId.keys()]).toEqual([
+      "check-login",
+      "human-login",
+      "work-a",
+      "work-b",
+      "merge",
+    ]);
     for (const stage of loaded.stages) {
+      if (stage.id === "merge") {
+        expect(stage.browser).toBeUndefined();
+        continue;
+      }
       expect(stage.browser?.profile).toBe("fixture-site");
       expect(stage.requires).toEqual([{ tool: "agent-browser" }]);
     }
@@ -19,10 +29,18 @@ describe("examples/browser-session pipeline", () => {
       loaded.dag.nodes.map((n) => [n.id, n.needsEdges.map((e) => [e.id, e.if !== undefined])]),
     );
     expect(edges["human-login"]).toEqual([["check-login", true]]);
-    expect(edges.work).toEqual(
+    for (const work of ["work-a", "work-b"]) {
+      expect(edges[work]).toEqual(
+        expect.arrayContaining([
+          ["check-login", false],
+          ["human-login", false],
+        ]),
+      );
+    }
+    expect(edges.merge).toEqual(
       expect.arrayContaining([
-        ["check-login", false],
-        ["human-login", false],
+        ["work-a", false],
+        ["work-b", false],
       ]),
     );
     expect(loaded.dag.nodes.find((n) => n.id === "human-login")?.completion).toBeDefined();
@@ -57,6 +75,15 @@ describe("examples/browser-session fixture server", () => {
     expect(persistent).toMatch(/Max-Age=/i);
     expect(session).toBeDefined();
     expect(session).not.toMatch(/Max-Age|Expires/i);
+  });
+
+  it("serves distinct pages /a and /b only with the cookie", async () => {
+    for (const page of ["a", "b"]) {
+      const anon = await fetch(`${base}/${page}`, { redirect: "manual" });
+      expect(anon.status).toBe(302);
+      const res = await fetch(`${base}/${page}`, { headers: { cookie: "fixture_login=1" } });
+      expect(await res.text()).toContain(`Page ${page.toUpperCase()}`);
+    }
   });
 
   it("shows Welcome on /home only with the cookie", async () => {

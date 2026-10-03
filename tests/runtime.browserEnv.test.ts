@@ -305,13 +305,12 @@ describe("shared browser (anchor) per run and profile", () => {
     expect(opens[0]!.env.AGENT_BROWSER_IDLE_TIMEOUT_MS).toBe("0");
     expect(opens[0]!.env).not.toHaveProperty("AGENT_BROWSER_CDP");
 
+    const closes = calls.filter(
+      (c) => c.args[0] === "close" && c.env.AGENT_BROWSER_SESSION === "sf-acct",
+    );
+    expect(closes).toHaveLength(1);
     const anchorFile = path.join(store.getWorkspaceDir(started.runId), "browser", "acct", "anchor.json");
-    const persisted = await readJson(anchorFile);
-    expect(persisted).toMatchObject({ cdpAddress: CDP, runId: started.runId, profile: "acct", restarts: 0 });
-    expect(persisted.anchorEnv.AGENT_BROWSER_PROFILE).toBeTruthy();
-    expect((await stat(anchorFile)).mode & 0o777).toBe(0o600);
-    const owner = await readJson(path.join(persisted.anchorEnv.AGENT_BROWSER_SOCKET_DIR, "owner.json"));
-    expect(owner).toMatchObject({ runId: started.runId, anchor: true, profile: "acct" });
+    await expect(stat(anchorFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("gives a different run its own anchor", async () => {
@@ -324,7 +323,7 @@ describe("shared browser (anchor) per run and profile", () => {
     expect(anchorOpens(calls)).toHaveLength(2);
   });
 
-  it("reuses the persisted anchor and refreshes the stage env when the anchor restarted", async () => {
+  it("starts a new anchor for a retry after the run ended and refreshes the stage env address", async () => {
     const calls: RunnerCall[] = [];
     let current = CDP;
     const support = localSupport({}, calls, () => current);
@@ -350,7 +349,7 @@ describe("shared browser (anchor) per run and profile", () => {
     expect((await manager.retryStage(started.runId, "login")).ok).toBe(true);
     await waitForStatus(store, started.runId, "succeeded");
 
-    expect(anchorOpens(calls)).toHaveLength(1);
+    expect(anchorOpens(calls)).toHaveLength(2);
     const after = envOf(launched, "login", 2);
     expect(after.AGENT_BROWSER_CDP).toBe(current);
     for (const key of Object.keys(before).filter((k) => k.startsWith("AGENT_BROWSER_") && k !== "AGENT_BROWSER_CDP")) {
@@ -358,8 +357,6 @@ describe("shared browser (anchor) per run and profile", () => {
     }
     const stageFile = await readJson(path.join(workspace, "stages", "login", "browser-env.json"));
     expect(stageFile.AGENT_BROWSER_CDP).toBe(current);
-    const anchor = await readJson(path.join(workspace, "browser", "acct", "anchor.json"));
-    expect(anchor).toMatchObject({ cdpAddress: current, restarts: 1 });
   });
 
   it("leaves profile-less stages unchanged: own browser, no anchor, no CDP", async () => {

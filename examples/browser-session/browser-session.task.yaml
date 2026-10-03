@@ -1,5 +1,5 @@
 id: browser-session
-goal: Read the home page of the local fixture site with a saved login and write a short result file.
+goal: Read two pages of the local fixture site in parallel with one saved login and write a short merged result file.
 context: |
   Start the fixture site first (node examples/browser-session/fixture-server.mjs).
   The first run asks you to log in once in a visible browser window. Later runs reuse the saved login.

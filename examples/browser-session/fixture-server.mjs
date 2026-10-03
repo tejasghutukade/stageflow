@@ -39,6 +39,18 @@ export function createFixtureServer() {
       return;
     }
 
+    if (url.pathname === "/a" || url.pathname === "/b") {
+      if (!loggedIn) {
+        res.writeHead(302, { location: "/login" });
+        res.end();
+        return;
+      }
+      const which = url.pathname.slice(1).toUpperCase();
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(PAGE(`<h1>Page ${which}</h1><p>Welcome. This is page ${which} of the fixture site.</p>`));
+      return;
+    }
+
     res.writeHead(302, { location: "/home" });
     res.end();
   });

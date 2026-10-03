@@ -822,6 +822,8 @@ Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.
 | `login_url` | string | Optional. Page a [human login stage](#browser-human-login) opens; defaults to `check.url` |
 | `check` | object | Optional login check: `url` (required), `logged_in_url` (glob), `logged_out_url` (glob or list of globs) |
 
+Stages of one run that name the same `profile` share one browser, each in its own tab, and the run holds the profile until it ends. See [Browser sessions](browser.md#shared-browser-and-tabs).
+
 Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
 
 ```yaml
@@ -883,7 +885,7 @@ A stage with `browser` whose `verify` has `type: browser_login` is a **human log
       - to: work
 ```
 
-Before the agent starts, the Host opens `login_url` in a visible window (no headless fallback, and no pre-agent login check) and the stage prompt tells the agent to call `ask_operator` with `kind: confirm` and leave the browser open. The window and the profile lock stay held while the stage waits. After the operator accepts and the agent emits, the Host re-runs the login check in the same session; `browser_login` passes only when the result is logged in. A wrong confirm fails the after-phase check, and `on_verify_fail` with `mode: repair` runs the stage again (a new attempt, a new gate, the same session) up to `max_attempts`. `on_verify_fail` is a recovery policy for the same stage, not a route target, so this self-loop is its native form. When the check stage already finds a valid login, its `if` route skips the login stage and the work stage still joins (see the fixture `tests/fixtures/pipelines/browser-human-login.pipeline.yaml`).
+Before the agent starts, the Host opens `login_url` in a visible window (no headless fallback, and no pre-agent login check) and the stage prompt tells the agent to call `ask_operator` with `kind: confirm` and leave the browser open. The window (the run's shared browser) and the run's profile lease stay held while the stage waits. After the operator accepts and the agent emits, the Host re-runs the login check in the same session; `browser_login` passes only when the result is logged in. A wrong confirm fails the after-phase check, and `on_verify_fail` with `mode: repair` runs the stage again (a new attempt, a new gate, the same session) up to `max_attempts`. `on_verify_fail` is a recovery policy for the same stage, not a route target, so this self-loop is its native form. When the check stage already finds a valid login, its `if` route skips the login stage and the work stage still joins (see the fixture `tests/fixtures/pipelines/browser-human-login.pipeline.yaml`).
 
 If the Host has no screen (Linux without `DISPLAY` / `WAYLAND_DISPLAY`) the stage fails before the agent starts: "A visible browser is needed for login, but this Host has no screen. A live view handoff is not available yet." In Docker the message adds a hint to log in on a machine with a screen first.
 
