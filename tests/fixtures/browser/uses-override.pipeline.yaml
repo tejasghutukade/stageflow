@@ -1,0 +1,13 @@
+id: browser-uses-override
+stages:
+  - id: worker
+    uses: ./file-browser.stage.yaml
+    browser:
+      profile: entry-profile
+      allow_domains: [example.com, "*.example.com"]
+      check:
+        url: https://example.com/feed
+        logged_in_url: https://example.com/feed*
+        logged_out_url:
+          - https://example.com/login*
+          - https://example.com/checkpoint*

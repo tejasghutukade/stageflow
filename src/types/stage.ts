@@ -30,6 +30,19 @@ export type StageIoYaml = {
  * in `src/config/yamlDialect.ts`. Do not add new catalog keys here — add them on
  * the YAML dialect and map them in compileTargetContract.
  */
+export type StageBrowserConfig = {
+  profile?: string;
+  headed?: boolean;
+  allow_domains?: string[];
+  /** Page the Host opens for a human login stage; defaults to `check.url`. */
+  login_url?: string;
+  check?: {
+    url: string;
+    logged_in_url?: string;
+    logged_out_url?: string | string[];
+  };
+};
+
 export type StageConfig = {
   id: string;
   system_prompt: string;
@@ -50,6 +63,8 @@ export type StageConfig = {
   secrets?: StageSecretDecl[];
   /** Declared toolchain binaries this stage needs (Slot 9). */
   requires?: ToolRequirement[];
+  /** Browser session settings for this stage; adds the agent-browser requirement. */
+  browser?: StageBrowserConfig;
   /**
    * Selects the AgentPort backend for this stage, overriding pipeline/global.
    * Parsed but not yet consulted — see STAGE_LEVEL_AGENT_OVERRIDE_ENABLED.

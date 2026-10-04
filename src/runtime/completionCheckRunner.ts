@@ -89,6 +89,12 @@ export type CompletionCheckRunnerInput = {
   /** Why the runtime could not establish the required pre-stage baseline. */
   checkoutError?: string;
   checklistAttestations?: readonly ChecklistAttestation[];
+  /** Re-runs the Host login check against the stage's own browser session. */
+  browserLogin?: () => Promise<{
+    state: "logged_in" | "logged_out" | "unknown";
+    logged_in: boolean | null;
+    url: string;
+  }>;
   onCheckStart?: (check: CompletionCheck) => Promise<void> | void;
   onCheckComplete?: (result: CompletionCheckResult) => Promise<void> | void;
 };
@@ -142,7 +148,14 @@ export type ChecklistCheckEvidence = {
   unexpected_items: string[];
 };
 
+export type BrowserLoginCheckEvidence = {
+  kind: "browser_login";
+  state?: "logged_in" | "logged_out" | "unknown";
+  url?: string;
+};
+
 export type CompletionCheckEvidence =
+  | BrowserLoginCheckEvidence
   | CommandCheckEvidence
   | ArtifactCheckEvidence
   | PayloadSchemaCheckEvidence
@@ -562,6 +575,34 @@ function runChecklistCheck(
   return result(check, "passed", evidence);
 }
 
+async function runBrowserLoginCheck(
+  check: Extract<CompletionCheck, { type: "browser_login" }>,
+  input: CompletionCheckRunnerInput,
+): Promise<CompletionCheckResult> {
+  const empty: BrowserLoginCheckEvidence = { kind: "browser_login" };
+  if (input.browserLogin === undefined) {
+    return result(check, "error", empty, "browser_login check requires a browser session");
+  }
+  try {
+    const observed = await input.browserLogin();
+    const evidence: BrowserLoginCheckEvidence = {
+      kind: "browser_login",
+      state: observed.state,
+      url: observed.url,
+    };
+    return observed.logged_in === true
+      ? result(check, "passed", evidence)
+      : result(
+          check,
+          "failed",
+          evidence,
+          `the Host login check still sees a ${observed.state === "unknown" ? "session it cannot confirm" : "logged-out session"}`,
+        );
+  } catch (error) {
+    return result(check, "error", empty, error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function runCheck(
   check: CompletionCheck,
   input: CompletionCheckRunnerInput,
@@ -579,6 +620,8 @@ async function runCheck(
       return runCheckoutChangesCheck(check, input);
     case "checklist":
       return runChecklistCheck(check, input);
+    case "browser_login":
+      return runBrowserLoginCheck(check, input);
   }
 }
 

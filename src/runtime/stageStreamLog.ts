@@ -77,10 +77,15 @@ export type StageStreamLogWriter = {
 
 export function createStageStreamLogWriter(
   streamLogPath: string,
-  options: { flushThrottleMs?: number; capBytes?: number } = {},
+  options: {
+    flushThrottleMs?: number;
+    capBytes?: number;
+    redact?: (text: string) => string;
+  } = {},
 ): StageStreamLogWriter {
   const flushThrottleMs = options.flushThrottleMs ?? STREAM_FLUSH_THROTTLE_MS;
   const capBytes = options.capBytes ?? DEFAULT_CAP_BYTES;
+  const scrub = options.redact ?? redactSecrets;
 
   let buffer = "";
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -93,7 +98,7 @@ export function createStageStreamLogWriter(
       timer = null;
     }
     if (!buffer) return writeChain;
-    const chunk = redactSecrets(buffer);
+    const chunk = scrub(buffer);
     buffer = "";
     writeChain = writeChain.then(() => appendChunk(streamLogPath, chunk, capBytes));
     return writeChain;

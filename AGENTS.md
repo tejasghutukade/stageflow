@@ -36,6 +36,7 @@ Stageflow is a runtime for **configurable multi-stage agent workflows**, with a 
 | `agent/` | Pi coding agent adapter |
 | `mcp/` | MCP server and tools |
 | `server/` | HTTP routes for the operator console API |
+| `browser/` | Browser sessions: profile store, lock, host, login check, teardown (see `docs/browser.md`) |
 | `tools/` | Pi tools (`ask_operator`, `emit_stage_envelope`, …) |
 | `envelope/` | Envelope schema and validation |
 
@@ -90,6 +91,19 @@ Related docs: [envelopes.md](docs/envelopes.md), [hitl.md](docs/hitl.md), [cli-r
 - JSON output and exit codes are part of the public contract — see `docs/ci.md` and `tests/cli.*.test.ts`
 - Stage worker protocol: `src/runtime/stageWorkerProtocol.ts`
 - Provider auth: `src/agent/providerAuth.ts`, `docs/providers.md`
+
+### Browser sessions
+
+Stage `browser:` field, saved logins, shared browser per run. Code: `src/browser/`, `src/cli/browserCommand.ts`, `src/config/stageBrowser.ts`, `builtin-skills/browser/SKILL.md`, plus hooks in `src/runtime/` (scheduler, run manager, stage launcher). Read [docs/browser-internals.md](docs/browser-internals.md) before changing it; user docs are [docs/browser.md](docs/browser.md).
+
+Rules every change must keep:
+
+- The stage browser env is byte-identical for every command, attempt, and resume worker. Compute once, persist, reuse.
+- YAML never carries a path or a scope. The Host chooses both.
+- The owner scope is fixed to `local` today. Hosted multi-tenant work is tracked in `TODO(multi-tenant)` comments (`grep -rn "TODO(multi-tenant)" src`) and the table in [docs/browser-internals.md](docs/browser-internals.md#multi-tenant-todo). Keep new code taking a scope as input, never a literal.
+- Tests use an injected `BrowserRunner` (no real `agent-browser`) and a per-test `socketRoot`. `tests/globalSetup.socketLeakGuard.ts` fails the run on leaked socket dirs.
+
+Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BROWSER_SMOKE=1 npx vitest run tests/browser.realChrome.smoke.test.ts`
 
 ### Tests
 

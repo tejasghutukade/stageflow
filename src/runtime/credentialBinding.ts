@@ -37,11 +37,15 @@ export function sfOwnedAuthPath(): string {
   return path.join(sfOwnedAgentDir(), "auth.json");
 }
 
+export const PI_HOME_AUTH_PATH_ENV = "STAGEFLOW_PI_HOME_AUTH_PATH";
+
+/** A stage worker's HOME is an empty attempt dir, so the Host passes its own Pi auth path through the environment. */
 export function piHomeAuthPath(
   override?: string,
 ): string {
   return (
     override ??
+    (process.env[PI_HOME_AUTH_PATH_ENV] || undefined) ??
     path.join(os.homedir(), ".pi", "agent", "auth.json")
   );
 }

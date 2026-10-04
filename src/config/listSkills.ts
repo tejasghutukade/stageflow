@@ -1,5 +1,6 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { resolveBuiltinSkillFile } from "./builtinSkills.js";
 import {
   DefaultResourceLoader,
   SettingsManager,
@@ -9,7 +10,7 @@ import {
 export type SkillScope = "user" | "project" | "temporary";
 
 /** Skill resolution origin — separate from ConfigOriginKind. */
-export type SkillOrigin = "run" | "checkout" | "host";
+export type SkillOrigin = "run" | "checkout" | "host" | "builtin";
 
 export type SkillListing = {
   name: string;
@@ -175,8 +176,21 @@ function originForLoaderSkill(
   return "host";
 }
 
+function resolveBuiltinResolved(name: string): ResolvedSkill | undefined {
+  const filePath = resolveBuiltinSkillFile(name);
+  if (filePath === undefined) return undefined;
+  return {
+    name,
+    filePath,
+    baseDir: path.dirname(filePath),
+    scope: "user",
+    source: "builtin",
+    origin: "builtin",
+  };
+}
+
 /**
- * Resolve a skill by name. Search order: run skills → checkout `.pi/skills` → host agentDir.
+ * Resolve a skill by name. Search order: run skills → checkout `.pi/skills` → host agentDir → package built-ins.
  */
 export async function resolveSkillByName(
   name: string,
@@ -193,11 +207,11 @@ export async function resolveSkillByName(
 
   const loader = await openSkillCatalogLoader(options);
   const match = loader.getSkills().skills.find((skill) => skill.name === name);
-  if (!match) return undefined;
+  if (!match) return resolveBuiltinResolved(name);
   try {
     await access(match.filePath);
   } catch {
-    return undefined;
+    return resolveBuiltinResolved(name);
   }
   if (
     options.checkoutRoot !== undefined &&

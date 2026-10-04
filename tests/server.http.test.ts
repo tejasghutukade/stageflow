@@ -1013,6 +1013,30 @@ describe("localhost HTTP API", () => {
     void url;
   });
 
+  it("POST answer surfaces verification=failed_retrying and keeps final failures as errors", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-http-ans-verify-"));
+    const { server, base, manager } = await withServer(root, scriptedFakeAgent([]));
+    const spy = vi.spyOn(manager, "deliverAnswer");
+    try {
+      const post = () =>
+        jsonFetch(`${base}/api/runs/r1/stages/login/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ promptId: "p", kind: "confirm", decision: "accept" }),
+        });
+      spy.mockResolvedValueOnce({ ok: true, verification: "failed_retrying" });
+      const retrying = await post();
+      expect(retrying.status).toBe(202);
+      expect(retrying.body).toEqual({ ok: true, verification: "failed_retrying" });
+      spy.mockResolvedValueOnce({ ok: false, reason: "Completion verification failed: logged-in", status: 500 });
+      const final = await post();
+      expect(final.status).toBe(500);
+      expect(final.body).toEqual({ error: "Completion verification failed: logged-in" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("POST answer delivers T2 free_text into waiting stage (202)", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-http-ans-"));
     const agent = scriptedFakeAgent([

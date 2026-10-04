@@ -9,6 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { Type } from "typebox";
+import type { HostGateContext } from "../browser/gateHandoff.js";
 import { prepareAskOperatorArguments } from "./prepareToolArguments.js";
 
 export class AskOperatorError extends Error {
@@ -72,7 +73,7 @@ export type MultiQuestionItem = {
   id: string;
 };
 
-export type AskOperatorPrompt =
+export type AskOperatorPrompt = (
   | { kind: "free_text"; message: string; id: string }
   | { kind: "confirm"; message: string; id: string }
   | {
@@ -85,7 +86,9 @@ export type AskOperatorPrompt =
       message: string;
       artifacts: string[];
       id: string;
-    };
+    }
+) &
+  HostGateContext;
 
 export type Decision = "accept" | "reject";
 

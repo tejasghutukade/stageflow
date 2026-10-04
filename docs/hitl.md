@@ -73,6 +73,18 @@ Params and answers (`src/tools/askOperator.ts`). Optional `id` on the prompt bec
 | `artifact_backed` | `message`, non-empty `artifacts[]`, optional `id` | `{ kind, promptId, decision: "accept" \| "reject", text? }` |
 | `multi_question` | `questions[]` of `free_text` or `confirm` only (nested `multi_question` / `artifact_backed` rejected) | `{ kind, promptId, answers }` — one entry per sub-question |
 
+### Gate handoff {#gate-handoff}
+
+For a stage with a `browser`, the Host adds optional fields to every pending prompt. They are never part of the `ask_operator` params, and the agent cannot set them.
+
+| Field | Meaning |
+|-------|---------|
+| `handoff` | `{ kind: "local_window" }` (the operator uses the browser window on the Host's screen) or `{ kind: "live_view", url }` (reserved for a later remote view; accepted by the schema today) |
+| `site` | Host of `browser.check.url`, else the first `allow_domains` entry, else the host of `browser.login_url` |
+| `profile` | Browser profile name (never a path) |
+
+Prompts from stages without `browser`, and gates stored before this field existed, omit all three and stay valid. See [Human login stage](yaml-catalog.md#browser-human-login).
+
 ## Operator flow
 
 1. Stage agent calls `ask_operator` with a `kind` and message (and `artifacts` for `artifact_backed`)
