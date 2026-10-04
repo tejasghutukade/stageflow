@@ -100,6 +100,7 @@ Rules every change must keep:
 
 - The stage browser env is byte-identical for every command, attempt, and resume worker. Compute once, persist, reuse.
 - YAML never carries a path or a scope. The Host chooses both.
+- The owner scope is fixed to `local` today. Hosted multi-tenant work is tracked in `TODO(multi-tenant)` comments (`grep -rn "TODO(multi-tenant)" src`) and the table in [docs/browser-internals.md](docs/browser-internals.md#multi-tenant-todo). Keep new code taking a scope as input, never a literal.
 - Tests use an injected `BrowserRunner` (no real `agent-browser`) and a per-test `socketRoot`. `tests/globalSetup.socketLeakGuard.ts` fails the run on leaked socket dirs.
 
 Real Chrome smoke test (opt-in, needs `agent-browser` on `PATH`): `STAGEFLOW_BROWSER_SMOKE=1 npx vitest run tests/browser.realChrome.smoke.test.ts`

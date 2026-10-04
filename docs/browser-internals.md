@@ -287,6 +287,20 @@ Hosted use is not built. These are the places a service would replace. Do not ad
 
 The shape that makes this work: a stage env is a CDP address, a session name, and pin-tab. The stage side does not care who owns Chrome.
 
+## Multi-tenant to-do list {#multi-tenant-todo}
+
+The feature is local and single-user today. These places must change before a hosted service. Each has a `TODO(multi-tenant)` comment in the code. Find them all with `grep -rn "TODO(multi-tenant)" src`.
+
+| Item | Where | What to do |
+|------|-------|------------|
+| Fixed owner scope | `profileStore.ts` (`LOCAL_BROWSER_SCOPE`), used in `stageBrowserEnv.ts`, `stageProfileLock.ts`, `cli/browserCommand.ts` | Give each run an owner scope set by the Host from the signed-in user. Pass it to the store, the lease, the audit record, and the CLI. Never read it from YAML. Add a test with two scopes that proves scope A cannot reach scope B. |
+| Key provider unused | `keyProvider.ts` | Call it where profile data is written, with a per-tenant key. Decide what it protects. |
+| Local-only teardown and sweep | `browserTeardown.ts`, `browserSweep.ts` | Add a close and sweep path for a remote browser host. |
+| Paths in run files | `anchor.json`, anchor `owner.json` | They hold a profile path and CDP address. Do not export or share a run folder as-is. A service should keep them out of tenant-visible files. |
+| Unauthenticated local control port | shared browser (CDP on 127.0.0.1) | Run each tenant's browser in an isolated sandbox. |
+
+When you remove a TODO, also update this table and "Known limitations".
+
 ## 9. How to extend {#how-to-extend}
 
 ### Add a `BrowserHost` implementation (for example remote)

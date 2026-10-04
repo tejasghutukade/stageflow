@@ -16,6 +16,8 @@ export function localKeyFilePath(): string {
   return path.join(globalStageflowHome(), "browser", "browser.key");
 }
 
+// TODO(multi-tenant): nothing in the runtime calls a KeyProvider yet, so browser.key is never created outside tests.
+// A service needs a per-tenant key (KMS) and a decision on what it encrypts; the agent-browser key does not protect the Chrome profile.
 export function createLocalKeyProvider(file?: string): KeyProvider {
   return {
     async getKey() {

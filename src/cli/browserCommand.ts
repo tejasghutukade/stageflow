@@ -16,6 +16,8 @@ import { createLocalProfileLock } from "../browser/localProfileLock.js";
 import { createLocalProfileStore } from "../browser/localProfileStore.js";
 import { matchLoginState, runLoginCheck } from "../browser/loginCheck.js";
 import type { ProfileLock, ProfileLockOwner, RunLiveness } from "../browser/profileLock.js";
+// TODO(multi-tenant): every `sf browser` command below uses the fixed local scope.
+// In a hosted service the scope must come from the signed-in user. Search for LOCAL_BROWSER_SCOPE in this file.
 import {
   InvalidProfileKeyError,
   LOCAL_BROWSER_SCOPE,

@@ -87,6 +87,7 @@ export async function resolveStageBrowserEnv(
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
 
+  // TODO(multi-tenant): open the profile in the run owner's scope, not the fixed local scope.
   const profile =
     browser.profile !== undefined
       ? await support.profiles.open({
@@ -142,6 +143,7 @@ export async function resolveStageBrowserEnv(
   if (persisted === undefined) {
     await writeEnv(fresh);
     if (browser.profile !== undefined) {
+      // TODO(multi-tenant): audit the run owner's scope.
       await safeAudit(support.audit, {
         event: "profile_used",
         scope: LOCAL_BROWSER_SCOPE,

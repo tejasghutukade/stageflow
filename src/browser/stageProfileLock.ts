@@ -31,6 +31,7 @@ export async function acquireStageProfile(
   input: ProfileWaitInput,
 ): Promise<"acquired" | "halted"> {
   const locks = stageProfileLock(support);
+  // TODO(multi-tenant): take the scope from the run owner instead of the fixed local scope.
   const key = { scope: LOCAL_BROWSER_SCOPE, name: input.profile };
   const pollMs = support.lockPollMs ?? DEFAULT_LOCK_POLL_MS;
   let announced: ProfileLockOwner | undefined;

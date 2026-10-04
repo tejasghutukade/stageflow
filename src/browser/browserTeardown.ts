@@ -106,6 +106,8 @@ async function removeSessionFiles(dir: string, session: string): Promise<void> {
  * (bounded) for the daemon to disappear, then removes the leftover socket-dir
  * files. Never signals Chrome: a hard kill loses cookie persistence.
  */
+// TODO(multi-tenant): teardown and the orphan sweep assume a local agent-browser runner and a local socket root.
+// A remote BrowserHost (sandbox or provider) needs its own close and sweep path.
 export async function closeBrowserSession(
   env: BrowserEnv,
   options: { runner?: BrowserRunner; closeWaitMs?: number } = {},
