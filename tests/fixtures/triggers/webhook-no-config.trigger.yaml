@@ -1,0 +1,7 @@
+id: webhook-no-config
+pipeline: hello
+task: my-task
+kind: event
+enabled: true
+event:
+  source: webhook

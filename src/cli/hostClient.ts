@@ -18,6 +18,7 @@ import type { RetryStageResult } from "../runtime/runRetryCoordinator.js";
 import { resolveStoreRoot, runWorkspaceDir } from "../runstore/paths.js";
 import type { RunDetail, RunStore } from "../runstore/port.js";
 import { clientAuthorizationHeaders } from "../server/controlToken.js";
+import type { TriggerListItem } from "../server/triggerRoutes.js";
 import type { TaskFile } from "../types/task.js";
 
 async function postJson(
@@ -428,6 +429,63 @@ export async function httpGcRuns(
     };
   }
   return { ok: false, reason: extractError(body, status), status };
+}
+
+export type HttpTriggerLookupResult =
+  | { ok: true; trigger: TriggerListItem }
+  | { ok: false; reason: string; status?: number };
+
+export type HttpListTriggersResult =
+  | { ok: true; triggers: TriggerListItem[] }
+  | { ok: false; reason: string; status?: number };
+
+export async function httpFireTrigger(
+  base: string,
+  triggerId: string,
+  task?: Record<string, unknown>,
+): Promise<StartRunResult> {
+  const { status, body } = await postJson(
+    base,
+    `/api/triggers/${enc(triggerId)}/fire`,
+    task !== undefined ? { task } : {},
+  );
+  if (status !== 202) return toStartFailure(status, body);
+  const parsed = body as {
+    runId: string;
+    queued?: boolean;
+    queuePosition?: number;
+  };
+  const runId = parsed.runId;
+  return {
+    ok: true,
+    runId,
+    ...(parsed.queued === true
+      ? { queued: true, queuePosition: parsed.queuePosition }
+      : {}),
+    done: pollRunUntilTerminal(base, runId).then(runDetailToPipelineRunResult),
+  };
+}
+
+export async function httpListTriggers(
+  base: string,
+): Promise<HttpListTriggersResult> {
+  const { status, body } = await getJson(base, "/api/triggers");
+  if (status !== 200) {
+    return { ok: false, reason: extractError(body, status), status };
+  }
+  const parsed = body as { triggers: TriggerListItem[] };
+  return { ok: true, triggers: parsed.triggers };
+}
+
+export async function httpGetTrigger(
+  base: string,
+  triggerId: string,
+): Promise<HttpTriggerLookupResult> {
+  const { status, body } = await getJson(base, `/api/triggers/${enc(triggerId)}`);
+  if (status !== 200) {
+    return { ok: false, reason: extractError(body, status), status };
+  }
+  return { ok: true, trigger: body as TriggerListItem };
 }
 
 export function resolveAbsolute(cwd: string, maybeRelative: string): string {

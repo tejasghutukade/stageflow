@@ -202,6 +202,9 @@ export async function createHttpHost(
 
   server.on("close", () => {
     boot.stopGcInterval();
+    boot.stopScheduleSource();
+    boot.stopGithubPollSource();
+    boot.stopEmailSource();
     void boot.mcpHandler.close();
   });
 

@@ -12,6 +12,7 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import { browseCatalog } from "../config/browseCatalog.js";
@@ -162,6 +163,15 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+/** Raw bytes, unparsed — for callers (webhook signature verification) that need the exact wire body. */
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 function contentTypeFor(filePath: string): string {
@@ -1301,10 +1311,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(stageWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -1352,10 +1361,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(pipelineWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -1409,6 +1417,20 @@ export function createOperatorRoutes(
           await handleProjectMcpRoutes(req, res, {
             projectRoot: rootDir,
             json,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleTriggerRoutes(req, res, {
+            cwd,
+            manager,
+            store,
+            json,
+            readJsonBody,
+            readRawBody,
+            auditLog,
           })
         ) {
           return true;

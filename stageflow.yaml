@@ -44,9 +44,11 @@ catalog:
     - examples/mcp-hitl-tour
     - examples/feature-loop
     - examples/ship-feature
+  triggers: []
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
+    trigger: "*.trigger.yaml"
   exclude:
     - tests/fixtures
     - examples/route-wiring-smoke-test/rejected
