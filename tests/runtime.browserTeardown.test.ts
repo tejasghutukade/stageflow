@@ -304,6 +304,42 @@ describe("browser teardown", () => {
     await started.done;
     expect(calls).toEqual([]);
   });
+
+  it("does no browser teardown work at all for a run without browser stages", async () => {
+    const calls: Call[] = [];
+    const lockCalls: string[] = [];
+    const locks = {
+      acquire: async () => {
+        lockCalls.push("acquire");
+        return { status: "acquired" as const, release: async () => undefined };
+      },
+      holder: async () => {
+        lockCalls.push("holder");
+        return undefined;
+      },
+      releaseOwner: async () => {
+        lockCalls.push("releaseOwner");
+      },
+      reclaimStale: async () => {
+        lockCalls.push("reclaimStale");
+        return 0;
+      },
+    };
+    const store = createRunStore({ rootDir: path.join(root, "store") });
+    const started = await startPipeline({
+      agent: scriptedFakeAgent([]),
+      store,
+      taskYaml: "id: t\ngoal: g\n",
+      pipeline: pipeline([stage("plain")]),
+      cwd: root,
+      executionMode: "process",
+      stageProcessLauncher: launcherFor(store, {}, []),
+      browser: { ...support(calls), locks },
+    });
+    await started.done;
+    expect(calls).toEqual([]);
+    expect(lockCalls).toEqual([]);
+  });
 });
 
 describe("orphan sweep at Host start", () => {

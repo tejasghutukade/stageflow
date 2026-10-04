@@ -740,6 +740,7 @@ export async function runPipelineDag(
     hostEnv: process.env,
   });
   const stageById = buildStageConfigById(loaded);
+  const runUsesBrowser = [...stageById.values()].some((s) => s.browser !== undefined);
 
   const retryContext = options.retryContext;
   const feedbackSchedule = createReplaySchedule();
@@ -1541,7 +1542,7 @@ export async function runPipelineDag(
     const taskPromise = launchStage(stageId)
       .then(async () => {
         const state = states.get(stageId);
-        if (state === "succeeded" || state === "failed") {
+        if (runUsesBrowser && (state === "succeeded" || state === "failed")) {
           await teardownStageBrowser(
             prepared.browser ?? defaultStageBrowserSupport(),
             {
@@ -1636,7 +1637,11 @@ export async function runPipelineDag(
   }
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
-  if (!(hasWaiting && !schedulingHalted) && !options.schedulingHalt?.hostShutdown) {
+  if (
+    runUsesBrowser &&
+    !(hasWaiting && !schedulingHalted) &&
+    !options.schedulingHalt?.hostShutdown
+  ) {
     await teardownRunBrowsers(
       prepared.browser ?? defaultStageBrowserSupport(),
       {
