@@ -18,7 +18,7 @@ import {
 } from "../tools/askOperator.js";
 
 export type DeliverAnswerResult =
-  | { ok: true }
+  | { ok: true; verification?: "failed_retrying" }
   | { ok: false; reason: string; status: 404 | 409 | 400 | 500 };
 
 export type DeliverAnswerPrefixResult =

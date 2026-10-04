@@ -694,9 +694,18 @@ export async function runRunsCommand(
         return 1;
       }
       if (parsed.json) {
-        printJson(out, { ok: true });
+        printJson(
+          out,
+          result.verification !== undefined
+            ? { ok: true, verification: result.verification }
+            : { ok: true },
+        );
       } else {
-        out.log("ok");
+        out.log(
+          result.verification !== undefined
+            ? `ok (${result.verification})`
+            : "ok",
+        );
       }
       return 0;
     }

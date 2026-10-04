@@ -345,7 +345,7 @@ sf runs waiting → sf runs answer → sf runs wait --until any
 | `--run` | Run id (required) |
 | `--stage` | Stage id (required) |
 | `--answer` | `AskOperatorAnswer` JSON |
-| `--json` | `{ "ok": true }` on success |
+| `--json` | `{ "ok": true }` on success; adds `"verification": "failed_retrying"` when after-phase verification failed and the stage is being repaired (new attempt, new gate) |
 
 If `--answer` is omitted, read stdin JSON only when stdin is not a TTY. On a TTY or empty stdin, exit `1` with a missing-answer error.
 

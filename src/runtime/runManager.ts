@@ -32,6 +32,7 @@ import {
   findUnhandledFailedStage,
   type RunMeta,
   type RunStore,
+  type RunPipelineDagSnapshot,
 } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -58,6 +59,7 @@ import {
   hydrateScheduleFromStore,
   hydratedScheduleHasRunnableWork,
   resumeRun,
+  retryRun,
   runPipelineDag,
 } from "./pipelineScheduler.js";
 import {
@@ -2601,7 +2603,11 @@ export class RunManager {
     runId: string,
     stageId: string,
     opaqueAnswer: OpaqueAnswer,
-  ): Promise<{ ok: boolean; reason?: string }> {
+  ): Promise<{
+    ok: boolean;
+    reason?: string;
+    verification?: "failed_retrying";
+  }> {
     const store = this.options.store;
     const launcher = this.stageProcessLauncher;
     if (!launcher) {
@@ -2689,6 +2695,40 @@ export class RunManager {
       ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
+        const nextRepairAttempt = await this.scheduleRepairAfterVerifyFailure(
+          runId,
+          stageId,
+          meta.pipeline_dag,
+        );
+        if (nextRepairAttempt !== undefined) {
+          await store.updateRunStatus(runId, "running");
+          const repaired = await retryRun({
+            prepared: {
+              task,
+              loaded,
+              run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
+              agent: this.options.agent,
+              store,
+              cwd: meta.project_root ?? this.projectRoot,
+              projectRoot: meta.project_root ?? this.projectRoot,
+              checkoutRoot: meta.checkout_root,
+              hitl: this.hitl,
+              operatorCatalog: this.options.operatorCatalog,
+              ...(this.options.browser !== undefined
+                ? { browser: this.options.browser }
+                : {}),
+            },
+            retryRoots: new Map([[stageId, nextRepairAttempt]]),
+            maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+            executionMode: this.executionMode,
+            stageProcessLauncher: launcher,
+            schedulingHalt: this.ensureSchedulingHalt(runId),
+          });
+          if (repaired.outcome === "failed") {
+            return { ok: false, reason: repaired.reason };
+          }
+          return { ok: true, verification: "failed_retrying" };
+        }
         await store.appendStageEvent(
           runId,
           stageId,
@@ -2767,6 +2807,26 @@ export class RunManager {
     } finally {
       this.attachedWaiting.delete(`${runId}\0${stageId}`);
     }
+  }
+
+  /**
+   * A resumed stage whose after-phase verification failed is repaired by the
+   * same policy the scheduler applies to a first-launch failure. Returns the
+   * freshly created attempt, or undefined when the failure is final.
+   */
+  private async scheduleRepairAfterVerifyFailure(
+    runId: string,
+    stageId: string,
+    dag: RunPipelineDagSnapshot | undefined,
+  ): Promise<number | undefined> {
+    const store = this.options.store;
+    const recovery = dag?.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return undefined;
+    const latest = await store.getLatestStageExecution(runId, stageId);
+    if (latest?.verification_outcome !== "failed") return undefined;
+    const attempts = await store.countStageAttempts(runId, stageId);
+    if (attempts >= recovery.max_attempts) return undefined;
+    return (await store.createStageExecution(runId, stageId)).attempt;
   }
 
   private async reconstructAndContinue(

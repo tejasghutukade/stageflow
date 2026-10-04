@@ -19,9 +19,11 @@ import {
 import { resetGlobalStageflowHomeForTests } from "../src/project/globalHome.js";
 
 let home: string;
+let sockRoot: string;
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), "sf-browser-host-"));
+  sockRoot = await mkdtemp(path.join("/tmp", "sfbt-"));
   process.env.STAGEFLOW_HOME = home;
   resetGlobalStageflowHomeForTests();
 });
@@ -30,6 +32,7 @@ afterEach(async () => {
   resetGlobalStageflowHomeForTests();
   delete process.env.STAGEFLOW_HOME;
   await rm(home, { recursive: true, force: true });
+  await rm(sockRoot, { recursive: true, force: true });
 });
 
 const implementations: Array<{
@@ -40,7 +43,7 @@ const implementations: Array<{
   {
     name: "local",
     make: () => ({
-      host: createLocalBrowserHost({ platform: "darwin", hostEnv: {} }),
+      host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: sockRoot }),
       profiles: createLocalProfileStore(),
     }),
     remote: false,
@@ -220,7 +223,7 @@ describe.each(implementations)("BrowserHost contract: $name", ({ make, remote })
 
 describe("local BrowserHost settings", () => {
   const local = (opts: Parameters<typeof createLocalBrowserHost>[0] = {}) => ({
-    host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, ...opts }),
+    host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot: sockRoot, ...opts }),
     profiles: createLocalProfileStore(),
   });
 
