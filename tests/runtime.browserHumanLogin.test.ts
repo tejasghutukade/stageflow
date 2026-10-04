@@ -100,7 +100,7 @@ function setup(options: {
     closeWaitMs: 100,
     socketRoot: path.join(root, "sock"),
     loginCheck: { settleMs: 0 },
-    ...(options.display !== undefined ? { display: () => options.display! } : {}),
+    display: () => options.display ?? { hasDisplay: true, docker: false },
   };
   const store = createRunStore({ rootDir: path.join(root, "store") });
   const manager = new RunManager({ agent, store, cwd: root, browser: support });

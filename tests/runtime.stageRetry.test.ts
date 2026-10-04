@@ -599,7 +599,7 @@ describe("runtime stage retry", () => {
     // manager's own cwd/projectRoot.
     const elsewhereManager = new RunManager({ agent, store, cwd: elsewhere });
     const retry = await elsewhereManager.retryStage(started.runId, "design-doc");
-    expect(retry.ok).toBe(true);
+    expect(retry).toMatchObject({ ok: true });
 
     const capturedRoots = credentialBindingSpy.mock.calls.map((call) => call[0]);
     expect(capturedRoots.length).toBeGreaterThan(0);
