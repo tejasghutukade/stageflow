@@ -39,7 +39,7 @@ function opaqueEqual(a: unknown, b: unknown): boolean {
 }
 
 export type FakeAgentBehavior =
-  | { type: "emit"; envelope: unknown }
+  | { type: "emit"; envelope: unknown; toolArgs?: string }
   | { type: "never_emit" }
   | { type: "throw"; message: string }
   | {
@@ -194,6 +194,9 @@ export class FakeAgent implements AgentPort {
         event: "tool_start",
         toolName: "fake_tool",
         toolCallId: "fake-1",
+        ...("toolArgs" in behavior && behavior.toolArgs !== undefined
+          ? { argsPreview: behavior.toolArgs }
+          : {}),
       });
       input.onActivity?.({
         event: "tool_end",

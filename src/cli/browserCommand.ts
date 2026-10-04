@@ -24,6 +24,8 @@ import {
   validateProfileName,
 } from "../browser/profileStore.js";
 import { cliRunLive, createRunLiveness } from "../browser/runLiveness.js";
+import { loadHostConfig } from "../config/hostConfig.js";
+import { BlockedSiteError, hostOf, isBlockedHost } from "../browser/sitePolicy.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import { createRunStore, storeNeedsHostMigration } from "../runstore/createStore.js";
 import { resolveStoreRoot } from "../runstore/paths.js";
@@ -62,6 +64,8 @@ export type BrowserCommandDeps = {
   locks: ProfileLock;
   runner: BrowserRunner;
   audit?: AuditSink;
+  /** Host-blocked sites; defaults to `browser.blocked_sites` from Host config. */
+  blockedSites?: readonly string[];
   display: DisplayProbe;
   /** Liveness of the run holding a profile lock. */
   isRunLive: RunLiveness;
@@ -342,11 +346,23 @@ async function statusCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   return BROWSER_EXIT.ok;
 }
 
+function assertUrlAllowed(deps: BrowserCommandDeps, url: string): void {
+  const host = hostOf(url);
+  if (host === undefined) return;
+  const blocked = deps.blockedSites ?? loadHostConfig().browserBlockedSites;
+  if (isBlockedHost(host, blocked) !== undefined) {
+    throw new BlockedSiteError(
+      `sf browser: --url "${host}" is blocked by Host policy (browser.blocked_sites)`,
+    );
+  }
+}
+
 async function checkCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   const name = requireName(p);
   if (p.url === undefined || p.loggedIn === undefined) {
     throw new Error("sf browser check needs --url and --logged-in");
   }
+  assertUrlAllowed(deps, p.url);
   const check = {
     url: p.url,
     logged_in_url: p.loggedIn,
@@ -377,6 +393,7 @@ async function loginCmd(deps: BrowserCommandDeps, p: Parsed): Promise<number> {
   if (p.url === undefined || p.loggedIn === undefined) {
     throw new Error("sf browser login needs --url and --logged-in");
   }
+  assertUrlAllowed(deps, p.url);
   const screen = deps.display();
   if (!screen.hasDisplay) throw noScreenError(screen.docker);
   let signal = deps.signal;
@@ -503,7 +520,9 @@ export async function runBrowserCommand(
     }
   } catch (err) {
     const cli = err instanceof CliError ? err : undefined;
-    const code = cli?.code ?? (err instanceof InvalidProfileKeyError ? err.code : "error");
+    const code = cli?.code ?? (err instanceof InvalidProfileKeyError || err instanceof BlockedSiteError
+        ? err.code
+        : "error");
     const message = (err as Error).message;
     if (json) resolved.log(JSON.stringify({ error: message, code }, null, 2));
     else resolved.error(message);

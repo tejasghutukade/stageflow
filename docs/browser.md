@@ -73,7 +73,7 @@ The shared browser listens on a CDP port bound to `127.0.0.1` with no token. Whi
 
 Headed is the default. The operator can watch, and all stages that share a profile look like one device to the site. Set `headed: false` per stage for CI or background work. Use one mode for all stages that share a profile, because headless Chrome reports a different user agent. A human login stage must be headed.
 
-On Linux the Host needs `DISPLAY` or `WAYLAND_DISPLAY` for a headed browser.
+On Linux the Host needs `DISPLAY` or `WAYLAND_DISPLAY` for a headed browser. Without one, a stage that did not ask for a login window quietly runs headless. macOS and Windows always count as having a screen.
 
 ## Docker and hosts with no screen
 
@@ -89,17 +89,17 @@ browser:
     - example.com
 ```
 
-A stage whose `allow_domains`, `check`, or `login_url` touches a blocked site (or a subdomain) fails before the browser starts. YAML cannot override it.
+A stage whose `allow_domains`, `check` URLs or `login_url` touch a blocked site (or a subdomain) fails when the stage starts, before the browser opens. `sf browser check` and `sf browser login` refuse a blocked `--url` the same way (exit code 1, JSON `code: "browser_site_blocked"`). YAML cannot override the list.
 
 ## Redaction and audit
 
-Cookie, storage, and token values are registered for redaction in stream logs and run logs. Run state and envelopes hold the profile name only, never a path or a value.
+Stages with a `browser` field get extra pattern redaction for cookie, storage, header, and token shapes in stream logs, live activity, and envelopes. Other stages are not changed. Pattern redaction is best effort. The skill also tells the agent never to print cookies or storage. Run state and envelopes hold the profile name only, never a path or a value.
 
-The Host appends audit records to `$STAGEFLOW_HOME/browser/audit.jsonl`: profile created, profile used by a run and stage, profile deleted, and navigation outside the allowlist. Records hold names, ids, and hosts only.
+The Host appends audit records to `$STAGEFLOW_HOME/browser/audit.jsonl`: profile created, profile used by a run and stage, and profile deleted. Records hold names and ids only. For profile stages with `allow_domains` it also records `navigation_outside_allowlist` (host only, once per host) and `allowlist_unverified` (stage activity log unreadable); see the soft allowlist below.
 
 ## Allowlist caveat
 
-`allow_domains` is enforced by agent-browser only for stages with no profile. agent-browser rejects its native allowlist together with a profile. For a stage with a profile, `allow_domains` is soft: it goes into the skill instructions and the Host checks navigation after the fact and audits violations. It is not a security boundary for profile stages. Use `browser.blocked_sites` and your own review for hard limits.
+`allow_domains` is enforced by agent-browser only for stages with no profile. agent-browser rejects its native allowlist together with a profile. For a stage with a profile, `allow_domains` is soft: it goes into the stage prompt and the agent is told to obey it. The Host does not enforce it. When the stage ends it audits explicit `agent-browser open|goto|navigate|tab new <url>` commands from the stage's tool activity and records hosts outside the list (`navigation_outside_allowlist`). Redirects, link clicks and in-page navigation are not seen. It is not a security boundary for profile stages. Use `browser.blocked_sites` and your own review for hard limits.
 
 ## Encryption
 
@@ -116,3 +116,7 @@ Many sites forbid bots and scraping in their terms and can limit or close accoun
 ## Cookies across runs
 
 Within a run, every cookie, session-only or persistent, is shared by all stages, because the shared browser stays open. When the run ends the Host closes the browser gracefully so Chrome writes its profile. A real-Chrome test (agent-browser 0.38.2) found that a graceful close and reopen of the profile kept both the persistent and the session-only fixture cookie. Do not rely on this across runs. Chrome and agent-browser may drop session-only cookies in other versions or after a crash or hard kill, and a site can expire the login by itself. Persistent cookies are the safe choice. Check the cookie type of your site. LinkedIn's main login cookie is persistent.
+
+## For contributors
+
+How the feature is built, its file layout, invariants, and test guide: [Browser sessions internals](browser-internals.md).

@@ -190,6 +190,30 @@ describe("sf browser check", () => {
   });
 });
 
+describe("sf browser Host site policy", () => {
+  it("refuses check and login for a --url on a blocked site, exit 1, JSON code", async () => {
+    const d = deps({ blockedSites: ["site.test"] });
+    await mkProfile("work", d);
+    expect(await runBrowserCommand(["check", "work", ...CHECK, "--json"], d)).toBe(1);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({
+      code: "browser_site_blocked",
+      error: expect.stringMatching(/site\.test.*blocked by Host policy \(browser\.blocked_sites\)/),
+    });
+    out.length = 0;
+    expect(
+      await runBrowserCommand(["login", "work", "--url", "https://app.site.test/login", "--logged-in", "*/home*", "--json"], d),
+    ).toBe(1);
+    expect(JSON.parse(out.join("\n"))).toMatchObject({ code: "browser_site_blocked" });
+    expect(calls).toEqual([]);
+  });
+
+  it("allows other sites", async () => {
+    const d = deps({ blockedSites: ["other.test"] });
+    await mkProfile("work", d);
+    expect(await runBrowserCommand(["check", "work", ...CHECK], d)).toBe(0);
+  });
+});
+
 describe("sf browser login", () => {
   const args = ["login", "work", "--url", "https://site.test/login", "--logged-in", "https://site.test/home*"];
 

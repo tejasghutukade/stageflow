@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { readdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readPersistedBrowserEnv } from "./persistedEnv.js";
 import { stageDir } from "../runstore/paths.js";
 import type { StageLogEvent } from "../runstore/port.js";
-import { auditStageNavigations } from "./navigationAudit.js";
+import { auditStageNavigations, type NavigationPolicy } from "./navigationAudit.js";
 import {
   BROWSER_ENV_FILENAME,
   BROWSER_POLICY_FILENAME,
@@ -153,7 +153,7 @@ function closeOptions(support: StageBrowserSupport) {
  */
 export function teardownStageBrowser(
   support: StageBrowserSupport,
-  input: { runId: string; runDir: string; stageId: string },
+  input: StageTeardownInput,
 ): Promise<void> {
   const key = `${input.runDir}\0${input.stageId}`;
   const running = stageTeardowns.get(key);
@@ -167,14 +167,56 @@ export function teardownStageBrowser(
 
 const stageTeardowns = new Map<string, Promise<void>>();
 
+type StageEvents = () => Promise<StageLogEvent[]>;
+type StageTeardownInput = {
+  runId: string;
+  runDir: string;
+  stageId: string;
+  /** Reads the stage's persisted tool activity for the soft allowlist audit. */
+  events?: StageEvents;
+};
+
+async function readNavigationPolicy(file: string): Promise<NavigationPolicy | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(file, "utf8")) as Partial<NavigationPolicy>;
+    if (
+      typeof raw.runId !== "string" ||
+      typeof raw.stageId !== "string" ||
+      !Array.isArray(raw.allow_domains)
+    ) {
+      return undefined;
+    }
+    return {
+      runId: raw.runId,
+      stageId: raw.stageId,
+      ...(typeof raw.profile === "string" ? { profile: raw.profile } : {}),
+      allow_domains: raw.allow_domains.filter((d): d is string => typeof d === "string"),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function auditAndClearPolicy(
+  support: StageBrowserSupport,
+  input: StageTeardownInput,
+): Promise<void> {
+  const file = path.join(stageDir(input.runDir, input.stageId), BROWSER_POLICY_FILENAME);
+  const policy = await readNavigationPolicy(file);
+  if (policy === undefined) return;
+  await auditStageNavigations(policy, input.events, support.audit).catch(() => undefined);
+  await rm(file, { force: true }).catch(() => undefined);
+}
+
 async function teardownStageBrowserOnce(
   support: StageBrowserSupport,
-  input: { runId: string; runDir: string; stageId: string },
+  input: StageTeardownInput,
 ): Promise<void> {
   const env = await readEnvFile(
     path.join(stageDir(input.runDir, input.stageId), BROWSER_ENV_FILENAME),
   );
   if (env === undefined) return;
+  await auditAndClearPolicy(support, input);
   const closedMarker = path.join(
     stageDir(input.runDir, input.stageId),
     BROWSER_CLOSED_FILENAME,
@@ -239,7 +281,11 @@ async function closeRunAnchorsOnce(
  */
 export async function teardownRunBrowsers(
   support: StageBrowserSupport,
-  run: { runId: string; runDir: string },
+  run: {
+    runId: string;
+    runDir: string;
+    events?: (stageId: string) => Promise<StageLogEvent[]>;
+  },
   only?: (stageId: string) => boolean,
 ): Promise<void> {
   let ids: string[] = [];
@@ -250,9 +296,12 @@ export async function teardownRunBrowsers(
   }
   for (const stageId of ids) {
     if (only !== undefined && !only(stageId)) continue;
-    await teardownStageBrowser(support, { ...run, stageId }).catch(
-      () => undefined,
-    );
+    const { events, ...base } = run;
+    await teardownStageBrowser(support, {
+      ...base,
+      stageId,
+      ...(events !== undefined ? { events: () => events(stageId) } : {}),
+    }).catch(() => undefined);
   }
   if (only === undefined) {
     await closeRunAnchors(support, run).catch(() => undefined);

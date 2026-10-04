@@ -56,6 +56,7 @@ export function assertBrowserSitesAllowed(
     if (norm.some((b) => within(d, b) || within(b, d))) fail(entry, "allow_domains entry");
   }
   const urls = [
+    ["login_url", browser.login_url],
     ["check.url", browser.check?.url],
     ["check.logged_in_url", browser.check?.logged_in_url],
     ...[browser.check?.logged_out_url].flat().map((u) => ["check.logged_out_url", u] as const),

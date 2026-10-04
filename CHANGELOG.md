@@ -7,9 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-03
+
 ### Added
 
-- Browser sessions: stage `browser` field (profile, headed, `allow_domains`, `check`), Host login check, human login stage with `browser_login` verify, profile lock and queue, teardown and orphan sweep, bundled `browser` skill, `browser.blocked_sites` host config, audit log. See `docs/browser.md` and `examples/browser-session/`.
+- **Browser sessions.** A stage can drive a real browser that stays logged in. The browser tool is [agent-browser](https://github.com/vercel-labs/agent-browser), used through the CLI and a bundled `browser` skill (no MCP). See `docs/browser.md` (users) and `docs/browser-internals.md` (contributors and agents).
+  - Stage `browser` field: `profile`, `headed`, `allow_domains`, `login_url`, `check` (`url`, `logged_in_url`, `logged_out_url`). The `agent-browser` requirement is added automatically.
+  - Profiles: named, saved logins kept on the Host under `$STAGEFLOW_HOME/browser/<scope>/<name>/` with owner-only permissions. A profile is leased to one run. Other runs queue until that run ends.
+  - Shared browser per run and profile: the Host starts one Chrome and keeps it open for the whole run. Each stage attaches over CDP with pin-tab and gets its own tab, so parallel stages share one login. The Host closes each stage's tab at stage end and the browser at run end, cancel, or abandon. An orphan sweep runs at Host start.
+  - Host-computed login check: `{ logged_in, url }` is computed by the Host and validated against the stage envelope. Human login stage: `verify: browser_login` with a confirm gate. The gate payload carries `handoff`, `site`, and `profile`. A wrong confirm returns `{ ok: true, verification: "failed_retrying" }` and raises a new gate while repair attempts remain.
+  - `sf browser profiles | status | check | login | clear`.
+  - Host config `browser.blocked_sites`, a per-Host audit log (`browser/audit.jsonl`), redaction of cookie and token output for browser stages, and owner-scope seams (`ProfileStore`, `ProfileLock`, `BrowserHost`, `KeyProvider`, `AuditSink`) for a future multi-tenant service.
+  - Example `examples/browser-session/` (local fixture login server, two parallel work stages) and an opt-in real-Chrome smoke test (`STAGEFLOW_BROWSER_SMOKE=1`).
+- Answer responses (HTTP 202 body, MCP `answer_gate`, `sf runs answer --json`) may include an optional `verification` field.
+
+### Changed
+
+- Stage workers receive the Host's Pi auth path through `STAGEFLOW_PI_HOME_AUTH_PATH`.
+
+### Fixed
+
+- Stages failed with "No API key" under the `pi_home` credential source, because the worker's empty attempt `$HOME` hid `~/.pi/agent/auth.json`.
+
+### Known limitations
+
+- Profile stages use a soft `allow_domains` check (agent-browser rejects its native allowlist with a profile or CDP). Profile-less stages get the native allowlist.
+- The agent-browser key does not protect the Chrome profile folder and is not wired. A visible login window needs a screen; Docker Hosts fail the login stage with a clear message. Only macOS with agent-browser 0.38.2 was verified. The full list is in `docs/browser-internals.md`.
 
 ## [0.27.1] - 2026-09-26
 

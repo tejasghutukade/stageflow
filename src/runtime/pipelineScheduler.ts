@@ -1544,7 +1544,12 @@ export async function runPipelineDag(
         if (state === "succeeded" || state === "failed") {
           await teardownStageBrowser(
             prepared.browser ?? defaultStageBrowserSupport(),
-            { runId: run.runId, runDir: run.workspaceDir, stageId },
+            {
+              runId: run.runId,
+              runDir: run.workspaceDir,
+              stageId,
+              events: () => store.listStageEvents(run.runId, stageId),
+            },
           ).catch(() => undefined);
         }
       })
@@ -1634,7 +1639,11 @@ export async function runPipelineDag(
   if (!(hasWaiting && !schedulingHalted) && !options.schedulingHalt?.hostShutdown) {
     await teardownRunBrowsers(
       prepared.browser ?? defaultStageBrowserSupport(),
-      { runId: run.runId, runDir: run.workspaceDir },
+      {
+        runId: run.runId,
+        runDir: run.workspaceDir,
+        events: (stageId) => store.listStageEvents(run.runId, stageId),
+      },
     );
   }
   if (hasWaiting && !schedulingHalted) {

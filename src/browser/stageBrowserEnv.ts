@@ -72,7 +72,11 @@ export async function resolveStageBrowserEnv(
     if (!screen.hasDisplay) throw noScreenError(screen.docker);
   }
 
-  if ((browser.allow_domains?.length ?? 0) > 0 || browser.check !== undefined) {
+  if (
+    (browser.allow_domains?.length ?? 0) > 0 ||
+    browser.check !== undefined ||
+    browser.login_url !== undefined
+  ) {
     assertBrowserSitesAllowed(
       input.stageId,
       browser,
@@ -146,18 +150,18 @@ export async function resolveStageBrowserEnv(
         stageId: input.stageId,
       });
     }
-    if (browser.profile !== undefined && (browser.allow_domains?.length ?? 0) > 0) {
-      await writeFile(
-        path.join(dir, BROWSER_POLICY_FILENAME),
-        `${JSON.stringify({
-          runId: input.runId,
-          stageId: input.stageId,
-          profile: browser.profile,
-          allow_domains: browser.allow_domains,
-        })}\n`,
-        { mode: 0o600 },
-      );
-    }
+  }
+  if (browser.profile !== undefined && (browser.allow_domains?.length ?? 0) > 0) {
+    await writeFile(
+      path.join(dir, BROWSER_POLICY_FILENAME),
+      `${JSON.stringify({
+        runId: input.runId,
+        stageId: input.stageId,
+        profile: browser.profile,
+        allow_domains: browser.allow_domains,
+      })}\n`,
+      { mode: 0o600 },
+    );
   }
   await writeSessionOwner({
     runId: input.runId,

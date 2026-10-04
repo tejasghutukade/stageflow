@@ -28,6 +28,7 @@ Stages are **author-defined and domain-agnostic**. Release automation, research 
 | [Verified Stage Execution](verified-stage-execution.md) | After-phase `verify`, evidence, and `on_verify_fail` repair / manual recovery |
 | [Human-in-the-loop](hitl.md) | Gate kinds, operator replies, `--skip-gates`, exit code `2` |
 | [Browser sessions](browser.md) | Stage `browser` field, saved logins (profiles), login check and human login pattern, queueing, teardown, headed vs headless, Docker limit |
+| [Browser sessions internals](browser-internals.md) | For contributors: module map, lifecycle, file layout, env contract, invariants, seams, extension recipes, test and debug guide for browser sessions |
 | [Providers](providers.md) | Pi model auth — `pi_home` vs `sf_owned` |
 
 ## Operating Stageflow

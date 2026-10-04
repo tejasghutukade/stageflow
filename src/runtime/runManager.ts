@@ -1302,6 +1302,7 @@ export class RunManager {
         runId,
         runDir: this.options.store.getWorkspaceDir(runId),
         stageId,
+        events: () => this.options.store.listStageEvents(runId, stageId),
       },
     ).catch(() => undefined);
 
@@ -1330,7 +1331,11 @@ export class RunManager {
     ) {
       await teardownRunBrowsers(
         this.options.browser ?? defaultStageBrowserSupport(),
-        { runId, runDir: this.options.store.getWorkspaceDir(runId) },
+        {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
       ).catch(() => undefined);
     }
     if (!hasWaiting && this.active.has(runId)) {
@@ -1396,7 +1401,11 @@ export class RunManager {
     }
     await teardownRunBrowsers(
       this.options.browser ?? defaultStageBrowserSupport(),
-      { runId, runDir: this.options.store.getWorkspaceDir(runId) },
+      {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
     );
 
     const detail = await this.options.store.readRun(runId);
@@ -2691,7 +2700,12 @@ export class RunManager {
       }
       await teardownStageBrowser(
         this.options.browser ?? defaultStageBrowserSupport(),
-        { runId, runDir: workspaceDir, stageId },
+        {
+          runId,
+          runDir: workspaceDir,
+          stageId,
+          events: () => store.listStageEvents(runId, stageId),
+        },
       ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
@@ -2741,7 +2755,11 @@ export class RunManager {
         await store.updateRunStatus(runId, "failed");
         await teardownRunBrowsers(
           this.options.browser ?? defaultStageBrowserSupport(),
-          { runId, runDir: workspaceDir },
+          {
+            runId,
+            runDir: workspaceDir,
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
         ).catch(() => undefined);
         return { ok: false, reason: launchResult.reason };
       }
@@ -2798,7 +2816,11 @@ export class RunManager {
         await store.updateRunStatus(runId, "failed");
         await teardownRunBrowsers(
           this.options.browser ?? defaultStageBrowserSupport(),
-          { runId, runDir: store.getWorkspaceDir(runId) },
+          {
+            runId,
+            runDir: store.getWorkspaceDir(runId),
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
         ).catch(() => undefined);
       } catch {
         // ignore secondary failures

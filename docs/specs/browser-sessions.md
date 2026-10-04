@@ -1,8 +1,12 @@
 ---
-status: ready-for-agent
+status: implemented
 ---
 
 # Spec: Browser sessions for stages
+
+**Status: implemented in 0.28.0** (with Revision 2, one shared browser per run and profile). Open items are listed in [Known limitations](../browser-internals.md#known-limitations).
+
+**Implementation notes.** The code lives in `src/browser/` with hooks in the scheduler, run manager, and stage launcher. See [Browser sessions internals](../browser-internals.md) for the module map, lifecycle, file layout, env contract, invariants, and test guide. Differences from this spec: the soft allowlist audit exists in code but is not called by the runtime; the key provider exists but is not wired; the Host-side filtering proxy, live view handoff, and remote browser host are not built; ticket checkboxes 00-12 were not updated after Revision 2.
 
 ## Problem Statement
 

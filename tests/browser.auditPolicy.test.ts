@@ -73,6 +73,14 @@ describe("Host site policy", () => {
     expect(() => assertBrowserSitesAllowed("s", { allow_domains: ["linkedin.com"] }, [])).not.toThrow();
   });
 
+  it("blocks a login_url on a blocked site", () => {
+    const blocked = ["linkedin.com"];
+    expect(() => assertBrowserSitesAllowed("s", { login_url: "https://www.linkedin.com/login" }, blocked)).toThrow(
+      /Stage "s".*login_url.*linkedin\.com.*blocked by Host policy \(browser\.blocked_sites\)/,
+    );
+    expect(() => assertBrowserSitesAllowed("s", { login_url: "https://ok.example/login" }, blocked)).not.toThrow();
+  });
+
   it("loads browser.blocked_sites from host config", async () => {
     const file = path.join(home, "config.yaml");
     await writeFile(file, "browser:\n  blocked_sites:\n    - LinkedIn.com\n    - '*.bank.example'\n");
