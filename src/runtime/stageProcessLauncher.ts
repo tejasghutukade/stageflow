@@ -9,6 +9,7 @@ import {
 } from "../logging/logger.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
+import { PI_HOME_AUTH_PATH_ENV, piHomeAuthPath } from "./credentialBinding.js";
 import { redactString } from "../logging/redact.js";
 import { getNamedSecrets } from "../logging/namedSecrets.js";
 import {
@@ -425,7 +426,7 @@ export class StageProcessLauncher {
       input.env ?? {},
       input.bindingKind ?? "unbound",
     );
-    const childEnv =
+    const withBrowser =
       input.browserEnv !== undefined
         ? {
             ...Object.fromEntries(
@@ -436,6 +437,10 @@ export class StageProcessLauncher {
             ...input.browserEnv,
           }
         : overlaid;
+    const childEnv = {
+      ...withBrowser,
+      [PI_HOME_AUTH_PATH_ENV]: piHomeAuthPath(),
+    };
 
     const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,
