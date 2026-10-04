@@ -8,6 +8,25 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Za-z_]*KEY[A-Za-z_]*\s*[:=]\s*['"]?[A-Za-z0-9+/_-]{16,}['"]?/gi,
 ];
 
+/** Cookie/storage/header/token shapes from browser commands; applied only to browser stages. */
+export const BROWSER_SECRET_PATTERNS: RegExp[] = [
+  /\b(?:Set-Cookie|Cookie)["']?\s*:\s*["']?[^\r\n"']+/gi,
+  /\b(?:Proxy-)?Authorization["']?\s*[:=]\s*["']?[^\r\n"']+/gi,
+  /\b(?:X-Api-Key|X-Auth-Token|X-CSRF-Token|X-Xsrf-Token)["']?\s*[:=]\s*["']?[^\s"']+/gi,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
+  /"name"\s*:\s*"[^"]*"\s*,\s*"value"\s*:\s*"[^"]*"/g,
+  /"value"\s*:\s*"[^"]*"(?=\s*,\s*"domain")/g,
+  /\b(?:li_at|li_rm|JSESSIONID|sessionid|session_id|sessid|csrftoken|auth_token|access_token|refresh_token|id_token)\b["']?\s*[:=]\s*["']?[A-Za-z0-9%+/_.=-]{8,}/gi,
+  /\b(?:li_at|li_rm|JSESSIONID|sessionid)\b[ \t|]+[A-Za-z0-9%+/_.=-]{16,}/g,
+  /"[^"\s]*(?:token|secret|authorization|jwt|session|password|passwd|api_?key|credential|csrf)[^"\s]*"\s*:\s*"[^"]{8,}"/gi,
+];
+
+/** Default patterns plus browser patterns, for `RedactOptions.patterns` on browser stages. */
+export const BROWSER_STAGE_PATTERNS: RegExp[] = [
+  ...SECRET_PATTERNS,
+  ...BROWSER_SECRET_PATTERNS,
+];
+
 const REDACTED = "[redacted]";
 
 export type NamedSecret = { name: string; value: string };

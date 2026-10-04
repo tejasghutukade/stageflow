@@ -40,6 +40,7 @@ export const BODY_KEYS = new Set([
   "mcp",
   "secrets",
   "requires",
+  "browser",
   "io",
   "verify",
 ]);

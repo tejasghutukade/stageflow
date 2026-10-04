@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { globalAgentBackendFromManifest, resolveAgentPort } from "./agent/resolveAgentPort.js";
+import { BROWSER_USAGE, runBrowserCommand } from "./cli/browserCommand.js";
 import { ARTIFACT_USAGE, runArtifactCommand } from "./cli/artifactCommand.js";
 import {
   ENVELOPE_USAGE,
@@ -99,6 +100,11 @@ const USAGE = `Usage:
   sf skills list
   sf skills install --from-path <dir> [--skill-name <name>]
   sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
+  sf browser profiles [--json]
+  sf browser status <name> [--json]
+  sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
+  sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>]
+  sf browser clear <name> [--yes]
   sf --version
   sf -V
   sf --help
@@ -145,7 +151,9 @@ ${TRIGGER_USAGE}
 
 ${PROVIDERS_USAGE}
 
-${SKILLS_USAGE}`;
+${SKILLS_USAGE}
+
+${BROWSER_USAGE}`;
 
 function parseArgs(argv: string[]): {
   help: boolean;
@@ -201,7 +209,8 @@ function parseArgs(argv: string[]): {
     command === "export" ||
     command === "runs" ||
     command === "trigger" ||
-    command === "skills"
+    command === "skills" ||
+    command === "browser"
   ) {
     return { help: false, command };
   }
@@ -562,6 +571,10 @@ async function main(argv: string[]): Promise<number> {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });
+    }
+
+    if (parsed.command === "browser") {
+      return runBrowserCommand(argv.slice(3));
     }
 
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);

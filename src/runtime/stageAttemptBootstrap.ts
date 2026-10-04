@@ -13,6 +13,15 @@ import {
   type ConfigOriginRecord,
 } from "../config/configOrigin.js";
 import {
+  loginCheckPromptBlock,
+  readStageLoginCheck,
+} from "../browser/loginCheck.js";
+import { humanLoginPromptBlock, isHumanLoginStage } from "../browser/humanLogin.js";
+import {
+  BROWSER_SKILL_NAME,
+  resolveBuiltinSkillFile,
+} from "../config/builtinSkills.js";
+import {
   resolveSkillByName,
   type SkillOrigin,
 } from "../config/listSkills.js";
@@ -32,6 +41,10 @@ import {
   type ResolvedMcpServers,
 } from "../config/resolveStageMcpServers.js";
 import { attemptArtifactsDir, attemptStreamLogPath } from "../runstore/workspaceLayout.js";
+import {
+  redactBrowserActivityEvent,
+  redactBrowserSecrets,
+} from "../agent/streamLogRedact.js";
 import {
   createStageStreamLogWriter,
   type StageStreamLogWriter,
@@ -190,6 +203,26 @@ async function resolveStageSkillForRun(
   };
 }
 
+/** Browser stages get the `browser` skill (run > checkout > host > built-in). A missing skill is not an error. */
+async function resolveBrowserSkillFile(
+  stage: Pick<StageConfig, "skill" | "browser">,
+  catalog: OperatorCatalog | undefined,
+  options: Parameters<typeof resolveStageSkillForRun>[2],
+): Promise<string | undefined> {
+  if (stage.browser === undefined || stage.skill === BROWSER_SKILL_NAME) {
+    return undefined;
+  }
+  const resolved = await resolveStageSkillForRun(
+    { skill: BROWSER_SKILL_NAME },
+    catalog,
+    options,
+  );
+  if (resolved.ok && resolved.skillFilePath !== undefined) {
+    return resolved.skillFilePath;
+  }
+  return resolveBuiltinSkillFile(BROWSER_SKILL_NAME);
+}
+
 async function resolveAttemptMcpServers(
   allowlist: readonly string[] | undefined,
   factoryCwd: string | undefined,
@@ -317,6 +350,17 @@ async function openStageWithOperatorCatalog(
     workspaceDir: resolveOptions.workspaceDir,
   });
   if (!skill.ok) return skill;
+  const browserSkillFilePath = await resolveBrowserSkillFile(
+    input.stage,
+    catalog,
+    {
+      bindingKind: resolveOptions.bindingKind,
+      checkoutRoot: resolveOptions.checkoutRoot,
+      factoryCwd,
+      trustWorkspaceConfig: resolveOptions.trustWorkspaceConfig,
+      workspaceDir: resolveOptions.workspaceDir,
+    },
+  );
   let resolvedMcpServers: ResolvedMcpServers | undefined;
   const origins: ConfigOriginRecord[] = [];
   try {
@@ -397,18 +441,50 @@ async function openStageWithOperatorCatalog(
       ).catch(() => null);
     }
   }
+  let loginCheck: Awaited<ReturnType<typeof readStageLoginCheck>>;
+  const humanLogin = isHumanLoginStage(
+    resolveOptions.dag,
+    input.stage.id,
+    input.stage.browser,
+  );
+  if (input.stage.browser?.check !== undefined && !humanLogin) {
+    loginCheck = await readStageLoginCheck(
+      resolveOptions.workspaceDir,
+      stageIdForManifest,
+    );
+    if (loginCheck === undefined) {
+      return { ok: false, reason: "browser login check result is missing" };
+    }
+  }
   try {
     const handle = agent.openStage({
       ...input,
       stage: {
         ...input.stage,
-        system_prompt: stampStagePromptArtifactsDir(
+        system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        ),
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url)}` : ""}`,
+        ...(loginCheck !== undefined
+          ? {
+              pre_emit_checks: [
+                ...(input.stage.pre_emit_checks ?? []),
+                {
+                  id: "browser_login_check",
+                  type: "browser_login_check" as const,
+                  state: loginCheck.state,
+                  logged_in: loginCheck.logged_in,
+                  url: loginCheck.url,
+                },
+              ],
+            }
+          : {}),
       },
       ...(skill.skillFilePath !== undefined
         ? { skillFilePath: skill.skillFilePath }
+        : {}),
+      ...(browserSkillFilePath !== undefined
+        ? { browserSkillFilePath }
         : {}),
       ...(resolvedMcpServers !== undefined ? { resolvedMcpServers } : {}),
       onResolvedModel: async (info) => {
@@ -597,9 +673,13 @@ export async function openStageAttempt(
 
   const roots = resolveAttemptRoots(input, stageId);
   const attempt = input.attemptCtx?.attempt ?? 1;
-  const streamWriter = (input.streamLogWriterFactory ?? createStageStreamLogWriter)(
-    attemptStreamLogPath(input.workspaceDir, stageId, attempt),
-  );
+  const streamLogPath = attemptStreamLogPath(input.workspaceDir, stageId, attempt);
+  const streamWriter = input.streamLogWriterFactory
+    ? input.streamLogWriterFactory(streamLogPath)
+    : createStageStreamLogWriter(
+        streamLogPath,
+        input.stage.browser !== undefined ? { redact: redactBrowserSecrets } : {},
+      );
   const resumeToken =
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, stageId, attempt);
@@ -653,7 +733,11 @@ export async function openStageAttempt(
       resumeToken,
       ...(input.sessionMode !== undefined ? { sessionMode: input.sessionMode } : {}),
       onActivity: (event) => {
-        input.onActivity?.(event);
+        input.onActivity?.(
+          input.stage.browser !== undefined
+            ? redactBrowserActivityEvent(event)
+            : event,
+        );
         void streamWriter.flush();
       },
       onAssistantTextDelta: streamWriter.onDelta,

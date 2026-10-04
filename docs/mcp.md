@@ -476,7 +476,7 @@ Deliver an operator answer for a waiting stage (same semantics as `POST /api/run
 
 `answer` must match `AskOperatorAnswer` for the pending prompt kind (`free_text`, `confirm`, `artifact_backed`, `multi_question`).
 
-**Success:** `{ "ok": true }`
+**Success:** `{ "ok": true }`. When the answer made after-phase verification fail but the stage `on_verify_fail` repair policy will retry it (for example a human-login confirm while still logged out), the response is `{ "ok": true, "verification": "failed_retrying" }` and the stage re-gates as a new attempt. A final failure (repair exhausted or none configured) is an error.
 
 **Errors (`isError: true`):** `400` malformed/mismatched answer; `404` unknown run/stage; `409` stage not waiting.
 

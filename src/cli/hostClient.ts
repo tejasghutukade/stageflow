@@ -250,7 +250,12 @@ export async function httpDeliverAnswer(
     `/api/runs/${enc(runId)}/stages/${enc(stageId)}/answer`,
     answer,
   );
-  if (status === 202) return { ok: true };
+  if (status === 202) {
+    const verification = (body as { verification?: unknown } | null)?.verification;
+    return verification === "failed_retrying"
+      ? { ok: true, verification }
+      : { ok: true };
+  }
   return { ok: false, reason: extractError(body, status), status: status as 404 | 409 | 400 | 500 };
 }
 

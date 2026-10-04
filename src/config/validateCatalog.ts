@@ -67,6 +67,7 @@ export type ValidationFindingCode =
   | "stage.invalid_timeout_ms"
   | "stage.invalid_skill"
   | "stage.invalid_mcp"
+  | "stage.invalid_browser"
   | "stage.invalid_secrets"
   | "stage.unknown_secret"
   | "stage.denied_secret"

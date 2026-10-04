@@ -32,6 +32,7 @@
 import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
   type EventBus,
@@ -603,10 +604,16 @@ function buildUserPrompt(
 
   const attempt = input.roots.attempt ?? 1;
   const attemptArtifactsPath = `stages/${runtimeStageId(input)}/attempts/${attempt}/artifacts/`;
-  const skillBaseDir =
+  const skillBaseDirs = [
     input.stage.skill !== undefined && input.skillFilePath !== undefined
       ? path.dirname(input.skillFilePath)
-      : undefined;
+      : undefined,
+    input.browserSkillFilePath !== undefined
+      ? path.dirname(input.browserSkillFilePath)
+      : undefined,
+  ].filter((dir): dir is string => dir !== undefined);
+  const skillBaseDir = skillBaseDirs.length > 0 ? skillBaseDirs.join(", ") : undefined;
+  const browserGuidance = formatBrowserGuidance(input);
   const artifactGuidance =
     input.roots.mode === "bound" && artifactToolName !== undefined
       ? [
@@ -647,10 +654,35 @@ function buildUserPrompt(
       : "",
     "",
     artifactGuidance,
+    browserGuidance,
     emitHint,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatBrowserGuidance(input: StageRunInput): string {
+  const browser = input.stage.browser;
+  if (browser === undefined) return "";
+  const lines = [
+    "This stage has a browser. Run only agent-browser commands in bash. The session is already set in the environment.",
+  ];
+  if (browser.allow_domains !== undefined && browser.allow_domains.length > 0) {
+    lines.push(
+      `Allowed domains: ${browser.allow_domains.join(", ")}. Open no other domain.`,
+    );
+  }
+  if (
+    input.browserSkillFilePath !== undefined &&
+    input.stage.skill !== BROWSER_SKILL_NAME
+  ) {
+    lines.push(
+      input.stage.skill !== undefined
+        ? `Before you use the browser, read the browser skill at ${input.browserSkillFilePath}.`
+        : "Follow the browser skill.",
+    );
+  }
+  return lines.join("\n");
 }
 
 export function composeStageUserPrompt(
@@ -667,6 +699,9 @@ export function composeStageUserPrompt(
   );
   if (input.stage.skill !== undefined) {
     return `/skill:${input.stage.skill} ${body}`;
+  }
+  if (input.browserSkillFilePath !== undefined && input.stage.browser !== undefined) {
+    return `/skill:${BROWSER_SKILL_NAME} ${body}`;
   }
   return body;
 }
@@ -1123,6 +1158,11 @@ async function prepareStageSessionWiring(
     };
   }
 
+  const additionalSkillPaths = [
+    input.skillFilePath,
+    input.stage.browser !== undefined ? input.browserSkillFilePath : undefined,
+  ].filter((p, i, all): p is string => p !== undefined && all.indexOf(p) === i);
+
   const additionalExtensionPaths: string[] = [];
   let restoreProvider: (() => void) | undefined;
   if (provider) {
@@ -1177,9 +1217,7 @@ async function prepareStageSessionWiring(
       settingsManager,
       systemPrompt: input.stage.system_prompt,
       additionalExtensionPaths,
-      ...(input.skillFilePath !== undefined
-        ? { additionalSkillPaths: [input.skillFilePath] }
-        : {}),
+      ...(additionalSkillPaths.length > 0 ? { additionalSkillPaths } : {}),
       extensionFactories,
       ...(attached.eventBus !== undefined ? { eventBus: attached.eventBus } : {}),
     });

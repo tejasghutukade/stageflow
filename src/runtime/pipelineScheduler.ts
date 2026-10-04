@@ -3,6 +3,21 @@ import { normalizeForkChoice } from "../envelope/forkChoice.js";
 import { refreshRunDiskUsage } from "../runstore/diskUsage.js";
 import type { RunPipelineDagSnapshot, RunStore, StageSnapshot } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  profileWaitingMessage,
+} from "../browser/stageProfileLock.js";
 import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type {
@@ -99,6 +114,7 @@ type SchedulerPreparedPipeline = {
   hitl?: StageHitlController;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
+  browser?: StageBrowserSupport;
 };
 
 export type { SchedulerPreparedPipeline };
@@ -724,6 +740,7 @@ export async function runPipelineDag(
     hostEnv: process.env,
   });
   const stageById = buildStageConfigById(loaded);
+  const runUsesBrowser = [...stageById.values()].some((s) => s.browser !== undefined);
 
   const retryContext = options.retryContext;
   const feedbackSchedule = createReplaySchedule();
@@ -1266,6 +1283,46 @@ export async function runPipelineDag(
     }
 
     const attempt = await resolveLaunchAttempt(stageId);
+    if (stage.browser?.profile !== undefined) {
+      const profile = stage.browser.profile;
+      // A stage queued behind another run's lease must not hold one of this
+      // run's active slots; it takes the slot back once it joins the lease.
+      let slotReleased = false;
+      let acquired: Awaited<ReturnType<typeof acquireStageProfile>>;
+      try {
+        acquired = await acquireStageProfile(
+          prepared.browser ?? defaultStageBrowserSupport(),
+          {
+            profile,
+            owner: { runId: run.runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => options.schedulingHalt?.halted === true,
+            onWaiting: async (holder) => {
+              if (!slotReleased) {
+                slotReleased = true;
+                activeCount -= 1;
+              }
+              await store.appendStageEvent(
+                run.runId,
+                stageId,
+                {
+                  event: "message",
+                  role: "host",
+                  text: profileWaitingMessage(profile, holder),
+                },
+                { attempt },
+              );
+            },
+          },
+        );
+      } finally {
+        if (slotReleased) activeCount += 1;
+      }
+      if (acquired === "halted") {
+        states.set(stageId, "skipped");
+        return;
+      }
+    }
     const attemptCtx = attemptContext(attempt);
     const prep = launchFor(feedbackSchedule, stageId);
     const feedbackLoopContext = prep?.feedbackLoopContext;
@@ -1337,6 +1394,28 @@ export async function runPipelineDag(
       }
     };
 
+    let browserEnv: Record<string, string> | undefined;
+    try {
+      browserEnv = await resolveStageBrowserEnv(
+        prepared.browser ?? defaultStageBrowserSupport(),
+        {
+          runId: run.runId,
+          stageId,
+          runDir: run.workspaceDir,
+          browser: stage.browser,
+          attempt,
+          humanLogin: isHumanLoginStage(dag, definitionId, stage.browser),
+        },
+      );
+    } catch (err) {
+      cleanupAttemptCredentials();
+      await onStageFailure(
+        stageId,
+        err instanceof Error ? err.message : String(err),
+      );
+      return;
+    }
+
     if (executionMode === "process") {
       const launcher = options.stageProcessLauncher;
       if (!launcher) {
@@ -1355,6 +1434,7 @@ export async function runPipelineDag(
           bindingKind: stageBinding.kind,
           grants,
           attemptHome,
+          ...(browserEnv !== undefined ? { browserEnv } : {}),
           ...(sessionMode !== undefined
             ? {
                 mode:
@@ -1411,9 +1491,11 @@ export async function runPipelineDag(
       operatorCatalog: prepared.operatorCatalog,
       completedEnvelopes,
       skipGates: prepared.skipGates,
+      ...(prepared.browser !== undefined ? { browser: prepared.browser } : {}),
       stageEnv: {
         ...stageBinding.env,
         ...grants.env,
+        ...browserEnv,
         HOME: attemptHome,
       },
       ...(sessionMode !== undefined ? { sessionMode } : {}),
@@ -1457,10 +1539,25 @@ export async function runPipelineDag(
     states.set(stageId, "active");
     launchedIds.add(stageId);
     activeCount += 1;
-    const taskPromise = launchStage(stageId).finally(() => {
-      activeCount -= 1;
-      inFlight.delete(taskPromise);
-    });
+    const taskPromise = launchStage(stageId)
+      .then(async () => {
+        const state = states.get(stageId);
+        if (runUsesBrowser && (state === "succeeded" || state === "failed")) {
+          await teardownStageBrowser(
+            prepared.browser ?? defaultStageBrowserSupport(),
+            {
+              runId: run.runId,
+              runDir: run.workspaceDir,
+              stageId,
+              events: () => store.listStageEvents(run.runId, stageId),
+            },
+          ).catch(() => undefined);
+        }
+      })
+      .finally(() => {
+        activeCount -= 1;
+        inFlight.delete(taskPromise);
+      });
     inFlight.add(taskPromise);
   };
 
@@ -1540,6 +1637,20 @@ export async function runPipelineDag(
   }
 
   const hasWaiting = [...states.values()].some((s) => s === "waiting");
+  if (
+    runUsesBrowser &&
+    !(hasWaiting && !schedulingHalted) &&
+    !options.schedulingHalt?.hostShutdown
+  ) {
+    await teardownRunBrowsers(
+      prepared.browser ?? defaultStageBrowserSupport(),
+      {
+        runId: run.runId,
+        runDir: run.workspaceDir,
+        events: (stageId) => store.listStageEvents(run.runId, stageId),
+      },
+    );
+  }
   if (hasWaiting && !schedulingHalted) {
     return {
       ok: false,

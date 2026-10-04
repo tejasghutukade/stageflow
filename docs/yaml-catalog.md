@@ -55,6 +55,7 @@ Optional top-level fields:
 | `model` | string | Pipeline default LLM/provider id for stages that omit their own `model` (see [Model defaults and precedence](#model-defaults-and-precedence)) |
 | `agent` | string | Pipeline default execution backend (`pi` or Claude-family). Backend selection is separate from `model`; see [Architecture](architecture.md) |
 | `schemas` | object | Named JSON Schema map for `$ref: "#/schemas/NAME"` on stage `io` (see [Pipeline schemas](#pipeline-schemas)) |
+| `browser` | object | Browser session settings (see [Stage browser](#stage-browser)); adds the `agent-browser` requirement |
 | `requires` | array | Toolchain declarations `{ tool, version? }` checked before start (see [Toolchain requires](#toolchain-requires)) |
 
 Bare string stage refs are rejected.
@@ -70,7 +71,7 @@ Each stage is an object with one of:
 
 `id` may be omitted when it is inferable from the `uses:` basename (`*.yaml` or `*.stage.yaml`).
 
-**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
+**Wiring** (any entry, including `uses:`): `route`, `entry`, `uses`, `on_verify_fail`, `replay_safe`. A Clone Chain emitter also takes `clone_cap` (integer ≥ 1) and `clone_mode` (`parallel` | `sequential`) — see [Clone Chain](#clone-chain). `skill`, `mcp`, `browser`, `secrets`, and `requires` may sit on a `uses:` wrapper or on the body — see [Skill binding](#skill-binding), [Stage MCP](#stage-mcp), [Stage browser](#stage-browser), [Stage secrets](#stage-secrets), and [Toolchain requires](#toolchain-requires). `needs`, `fork`, `feedback_loop`, `route_select`, `allow_none`, `clonable`, and `clone_actions` are rejected. `clone_cap` / `clone_mode` on a stage that is not a Clone Chain emitter also fail load.
 
 **Body** (inline entry or external stage file): `system_prompt` (required), `model` (**optional** when a pipeline or manifest default supplies it), `io` (**required** — both `io.input.schema` and `io.output.schema`), `verify`, `gate_kinds`, `skill`, `mcp`, `secrets`, `requires`, `timeout_ms`. Effective `model` is materialized at pipeline load — see [Model defaults and precedence](#model-defaults-and-precedence). `io.output.schema` is the producer contract for success `payload`; `io.input.schema` is what the stage requires to start. Omitting `io`, a side, or `schema` fails load (`stage.invalid_io`). JSON Schema subset: [Envelopes — io schemas](envelopes.md#io-schemas). `io.output.schema` implies emit-time payload validation on success. `verify` is one list of checks with `when: [emit]`, `[after]`, or both — see [Verify](#verify). Optional `timeout_ms` is a positive integer wall-clock budget for the stage attempt in milliseconds (default 3600000 / 60 minutes when omitted). When the budget elapses the attempt fails with `stage timed out after …ms` and the session is kept so the operator can resume the same attempt (`sf runs resume` / Resume session) instead of retrying from scratch. `clonable` and `clone_actions` are not accepted. `clone_cap` and `clone_mode` belong on the pipeline entry of a Clone Chain emitter, not on the reusable stage body — see [Clone Chain](#clone-chain) and [Rejected clone fields](#rejected-clone-fields).
 
@@ -246,6 +247,7 @@ Check discriminator is `type:` (not `kind:`). Gate widgets still use `kind:` on 
 | `artifact` | `id`, `when` | `basename` (emit), `path` / `nonempty` (after) | `emit`, `after`, or both — **required** |
 | `command` | `id`, `run` | `cwd`, `timeout_ms` | `after` only |
 | `checklist` | `id`, `items` | — | `after` only |
+| `browser_login` | `id` | — | `after` only; needs `browser.check` on the stage and `headed` not `false`; see [Human login stage](#browser-human-login) |
 | `payload_schema` | `id` | — | `after` only; requires `io.output.schema` (optional re-check; emit already validates when that schema is present) |
 | `checkout_changes` | `id` | `path_fields` | `after` only |
 
@@ -808,6 +810,89 @@ MCP elicitation is unsupported — a passed server cannot ask the operator a que
 Settings can list git-root `.mcp.json` names and Check whether a server can connect without starting a run. That inspect is not attach: YAML `mcp:` still allowlists what a stage receives.
 
 Operator-host MCP (`sf ui` / `sf mcp`) is a different surface — see [MCP](mcp.md).
+
+### Stage browser {#stage-browser}
+
+`browser:` gives a stage browser-session settings. Allowed on a pipeline stage entry (inline body or `uses:` wrapper) and in an external stage file; a pipeline-entry `browser` replaces the file value as a whole, like `mcp`.
+
+| Key | Type | Meaning |
+|-----|------|---------|
+| `profile` | string | Optional profile name: 1-64 characters of letters, digits, `-`, `_` |
+| `headed` | boolean | Optional. Show the browser window (`true`) or run headless (`false`) |
+| `allow_domains` | non-empty list | Optional bare domains (`example.com`, `*.example.com`); no scheme, port, or path |
+| `login_url` | string | Optional. Page a [human login stage](#browser-human-login) opens; defaults to `check.url` |
+| `check` | object | Optional login check: `url` (required), `logged_in_url` (glob), `logged_out_url` (glob or list of globs) |
+
+Stages of one run that name the same `profile` share one browser, each in its own tab, and the run holds the profile until it ends. See [Browser sessions](browser.md#shared-browser-and-tabs).
+
+Unknown keys fail load with `stage.invalid_browser`. So do `path`, `scope`, and `secret`: the Host chooses where profiles live and which scope owns them, never YAML. A stage with `browser` automatically requires the `agent-browser` binary; it merges with an explicit `requires` entry for the same tool, and `sf validate` reports a missing binary with the distinct toolchain error (see [Toolchain requires](#toolchain-requires)).
+
+```yaml
+stages:
+  - id: read-feed
+    uses: ./read-feed.yaml
+    browser:
+      profile: work
+      headed: true
+      allow_domains: [example.com, "*.example.com"]
+      check:
+        url: https://example.com/feed
+        logged_in_url: https://example.com/feed*
+        logged_out_url: [https://example.com/login*]
+```
+
+#### Login check stage {#browser-login-check}
+
+When a stage has `browser.check`, the Host (not the model) opens `check.url` with the stage's profile at stage start and matches the settled final address: `logged_out_url` wins over `logged_in_url`; neither matching is `unknown`. Globs match the whole URL; `*` matches any characters (including `/`), `?` one character. The result is stored as `browser-login-check.json` in the stage run dir and appended to the stage prompt. The stage must emit `payload: { logged_in, url }`; the Host rejects any envelope whose `logged_in` or `url` differs from its result. For `unknown`, the prompt tells the agent to inspect the page with the browser skill and decide; the Host then only requires a boolean `logged_in` and the same `url`.
+
+Write the check as a thin stage (no ready-made stage file ships). Route only the check-to-login edge on `logged_in`; the work stage is a join of check and login, so its inbound edges carry no `if`, and its `io.input` must be a subset of both parents' output:
+
+```yaml
+stages:
+  - id: check
+    entry: true
+    system_prompt: Report the Host login check result.
+    browser:
+      profile: work
+      check: { url: https://example.com/feed, logged_in_url: "https://example.com/feed*", logged_out_url: ["https://example.com/login*"] }
+    route:
+      - to: login
+        if: { field: logged_in, op: eq, value: false }
+      - to: work
+    io:
+      output:
+        schema: { type: object, required: [logged_in, url], properties: { logged_in: { type: boolean }, url: { type: string } } }
+```
+
+See `tests/fixtures/pipelines/browser-login-check.pipeline.yaml` for the full check, login, work topology.
+
+#### Human login stage {#browser-human-login}
+
+A stage with `browser` whose `verify` has `type: browser_login` is a **human login stage**. It needs `browser.check` (the same check used by the check stage) and must not set `headed: false`.
+
+```yaml
+  - id: login
+    system_prompt: Ask the operator to log in.
+    gate_kinds: [confirm]
+    browser:
+      profile: work
+      login_url: https://example.com/login   # optional; defaults to check.url
+      check: { url: https://example.com/feed, logged_in_url: "https://example.com/feed*", logged_out_url: ["https://example.com/login*"] }
+    verify:
+      - id: logged-in
+        type: browser_login                  # after-phase only; no other keys
+    on_verify_fail: { mode: repair, max_attempts: 3, retry_safety: idempotent, include_failed_checks: true }
+    route:
+      - to: work
+```
+
+Before the agent starts, the Host opens `login_url` in a visible window (no headless fallback, and no pre-agent login check) and the stage prompt tells the agent to call `ask_operator` with `kind: confirm` and leave the browser open. The window (the run's shared browser) and the run's profile lease stay held while the stage waits. After the operator accepts and the agent emits, the Host re-runs the login check in the same session; `browser_login` passes only when the result is logged in. A wrong confirm fails the after-phase check, and `on_verify_fail` with `mode: repair` runs the stage again (a new attempt, a new gate, the same session) up to `max_attempts`. `on_verify_fail` is a recovery policy for the same stage, not a route target, so this self-loop is its native form. When the check stage already finds a valid login, its `if` route skips the login stage and the work stage still joins (see the fixture `tests/fixtures/pipelines/browser-human-login.pipeline.yaml`).
+
+If the Host has no screen (Linux without `DISPLAY` / `WAYLAND_DISPLAY`) the stage fails before the agent starts: "A visible browser is needed for login, but this Host has no screen. A live view handoff is not available yet." In Docker the message adds a hint to log in on a machine with a screen first.
+
+Every gate (`ask_operator` prompt) of a stage with `browser` carries Host-injected fields: `handoff: { kind: "local_window" }`, `site` (host of `check.url`, else the first `allow_domains` entry, else the host of `login_url`), and `profile` (the profile name, never a path). The agent cannot set or omit them; gates of stages without `browser` never have them. See [HITL — gate handoff](hitl.md#gate-handoff).
+
+Third-party sites can forbid automation in their terms; check the rules of any site before pointing a stage at it.
 
 ### Toolchain requires {#toolchain-requires}
 

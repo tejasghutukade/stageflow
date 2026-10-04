@@ -3,6 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
+    globalSetup: ["tests/globalSetup.socketLeakGuard.ts"],
     env: {
       STAGEFLOW_MIN_FREE_DISK_BYTES: "0",
       TMPDIR: process.env.TMPDIR ?? "/tmp",

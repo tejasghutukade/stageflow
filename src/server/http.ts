@@ -977,7 +977,12 @@ export function createOperatorRoutes(
             json(res, result.status, { error: result.reason });
             return true;
           }
-          json(res, 202, { ok: true });
+          json(res, 202, {
+            ok: true,
+            ...(result.verification !== undefined
+              ? { verification: result.verification }
+              : {}),
+          });
           return true;
         }
 

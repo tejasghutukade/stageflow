@@ -6,6 +6,12 @@ import type {
   StageSessionMode,
 } from "../agent/port.js";
 import type { StageLogLine } from "../agent/activity.js";
+import {
+  hostGateContextFor,
+  stampGateRequest,
+  type HostGateContext,
+} from "../browser/gateHandoff.js";
+import type { BrowserRunner, StageBrowserSupport } from "../browser/browserHost.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedStageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
@@ -29,6 +35,8 @@ import {
   type OperatorCatalog,
 } from "./stageAttemptBootstrap.js";
 import { createVerifiedStageExecution } from "./verifiedStageExecution.js";
+import { BROWSER_STAGE_PATTERNS, redact } from "../logging/redact.js";
+import { getNamedSecrets } from "../logging/namedSecrets.js";
 import { isStageTimeoutReason } from "../agent/stageTimeout.js";
 
 export type RunStageOutcome = StageRunResult | { waiting: true };
@@ -73,6 +81,8 @@ export type RunStageOptions = {
   feedbackLoopContext?: FeedbackLoopContext;
   resumeToken?: string;
   stageEnv?: Record<string, string>;
+  /** Test seam for the Host login check run by a `browser_login` verify item. */
+  browser?: Pick<StageBrowserSupport, "runner" | "loginCheck">;
 };
 
 const LIFECYCLE_EVENTS = new Set([
@@ -130,13 +140,25 @@ async function finalizeStageResult(options: {
   result: StageRunResult;
   activityChain: Promise<void>;
   attemptCtx?: StageAttemptContext;
+  browser?: boolean;
 }): Promise<StageRunResult> {
-  const { store, runId, stageId, result, activityChain, attemptCtx } = options;
+  const { store, runId, stageId, result, activityChain, attemptCtx, browser } =
+    options;
   const attemptOpt = attemptCtx?.eventOptions();
   await activityChain;
 
   if (result.envelope) {
-    await store.writeEnvelope(runId, stageId, result.envelope, attemptOpt);
+    await store.writeEnvelope(
+      runId,
+      stageId,
+      browser
+        ? (redact(result.envelope as unknown as Record<string, unknown>, {
+            patterns: BROWSER_STAGE_PATTERNS,
+            namedSecrets: getNamedSecrets(),
+          }) as unknown as StageEnvelope)
+        : result.envelope,
+      attemptOpt,
+    );
   }
 
   if (!result.ok) {
@@ -174,12 +196,14 @@ export async function runStageYieldLoop(options: {
   store?: RunStore;
   attemptCtx?: StageAttemptContext;
   skipGates?: boolean;
+  gateContext?: HostGateContext;
 }): Promise<RunStageYieldLoopResult> {
-  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx, skipGates } = options;
+  const { handle, runId, stageId, hitl, workerMode, store, attemptCtx, skipGates, gateContext } = options;
 
   while (true) {
     const event = await handle.next();
     if (event.status === "waiting_for_input") {
+      const request = stampGateRequest(event.request, gateContext);
       if (skipGates) {
         return {
           ok: false,
@@ -197,7 +221,7 @@ export async function runStageYieldLoop(options: {
           store,
           runId,
           stageId,
-          request: event.request,
+          request,
           attemptCtx,
           qaHooks: createDefaultHitlQaHooks(store),
         });
@@ -209,7 +233,7 @@ export async function runStageYieldLoop(options: {
           reason: "stage requested wait but no HITL controller is configured",
         };
       }
-      await hitl.enterWait(runId, stageId, handle, event.request, attemptCtx);
+      await hitl.enterWait(runId, stageId, handle, request, attemptCtx);
       continue;
     }
     return event.result;
@@ -242,6 +266,7 @@ export async function runStage(
     feedbackLoopContext,
     resumeToken,
     stageEnv,
+    browser: browserSeams,
   } = options;
   const stageId = options.stageId ?? stage.id;
   const attemptOpt = attemptCtx?.eventOptions();
@@ -278,6 +303,19 @@ export async function runStage(
     dag,
     roots,
     commandEnv: stageEnv ?? process.env,
+    ...(stage.browser?.check !== undefined
+      ? {
+          browserLogin: {
+            check: stage.browser.check,
+            ...(browserSeams?.runner !== undefined
+              ? { runner: browserSeams.runner }
+              : {}),
+            ...(browserSeams?.loginCheck !== undefined
+              ? { options: browserSeams.loginCheck }
+              : {}),
+          },
+        }
+      : {}),
   });
   await verifiedExecution.prepare();
   console.error(`Running stage ${stageId} (${stage.model})...`);
@@ -347,6 +385,7 @@ export async function runStage(
       store: workerMode ? store : undefined,
       attemptCtx,
       skipGates,
+      gateContext: hostGateContextFor(stage.browser),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -391,6 +430,7 @@ export async function runStage(
       result,
       activityChain,
       attemptCtx,
+      browser: stage.browser !== undefined,
     });
   } finally {
     const timedOut = isStageTimeoutReason(

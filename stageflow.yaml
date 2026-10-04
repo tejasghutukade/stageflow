@@ -4,6 +4,7 @@ catalog:
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp
+    - examples/browser-session
     - examples/context7-mcp
     - examples/conditional-fork
     - examples/hello-world
@@ -25,6 +26,7 @@ catalog:
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp
+    - examples/browser-session
     - examples/context7-mcp
     - examples/conditional-fork
     - examples/hello-world
