@@ -119,7 +119,11 @@ export function registerControlTools(server: McpServer, deps: McpToolDeps): void
         target_run_id: runId,
         outcome: "ok",
       });
-      return textResult({ ok: true });
+      return textResult(
+        result.verification !== undefined
+          ? { ok: true, verification: result.verification }
+          : { ok: true },
+      );
     },
   );
 

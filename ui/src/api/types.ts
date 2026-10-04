@@ -247,7 +247,11 @@ export type MultiQuestionItem = {
   id: string;
 };
 
-export type PendingPrompt =
+export type GateHandoff =
+  | { kind: "local_window" }
+  | { kind: "live_view"; url: string };
+
+export type PendingPrompt = (
   | { kind: "free_text"; message: string; id: string }
   | { kind: "confirm"; message: string; id: string }
   | {
@@ -260,7 +264,13 @@ export type PendingPrompt =
       message: string;
       artifacts: string[];
       id: string;
-    };
+    }
+) & {
+  /** Set by the Host for stages with a browser; older gates omit these. */
+  handoff?: GateHandoff;
+  site?: string;
+  profile?: string;
+};
 
 export type FreeTextOrConfirmPayload =
   | { kind: "free_text"; text: string }
@@ -318,7 +328,8 @@ export type CompletionCheckType =
   | "checklist"
   | "payload_schema"
   | "gate"
-  | "checkout_changes";
+  | "checkout_changes"
+  | "browser_login";
 
 export type VerificationCheckResult = {
   run_id: string;
@@ -957,3 +968,42 @@ export type ProjectMcpRowStatus =
   | "not-yet-probed"
   | "probing"
   | ProjectMcpProbeStatus;
+
+export type TriggerSchedule = {
+  cron: string;
+  timezone?: string;
+};
+
+export type TriggerEvent = {
+  source: string;
+  match?: Record<string, unknown>;
+};
+
+export type TriggerListItem = {
+  id: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled: boolean;
+  definition_ref: string;
+  last_fired_at?: string;
+  last_run_id?: string;
+  next_run_at?: string;
+};
+
+export type CreateTriggerInput = {
+  directory: string;
+  id: string;
+  pipeline: string;
+  task?: string;
+  kind: "manual" | "schedule" | "event";
+  schedule?: TriggerSchedule;
+  event?: TriggerEvent;
+  enabled?: boolean;
+};
+
+export type CreateTriggerResult =
+  | { ok: true; trigger: TriggerListItem }
+  | { ok: false; status: number; error: string };

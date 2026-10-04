@@ -1,4 +1,9 @@
-import type { LoadedStageConfig, StageGateKind, StageIoYaml } from "./stage.js";
+import type {
+  LoadedStageConfig,
+  StageBrowserConfig,
+  StageGateKind,
+  StageIoYaml,
+} from "./stage.js";
 import type { CompletionContract, RecoveryPolicy } from "./completion.js";
 import type { StageSecretDecl } from "../runtime/stageSecretDecl.js";
 import type { ToolRequirement } from "../config/toolRequires.js";
@@ -166,6 +171,7 @@ export type PipelineStageYamlEntry = {
   timeout_ms?: number;
   skill?: string;
   mcp?: string[];
+  browser?: StageBrowserConfig;
   replay_safe?: boolean;
   route?: PipelineRouteEntry[];
   entry?: boolean;
@@ -197,6 +203,7 @@ export type NormalizedPipelineStageEntry = {
   mcp?: string[];
   secrets?: StageSecretDecl[];
   requires?: ToolRequirement[];
+  browser?: StageBrowserConfig;
   clone_cap?: number;
   clone_mode?: CloneMode;
   body:

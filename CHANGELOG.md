@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.28.0] - 2026-10-03
+## [0.30.0] - 2026-10-04
 
 ### Added
 
@@ -15,6 +15,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Untitled drafts persist as build records under `$STAGEFLOW_HOME/workshop/builds/{id}.json` (no catalog file until save). Chat history persists separately under `workshop/sessions`, and each session points at the build it was editing.
 - Author tools to list, focus, and create builds; create and edit the pipeline, stages, and an optional task; validate the draft; and save. Save writes catalog YAML only when asked, and refuses an invalid package unless the operator explicitly allows it.
 - Studio picker lists each open build and each on-disk pipeline once. The same chat can switch builds, or History can reopen the session that last edited another pipeline.
+
+## [0.29.0] - 2026-10-03
+
+### Added
+
+- **Browser sessions.** A stage can drive a real browser that stays logged in. The browser tool is [agent-browser](https://github.com/vercel-labs/agent-browser), used through the CLI and a bundled `browser` skill (no MCP). See `docs/browser.md` (users) and `docs/browser-internals.md` (contributors and agents).
+  - Stage `browser` field: `profile`, `headed`, `allow_domains`, `login_url`, `check` (`url`, `logged_in_url`, `logged_out_url`). The `agent-browser` requirement is added automatically.
+  - Profiles: named, saved logins kept on the Host under `$STAGEFLOW_HOME/browser/<scope>/<name>/` with owner-only permissions. A profile is leased to one run. Other runs queue until that run ends.
+  - Shared browser per run and profile: the Host starts one Chrome and keeps it open for the whole run. Each stage attaches over CDP with pin-tab and gets its own tab, so parallel stages share one login. The Host closes each stage's tab at stage end and the browser at run end, cancel, or abandon. An orphan sweep runs at Host start.
+  - Host-computed login check: `{ logged_in, url }` is computed by the Host and validated against the stage envelope. Human login stage: `verify: browser_login` with a confirm gate. The gate payload carries `handoff`, `site`, and `profile`. A wrong confirm returns `{ ok: true, verification: "failed_retrying" }` and raises a new gate while repair attempts remain.
+  - `sf browser profiles | status | check | login | clear`.
+  - Host config `browser.blocked_sites`, a per-Host audit log (`browser/audit.jsonl`), redaction of cookie and token output for browser stages, and owner-scope seams (`ProfileStore`, `ProfileLock`, `BrowserHost`, `KeyProvider`, `AuditSink`) for a future multi-tenant service.
+  - Example `examples/browser-session/` (local fixture login server, two parallel work stages) and an opt-in real-Chrome smoke test (`STAGEFLOW_BROWSER_SMOKE=1`).
+- Answer responses (HTTP 202 body, MCP `answer_gate`, `sf runs answer --json`) may include an optional `verification` field.
+
+### Changed
+
+- Stage workers receive the Host's Pi auth path through `STAGEFLOW_PI_HOME_AUTH_PATH`.
+
+### Fixed
+
+- Stages failed with "No API key" under the `pi_home` credential source, because the worker's empty attempt `$HOME` hid `~/.pi/agent/auth.json`.
+
+### Known limitations
+
+- Profile stages use a soft `allow_domains` check (agent-browser rejects its native allowlist with a profile or CDP). Profile-less stages get the native allowlist.
+- The agent-browser key does not protect the Chrome profile folder and is not wired. A visible login window needs a screen; Docker Hosts fail the login stage with a clear message. Only macOS with agent-browser 0.38.2 was verified. The full list is in `docs/browser-internals.md`.
+
+## [0.28.1] - 2026-09-30
+
+### Fixed
+
+- Project root resolution no longer requires git. `resolveStageflowContext` now finds the nearest `stageflow.yaml` first (like a `package.json` for npm), the same way for catalog discovery, trigger-adapter discovery, and stage/pipeline/trigger creation. `isGitProject` is still reported and still gates anything that genuinely needs git (checkout, worktrees), but no longer blocks reading or writing a catalog that has no git repo behind it. Previously, none of the three trigger adapters (schedule, GitHub poll, email) could discover triggers in a non-git catalog root at all.
+
+## [0.28.0] - 2026-09-30
+
+### Added
+
+- Pipeline trigger and scheduler backbone: `kind: event` / `kind: schedule` trigger YAML, `TriggerSourcePort` adapter seam, and dynamic task mode (a firing event can build a one-off `TaskFile` instead of requiring a pre-authored task).
+- Three trigger adapters, each a real `TriggerSourcePort` implementation: a GitHub poll connector (ETag-conditional, grouped by repo so N triggers on one repo cost one API call), a generic webhook adapter (per-trigger URL, HMAC-SHA256 verified), and an email connector (IMAP IDLE, connections pooled per mailbox, bounded-backoff reconnect).
+- Generic `trigger_adapter_state` store table for adapter-persisted cursors (ETags, UID watermarks) shared across all three adapters.
+
+### Fixed
+
+- `event.config` was silently dropped on trigger creation (both HTTP and MCP); it now passes through opaquely to adapters.
+- `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` and `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` are now recognized Host env keys; setting either to tune an adapter's interval no longer crashes boot.
+- The GitHub poll adapter no longer logs an error on every "nothing changed since last poll" tick — Octokit throws on HTTP 304, which was being caught and logged as a failure instead of handled as the expected no-op.
 
 ## [0.27.1] - 2026-09-26
 

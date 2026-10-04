@@ -12,6 +12,7 @@ import {
 import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
+import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
@@ -245,6 +246,15 @@ function readBuildTieField(
   if (value === null) return { ok: true, present: true, value: null };
   if (typeof value === "string") return { ok: true, present: true, value };
   return { ok: false, error: `${field} must be a string or null` };
+}
+
+/** Raw bytes, unparsed — for callers (webhook signature verification) that need the exact wire body. */
+async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
 }
 
 function contentTypeFor(filePath: string): string {
@@ -1082,7 +1092,12 @@ export function createOperatorRoutes(
             json(res, result.status, { error: result.reason });
             return true;
           }
-          json(res, 202, { ok: true });
+          json(res, 202, {
+            ok: true,
+            ...(result.verification !== undefined
+              ? { verification: result.verification }
+              : {}),
+          });
           return true;
         }
 
@@ -1411,10 +1426,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(stageWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -1462,10 +1476,9 @@ export function createOperatorRoutes(
             return true;
           }
           const ctx = await resolveStageflowContext(pipelineWriteRoot);
-          if (!ctx.isGitProject) {
+          if (ctx.manifestStatus !== "ok") {
             json(res, 400, {
-              error:
-                "Project root not found; initialize stageflow.yaml in a git repo",
+              error: "Project root not found; initialize stageflow.yaml",
             });
             return true;
           }
@@ -2746,6 +2759,20 @@ export function createOperatorRoutes(
           await handleProjectMcpRoutes(req, res, {
             projectRoot: rootDir,
             json,
+          })
+        ) {
+          return true;
+        }
+
+        if (
+          await handleTriggerRoutes(req, res, {
+            cwd,
+            manager,
+            store,
+            json,
+            readJsonBody,
+            readRawBody,
+            auditLog,
           })
         ) {
           return true;

@@ -12,6 +12,7 @@ import { NewRunPage } from "./pages/NewRunPage";
 import { TodayPage } from "./pages/TodayPage";
 import { PipelinesPage } from "./pages/PipelinesPage";
 import { TasksPage } from "./pages/TasksPage";
+import { TriggersPage } from "./pages/TriggersPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -41,6 +42,7 @@ function railActiveId(route: Route): string {
   if (route.name === "new") return "today";
   if (route.name === "pipeline") return "pipelines";
   if (route.name === "task") return "tasks";
+  if (route.name === "trigger") return "triggers";
   if (route.name === "skill") return "skills";
   if (
     route.name === "extensionPackage" ||
@@ -141,6 +143,10 @@ function AppShell() {
     content = <TasksPage onNew={go} />;
   } else if (route.name === "task") {
     content = <TasksPage taskId={route.taskId} onNew={go} />;
+  } else if (route.name === "triggers") {
+    content = <TriggersPage />;
+  } else if (route.name === "trigger") {
+    content = <TriggersPage triggerId={route.triggerId} />;
   } else if (route.name === "skills") {
     content = <SkillsPage />;
   } else if (route.name === "skill") {

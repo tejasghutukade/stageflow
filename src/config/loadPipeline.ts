@@ -39,6 +39,7 @@ import {
   collectRouteAllGatedWarnings,
 } from "./routeIf.js";
 import { mergeToolRequires, type ToolRequirement } from "./toolRequires.js";
+import { withBrowserRequires } from "./stageBrowser.js";
 
 export type { LoadedPipeline } from "../types/pipeline.js";
 export type { LoadIssue, LoadOutcome } from "./loadOutcome.js";
@@ -284,6 +285,14 @@ async function buildLoadedPipelineFromMerge(
         if (!merged.ok) return loadFailure(merged.issues);
         stage = { ...stage, requires: merged.value };
       }
+      const inlineRequires = withBrowserRequires(stage, {
+        pipelineId,
+        stageId: entry.id,
+      });
+      if (!inlineRequires.ok) return loadFailure(inlineRequires.issues);
+      if (inlineRequires.value !== undefined) {
+        stage = { ...stage, requires: inlineRequires.value };
+      }
       stages.push(stage);
       stageSources[stageId] = { kind: "inline" };
       continue;
@@ -345,8 +354,17 @@ async function buildLoadedPipelineFromMerge(
       stageRequires = merged.value;
     }
 
+    const browser = entry.browser ?? stageOutcome.value.browser;
+    const fileRequires = withBrowserRequires(
+      { browser, requires: stageRequires },
+      { pipelineId, stageId: entry.id },
+    );
+    if (!fileRequires.ok) return loadFailure(fileRequires.issues);
+    stageRequires = fileRequires.value;
+
     const stage: StageConfig = {
       ...stageOutcome.value,
+      ...(browser !== undefined ? { browser } : {}),
       ...(entry.skill !== undefined ? { skill: entry.skill } : {}),
       ...(entry.mcp !== undefined ? { mcp: entry.mcp } : {}),
       ...(entry.secrets !== undefined ? { secrets: entry.secrets } : {}),

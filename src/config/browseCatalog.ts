@@ -52,6 +52,7 @@ export type CatalogBrowseResult = {
 export type CatalogScanPaths = {
   pipelinePaths: string[];
   taskPaths: string[];
+  triggerPaths: string[];
 };
 
 const BAKED_MODEL_IDS = [
@@ -88,7 +89,7 @@ function bakedModels(): string[] {
 function catalogReadyFromStageflow(
   ctx: StageflowContext,
 ): ctx is StageflowContext & { manifest: LoadedManifest } {
-  return ctx.isGitProject && ctx.manifestStatus === "ok" && ctx.manifest !== null;
+  return ctx.manifestStatus === "ok" && ctx.manifest !== null;
 }
 
 function catalogReady(ctx: CatalogContext): ctx is CatalogContext & {
@@ -104,11 +105,12 @@ export async function getCatalogScanPaths(
   if (!catalogReady(ctx)) {
     return null;
   }
-  const [pipelinePaths, taskPaths] = await Promise.all([
+  const [pipelinePaths, taskPaths, triggerPaths] = await Promise.all([
     scanCatalogPaths(ctx.manifest, "pipeline"),
     scanCatalogPaths(ctx.manifest, "task"),
+    scanCatalogPaths(ctx.manifest, "trigger"),
   ]);
-  return { pipelinePaths, taskPaths };
+  return { pipelinePaths, taskPaths, triggerPaths };
 }
 
 async function listTasksFromManifest(
@@ -208,7 +210,7 @@ export async function browseCatalog(
       ? await resolveStageflowContext(invocationCwd)
       : invocationCwd;
   const base = {
-    projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+    projectRoot: ctx.manifestStatus === "not_git" ? null : ctx.projectRoot,
     manifest: ctx.manifest,
     manifestStatus: ctx.manifestStatus,
     issues: ctx.manifestIssues,

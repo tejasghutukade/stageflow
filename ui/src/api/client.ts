@@ -4,6 +4,8 @@ import type {
   CreatePipelineResult,
   CreateStageInput,
   CreateStageResult,
+  CreateTriggerInput,
+  CreateTriggerResult,
   CredentialSource,
   FeedbackDecisionResult,
   FeedbackLoopDecisionKind,
@@ -24,6 +26,7 @@ import type {
   StageAnswer,
   StartRunResult,
   TaskListing,
+  TriggerListItem,
   CreatedStageListing,
   PackageListing,
   ExtensionFileListing,
@@ -106,6 +109,56 @@ export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
 
 export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {
   return api("/api/pipelines");
+}
+
+export function fetchTriggers(): Promise<{ triggers: TriggerListItem[] }> {
+  return api("/api/triggers");
+}
+
+export function fetchTrigger(id: string): Promise<TriggerListItem> {
+  return api(`/api/triggers/${encodeURIComponent(id)}`);
+}
+
+export function fireTrigger(
+  id: string,
+): Promise<{
+  runId: string;
+  queued?: boolean;
+  queuePosition?: number;
+  queuedCode?: string;
+}> {
+  return api(`/api/triggers/${encodeURIComponent(id)}/fire`, {
+    method: "POST",
+  });
+}
+
+export async function createTriggerWithDetails(
+  input: CreateTriggerInput,
+): Promise<CreateTriggerResult> {
+  try {
+    const res = await fetch("/api/triggers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify(input),
+    });
+    const body = (await res.json().catch(() => ({}))) as TriggerListItem & {
+      error?: string;
+    };
+    if (res.ok && typeof body.id === "string") {
+      return { ok: true, trigger: body };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 export function fetchModels(): Promise<{ models: string[] }> {

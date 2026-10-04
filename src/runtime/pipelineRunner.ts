@@ -25,6 +25,7 @@ import {
   readStageExecutionMode,
   type StageExecutionMode,
 } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { PipelineValidationError } from "./pipelineValidationError.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
@@ -136,6 +137,7 @@ export type PreparedPipeline = {
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  browser?: StageBrowserSupport;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   findings?: ValidationFinding[];
@@ -187,6 +189,7 @@ async function preparePipeline(options: {
   hitl?: StageHitlController;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  browser?: StageBrowserSupport;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   callerId?: string | null;
@@ -400,6 +403,7 @@ async function preparePipeline(options: {
     hitl: options.hitl,
     executionMode,
     stageProcessLauncher,
+    browser: options.browser,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
     ...(warningFindings.length > 0 ? { findings: warningFindings } : {}),
@@ -462,6 +466,7 @@ export async function runPipeline(options: {
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  browser?: StageBrowserSupport;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
 }): Promise<PipelineRunResult> {
@@ -479,6 +484,7 @@ export async function runPipeline(options: {
     hitl: options.hitl,
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
+    browser: options.browser,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
   });
@@ -514,6 +520,7 @@ export async function startPipeline(options: {
   maxActiveStagesPerRun?: number;
   executionMode?: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
+  browser?: StageBrowserSupport;
   operatorCatalog?: OperatorCatalog;
   skipGates?: boolean;
   schedulingHalt?: { halted: boolean };
@@ -545,6 +552,7 @@ export async function startPipeline(options: {
     hitl: options.hitl,
     executionMode: options.executionMode,
     stageProcessLauncher: options.stageProcessLauncher,
+    browser: options.browser,
     operatorCatalog: options.operatorCatalog,
     skipGates: options.skipGates,
     callerId: options.callerId,

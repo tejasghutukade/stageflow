@@ -17,7 +17,7 @@ export type CatalogContext = {
 
 export function catalogContextFromStageflow(ctx: StageflowContext): CatalogContext {
   return {
-    projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+    projectRoot: ctx.manifestStatus === "not_git" ? null : ctx.projectRoot,
     manifest: ctx.manifest,
     manifestStatus: ctx.manifestStatus,
     issues: ctx.manifestIssues,

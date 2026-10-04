@@ -5,6 +5,7 @@ import {
   isAdvancingEnvelope,
 } from "../envelope/check.js";
 import { assertFeedbackLoopAction } from "../envelope/feedbackLoop.js";
+import { loginCheckIssue } from "../browser/loginCheck.js";
 import { assertEnvelopePayload } from "../envelope/payloadSchema.js";
 import { assertForkEnvelope } from "../envelope/forkChoice.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
@@ -38,7 +39,7 @@ function opaqueEqual(a: unknown, b: unknown): boolean {
 }
 
 export type FakeAgentBehavior =
-  | { type: "emit"; envelope: unknown }
+  | { type: "emit"; envelope: unknown; toolArgs?: string }
   | { type: "never_emit" }
   | { type: "throw"; message: string }
   | {
@@ -193,6 +194,9 @@ export class FakeAgent implements AgentPort {
         event: "tool_start",
         toolName: "fake_tool",
         toolCallId: "fake-1",
+        ...("toolArgs" in behavior && behavior.toolArgs !== undefined
+          ? { argsPreview: behavior.toolArgs }
+          : {}),
       });
       input.onActivity?.({
         event: "tool_end",
@@ -235,6 +239,13 @@ export class FakeAgent implements AgentPort {
           assertForkEnvelope(envelope, input.forkEmitContext);
         }
         assertEnvelopePayload(envelope, input.stage.payload_schema);
+        if (envelope.status !== "failure") {
+          for (const check of input.stage.pre_emit_checks ?? []) {
+            if (check.type !== "browser_login_check") continue;
+            const issue = loginCheckIssue(envelope.payload, check);
+            if (issue !== undefined) throw new Error(issue);
+          }
+        }
         if (!isAdvancingEnvelope(envelope)) {
           input.onActivity?.({ event: "agent_end" });
           return {

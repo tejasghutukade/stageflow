@@ -73,6 +73,8 @@ export type StageRunInput = {
   /** Optional raw assistant-text-delta sink, fired alongside onActivity, not instead of it. */
   onAssistantTextDelta?: (delta: string) => void;
   skillFilePath?: string;
+  /** Bundled browser skill; set by the runtime when the stage has `browser`. */
+  browserSkillFilePath?: string;
   forkEmitContext?: ForkEmitContext;
   cloneEmitContext?: CloneEmitContext;
   /** Declared source policy; successful emits must continue or send work back. */

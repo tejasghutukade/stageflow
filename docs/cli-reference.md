@@ -345,7 +345,7 @@ sf runs waiting → sf runs answer → sf runs wait --until any
 | `--run` | Run id (required) |
 | `--stage` | Stage id (required) |
 | `--answer` | `AskOperatorAnswer` JSON |
-| `--json` | `{ "ok": true }` on success |
+| `--json` | `{ "ok": true }` on success; adds `"verification": "failed_retrying"` when after-phase verification failed and the stage is being repaired (new attempt, new gate) |
 
 If `--answer` is omitted, read stdin JSON only when stdin is not a TTY. On a TTY or empty stdin, exit `1` with a missing-answer error.
 
@@ -428,6 +428,85 @@ sf runs gc [--dry-run] [--json]
 | `--json` | `{ "slimmed", "purged", "bareCachesEvicted" }` |
 
 `--dry-run` is report-only; omitting it mutates. Matching MCP tool is `gc_runs` with `execute` (default `false` = dry-run). No operator-console GC button in this release.
+
+## `sf trigger`
+
+Inspect and fire catalog `*.trigger.yaml` definitions (see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)). Like `sf run`/`sf runs`, this is an HTTP client of the shared global Stageflow service (auto-started if nothing is listening).
+
+```bash
+sf trigger list [--json]
+sf trigger show <id> [--json]
+sf trigger fire <id> [--task-inline '<json>'] [--json]
+```
+
+There is no `sf trigger create`; creating a `*.trigger.yaml` is done through `POST /api/triggers`, the `create_trigger` MCP tool, or the operator console's New Trigger panel — not the CLI.
+
+| Subcommand | Role |
+|------------|------|
+| `list` | Catalog-authoritative list of every trigger, overlaid with its last-recorded fire state (if any) |
+| `show` | One trigger's catalog fields plus `last_fired_at` / `last_run_id` when it has fired before, and `next_run_at` for a `schedule`-kind trigger |
+| `fire` | Resolve the trigger's `pipeline`/`task` refs and start a real run through the same `start_run` path the CLI/MCP/console use |
+
+`kind: manual` triggers only run when fired explicitly. `kind: schedule` triggers also fire on their own on a running Host, per their `cron`/`timezone` (catch-up-once-on-boot if the Host was down past the due time — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)); firing one manually with `sf trigger fire` still works the same as any other trigger. `kind: event` triggers with `event.source: github.*` fire on their own via the GitHub poll adapter, and with `event.source: webhook` fire on an inbound `POST /api/triggers/:id/webhook` request (see below) — other `event.source` values still only load and validate, with no adapter driving them yet (see [Architecture](architecture.md)).
+
+### `sf trigger list`
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Pretty-printed `{ "triggers": [ … ] }`, each item the trigger's catalog fields plus `definition_ref`, and `last_fired_at` / `last_run_id` / `next_run_at` when present |
+
+Without `--json`, prints one `id\tkind\tenabled` line per trigger.
+
+**Exit codes:** `0` success, `1` error (for example no catalog found).
+
+### `sf trigger show`
+
+| Flag | Description |
+|------|-------------|
+| `<id>` | Trigger id (required) |
+| `--json` | Pretty-printed trigger object (same shape as one `list` item) |
+
+**Exit codes:** `0` success, `1` error (unknown trigger id).
+
+### `sf trigger fire` {#sf-trigger-fire}
+
+```bash
+sf trigger fire manual-hello-world --json
+sf trigger fire dynamic-hello --task-inline '{"id":"t","goal":"Research it"}' --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `<id>` | Trigger id (required) |
+| `--task-inline` | Inline task JSON (`{ id, goal, ... }`), same shape and parsing as `sf run-stage`'s `--task-inline` (`src/cli/runStageCommand.ts`) — required to fire a dynamic-mode trigger (`task` absent from its `*.trigger.yaml`), rejected for a catalog-mode trigger (`task` set) |
+| `--json` | JSON output — start-failure or completion shape, see below |
+
+Resolves the trigger, starts a run, and blocks until that run reaches a terminal or waiting state — the same completion contract as `sf run`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Pipeline succeeded |
+| `1` | Failed (unknown trigger id, disabled trigger, dangling `pipeline`/`task` ref, mode mismatch, malformed `--task-inline` JSON, stage error, cancelled, or busy start) |
+| `2` | Pipeline waiting on operator input |
+
+**JSON outcomes** (`--json`) follow the same `sf run` completion shape (`ok`, `outcome`, `runId`, …) on success. On a start failure (unknown id, disabled trigger, an unresolved ref, or a mode mismatch), the JSON body is the same shape as `sf run`'s start-failure JSON (`reason`, optional `code`), still exit `1`.
+
+A disabled trigger (`enabled: false`) fails fire with a reason mentioning "disabled" (HTTP `409`). An unknown trigger id fails with a reason naming the id (HTTP `404`).
+
+**Catalog vs. dynamic mode rejections** (HTTP `422`, exit `1` — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml)):
+
+| Code | When | JSON body |
+|------|------|-----------|
+| `trigger.task_override_not_allowed` | A catalog-mode trigger (`task` set) is fired with `--task-inline` supplied | `{ "ok": false, "outcome": "failed", "reason": "Trigger \"<id>\" already has a catalog task \"<task>\"; task override is not allowed", "code": "trigger.task_override_not_allowed" }` |
+| `trigger.task_required` | A dynamic-mode trigger (`task` absent) is fired with no `--task-inline` | `{ "ok": false, "outcome": "failed", "reason": "Trigger \"<id>\" has no catalog task; a task must be supplied when firing", "code": "trigger.task_required" }` |
+
+Without `--json`, both print as `<code>: <reason>` on stderr.
+
+HTTP: `GET /api/triggers`, `GET /api/triggers/:id`, `POST /api/triggers/:id/fire` with an optional `task` body field (`202` with `{ runId, queued?, queuePosition?, queuedCode? }` on accept, `422` with `{ error, code }` on a mode mismatch). Same mutate / loopback gating notes as other mutating Host verbs (see [`sf runs`](#sf-runs) above).
+
+There is also `POST /api/triggers/:id/webhook`, for a `webhook`-sourced `event`-kind trigger — see [YAML catalog — Webhook adapter](yaml-catalog.md#webhook-adapter-eventsource-webhook). It has no `sf trigger`/CLI or MCP counterpart: it's called by whatever external service sends the webhook, not by an operator, and it authenticates via the trigger's own HMAC signature rather than a bearer token.
 
 ## `sf envelope get`
 
@@ -598,6 +677,48 @@ sf skills install --from-zip "https://github.com/tt-a1i/archify/releases/downloa
 ```
 
 See [CI: Skills in CI](ci.md#skills-in-ci) and [YAML catalog: skill binding](yaml-catalog.md#skill-binding). Durable install in a container is [docker exec / image bake](docker.md#cli-via-docker-exec); harnesses prefer run-scoped `start_run.skills` when that lands ([MCP decision table](mcp.md#cli-only-capabilities-decision-table)).
+
+## `sf browser`
+
+Manage saved browser logins (profiles) used by stages with a `browser` field. Output never shows profile paths or cookie values.
+
+```bash
+sf browser profiles [--json]
+sf browser status <name> [--json]
+sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
+sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>] [--json]
+sf browser clear <name> [--yes] [--json]
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `profiles` | Lists profile names and last use. Text is TSV `name\tlast_used` (`never` if unknown). JSON: `{ "profiles": [ { "name", "last_used" } ] }`. |
+| `status` | Shows whether the profile exists, who holds its lock (run and stage), and whether a browser session is open. JSON: `{ "name", "exists", "locked", "lock": { "run_id", "stage_id", "live" } \| null, "session_open" }`. |
+| `check` | Opens `--url` with the profile the same way a stage does and prints the Host-computed result. JSON: `{ "logged_in": true \| false \| null, "url", "state": "logged_in" \| "logged_out" \| "unknown" }`. Closes the session after. The profile must exist. |
+| `login` | Opens a visible window on `--url` and waits until the page address matches `--logged-in`, the timeout passes (default 300 s), the window is closed, or you press Ctrl-C. Then closes the session so the login is saved. Creates the profile if it is new. Needs a screen. |
+| `clear` | Closes any open session and deletes the profile. Asks to confirm on a terminal. Without a terminal it needs `--yes`. |
+
+| Flag | Description |
+|------|-------------|
+| `--logged-in` | Glob for addresses that mean logged in. `*` matches any text. |
+| `--logged-out` | Glob for addresses that mean logged out. Repeatable. Wins over `--logged-in`. |
+| `--headless` | `check` only: no visible window. |
+| `--yes` | `clear` only: skip the confirmation. |
+| `--timeout-sec` | `login` only: how long to wait. |
+
+`check`, `login`, and `clear` take the profile lock. If a live run holds the profile they stop with exit `2`. Locks left by dead runs or dead CLI calls are reclaimed.
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Success. For `check`: logged in. |
+| `1` | Error: bad usage, missing profile, no screen for `login`, cancelled or unconfirmed `clear`. |
+| `2` | Profile is in use by a live run. |
+| `3` | `check`: logged out. |
+| `4` | `check`: unknown (patterns could not decide). |
+| `5` | `login`: not completed (timeout or window closed). |
+| `130` | `login`: stopped with Ctrl-C. |
+
+With `--json`, errors print `{ "error", "code" }` on stdout with the same exit codes. Codes: `not_found`, `profile_busy`, `confirmation_required`, `open_failed`, `invalid_profile_key`, `error`.
 
 ## `sf validate`
 
@@ -855,6 +976,8 @@ Used by the runtime to execute a single stage in a worker process. Not intended 
 | `STAGEFLOW_NO_AUTOSTART` | Disable detached Host autostart (container-safe); mutating CLI verbs fail with `autostart_disabled` |
 | `STAGEFLOW_AUTO_RESUME_INTERRUPTED` | Opt-in boot auto-resume of `interrupted` stages (default off) |
 | `STAGEFLOW_MAX_AUTO_RESUMES` | Cap on automatic resumes per attempt (default `3`) |
+| `STAGEFLOW_TRIGGER_TICK_INTERVAL_MS` | `schedule`-kind trigger poll interval (default `30000`); `0` disables the schedule adapter — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) |
+| `STAGEFLOW_GITHUB_POLL_INTERVAL_MS` | GitHub `event`-kind trigger poll interval (default `60000`); `0` disables the GitHub poll adapter — see [YAML catalog — Triggers](yaml-catalog.md#triggers-trigger-yaml) |
 
 Full CI-related flags and env vars: [CI / headless](ci.md).
 

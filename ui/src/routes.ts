@@ -12,6 +12,8 @@ export type Route =
   | { name: "pipeline"; pipelineId: string }
   | { name: "tasks" }
   | { name: "task"; taskId: string }
+  | { name: "triggers" }
+  | { name: "trigger"; triggerId: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
   | { name: "extensions" }
@@ -51,6 +53,10 @@ export function pipelinePath(pipelineId: string): string {
 
 export function taskPath(taskId: string): string {
   return `/tasks/${encodeURIComponent(taskId)}`;
+}
+
+export function triggerPath(triggerId: string): string {
+  return `/triggers/${encodeURIComponent(triggerId)}`;
 }
 
 export function skillPath(name: string): string {
@@ -132,6 +138,11 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("tasks/")) {
     const taskId = firstSegment(path.slice("tasks/".length));
     if (taskId) return { name: "task", taskId };
+  }
+  if (path === "triggers") return { name: "triggers" };
+  if (path.startsWith("triggers/")) {
+    const triggerId = firstSegment(path.slice("triggers/".length));
+    if (triggerId) return { name: "trigger", triggerId };
   }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {

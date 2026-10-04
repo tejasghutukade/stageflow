@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { globalAgentBackendFromManifest, resolveAgentPort } from "./agent/resolveAgentPort.js";
+import { BROWSER_USAGE, runBrowserCommand } from "./cli/browserCommand.js";
 import { ARTIFACT_USAGE, runArtifactCommand } from "./cli/artifactCommand.js";
 import {
   ENVELOPE_USAGE,
@@ -36,6 +37,7 @@ import { PROVIDERS_USAGE, runProvidersCommand } from "./cli/providersCommand.js"
 import { RUN_USAGE, runRunCommand } from "./cli/runCommand.js";
 import { RUN_STAGE_USAGE, runRunStageCommand } from "./cli/runStageCommand.js";
 import { RUNS_USAGE, runRunsCommand } from "./cli/runsCommand.js";
+import { TRIGGER_USAGE, runTriggerCommand } from "./cli/triggerCommand.js";
 import { resolveOperatorCatalog } from "./cli/operatorCatalog.js";
 import { SKILLS_USAGE, runSkillsCommand } from "./cli/skillsCommand.js";
 import { VALIDATE_USAGE, runValidateCommand } from "./cli/validateCommand.js";
@@ -98,6 +100,11 @@ const USAGE = `Usage:
   sf skills list
   sf skills install --from-path <dir> [--skill-name <name>]
   sf skills install --from-zip <url-or-path> [--skill-name <name>] [--checksum sha256:<hex>]
+  sf browser profiles [--json]
+  sf browser status <name> [--json]
+  sf browser check <name> --url <url> --logged-in <glob> [--logged-out <glob>]... [--headless] [--json]
+  sf browser login <name> --url <login-url> --logged-in <glob> [--timeout-sec <n>]
+  sf browser clear <name> [--yes]
   sf --version
   sf -V
   sf --help
@@ -140,9 +147,13 @@ ${EXPORT_ALL_USAGE}
 
 ${RUNS_USAGE}
 
+${TRIGGER_USAGE}
+
 ${PROVIDERS_USAGE}
 
-${SKILLS_USAGE}`;
+${SKILLS_USAGE}
+
+${BROWSER_USAGE}`;
 
 function parseArgs(argv: string[]): {
   help: boolean;
@@ -197,7 +208,9 @@ function parseArgs(argv: string[]): {
     command === "restore" ||
     command === "export" ||
     command === "runs" ||
-    command === "skills"
+    command === "trigger" ||
+    command === "skills" ||
+    command === "browser"
   ) {
     return { help: false, command };
   }
@@ -543,6 +556,12 @@ async function main(argv: string[]): Promise<number> {
       });
     }
 
+    if (parsed.command === "trigger") {
+      return runTriggerCommand(argv.slice(3), {
+        cwd: ctx.invocationCwd,
+      });
+    }
+
     if (parsed.command === "providers") {
       return runProvidersCommand(argv.slice(3), ctx.invocationCwd);
     }
@@ -552,6 +571,10 @@ async function main(argv: string[]): Promise<number> {
         cwd: ctx.invocationCwd,
         projectRoot: ctx.projectRoot,
       });
+    }
+
+    if (parsed.command === "browser") {
+      return runBrowserCommand(argv.slice(3));
     }
 
     const globalAgent = globalAgentBackendFromManifest(ctx.manifest);

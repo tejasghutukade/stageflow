@@ -15,6 +15,7 @@ import {
 } from "./pipelineScheduler.js";
 import { loadRunContext } from "./resumeReconstruct.js";
 import type { StageExecutionMode } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
 import type { StageProcessLauncher } from "./stageProcessLauncher.js";
 import type { StageHitlController } from "./stageHitl.js";
 import { syncRunStatusFromStages } from "./stageRecovery.js";
@@ -105,6 +106,7 @@ export type RetryStageRequest = {
   agent: AgentPort;
   cwd: string;
   operatorCatalog?: OperatorCatalog;
+  browser?: StageBrowserSupport;
   maxActiveStagesPerRun: number;
   executionMode: StageExecutionMode;
   stageProcessLauncher?: StageProcessLauncher;
@@ -503,6 +505,7 @@ export class RunRetryCoordinator {
         checkoutRoot: meta.checkout_root,
         hitl: req.hitl,
         operatorCatalog: req.operatorCatalog,
+        ...(req.browser !== undefined ? { browser: req.browser } : {}),
       };
 
       if (this.isActive(runId)) {

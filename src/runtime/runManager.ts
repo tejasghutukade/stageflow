@@ -32,6 +32,7 @@ import {
   findUnhandledFailedStage,
   type RunMeta,
   type RunStore,
+  type RunPipelineDagSnapshot,
 } from "../runstore/port.js";
 import { buildPipelineDagSnapshotFromLoaded } from "../runstore/pipelineDagSnapshot.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -58,6 +59,7 @@ import {
   hydrateScheduleFromStore,
   hydratedScheduleHasRunnableWork,
   resumeRun,
+  retryRun,
   runPipelineDag,
 } from "./pipelineScheduler.js";
 import {
@@ -76,6 +78,23 @@ import {
   readStageExecutionMode,
   type StageExecutionMode,
 } from "./stageConcurrency.js";
+import type { StageBrowserSupport } from "../browser/browserHost.js";
+import { isHumanLoginStage } from "../browser/humanLogin.js";
+import {
+  defaultStageBrowserSupport,
+  resolveStageBrowserEnv,
+} from "../browser/stageBrowserEnv.js";
+import {
+  teardownRunBrowsers,
+  teardownStageBrowser,
+} from "../browser/browserTeardown.js";
+import { createRunLiveness } from "../browser/runLiveness.js";
+import {
+  acquireStageProfile,
+  stageProfileLock,
+} from "../browser/stageProfileLock.js";
+import { sweepOrphanBrowserSessions } from "../browser/browserSweep.js";
+import { definitionIdForInstance } from "../runstore/stageInstanceId.js";
 import { StageProcessLauncher } from "./stageProcessLauncher.js";
 import { logger as rootLogger } from "../logging/logger.js";
 import { registerNamedSecrets } from "../logging/namedSecrets.js";
@@ -579,6 +598,7 @@ export class RunManager {
       maxActiveStagesPerRun?: number;
       executionMode?: StageExecutionMode;
       stageProcessLauncher?: StageProcessLauncher;
+      browser?: StageBrowserSupport;
       a2aStore?: A2aStore;
       knownWritableProjectRoots?: () =>
         | Iterable<string>
@@ -925,6 +945,24 @@ export class RunManager {
       .some((entry) => entry.runId === runId && entry.stageId === stageId);
   }
 
+  async sweepBrowserSessions(): Promise<{ closed: string[] }> {
+    const support = this.options.browser ?? defaultStageBrowserSupport();
+    const isRunLive = createRunLiveness(this.options.store);
+    await stageProfileLock(support)
+      .reclaimStale(isRunLive)
+      .catch(() => 0);
+    return sweepOrphanBrowserSessions({
+      isRunLive,
+      ...(support.runner !== undefined ? { runner: support.runner } : {}),
+      ...(support.closeWaitMs !== undefined
+        ? { closeWaitMs: support.closeWaitMs }
+        : {}),
+      ...(support.socketRoot !== undefined
+        ? { socketRoot: support.socketRoot }
+        : {}),
+    });
+  }
+
   async reconcileOrphanedStages(): Promise<{
     reconciled: Array<{ runId: string; stageId: string; reason: string }>;
   }> {
@@ -1258,6 +1296,15 @@ export class RunManager {
         await this.stageProcessLauncher.cancelRun(runId);
       }
     }
+    await teardownStageBrowser(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      {
+        runId,
+        runDir: this.options.store.getWorkspaceDir(runId),
+        stageId,
+        events: () => this.options.store.listStageEvents(runId, stageId),
+      },
+    ).catch(() => undefined);
 
     await markStageInterrupted({
       store: this.options.store,
@@ -1278,6 +1325,19 @@ export class RunManager {
     const hasWaiting = after.stages.some(
       (s) => s.status === "waiting_for_input",
     );
+    if (
+      !hasWaiting &&
+      !(await createRunLiveness(this.options.store)(runId).catch(() => true))
+    ) {
+      await teardownRunBrowsers(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
+      ).catch(() => undefined);
+    }
     if (!hasWaiting && this.active.has(runId)) {
       this.removeActiveEntry(runId, false);
     }
@@ -1339,6 +1399,14 @@ export class RunManager {
     if (this.stageProcessLauncher !== undefined) {
       await this.stageProcessLauncher.cancelRun(runId);
     }
+    await teardownRunBrowsers(
+      this.options.browser ?? defaultStageBrowserSupport(),
+      {
+          runId,
+          runDir: this.options.store.getWorkspaceDir(runId),
+          events: (stageId) => this.options.store.listStageEvents(runId, stageId),
+        },
+    );
 
     const detail = await this.options.store.readRun(runId);
     for (const stage of detail.stages) {
@@ -2077,6 +2145,9 @@ export class RunManager {
         agent: this.options.agent,
         cwd: meta.project_root ?? this.projectRoot,
         operatorCatalog: this.options.operatorCatalog,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
@@ -2500,6 +2571,9 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
@@ -2538,7 +2612,11 @@ export class RunManager {
     runId: string,
     stageId: string,
     opaqueAnswer: OpaqueAnswer,
-  ): Promise<{ ok: boolean; reason?: string }> {
+  ): Promise<{
+    ok: boolean;
+    reason?: string;
+    verification?: "failed_retrying";
+  }> {
     const store = this.options.store;
     const launcher = this.stageProcessLauncher;
     if (!launcher) {
@@ -2565,10 +2643,47 @@ export class RunManager {
         runWorkspaceDir: workspaceDir,
         hostEnv: process.env,
       });
+      const resumedStage = loaded.stages.find(
+        (s) => s.id === definitionIdForInstance(meta.pipeline_dag, stageId),
+      );
+      if (resumedStage?.browser?.profile !== undefined) {
+        await acquireStageProfile(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            profile: resumedStage.browser.profile,
+            owner: { runId, stageId },
+            isRunLive: createRunLiveness(store),
+            halted: () => true,
+          },
+        ).then((outcome) => {
+          if (outcome === "halted") {
+            throw new Error(
+              `browser profile "${resumedStage.browser?.profile}" is held by another run`,
+            );
+          }
+        });
+      }
+      const browserEnv = await resolveStageBrowserEnv(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          stageId,
+          runDir: workspaceDir,
+          browser: resumedStage?.browser,
+          attempt,
+          humanLogin: isHumanLoginStage(
+            meta.pipeline_dag,
+            definitionIdForInstance(meta.pipeline_dag, stageId),
+            resumedStage?.browser,
+          ),
+          resuming: true,
+        },
+      );
       const launchResult = await launcher.launch({
         runId,
         stageId,
         rootDir: runProjectRoot,
+        ...(browserEnv !== undefined ? { browserEnv } : {}),
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,
@@ -2583,8 +2698,51 @@ export class RunManager {
       if (launchResult.type === "waiting") {
         return { ok: true };
       }
+      await teardownStageBrowser(
+        this.options.browser ?? defaultStageBrowserSupport(),
+        {
+          runId,
+          runDir: workspaceDir,
+          stageId,
+          events: () => store.listStageEvents(runId, stageId),
+        },
+      ).catch(() => undefined);
 
       if (launchResult.type === "failed") {
+        const nextRepairAttempt = await this.scheduleRepairAfterVerifyFailure(
+          runId,
+          stageId,
+          meta.pipeline_dag,
+        );
+        if (nextRepairAttempt !== undefined) {
+          await store.updateRunStatus(runId, "running");
+          const repaired = await retryRun({
+            prepared: {
+              task,
+              loaded,
+              run: { runId, workspaceDir: store.getWorkspaceDir(runId) },
+              agent: this.options.agent,
+              store,
+              cwd: meta.project_root ?? this.projectRoot,
+              projectRoot: meta.project_root ?? this.projectRoot,
+              checkoutRoot: meta.checkout_root,
+              hitl: this.hitl,
+              operatorCatalog: this.options.operatorCatalog,
+              ...(this.options.browser !== undefined
+                ? { browser: this.options.browser }
+                : {}),
+            },
+            retryRoots: new Map([[stageId, nextRepairAttempt]]),
+            maxActiveStagesPerRun: this.maxActiveStagesPerRun,
+            executionMode: this.executionMode,
+            stageProcessLauncher: launcher,
+            schedulingHalt: this.ensureSchedulingHalt(runId),
+          });
+          if (repaired.outcome === "failed") {
+            return { ok: false, reason: repaired.reason };
+          }
+          return { ok: true, verification: "failed_retrying" };
+        }
         await store.appendStageEvent(
           runId,
           stageId,
@@ -2595,6 +2753,14 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            runId,
+            runDir: workspaceDir,
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
         return { ok: false, reason: launchResult.reason };
       }
 
@@ -2617,6 +2783,9 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         resumeFromStageId: stageId,
@@ -2645,6 +2814,14 @@ export class RunManager {
           eventOptions,
         );
         await store.updateRunStatus(runId, "failed");
+        await teardownRunBrowsers(
+          this.options.browser ?? defaultStageBrowserSupport(),
+          {
+            runId,
+            runDir: store.getWorkspaceDir(runId),
+            events: (stageId) => store.listStageEvents(runId, stageId),
+          },
+        ).catch(() => undefined);
       } catch {
         // ignore secondary failures
       }
@@ -2652,6 +2829,26 @@ export class RunManager {
     } finally {
       this.attachedWaiting.delete(`${runId}\0${stageId}`);
     }
+  }
+
+  /**
+   * A resumed stage whose after-phase verification failed is repaired by the
+   * same policy the scheduler applies to a first-launch failure. Returns the
+   * freshly created attempt, or undefined when the failure is final.
+   */
+  private async scheduleRepairAfterVerifyFailure(
+    runId: string,
+    stageId: string,
+    dag: RunPipelineDagSnapshot | undefined,
+  ): Promise<number | undefined> {
+    const store = this.options.store;
+    const recovery = dag?.nodes.find((node) => node.id === stageId)?.recovery;
+    if (recovery?.mode !== "repair") return undefined;
+    const latest = await store.getLatestStageExecution(runId, stageId);
+    if (latest?.verification_outcome !== "failed") return undefined;
+    const attempts = await store.countStageAttempts(runId, stageId);
+    if (attempts >= recovery.max_attempts) return undefined;
+    return (await store.createStageExecution(runId, stageId)).attempt;
   }
 
   private async reconstructAndContinue(
@@ -2976,6 +3173,9 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
         submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3555,6 +3755,9 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(runId);
       const started = await startPipeline({
         submission,
+        ...(this.options.browser !== undefined
+          ? { browser: this.options.browser }
+          : {}),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3681,6 +3884,9 @@ export class RunManager {
           checkoutRoot: loadedMeta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
+          ...(this.options.browser !== undefined
+            ? { browser: this.options.browser }
+            : {}),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,

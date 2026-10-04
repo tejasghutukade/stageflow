@@ -70,6 +70,8 @@ export const KNOWN_STAGEFLOW_ENV_KEYS = new Set<string>([
   "STAGEFLOW_TOOLCHAIN_MANIFEST",
   "STAGEFLOW_SECRET_REGISTRY",
   "STAGEFLOW_BUILD_SHA",
+  "STAGEFLOW_TRIGGER_TICK_INTERVAL_MS",
+  "STAGEFLOW_GITHUB_POLL_INTERVAL_MS",
 ]);
 
 const KNOWN_ENV_PREFIXES = [
@@ -87,6 +89,7 @@ const FILE_KEY_TO_FIELD = {
   trust_workspace_config: "trustWorkspaceConfig",
   allow_unknown_config: "allowUnknownConfig",
   callers: "callers",
+  browser: "browser",
 } as const;
 
 type FileField = (typeof FILE_KEY_TO_FIELD)[keyof typeof FILE_KEY_TO_FIELD];
@@ -107,6 +110,8 @@ export type HostConfig = {
   readToken: string | undefined;
   /** caller_id → quota; empty when unset. */
   callers: Record<string, CallerQuotaConfig>;
+  /** Domains no browser stage may use (`browser.blocked_sites` in config.yaml). */
+  browserBlockedSites: string[];
   /** Absolute path of config.yaml when loaded; undefined if absent. */
   configFilePath: string | undefined;
   warnings: string[];
@@ -484,6 +489,38 @@ export function loadHostConfig(options?: {
     callers = coerceCallers(file.values.callers, "callers");
   }
 
+  let browserBlockedSites: string[] = [];
+  if (file.values.browser !== undefined) {
+    const raw = file.values.browser;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new HostConfigError(`Invalid value for browser`, "config_invalid", "browser");
+    }
+    for (const sub of Object.keys(raw)) {
+      if (sub !== "blocked_sites") {
+        throw new HostConfigError(
+          `Unknown key "${sub}" under browser`,
+          "config_unknown_key",
+          `browser.${sub}`,
+        );
+      }
+    }
+    const sites = (raw as Record<string, unknown>).blocked_sites;
+    if (sites !== undefined) {
+      browserBlockedSites = coerceFileStringList(sites, "browser.blocked_sites")
+        .map((s) => s.trim().toLowerCase().replace(/^\*\./, "").replace(/^\./, ""))
+        .filter((s) => s.length > 0);
+      for (const site of browserBlockedSites) {
+        if (!/^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(site)) {
+          throw new HostConfigError(
+            `Invalid domain "${site}" in browser.blocked_sites`,
+            "config_invalid",
+            "browser.blocked_sites",
+          );
+        }
+      }
+    }
+  }
+
   return {
     maxConcurrentRuns,
     maxConcurrentRunsPerProject,
@@ -494,6 +531,7 @@ export function loadHostConfig(options?: {
     controlToken,
     readToken,
     callers,
+    browserBlockedSites,
     configFilePath:
       configFilePath !== undefined && existsSync(configFilePath)
         ? configFilePath

@@ -2,7 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { LoadedManifest } from "../types/stageflowManifest.js";
 
-export type CatalogPathKind = "pipeline" | "task";
+export type CatalogPathKind = "pipeline" | "task" | "trigger";
 
 function normalizeRepoRel(repoRelPath: string): string {
   return repoRelPath.replace(/\\/g, "/").replace(/^\.\/+/, "");
@@ -79,8 +79,14 @@ export async function scanCatalogPaths(
   kind: CatalogPathKind,
 ): Promise<string[]> {
   const { projectRoot, manifest: doc, patterns } = manifest;
-  const entries = kind === "pipeline" ? doc.catalog.pipelines : doc.catalog.tasks;
-  const pattern = kind === "pipeline" ? patterns.pipeline : patterns.task;
+  const entries =
+    kind === "pipeline"
+      ? doc.catalog.pipelines
+      : kind === "task"
+        ? doc.catalog.tasks
+        : (doc.catalog.triggers ?? []);
+  const pattern =
+    kind === "pipeline" ? patterns.pipeline : kind === "task" ? patterns.task : patterns.trigger;
   const exclude = doc.catalog.exclude;
 
   const seen = new Set<string>();

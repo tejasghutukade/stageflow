@@ -12,6 +12,7 @@ import { parseModelField } from "./modelField.js";
 
 const DEFAULT_PIPELINE_PATTERN = "*.pipeline.yaml";
 const DEFAULT_TASK_PATTERN = "*.task.yaml";
+const DEFAULT_TRIGGER_PATTERN = "*.trigger.yaml";
 
 export function manifestPathForProject(projectRoot: string): string {
   return path.join(projectRoot, "stageflow.yaml");
@@ -63,10 +64,11 @@ function parseStringArray(
 function parsePatterns(
   raw: unknown,
   issues: LoadIssue[],
-): { pipeline: string; task: string } {
+): { pipeline: string; task: string; trigger: string } {
   const defaults = {
     pipeline: DEFAULT_PIPELINE_PATTERN,
     task: DEFAULT_TASK_PATTERN,
+    trigger: DEFAULT_TRIGGER_PATTERN,
   };
   if (raw === undefined || raw === null) {
     return defaults;
@@ -90,6 +92,12 @@ function parsePatterns(
       : typeof record.task === "string" && record.task.trim().length > 0
         ? record.task.trim()
         : null;
+  const trigger =
+    record.trigger === undefined
+      ? defaults.trigger
+      : typeof record.trigger === "string" && record.trigger.trim().length > 0
+        ? record.trigger.trim()
+        : null;
   if (pipeline === null) {
     issues.push(
       catalogIssue("catalog.manifest_invalid", "catalog.patterns.pipeline must be a string"),
@@ -100,9 +108,15 @@ function parsePatterns(
       catalogIssue("catalog.manifest_invalid", "catalog.patterns.task must be a string"),
     );
   }
+  if (trigger === null) {
+    issues.push(
+      catalogIssue("catalog.manifest_invalid", "catalog.patterns.trigger must be a string"),
+    );
+  }
   return {
     pipeline: pipeline ?? defaults.pipeline,
     task: task ?? defaults.task,
+    trigger: trigger ?? defaults.trigger,
   };
 }
 
@@ -158,6 +172,15 @@ export function parseStageflowManifestOutcome(
     }
   }
 
+  const triggersRaw = catalogRecord.triggers;
+  let triggers: string[] | undefined;
+  if (triggersRaw !== undefined) {
+    const parsed = parseStringArray(triggersRaw, "triggers", issues);
+    if (parsed !== null) {
+      triggers = parsed;
+    }
+  }
+
   const patterns = parsePatterns(catalogRecord.patterns, issues);
 
   let agent: string | undefined;
@@ -188,6 +211,9 @@ export function parseStageflowManifestOutcome(
   if (exclude !== undefined) {
     catalog.exclude = exclude;
   }
+  if (triggers !== undefined) {
+    catalog.triggers = triggers;
+  }
   if (catalogRecord.patterns !== undefined) {
     catalog.patterns = {};
     if (typeof (catalogRecord.patterns as Record<string, unknown>).pipeline === "string") {
@@ -195,6 +221,9 @@ export function parseStageflowManifestOutcome(
     }
     if (typeof (catalogRecord.patterns as Record<string, unknown>).task === "string") {
       catalog.patterns.task = patterns.task;
+    }
+    if (typeof (catalogRecord.patterns as Record<string, unknown>).trigger === "string") {
+      catalog.patterns.trigger = patterns.trigger;
     }
   }
 
