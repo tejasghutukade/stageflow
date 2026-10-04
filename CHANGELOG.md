@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-03
+
+### Added
+
+- Workshop Author on `#/workshop`: a chat agent that drafts a pipeline, asks when a missing detail would change the stages or the wiring, and shows the draft on the studio stage map. Click a stage for its prompt, IO, verify, and HITL summary.
+- Untitled drafts persist as build records under `$STAGEFLOW_HOME/workshop/builds/{id}.json` (no catalog file until save). Chat history persists separately under `workshop/sessions`, and each session points at the build it was editing.
+- Author tools to list, focus, and create builds; create and edit the pipeline, stages, and an optional task; validate the draft; and save. Save writes catalog YAML only when asked, and refuses an invalid package unless the operator explicitly allows it.
+- Studio picker lists each open build and each on-disk pipeline once. The same chat can switch builds, or History can reopen the session that last edited another pipeline.
+
 ## [0.27.1] - 2026-09-26
 
 ### Fixed

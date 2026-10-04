@@ -67,6 +67,17 @@ export type OperatorAgentSessionEvent =
   | { type: "validation"; result: ValidationResult }
   | { type: "error"; message: string };
 
+export type WorkshopToolActivityUpdate = {
+  id: string;
+  name: string;
+  status: "running" | "complete" | "error";
+  target?: string;
+  errorMessage?: string;
+  draft?: DraftPackage;
+  /** Build the turn is editing. Absent when the chat is unlinked. */
+  buildId?: string;
+};
+
 export type OperatorAgentSession = {
   readonly profileId: string;
   readonly profileTitle: string;
@@ -84,8 +95,14 @@ export type OperatorAgentSession = {
   ): Promise<void>;
   send(
     message: string,
-    options?: { onDelta?: (text: string) => void },
+    options?: {
+      onDelta?: (text: string) => void;
+      onActivity?: (update: WorkshopToolActivityUpdate) => void;
+      modelId?: string;
+    },
   ): Promise<OperatorAgentSessionEvent[]>;
+  /** Interrupt the in-flight prompt. Resolves when the backend is idle. */
+  abort(): Promise<void>;
   /** Confirm mutation (soft UX); draft already applied — does not re-apply. */
   acceptProposal(proposalId?: string): AcceptProposalResult;
   /** Soft-undo the mutation when the applied fingerprint still matches. */
@@ -112,6 +129,10 @@ export type WorkshopDraftContext = {
   };
   /** Catalog write root for the save tool (usually the operator project). */
   projectRoot?: string;
+  /** Workshop chat session that owns this host context. */
+  chatSessionId?: string;
+  /** Build this turn is editing. Absent when that chat is unlinked. */
+  buildId?: string;
 };
 
 export type { AcceptProposalResult, ProposalArtifactDiff, UndoMutationResult };

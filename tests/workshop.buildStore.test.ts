@@ -10,6 +10,7 @@ import {
   getWorkshopBuild,
   listWorkshopBuilds,
   listWorkshopPickerRows,
+  resolvePickerCatalogPipelines,
   resolveWorkshopBuildStoreRoot,
   updateWorkshopBuild,
   workshopBuildFilePath,
@@ -404,6 +405,37 @@ describe("workshop picker", () => {
       } finally {
         await fixture.cleanup();
       }
+    });
+  });
+
+  it("lists a seeded catalog root once after it is tied to the filesystem path", async () => {
+    await withIsolatedHome(async () => {
+      const examples = "/tmp/stageflow-examples";
+      const pipelines = resolvePickerCatalogPipelines(
+        [
+          {
+            project_root: "examples",
+            path: "ci-validate/ci-demo.pipeline.yaml",
+            id: "ci-demo",
+          },
+        ],
+        [{ project_root: "examples", path: examples }],
+      );
+      expect(pipelines[0]?.project_root).toBe(examples);
+      const storeRoot = resolveWorkshopBuildStoreRoot();
+      const tied = createWorkshopBuild(storeRoot, {
+        draft,
+        projectRoot: "examples",
+        relativePath: "ci-validate/ci-demo.pipeline.yaml",
+      });
+      const rows = listWorkshopPickerRows(storeRoot, pipelines, [
+        { project_root: "examples", path: examples },
+      ]);
+      const matches = rows.filter(
+        (row) => row.relativePath === "ci-validate/ci-demo.pipeline.yaml",
+      );
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.id).toBe(tied.id);
     });
   });
 });

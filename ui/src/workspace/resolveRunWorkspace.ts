@@ -66,6 +66,8 @@ export type SpatialNodeChrome = {
   gateKinds?: StageGateKind[];
   promptSummary?: string;
   meta?: string;
+  /** Workshop studio cards show the stage name only. */
+  titleOnly?: boolean;
   isWaitingAttention: boolean;
   isFeedbackSource?: boolean;
   isFeedbackTarget?: boolean;

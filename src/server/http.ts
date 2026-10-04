@@ -25,6 +25,7 @@ import {
   parseOpenDraftPackageBody,
   parseOverwriteDraftPackageBody,
   validateDraftPackage,
+  type DraftPackage,
 } from "../config/draftPackage.js";
 import {
   clearWorkshopAutosave,
@@ -42,6 +43,7 @@ import {
   acceptWorkshopSessionMutation,
   iterateWorkshopChatStreamFrames,
   runWorkshopChatTurn,
+  stopWorkshopChatTurn,
   undoWorkshopSessionMutation,
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
@@ -52,7 +54,19 @@ import {
   getWorkshopSession,
   listWorkshopSessions,
   resolveWorkshopSessionStoreRoot,
+  updateWorkshopSessionActiveBuildId,
 } from "../workshop/sessionStore.js";
+import {
+  createWorkshopBuild,
+  focusUnboundWorkshopBuild,
+  getWorkshopBuild,
+  listWorkshopBuilds,
+  listWorkshopPickerRows,
+  resolvePickerCatalogPipelines,
+  resolveWorkshopBuildStoreRoot,
+  updateWorkshopBuild,
+  WorkshopBuildStoreError,
+} from "../workshop/buildStore.js";
 import {
   createLiveWorkshopOperatorHost,
   type OperatorAgentHost,
@@ -217,6 +231,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function readBuildTieField(
+  body: Record<string, unknown>,
+  field: "projectRoot" | "relativePath",
+):
+  | { ok: true; present: false }
+  | { ok: true; present: true; value: string | null }
+  | { ok: false; error: string } {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    return { ok: true, present: false };
+  }
+  const value = body[field];
+  if (value === null) return { ok: true, present: true, value: null };
+  if (typeof value === "string") return { ok: true, present: true, value };
+  return { ok: false, error: `${field} must be a string or null` };
+}
+
 function contentTypeFor(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();
   switch (ext) {
@@ -344,6 +374,7 @@ export function createOperatorRoutes(
     );
   const workshopSessionStoreRoot = (): string =>
     resolveWorkshopSessionStoreRoot();
+  const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method, boot }) => {
@@ -1949,6 +1980,221 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (method === "GET" && pathname === "/api/workshop/picker") {
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            rows: listWorkshopPickerRows(
+              workshopBuildStoreRoot(),
+              resolvePickerCatalogPipelines(result.items, result.roots),
+              result.roots,
+            ),
+            root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/focus") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (
+            typeof body.projectRoot !== "string" ||
+            typeof body.relativePath !== "string"
+          ) {
+            json(res, 400, { error: "project root and path are required" });
+            return true;
+          }
+          let projectRoot = body.projectRoot;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              body.projectRoot,
+            );
+            projectRoot = wireRoot.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, { error: err.message });
+              return true;
+            }
+            throw err;
+          }
+          const focused = await focusUnboundWorkshopBuild(
+            workshopBuildStoreRoot(),
+            {
+              projectRoot,
+              relativePath: body.relativePath,
+            },
+          );
+          if (!focused.ok) {
+            json(res, focused.status, { error: focused.error });
+            return true;
+          }
+          json(res, focused.created ? 201 : 200, { build: focused.build });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          json(res, 200, {
+            builds: listWorkshopBuilds(workshopBuildStoreRoot()),
+          });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          const build = createWorkshopBuild(workshopBuildStoreRoot(), {
+            draft: draftParsed,
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+            ...(projectRoot.present ? { projectRoot: projectRoot.value } : {}),
+            ...(relativePath.present
+              ? { relativePath: relativePath.value }
+              : {}),
+          });
+          json(res, 201, { build });
+          return true;
+        }
+
+        const workshopBuildMatch = pathname.match(
+          /^\/api\/workshop\/builds\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          try {
+            const build = getWorkshopBuild(workshopBuildStoreRoot(), buildId);
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "PUT" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          let draft: DraftPackage | undefined;
+          if (body.draft !== undefined) {
+            const draftParsed = parseDraftPackageBody({ draft: body.draft });
+            if ("ok" in draftParsed) {
+              json(res, draftParsed.status, { error: draftParsed.error });
+              return true;
+            }
+            draft = draftParsed;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          try {
+            const build = updateWorkshopBuild(workshopBuildStoreRoot(), buildId, {
+              ...(draft ? { draft } : {}),
+              ...(projectRoot.present
+                ? { projectRoot: projectRoot.value }
+                : {}),
+              ...(relativePath.present
+                ? { relativePath: relativePath.value }
+                : {}),
+            });
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
         if (
           method === "GET" &&
           pathname === "/api/workshop/sessions"
@@ -1991,6 +2237,57 @@ export function createOperatorRoutes(
             const session = getWorkshopSession(
               workshopSessionStoreRoot(),
               sessionId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionPatchMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "PATCH" && workshopSessionPatchMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionPatchMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!Object.prototype.hasOwnProperty.call(body, "activeBuildId")) {
+            json(res, 400, { error: "activeBuildId is required" });
+            return true;
+          }
+          const activeBuildId = body.activeBuildId;
+          if (activeBuildId !== null && typeof activeBuildId !== "string") {
+            json(res, 400, { error: "activeBuildId must be a string or null" });
+            return true;
+          }
+          try {
+            const session = updateWorkshopSessionActiveBuildId(
+              workshopSessionStoreRoot(),
+              sessionId,
+              activeBuildId,
             );
             json(res, 200, { session });
           } catch (err) {
@@ -2116,6 +2413,30 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (method === "POST" && pathname === "/api/workshop/chat/stop") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
+            return true;
+          }
+          const stopped = await stopWorkshopChatTurn(
+            workshopChatRegistry,
+            body.sessionId,
+          );
+          json(res, 200, { ok: true, ...stopped });
+          return true;
+        }
+
         if (method === "POST" && pathname === "/api/workshop/chat") {
           let body: unknown;
           try {
@@ -2136,6 +2457,7 @@ export function createOperatorRoutes(
             json(res, 400, { error: "message is required" });
             return true;
           }
+          const sessionId = body.sessionId;
           const draftParsed = parseDraftPackageBody(body);
           if ("ok" in draftParsed) {
             json(res, draftParsed.status, { error: draftParsed.error });
@@ -2227,9 +2549,15 @@ export function createOperatorRoutes(
             };
             let streamedDelta = false;
             let writeChain: Promise<void> = Promise.resolve();
+            let turnFinished = false;
             const enqueueFrame = (frame: unknown): void => {
               writeChain = writeChain.then(() => writeFrame(frame));
             };
+            const stopIfClientLeft = () => {
+              if (turnFinished || res.writableEnded) return;
+              void workshopChatRegistry.abortTurn(sessionId);
+            };
+            res.once("close", stopIfClientLeft);
             try {
               const turn = await runWorkshopChatTurn({
                 ...chatTurnBase,
@@ -2237,7 +2565,18 @@ export function createOperatorRoutes(
                   streamedDelta = true;
                   enqueueFrame({ type: "delta", text });
                 },
+                onActivity: (update) => {
+                  enqueueFrame({ type: "activity", ...update });
+                },
+                onPointerChange: (frame) => {
+                  enqueueFrame({
+                    type: "pointer-change",
+                    buildId: frame.buildId,
+                    draft: frame.draft,
+                  });
+                },
               });
+              turnFinished = true;
               await writeChain;
               for (const frame of iterateWorkshopChatStreamFrames(turn, {
                 chunkAssistantText: !streamedDelta,
@@ -2248,6 +2587,7 @@ export function createOperatorRoutes(
                 res.end();
               }
             } catch (err) {
+              turnFinished = true;
               await writeChain.catch(() => undefined);
               const message = err instanceof Error ? err.message : String(err);
               const errorEvent = { type: "error" as const, message };
@@ -2263,6 +2603,7 @@ export function createOperatorRoutes(
                 pending: null,
                 autoApply: false,
                 model: resolvedModel,
+                buildId: workshopChatRegistry.getPinnedBuildId(body.sessionId),
               });
               if (!res.writableEnded && !res.destroyed) {
                 res.end();

@@ -645,14 +645,17 @@ function SpatialNode({
   const statusLabel = abandoned ? abandonedDisplayCopy() : statusCopy(status);
   const title = chrome?.title ?? node.stageId;
   const kicker = chrome ? spatialNodeKicker(chrome.kicker, chrome.title) : null;
-  const metaParts = [statusLabel];
-  if (chrome?.isSuperseded) metaParts.push("superseded");
-  if (chrome?.readinessLine && status === "pending") metaParts.push(chrome.readinessLine);
-  if (status === "waiting_for_input") {
-    if (chrome?.gateKinds?.length) metaParts.push(chrome.gateKinds.map(gateLabel).join(" · "));
-    if (chrome?.promptSummary) metaParts.push(chrome.promptSummary);
-  } else if (chrome?.meta) {
-    metaParts.push(chrome.meta);
+  const metaParts: string[] = [];
+  if (!chrome?.titleOnly) {
+    metaParts.push(statusLabel);
+    if (chrome?.isSuperseded) metaParts.push("superseded");
+    if (chrome?.readinessLine && status === "pending") metaParts.push(chrome.readinessLine);
+    if (status === "waiting_for_input") {
+      if (chrome?.gateKinds?.length) metaParts.push(chrome.gateKinds.map(gateLabel).join(" · "));
+      if (chrome?.promptSummary) metaParts.push(chrome.promptSummary);
+    } else if (chrome?.meta) {
+      metaParts.push(chrome.meta);
+    }
   }
 
   const select = () => {
@@ -691,7 +694,9 @@ function SpatialNode({
               {title}
               <AttemptCountBadge count={chrome?.attemptCount} />
             </span>
-            <span className="gnode__meta">{metaParts.join(" · ")}</span>
+            {metaParts.length > 0 ? (
+              <span className="gnode__meta">{metaParts.join(" · ")}</span>
+            ) : null}
           </button>
         </foreignObject>
       ) : (
@@ -704,9 +709,11 @@ function SpatialNode({
           <text className="node-title" x={16} y={kicker ? 44 : 32}>
             {title}
           </text>
-          <text className="node-meta" x={16} y={66}>
-            {metaParts.join(" · ")}
-          </text>
+          {metaParts.length > 0 ? (
+            <text className="node-meta" x={16} y={66}>
+              {metaParts.join(" · ")}
+            </text>
+          ) : null}
         </g>
       )}
       <NodeStatusColumn

@@ -10,7 +10,17 @@ import {
 import { createRunStore } from "../src/runstore/createStore.js";
 import { startUiServer } from "../src/server/http.js";
 import { writeFactorySettings } from "../src/runtime/settingsFile.js";
+import { readDraftFromContext } from "../src/operatorAgent/index.js";
 import { resetWorkshopChatSessionsForTests } from "../src/workshop/chatTurn.js";
+import {
+  createWorkshopBuild,
+  getWorkshopBuild,
+} from "../src/workshop/buildStore.js";
+import {
+  getWorkshopSession,
+  resolveWorkshopSessionStoreRoot,
+  updateWorkshopSessionActiveBuildId,
+} from "../src/workshop/sessionStore.js";
 import {
   initTempGitRepo,
   withIsolatedHome,
@@ -245,6 +255,82 @@ describe("POST /api/workshop/chat", () => {
       const deltas = frames.filter((f) => f.type === "delta");
       expect(deltas.length).toBeGreaterThanOrEqual(1);
       expect(frames.at(-1)?.type).toBe("done");
+    });
+  });
+
+  it("POST /api/workshop/chat/stop aborts the in-flight turn", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      let completeEntered = false;
+      const model: OperatorAgentModel = {
+        async complete() {
+          completeEntered = true;
+          await gate;
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "stopped" },
+            ],
+          };
+        },
+        async abort() {
+          release();
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-sess-stop");
+      const idle = await jsonFetch(`${base}/api/workshop/chat/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "http-sess-stop" }),
+      });
+      expect(idle.status).toBe(200);
+      expect(idle.body.stopped).toBe(false);
+
+      const resPromise = fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({
+          sessionId: "http-sess-stop",
+          message: "hello",
+          draft: { pipeline: { id: "demo", stages: [] } },
+          stream: true,
+        }),
+      });
+      for (let i = 0; i < 40 && !completeEntered; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(completeEntered).toBe(true);
+      const stop = await jsonFetch(`${base}/api/workshop/chat/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "http-sess-stop" }),
+      });
+      expect(stop.status).toBe(200);
+      expect(stop.body.stopped).toBe(true);
+      expect(stop.body.draft?.pipeline?.id).toBe("demo");
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('"type":"done"');
     });
   });
 
@@ -572,6 +658,213 @@ describe("POST /api/workshop/chat", () => {
       });
       expect(result.status).toBe(404);
       expect(result.body.code).toBe("workshop_session_not_found");
+    });
+  });
+
+  it("edits the pinned build when the request body carries a different draft", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const home = resolveWorkshopSessionStoreRoot();
+      const { server, base } = await withServer(repo.root, storeRoot);
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-pin-a");
+      createWorkshopBuild(home, {
+        id: "build-a",
+        draft: { pipeline: { id: "alpha", stages: [] } },
+      });
+      updateWorkshopSessionActiveBuildId(home, "http-pin-a", "build-a");
+
+      const result = await jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "http-pin-a",
+          message: "intake form review",
+          draft: { pipeline: { id: "other", stages: [] } },
+        }),
+      });
+      expect(result.status).toBe(200);
+      expect(result.body.buildId).toBe("build-a");
+      expect(result.body.draft.pipeline.id).toBe("alpha");
+      expect(result.body.draft.pipeline.stages.length).toBe(1);
+      const stored = getWorkshopBuild(home, "build-a");
+      expect(stored.id).toBe("build-a");
+      expect(stored.draft.pipeline.id).toBe("alpha");
+      expect(stored.draft.pipeline.stages.length).toBe(1);
+    });
+  });
+
+  it("names the pinned build id on an activity frame", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const home = resolveWorkshopSessionStoreRoot();
+      const model: OperatorAgentModel = {
+        async complete({ onActivity }) {
+          onActivity?.({
+            id: "act-1",
+            name: "edit_pipeline",
+            status: "running",
+          });
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "working" },
+            ],
+          };
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-pin-activity");
+      createWorkshopBuild(home, {
+        id: "build-act",
+        draft: { pipeline: { id: "alpha", stages: [] } },
+      });
+      updateWorkshopSessionActiveBuildId(home, "http-pin-activity", "build-act");
+
+      const res = await fetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
+        body: JSON.stringify({
+          sessionId: "http-pin-activity",
+          message: "edit the open pipeline",
+          draft: { pipeline: { id: "other", stages: [] } },
+          stream: true,
+        }),
+      });
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const frames = text
+        .trim()
+        .split("\n")
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              type: string;
+              buildId?: string;
+              name?: string;
+            },
+        );
+      const activity = frames.find((frame) => frame.type === "activity");
+      expect(activity?.name).toBe("edit_pipeline");
+      expect(activity?.buildId).toBe("build-act");
+      const done = frames.at(-1);
+      expect(done?.type).toBe("done");
+      expect(done?.buildId).toBe("build-act");
+    });
+  });
+
+  it("a second chat post waits, then runs on the pointer", async () => {
+    await withIsolatedHome(async () => {
+      const repo = await initTempGitRepo();
+      cleanups.push(repo.cleanup);
+      const storeRoot = await mkdtemp(path.join(tmpdir(), "sf-workshop-chat-"));
+      const home = resolveWorkshopSessionStoreRoot();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered = false;
+      const seen: string[] = [];
+      const model: OperatorAgentModel = {
+        async complete({ tools }) {
+          const id = readDraftFromContext(tools.getContext()).pipeline.id;
+          if (!entered) {
+            seen.push(id);
+            entered = true;
+            await gate;
+            seen.push(readDraftFromContext(tools.getContext()).pipeline.id);
+            return {
+              events: [
+                { type: "message", role: "assistant", text: "first" },
+              ],
+            };
+          }
+          seen.push(id);
+          return {
+            events: [
+              { type: "message", role: "assistant", text: "second" },
+            ],
+          };
+        },
+      };
+      const { server, base } = await withServer(
+        repo.root,
+        storeRoot,
+        createWorkshopOperatorHost({ model }),
+      );
+      cleanups.push(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            server.close((err) => (err ? reject(err) : resolve()));
+          }),
+      );
+      await createSession(base, "http-pin-wait");
+      createWorkshopBuild(home, {
+        id: "build-a",
+        draft: { pipeline: { id: "alpha", stages: [] } },
+      });
+      createWorkshopBuild(home, {
+        id: "build-b",
+        draft: { pipeline: { id: "beta", stages: [] } },
+      });
+      updateWorkshopSessionActiveBuildId(home, "http-pin-wait", "build-a");
+
+      const firstPromise = jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "http-pin-wait",
+          message: "first",
+          draft: { pipeline: { id: "posted", stages: [] } },
+        }),
+      });
+      for (let i = 0; i < 40 && !entered; i += 1) {
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      expect(entered).toBe(true);
+      updateWorkshopSessionActiveBuildId(home, "http-pin-wait", "build-b");
+      const secondPromise = jsonFetch(`${base}/api/workshop/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: "http-pin-wait",
+          message: "second",
+          draft: { pipeline: { id: "hijack", stages: [] } },
+        }),
+      });
+      await new Promise((r) => setTimeout(r, 80));
+      release();
+      const first = await firstPromise;
+      const second = await secondPromise;
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(seen).toEqual(["alpha", "alpha", "beta"]);
+      expect(first.body.draft.pipeline.id).toBe("alpha");
+      expect(second.body.draft.pipeline.id).toBe("beta");
+      expect(getWorkshopSession(home, "http-pin-wait").activeBuildId).toBe(
+        "build-b",
+      );
     });
   });
 });

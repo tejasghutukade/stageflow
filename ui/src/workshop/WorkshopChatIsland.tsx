@@ -12,6 +12,7 @@ import {
   ChatMessage,
   ChatMessageBubble,
   ChatMessageList,
+  ChatToolCalls,
 } from "@astryxdesign/core/Chat";
 import { Markdown } from "@astryxdesign/core/Markdown";
 import { Stack, StackItem } from "@astryxdesign/core/Stack";
@@ -21,10 +22,12 @@ import {
   type ReactNode,
 } from "react";
 import {
+  interleaveAssistantTextWithTools,
   mapWorkshopChatParts,
   maySend,
   type WorkshopChatMessageInput,
   type WorkshopChatMutationCardInput,
+  type WorkshopToolActivityRow,
 } from "./workshopChatView";
 import "../components/assistant-ui/workshop-embed.css";
 
@@ -36,9 +39,10 @@ export type WorkshopChatIslandProps = {
   seedMessages: ThreadMessageLike[];
   adapter: ChatModelAdapter;
   greeting: string;
+  toolActivity?: readonly WorkshopToolActivityRow[];
   MutationCard: ComponentType<WorkshopMutationCardProps>;
-  /** Model picker (and similar) rendered in the composer footer. */
   composerActions?: ReactNode;
+  onStop?: () => void;
 };
 
 function bubbleGroup(
@@ -64,14 +68,36 @@ function messageContent(
   return [];
 }
 
+function toolCallsNode(
+  key: string,
+  calls: readonly WorkshopToolActivityRow[],
+): ReactNode {
+  return (
+    <ChatToolCalls
+      key={key}
+      calls={calls.map((call) => ({
+        key: call.id,
+        name: call.name,
+        status: call.status,
+        target: call.target,
+        errorMessage: call.errorMessage,
+      }))}
+    />
+  );
+}
+
 function WorkshopAstryxColumn({
   greeting,
+  toolActivity = [],
   MutationCard,
   composerActions,
+  onStop,
 }: {
   greeting: string;
+  toolActivity?: readonly WorkshopToolActivityRow[];
   MutationCard: ComponentType<WorkshopMutationCardProps>;
   composerActions?: ReactNode;
+  onStop?: () => void;
 }) {
   const aui = useAui();
   const isRunning = useAuiState((s) => s.thread.isRunning);
@@ -86,16 +112,18 @@ function WorkshopAstryxColumn({
     })),
   );
 
-  let currentTurnHasAssistantText = false;
+  let lastAssistantTextIndex = -1;
   for (let index = viewParts.length - 1; index >= 0; index -= 1) {
     const part = viewParts[index];
     if (part.kind === "text" && part.role === "user") break;
     if (part.kind === "text" && part.role === "assistant") {
-      currentTurnHasAssistantText = true;
+      lastAssistantTextIndex = index;
       break;
     }
   }
-  const showInProgressPlaceholder = isRunning && !currentTurnHasAssistantText;
+  const currentTurnHasAssistantText = lastAssistantTextIndex >= 0;
+  const showInProgressPlaceholder =
+    isRunning && !currentTurnHasAssistantText && toolActivity.length === 0;
 
   const onSubmit = (value: string) => {
     if (isRunning) return;
@@ -109,8 +137,8 @@ function WorkshopAstryxColumn({
       value={composerText}
       onChange={(value) => aui.composer.setText(value)}
       onSubmit={onSubmit}
-      isStopShown={false}
-      isDisabled={isRunning}
+      onStop={onStop}
+      isStopShown={isRunning}
       placeholder="Describe a stage or workflow change…"
       footerActions={composerActions}
       density="compact"
@@ -165,7 +193,8 @@ function WorkshopAstryxColumn({
     );
   };
 
-  for (const part of viewParts) {
+  for (let partIndex = 0; partIndex < viewParts.length; partIndex += 1) {
+    const part = viewParts[partIndex]!;
     if (part.kind === "text" && part.role === "user") {
       flushAssistant();
       pendingUserTexts.push(part.text);
@@ -173,13 +202,47 @@ function WorkshopAstryxColumn({
     }
     if (part.kind === "text" && part.role === "assistant") {
       flushUser();
-      pendingAssistant.push(
-        <ChatMessageBubble key={`text-${pendingAssistant.length}`} variant="ghost">
-          <Markdown isStreaming={false} density="compact" contentWidth="100%">
-            {part.text}
-          </Markdown>
-        </ChatMessageBubble>,
-      );
+      if (partIndex === lastAssistantTextIndex && toolActivity.length > 0) {
+        const segments = interleaveAssistantTextWithTools(
+          part.text,
+          toolActivity,
+        );
+        for (const [segmentIndex, segment] of segments.entries()) {
+          if (segment.kind === "text") {
+            if (!segment.text) continue;
+            pendingAssistant.push(
+              <ChatMessageBubble
+                key={`text-${pendingAssistant.length}`}
+                variant="ghost"
+              >
+                <Markdown
+                  isStreaming={false}
+                  density="compact"
+                  contentWidth="100%"
+                >
+                  {segment.text}
+                </Markdown>
+              </ChatMessageBubble>,
+            );
+          } else {
+            flushAssistant();
+            rendered.push(
+              toolCallsNode(`tools-${partIndex}-${segmentIndex}`, segment.calls),
+            );
+          }
+        }
+      } else {
+        pendingAssistant.push(
+          <ChatMessageBubble
+            key={`text-${pendingAssistant.length}`}
+            variant="ghost"
+          >
+            <Markdown isStreaming={false} density="compact" contentWidth="100%">
+              {part.text}
+            </Markdown>
+          </ChatMessageBubble>,
+        );
+      }
       continue;
     }
     if (part.kind === "text") {
@@ -202,6 +265,9 @@ function WorkshopAstryxColumn({
   flushUser();
   flushAssistant();
 
+  if (!currentTurnHasAssistantText && toolActivity.length > 0) {
+    rendered.push(toolCallsNode("tool-activity", toolActivity));
+  }
   if (showInProgressPlaceholder) {
     rendered.push(
       <ChatMessage key="in-progress" sender="assistant">
@@ -229,8 +295,10 @@ export function WorkshopChatIsland({
   seedMessages,
   adapter,
   greeting,
+  toolActivity,
   MutationCard,
   composerActions,
+  onStop,
 }: WorkshopChatIslandProps) {
   const runtime = useLocalRuntime(adapter, {
     initialMessages: seedMessages,
@@ -242,8 +310,10 @@ export function WorkshopChatIsland({
         <div className="workshop-lab__aui-thread-wrap">
           <WorkshopAstryxColumn
             greeting={greeting}
+            toolActivity={toolActivity}
             MutationCard={MutationCard}
             composerActions={composerActions}
+            onStop={onStop}
           />
         </div>
       </AssistantRuntimeProvider>

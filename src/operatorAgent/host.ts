@@ -15,6 +15,7 @@ import type {
   OperatorAgentSessionEvent,
   OperatorAgentToolContext,
   OperatorAgentToolResult,
+  WorkshopToolActivityUpdate,
 } from "./types.js";
 
 export type OperatorAgentModelTurn = {
@@ -31,6 +32,10 @@ export type OperatorAgentModelCompleteInput = {
    * Invoked as Pi `text_delta` (or equivalent) arrives — before complete resolves.
    */
   onDelta?: (text: string) => void;
+  /** Mid-turn tool status for the Workshop chat column. */
+  onActivity?: (update: WorkshopToolActivityUpdate) => void;
+  /** Workshop composer model for this turn. Applied before the prompt. */
+  modelId?: string;
 };
 
 export type OperatorAgentModel = {
@@ -48,6 +53,8 @@ export type OperatorAgentModel = {
   }): Promise<void>;
   /** Optional: dispose backend resources bound to this tool context. */
   releaseTools?(tools: OperatorAgentToolContext): void | Promise<void>;
+  /** Interrupt the in-flight prompt for this tool context. */
+  abort?(tools: OperatorAgentToolContext): Promise<void>;
 };
 
 function createSession(
@@ -139,7 +146,11 @@ function createSession(
     },
     async send(
       message: string,
-      options?: { onDelta?: (text: string) => void },
+      options?: {
+        onDelta?: (text: string) => void;
+        onActivity?: (update: WorkshopToolActivityUpdate) => void;
+        modelId?: string;
+      },
     ): Promise<OperatorAgentSessionEvent[]> {
       if (closed) {
         return [{ type: "error", message: "session is closed" }];
@@ -151,6 +162,8 @@ function createSession(
         contextSnapshot: profile.contextAdapter.serialize(context),
         tools: toolContext,
         onDelta: options?.onDelta,
+        onActivity: options?.onActivity,
+        modelId: options?.modelId,
       });
       const events: OperatorAgentSessionEvent[] = [];
       let sawProposal = false;
@@ -169,6 +182,10 @@ function createSession(
         events.push({ type: "proposal", proposal: lastEmitted });
       }
       return events;
+    },
+    async abort(): Promise<void> {
+      if (closed) return;
+      await model.abort?.(toolContext);
     },
     acceptProposal(proposalId?: string): AcceptProposalResult {
       const resolved = resolveMutation(proposalId);
@@ -231,5 +248,10 @@ export async function invokeProfileTool(
   if (!tool) {
     return { ok: false, content: null, error: `Unknown tool: ${name}` };
   }
+  const { rejectUnlinkedWorkshopDraftTool } = await import(
+    "../workshop/chatTurn.js"
+  );
+  const blocked = rejectUnlinkedWorkshopDraftTool(ctx.getContext(), name);
+  if (blocked) return blocked;
   return tool.handler(args, ctx);
 }

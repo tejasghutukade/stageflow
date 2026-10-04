@@ -5,6 +5,11 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
+  DropdownMenu,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "@astryxdesign/core/DropdownMenu";
+import {
   createContext,
   useCallback,
   useContext,
@@ -19,10 +24,15 @@ import {
   createWorkshopSession,
   fetchModels,
   fetchSettings,
+  focusWorkshopBuild,
+  getWorkshopBuild,
   getWorkshopSession,
+  listWorkshopPicker,
   listWorkshopSessions,
   sendWorkshopChatTurnStreaming,
+  stopWorkshopChat,
   undoWorkshopSessionMutation,
+  updateWorkshopSessionActiveBuild,
   type DraftPackagePayload,
   type PipelineTrackProjection,
   type StageSnapshot,
@@ -36,7 +46,10 @@ import {
   WorkshopChatIsland,
   type WorkshopMutationCardProps,
 } from "../workshop/WorkshopChatIsland";
-import { CHAT_FAILED_PREFIX } from "../workshop/workshopChatView";
+import {
+  CHAT_FAILED_PREFIX,
+  type WorkshopToolActivityRow,
+} from "../workshop/workshopChatView";
 import {
   buildDraftMutationToolParts,
   mutationCardActionsLocked,
@@ -45,6 +58,20 @@ import {
   DEFAULT_WORKSHOP_MODEL,
   resolveWorkshopModel,
 } from "../workshop/modelSettings";
+import {
+  applyPointerChange,
+  chooseStudioRow,
+  draftFrameApplies,
+  historyBuildName,
+  mutationMapAfterChange,
+  openSessionStudio,
+  pickerRowLabel,
+  pickerRowValue,
+  rowsAfterPickerLoad,
+  startNewChatStudio,
+  type StudioPickerRow,
+  type StudioSelection,
+} from "./workshopStudio";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -79,16 +106,27 @@ export type LiveChatRefs = {
   sessionId: MutableRefObject<string | null>;
   draft: MutableRefObject<DraftPackagePayload>;
   model: MutableRefObject<string>;
+  selectedBuildId: MutableRefObject<string | null>;
   setDraft: (draft: DraftPackagePayload) => void;
+  onPointerChange?: (frame: {
+    buildId: string;
+    draft: DraftPackagePayload;
+  }) => void;
   registerMutations: (proposals: WorkshopChatProposalPayload[]) => void;
+  pushActivity: (update: WorkshopToolActivityRow) => void;
+  clearActivity: () => void;
+  /** Set for the duration of a turn. Composer stop calls this. */
+  stop: MutableRefObject<(() => void) | null>;
 };
+
+export type { WorkshopToolActivityRow };
 
 const EMPTY_DRAFT: DraftPackagePayload = {
   pipeline: { id: "untitled", stages: [] },
 };
 
 const GREETING =
-  "What are we building? Describe a workflow and I’ll sketch stages on the studio as we go.";
+  "What are we building? Tell me the workflow in your own words — I’ll ask where it changes the draft.";
 
 const EMPTY_PROJECTION: PipelineTrackProjection = { nodes: [], edges: [] };
 
@@ -251,12 +289,9 @@ function toChrome(stages: DraftStage[]): SpatialNodeChrome[] {
       kicker: pending ? "mutation · pending" : "stage · draft",
       status: pending ? "waiting_for_input" : "succeeded",
       attemptCount: pending ? undefined : 1,
-      readinessLine: pending
-        ? "Awaiting Accept / Reject"
-        : stage.promptSummary,
+      readinessLine: pending ? "Awaiting Accept / Reject" : undefined,
       gateKinds: pending ? ["confirm"] : undefined,
-      promptSummary: pending ? stage.promptSummary : undefined,
-      meta: stage.ioSummary,
+      titleOnly: true,
       isWaitingAttention: pending,
       isSuperseded: false,
     };
@@ -292,12 +327,14 @@ function assistantTextFromEvents(
 
 export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
   return {
-    async *run({ messages }) {
+    async *run({ messages, abortSignal }) {
       const userText = extractUserText(messages);
       if (!userText) {
         yield { content: [{ type: "text", text: GREETING }] };
         return;
       }
+
+      refs.clearActivity();
 
       const sessionId = refs.sessionId.current;
       if (!sessionId) {
@@ -317,6 +354,7 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
 
       type QueueItem =
         | { kind: "delta" }
+        | { kind: "aborted" }
         | { kind: "done"; result: Awaited<ReturnType<typeof sendWorkshopChatTurnStreaming>> };
       const queue: QueueItem[] = [];
       let wake: (() => void) | undefined;
@@ -330,6 +368,16 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
           wake = resolve;
         });
 
+      const stopController = new AbortController();
+      const requestStop = () => {
+        if (stopController.signal.aborted) return;
+        stopController.abort();
+        enqueue({ kind: "aborted" });
+      };
+      refs.stop.current = requestStop;
+      if (abortSignal?.aborted) requestStop();
+      else abortSignal?.addEventListener("abort", requestStop, { once: true });
+
       const turnPromise = sendWorkshopChatTurnStreaming(
         {
           sessionId,
@@ -342,17 +390,45 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
             assistantText += text;
             enqueue({ kind: "delta" });
           },
+          onActivity: (update) => {
+            if (refs.sessionId.current !== sessionId) return;
+            if (
+              update.draft !== null &&
+              typeof update.draft === "object" &&
+              draftFrameApplies(refs.selectedBuildId.current, update.buildId)
+            ) {
+              refs.setDraft(update.draft as DraftPackagePayload);
+            }
+            refs.pushActivity({
+              id: update.id,
+              name: update.name,
+              status: update.status,
+              ...(update.target !== undefined ? { target: update.target } : {}),
+              ...(update.errorMessage !== undefined
+                ? { errorMessage: update.errorMessage }
+                : {}),
+              textOffset: assistantText.length,
+            });
+          },
           onEvent: (event) => {
             if (event.type === "proposal") {
               proposals.push(event.proposal);
             }
           },
+          onPointerChange: (frame) => {
+            if (refs.sessionId.current !== sessionId) return;
+            refs.selectedBuildId.current = frame.buildId;
+            refs.setDraft(frame.draft);
+            refs.onPointerChange?.(frame);
+          },
+          signal: stopController.signal,
         },
       ).then((result) => {
         enqueue({ kind: "done", result });
         return result;
       });
 
+      try {
       while (true) {
         if (queue.length === 0) await wait();
         const item = queue.shift()!;
@@ -363,31 +439,64 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
           continue;
         }
 
-        await turnPromise;
-        const result = item.result;
-        if (!result.ok) {
+        if (item.kind === "aborted") {
+          const stopped = await stopWorkshopChat(sessionId);
+          const stopApplies =
+            refs.sessionId.current === sessionId &&
+            draftFrameApplies(refs.selectedBuildId.current, stopped?.buildId);
+          if (stopped?.draft && stopApplies) refs.setDraft(stopped.draft);
+          if (
+            stopApplies &&
+            stopped?.pending &&
+            !proposals.some((proposal) => proposal.id === stopped.pending?.id)
+          ) {
+            proposals.push(stopped.pending);
+          }
+          if (stopApplies && proposals.length > 0) refs.registerMutations(proposals);
           yield {
             content: [
               {
                 type: "text",
-                text: `${CHAT_FAILED_PREFIX} ${result.error}`,
+                text: assistantText.trim() || "Stopped.",
+              },
+              ...buildDraftMutationToolParts(proposals),
+            ],
+          };
+          return;
+        }
+
+        await turnPromise;
+        const result = item.result;
+        if (!result.ok) {
+          const stopped =
+            stopController.signal.aborted || result.error === "Stopped.";
+          yield {
+            content: [
+              {
+                type: "text",
+                text: stopped
+                  ? assistantText.trim() || "Stopped."
+                  : `${CHAT_FAILED_PREFIX} ${result.error}`,
               },
             ],
           };
           return;
         }
 
-        refs.setDraft(result.draft);
+        const doneApplies =
+          refs.sessionId.current === sessionId &&
+          draftFrameApplies(refs.selectedBuildId.current, result.buildId);
+        if (doneApplies) refs.setDraft(result.draft);
         const fromEvents = assistantTextFromEvents(result.events);
         const finalText =
           assistantText.trim() ||
           fromEvents ||
           (proposals.length > 0
             ? "Updated the draft. Accept or Reject the mutation cards below."
-            : "Done.");
-        if (proposals.length > 0) {
+            : `No draft change. ${refs.model.current} finished without updating the studio.`);
+        if (doneApplies && proposals.length > 0) {
           refs.registerMutations(proposals);
-        } else if (result.pending) {
+        } else if (doneApplies && result.pending) {
           refs.registerMutations([result.pending]);
           proposals.push(result.pending);
         }
@@ -399,6 +508,10 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
           ],
         };
         return;
+      }
+      } finally {
+        if (refs.stop.current === requestStop) refs.stop.current = null;
+        abortSignal?.removeEventListener("abort", requestStop);
       }
     },
   };
@@ -568,6 +681,7 @@ function LabChatHeader({
 
 function HistoryPanel({
   sessions,
+  pickerRows,
   activeSessionId,
   loading,
   error,
@@ -575,6 +689,7 @@ function HistoryPanel({
   onSelect,
 }: {
   sessions: WorkshopSessionSummary[];
+  pickerRows: StudioPickerRow[];
   activeSessionId: string | null;
   loading: boolean;
   error: string | null;
@@ -600,6 +715,7 @@ function HistoryPanel({
           {sessions.map((session) => {
             const title = session.title.trim() || "Untitled session";
             const when = new Date(session.updatedAt).toLocaleString();
+            const buildName = historyBuildName(session.activeBuildId, pickerRows);
             return (
               <li key={session.id}>
                 <button
@@ -609,6 +725,7 @@ function HistoryPanel({
                   onClick={() => onSelect(session.id)}
                 >
                   <strong>{title}</strong>
+                  {buildName ? <span>{buildName}</span> : null}
                   <span className="muted">{when}</span>
                 </button>
               </li>
@@ -707,6 +824,24 @@ function MapEmptyState() {
   );
 }
 
+function modelTail(id: string): string {
+  const tail = id.split("/").pop() ?? id;
+  return tail.endsWith(":free") ? tail.slice(0, -":free".length) : tail;
+}
+
+function shortModelLabels(ids: readonly string[]): Map<string, string> {
+  const tails = ids.map(modelTail);
+  const counts = new Map<string, number>();
+  for (const tail of tails) counts.set(tail, (counts.get(tail) ?? 0) + 1);
+  const labels = new Map<string, string>();
+  ids.forEach((id, index) => {
+    const tail = tails[index] ?? id;
+    const provider = id.split("/")[0] ?? id;
+    labels.set(id, (counts.get(tail) ?? 0) > 1 ? `${provider}/${tail}` : tail);
+  });
+  return labels;
+}
+
 function WorkshopModelPicker({
   model,
   models,
@@ -722,27 +857,35 @@ function WorkshopModelPicker({
     models.length > 0
       ? models
       : [resolveWorkshopModel({ settingsDefault })];
+  const ids = options.includes(model) ? options : [model, ...options];
+  const shorts = shortModelLabels(ids);
+  const current = shorts.get(model) ?? modelTail(model);
 
   return (
-    <label className="workshop-lab__model">
-      <span className="muted">Model</span>
-      <select
-        className="select workshop-lab__model-select"
+    <DropdownMenu
+      placement="above"
+      menuWidth={420}
+      button={{
+        label: "Workshop chat model",
+        variant: "ghost",
+        size: "sm",
+        children: current,
+      }}
+    >
+      <DropdownMenuRadioGroup
+        label="Workshop chat model"
         value={model}
-        aria-label="Workshop chat model"
-        title={`Effective: ${model}`}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={onChange}
       >
-        {!options.includes(model) ? (
-          <option value={model}>{model}</option>
-        ) : null}
-        {options.map((id) => (
-          <option key={id} value={id}>
-            {id === settingsDefault ? `${id} (default)` : id}
-          </option>
+        {ids.map((id) => (
+          <DropdownMenuRadioItem
+            key={id}
+            value={id}
+            label={id === settingsDefault ? `${id} (default)` : id}
+          />
         ))}
-      </select>
-    </label>
+      </DropdownMenuRadioGroup>
+    </DropdownMenu>
   );
 }
 
@@ -762,6 +905,9 @@ export function WorkshopPage() {
   const [historySessions, setHistorySessions] = useState<
     WorkshopSessionSummary[]
   >([]);
+  const [pickerRows, setPickerRows] = useState<StudioPickerRow[]>([]);
+  const [selectedBuildId, setSelectedBuildId] = useState<string | null>(null);
+  const [studioError, setStudioError] = useState<string | null>(null);
   const [chatModel, setChatModel] = useState(DEFAULT_WORKSHOP_MODEL);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [settingsDefault, setSettingsDefault] = useState<string | null>(null);
@@ -769,6 +915,15 @@ export function WorkshopPage() {
   const sessionIdRef = useRef<string | null>(null);
   const draftRef = useRef<DraftPackagePayload>(EMPTY_DRAFT);
   const modelRef = useRef<string>(DEFAULT_WORKSHOP_MODEL);
+  const stopChatRef = useRef<(() => void) | null>(null);
+  const selectedBuildIdRef = useRef<string | null>(null);
+  const cardsBuildIdRef = useRef<string | null>(null);
+  const pickerRowsRef = useRef<StudioPickerRow[]>([]);
+  const selectionRef = useRef<StudioSelection>(startNewChatStudio([]));
+  const studioRequestRef = useRef(0);
+  const onPointerChangeRef = useRef<
+    (frame: { buildId: string; draft: DraftPackagePayload }) => void
+  >(() => {});
   sessionIdRef.current = sessionId;
   draftRef.current = draft;
   modelRef.current = chatModel;
@@ -776,6 +931,50 @@ export function WorkshopPage() {
   const applyDraft = useCallback((next: DraftPackagePayload) => {
     draftRef.current = next;
     setDraft(next);
+  }, []);
+
+  const applyStudio = useCallback(
+    (next: StudioSelection) => {
+      selectionRef.current = next;
+      pickerRowsRef.current = next.rows;
+      selectedBuildIdRef.current = next.buildId;
+      cardsBuildIdRef.current = next.buildId;
+      setPickerRows(next.rows);
+      setSelectedBuildId(next.buildId);
+      setStudioError(next.error);
+      applyDraft(next.draft);
+    },
+    [applyDraft],
+  );
+
+  const replacePickerRows = useCallback((rows: StudioPickerRow[]) => {
+    pickerRowsRef.current = rows;
+    selectionRef.current = { ...selectionRef.current, rows };
+    setPickerRows(rows);
+  }, []);
+
+  const refreshPicker = useCallback(async () => {
+    const listed = await listWorkshopPicker();
+    if (!listed.ok) return;
+    const selected =
+      selectionRef.current.rows.find(
+        (row) => row.id != null && row.id === selectedBuildIdRef.current,
+      ) ?? null;
+    replacePickerRows(rowsAfterPickerLoad(listed.rows, selected));
+  }, [replacePickerRows]);
+
+  const [toolActivity, setToolActivity] = useState<WorkshopToolActivityRow[]>([]);
+  const pushActivity = useCallback((update: WorkshopToolActivityRow) => {
+    setToolActivity((prev) => {
+      const index = prev.findIndex((call) => call.id === update.id);
+      if (index < 0) return [...prev, update].slice(-12);
+      const next = prev.slice();
+      next[index] = update;
+      return next;
+    });
+  }, []);
+  const clearActivity = useCallback(() => {
+    setToolActivity([]);
   }, []);
 
   const registerMutations = useCallback(
@@ -796,16 +995,42 @@ export function WorkshopPage() {
       sessionId: sessionIdRef,
       draft: draftRef,
       model: modelRef,
+      selectedBuildId: selectedBuildIdRef,
       setDraft: applyDraft,
+      onPointerChange: (frame) => onPointerChangeRef.current(frame),
       registerMutations,
+      pushActivity,
+      clearActivity,
+      stop: stopChatRef,
     }),
-    [applyDraft, registerMutations],
+    [applyDraft, registerMutations, pushActivity, clearActivity],
   );
 
   const chatAdapter = useMemo(
     () => createLiveChatModel(liveRefs),
     [liveRefs],
   );
+
+  onPointerChangeRef.current = (frame) => {
+    const previous = {
+      sessionId: sessionIdRef.current,
+      buildId: cardsBuildIdRef.current,
+    };
+    const next = applyPointerChange(selectionRef.current, frame);
+    applyStudio(next);
+    setMutationCards((cards) =>
+      mutationMapAfterChange(
+        previous,
+        { sessionId: sessionIdRef.current, buildId: next.buildId },
+        cards,
+      ),
+    );
+    void refreshPicker();
+  };
+
+  useEffect(() => {
+    void refreshPicker();
+  }, [refreshPicker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -835,20 +1060,34 @@ export function WorkshopPage() {
   }, []);
 
   const startNewSession = useCallback(async () => {
+    const request = ++studioRequestRef.current;
     setBootError(null);
     setHistoryOpen(false);
+    const previous = {
+      sessionId: sessionIdRef.current,
+      buildId: cardsBuildIdRef.current,
+    };
     const created = await createWorkshopSession();
+    if (studioRequestRef.current !== request) return;
     if (!created.ok) {
       setBootError(created.error);
       return;
     }
+    sessionIdRef.current = created.session.id;
+    const next = startNewChatStudio(pickerRowsRef.current);
+    applyStudio(next);
     setSessionId(created.session.id);
-    applyDraft(EMPTY_DRAFT);
-    setMutationCards(new Map());
+    setMutationCards((cards) =>
+      mutationMapAfterChange(
+        previous,
+        { sessionId: created.session.id, buildId: null },
+        cards,
+      ),
+    );
     setSelectedStageId(null);
     setSeedMessages(emptySeedMessages());
     setThreadEpoch((n) => n + 1);
-  }, [applyDraft]);
+  }, [applyStudio]);
 
   useEffect(() => {
     void startNewSession();
@@ -858,35 +1097,141 @@ export function WorkshopPage() {
     setHistoryOpen(true);
     setHistoryLoading(true);
     setHistoryError(null);
-    const listed = await listWorkshopSessions();
+    const [listed, picker] = await Promise.all([
+      listWorkshopSessions(),
+      listWorkshopPicker(),
+    ]);
     setHistoryLoading(false);
+    if (picker.ok) {
+      const selected =
+        selectionRef.current.rows.find(
+          (row) => row.id != null && row.id === selectedBuildIdRef.current,
+        ) ?? null;
+      replacePickerRows(rowsAfterPickerLoad(picker.rows, selected));
+    }
     if (!listed.ok) {
       setHistoryError(listed.error);
       setHistorySessions([]);
       return;
     }
     setHistorySessions(listed.sessions);
-  }, []);
+  }, [replacePickerRows]);
 
   const openSession = useCallback(
     async (id: string) => {
+      const request = ++studioRequestRef.current;
       setHistoryLoading(true);
       setHistoryError(null);
+      const previous = {
+        sessionId: sessionIdRef.current,
+        buildId: cardsBuildIdRef.current,
+      };
       const got = await getWorkshopSession(id);
+      if (studioRequestRef.current !== request) return;
       setHistoryLoading(false);
       if (!got.ok) {
         setHistoryError(got.error);
         return;
       }
+      sessionIdRef.current = got.session.id;
+      applyStudio(startNewChatStudio(pickerRowsRef.current));
+      setMutationCards((cards) =>
+        mutationMapAfterChange(
+          previous,
+          { sessionId: got.session.id, buildId: null },
+          cards,
+        ),
+      );
+      let build = null;
+      let loadError: string | null = null;
+      if (got.session.activeBuildId) {
+        const loaded = await getWorkshopBuild(got.session.activeBuildId);
+        if (studioRequestRef.current !== request) return;
+        if (loaded.ok) build = loaded.build;
+        else loadError = loaded.error;
+      }
+      const next = openSessionStudio({
+        activeBuildId: got.session.activeBuildId,
+        build,
+        rows: pickerRowsRef.current,
+        error: loadError,
+      });
+      const beforeBuild = cardsBuildIdRef.current;
+      applyStudio(next);
       setSessionId(got.session.id);
-      applyDraft(EMPTY_DRAFT);
-      setMutationCards(new Map());
+      setMutationCards((cards) =>
+        mutationMapAfterChange(
+          { sessionId: got.session.id, buildId: beforeBuild },
+          { sessionId: got.session.id, buildId: next.buildId },
+          cards,
+        ),
+      );
       setSelectedStageId(null);
       setSeedMessages(transcriptToSeedMessages(got.session.transcript));
       setThreadEpoch((n) => n + 1);
       setHistoryOpen(false);
     },
-    [applyDraft],
+    [applyStudio],
+  );
+
+  const pickStudioRow = useCallback(
+    async (row: StudioPickerRow) => {
+      const sessionIdAtPick = sessionIdRef.current;
+      if (!sessionIdAtPick) return;
+      const request = studioRequestRef.current;
+      const previous = {
+        sessionId: sessionIdAtPick,
+        buildId: cardsBuildIdRef.current,
+      };
+      const result = await chooseStudioRow({
+        sessionId: sessionIdAtPick,
+        row,
+        selection: selectionRef.current,
+        focus: async (picked) => {
+          if (!picked.projectRoot || !picked.relativePath) {
+            return { ok: false, error: "project root and path are required" };
+          }
+          const focused = await focusWorkshopBuild({
+            projectRoot: picked.projectRoot,
+            relativePath: picked.relativePath,
+          });
+          if (!focused.ok) return { ok: false, error: focused.error };
+          return { ok: true, build: focused.build };
+        },
+        updatePointer: async (sessionId, activeBuildId) => {
+          const updated = await updateWorkshopSessionActiveBuild({
+            sessionId,
+            activeBuildId,
+          });
+          if (!updated.ok) return { ok: false, error: updated.error };
+          return { ok: true };
+        },
+        loadBuild: async (buildId) => {
+          const loaded = await getWorkshopBuild(buildId);
+          if (!loaded.ok) return { ok: false, error: loaded.error };
+          return { ok: true, build: loaded.build };
+        },
+      });
+      if (
+        studioRequestRef.current !== request ||
+        sessionIdRef.current !== sessionIdAtPick
+      ) {
+        return;
+      }
+      applyStudio(result.selection);
+      setMutationCards((cards) =>
+        mutationMapAfterChange(
+          previous,
+          {
+            sessionId: sessionIdAtPick,
+            buildId: result.selection.buildId,
+          },
+          cards,
+        ),
+      );
+      setSelectedStageId(null);
+    },
+    [applyStudio],
   );
 
   const acceptMutation = useCallback(
@@ -1073,6 +1418,7 @@ export function WorkshopPage() {
           {historyOpen ? (
             <HistoryPanel
               sessions={historySessions}
+              pickerRows={pickerRows}
               activeSessionId={sessionId}
               loading={historyLoading}
               error={historyError}
@@ -1088,7 +1434,9 @@ export function WorkshopPage() {
                   seedMessages={seedMessages}
                   adapter={chatAdapter}
                   greeting={GREETING}
+                  toolActivity={toolActivity}
                   MutationCard={MutationCardToolUI}
+                  onStop={() => stopChatRef.current?.()}
                   composerActions={
                     <WorkshopModelPicker
                       model={chatModel}
@@ -1167,7 +1515,32 @@ export function WorkshopPage() {
 
         <section className="workshop-lab__map" aria-label="Workshop studio">
           <div className="workshop-lab__map-head">
-            <div className="eyebrow">Studio · draft</div>
+            <div className="workshop-lab__map-switch">
+              <div className="eyebrow">Studio · draft</div>
+              <select
+                className="select workshop-lab__pipeline-select"
+                aria-label="Studio pipeline"
+                value={selectedBuildId ? `build:${selectedBuildId}` : ""}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (!value) return;
+                  const row = pickerRows.find(
+                    (item) => pickerRowValue(item) === value,
+                  );
+                  if (row) void pickStudioRow(row);
+                }}
+              >
+                <option value="">No pipeline</option>
+                {pickerRows.map((row) => (
+                  <option key={pickerRowValue(row)} value={pickerRowValue(row)}>
+                    {pickerRowLabel(row)}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {studioError ? (
+              <p className="workshop-lab__boot-error muted">{studioError}</p>
+            ) : null}
             <p className="workshop-lab__selection muted">
               {draftStages.length === 0
                 ? "Empty — stages appear when the Author mutates the draft"

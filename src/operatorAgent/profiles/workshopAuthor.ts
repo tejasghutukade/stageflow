@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "yaml";
 import {
   validateDraftPackage,
   type DraftPackage,
@@ -29,6 +30,7 @@ import {
   buildCreateTaskDraft,
   createSaveTool,
   createWorkshopAuthorMutatingTools,
+  createWorkshopBuildTools,
   WORKSHOP_AUTHOR_TOOL_NAMES,
   WORKSHOP_FORBIDDEN_AGENT_TOOLS,
   type WorkshopAuthorToolOptions,
@@ -234,6 +236,36 @@ const readDraftTool: OperatorAgentTool = {
   },
 };
 
+function coercePlainObject(value: unknown): Record<string, unknown> | null {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  try {
+    const parsed = parseYaml(trimmed) as unknown;
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {}
+  return null;
+}
+
 const proposeDraftTool: OperatorAgentTool = {
   name: "propose_draft",
   description:
@@ -243,11 +275,32 @@ const proposeDraftTool: OperatorAgentTool = {
       typeof args.summary === "string" && args.summary.trim()
         ? args.summary.trim()
         : "Update draft";
-    const nextDraft =
-      args.draft !== null && typeof args.draft === "object"
-        ? (args.draft as DraftPackage)
-        : null;
-    if (!nextDraft || !nextDraft.pipeline) {
+    let nextDraft = coercePlainObject(args.draft) as DraftPackage | null;
+    if (
+      (!nextDraft ||
+        nextDraft.pipeline === null ||
+        typeof nextDraft.pipeline !== "object" ||
+        Array.isArray(nextDraft.pipeline)) &&
+      args.pipeline !== null &&
+      typeof args.pipeline === "object" &&
+      !Array.isArray(args.pipeline)
+    ) {
+      const stages = Array.isArray(args.stages)
+        ? (args.stages as DraftPackage["stages"])
+        : undefined;
+      const task = coercePlainObject(args.task) as DraftPackage["task"] | null;
+      nextDraft = {
+        pipeline: args.pipeline as DraftPackage["pipeline"],
+        ...(stages ? { stages } : {}),
+        ...(task ? { task } : {}),
+      };
+    }
+    if (
+      !nextDraft ||
+      nextDraft.pipeline === null ||
+      typeof nextDraft.pipeline !== "object" ||
+      Array.isArray(nextDraft.pipeline)
+    ) {
       return { ok: false, content: null, error: "draft is required" };
     }
     const current = readDraftFromContext(ctx.getContext());
@@ -328,6 +381,7 @@ export function createWorkshopAuthorTools(
   options: WorkshopAuthorToolOptions = {},
 ): OperatorAgentTool[] {
   return [
+    ...createWorkshopBuildTools(),
     readDraftTool,
     validateDraftTool,
     ...createWorkshopAuthorMutatingTools(),

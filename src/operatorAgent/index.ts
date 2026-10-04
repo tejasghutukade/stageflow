@@ -12,6 +12,7 @@ export type {
   ProposalArtifactDiff,
   UndoMutationResult,
   WorkshopDraftContext,
+  WorkshopToolActivityUpdate,
 } from "./types.js";
 export {
   createOperatorAgentHost,

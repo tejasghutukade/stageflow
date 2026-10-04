@@ -47,7 +47,9 @@ import type {
   PutWorkshopAutosaveResult,
   ValidationFinding,
   WorkshopAutosavePayload,
+  WorkshopChatProposalPayload,
   WorkshopChatStreamFrame,
+  WorkshopToolCallUpdate,
   WorkshopChatTurnInput,
   WorkshopChatTurnPayload,
   WorkshopChatTurnResult,
@@ -56,6 +58,12 @@ import type {
   WorkshopSessionMutationResult,
   WorkshopSessionRecord,
   WorkshopSessionSummary,
+  FocusWorkshopBuildResult,
+  GetWorkshopBuildResult,
+  ListWorkshopPickerResult,
+  UpdateWorkshopSessionActiveBuildResult,
+  WorkshopBuildRecord,
+  WorkshopPickerRow,
 } from "./types";
 import { authorizationHeaders } from "./controlToken";
 
@@ -1096,6 +1104,132 @@ export async function createWorkshopSession(input?: {
   }
 }
 
+export async function listWorkshopPicker(): Promise<ListWorkshopPickerResult> {
+  try {
+    const res = await fetch("/api/workshop/picker", {
+      headers: { ...authorizationHeaders() },
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      rows?: WorkshopPickerRow[];
+      error?: string;
+    };
+    if (res.ok && Array.isArray(body.rows)) {
+      return { ok: true, rows: body.rows };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function getWorkshopBuild(
+  buildId: string,
+): Promise<GetWorkshopBuildResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/builds/${encodeURIComponent(buildId)}`,
+      { headers: { ...authorizationHeaders() } },
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      build?: WorkshopBuildRecord;
+      error?: string;
+    };
+    if (res.ok && body.build) {
+      return { ok: true, build: body.build };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function focusWorkshopBuild(input: {
+  projectRoot: string;
+  relativePath: string;
+}): Promise<FocusWorkshopBuildResult> {
+  try {
+    const res = await fetch("/api/workshop/focus", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify({
+        projectRoot: input.projectRoot,
+        relativePath: input.relativePath,
+      }),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      build?: WorkshopBuildRecord;
+      error?: string;
+    };
+    if ((res.ok || res.status === 201) && body.build) {
+      return { ok: true, build: body.build };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+export async function updateWorkshopSessionActiveBuild(input: {
+  sessionId: string;
+  activeBuildId: string | null;
+}): Promise<UpdateWorkshopSessionActiveBuildResult> {
+  try {
+    const res = await fetch(
+      `/api/workshop/sessions/${encodeURIComponent(input.sessionId)}`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...authorizationHeaders(),
+        },
+        body: JSON.stringify({ activeBuildId: input.activeBuildId }),
+      },
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      session?: WorkshopSessionRecord;
+      error?: string;
+    };
+    if (res.ok && body.session) {
+      return { ok: true, session: body.session };
+    }
+    return {
+      ok: false,
+      status: res.status,
+      error: body.error ?? `Request failed (${res.status})`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 export async function getWorkshopSession(
   sessionId: string,
 ): Promise<GetWorkshopSessionResult> {
@@ -1292,11 +1426,49 @@ export async function sendWorkshopChatTurn(
  * Prefer NDJSON stream when the host supports it; fall back to a coherent JSON turn.
  * `onDelta` receives assistant text chunks for progressive UI updates.
  */
+export async function stopWorkshopChat(sessionId: string): Promise<{
+  draft: DraftPackagePayload | null;
+  pending: WorkshopChatProposalPayload | null;
+  buildId?: string | null;
+} | null> {
+  try {
+    const res = await fetch("/api/workshop/chat/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authorizationHeaders() },
+      body: JSON.stringify({ sessionId }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      draft?: DraftPackagePayload | null;
+      pending?: WorkshopChatProposalPayload | null;
+      buildId?: string | null;
+    };
+    if (!res.ok) return null;
+    return {
+      draft:
+        body.draft !== null && typeof body.draft === "object" ? body.draft : null,
+      pending:
+        body.pending !== null && typeof body.pending === "object"
+          ? body.pending
+          : null,
+      buildId: typeof body.buildId === "string" && body.buildId ? body.buildId : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function sendWorkshopChatTurnStreaming(
   input: WorkshopChatTurnInput,
   handlers: {
     onDelta?: (text: string) => void;
+    onActivity?: (update: WorkshopToolCallUpdate) => void;
+    onPointerChange?: (frame: {
+      buildId: string;
+      draft: DraftPackagePayload;
+    }) => void;
     onEvent?: (event: WorkshopChatTurnPayload["events"][number]) => void;
+    signal?: AbortSignal;
   } = {},
 ): Promise<WorkshopChatTurnResult> {
   let openedNdjson = false;
@@ -1316,6 +1488,7 @@ export async function sendWorkshopChatTurnStreaming(
         ...(input.model !== undefined ? { model: input.model } : {}),
         stream: true,
       }),
+      ...(handlers.signal ? { signal: handlers.signal } : {}),
     });
 
     const contentType = res.headers.get("content-type") ?? "";
@@ -1352,6 +1525,13 @@ export async function sendWorkshopChatTurnStreaming(
     const consumeFrame = (frame: WorkshopChatStreamFrame): void => {
       if (frame.type === "delta") {
         handlers.onDelta?.(frame.text);
+      } else if (frame.type === "activity") {
+        handlers.onActivity?.(frame);
+      } else if (frame.type === "pointer-change") {
+        handlers.onPointerChange?.({
+          buildId: frame.buildId,
+          draft: frame.draft,
+        });
       } else if (frame.type === "event") {
         handlers.onEvent?.(frame.event);
         if (
@@ -1369,6 +1549,7 @@ export async function sendWorkshopChatTurnStreaming(
           pending: frame.pending,
           autoApply: frame.autoApply,
           model: frame.model,
+          buildId: frame.buildId ?? null,
         };
       }
     };
@@ -1411,7 +1592,13 @@ export async function sendWorkshopChatTurnStreaming(
       status: res.status,
       error: "Stream ended without a done frame",
     };
-  } catch {
+  } catch (err) {
+    if (
+      handlers.signal?.aborted ||
+      (err instanceof Error && err.name === "AbortError")
+    ) {
+      return { ok: false, status: 0, error: "Stopped." };
+    }
     // JSON fallback only when the server never opened NDJSON.
     if (openedNdjson) {
       return {

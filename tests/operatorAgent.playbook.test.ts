@@ -49,6 +49,9 @@ describe("Workshop Author playbook + docs retrieval", () => {
     const profile = createWorkshopAuthorProfile();
     expect(profile.playbook).toBe(WORKSHOP_AUTHOR_PLAYBOOK);
     expect(profile.tools.map((t) => t.name)).toEqual([
+      "list_builds",
+      "focus_build",
+      "create_build",
       "read_draft",
       "validate_draft",
       "create_pipeline",
@@ -64,9 +67,24 @@ describe("Workshop Author playbook + docs retrieval", () => {
     for (const forbidden of ["bash", "write", "edit"] as const) {
       expect(profile.tools.some((t) => t.name === forbidden)).toBe(false);
     }
-    expect(profile.playbook).toMatch(/clarify-then-create|clarify/i);
+    expect(profile.playbook).toMatch(/clarify before you create|clarify/i);
+    expect(profile.playbook).toMatch(/not a task runner/i);
+    expect(profile.playbook).toMatch(/one to four sentences/i);
+    expect(profile.playbook).toMatch(/single most useful question/i);
     expect(profile.playbook).toMatch(/create_stage/);
     expect(profile.playbook).toMatch(/never use bash\/write\/edit/i);
+    expect(profile.playbook).toMatch(
+      /ask before a second pipeline when one is already open/i,
+    );
+    expect(profile.playbook).toMatch(
+      /if the answer is still ambiguous, ask once more/i,
+    );
+    expect(profile.playbook).toMatch(
+      /when nothing is selected, create an untitled build and focus it/i,
+    );
+    expect(profile.playbook).toMatch(
+      /when the operator names an existing pipeline, focus it rather than create a new one/i,
+    );
     expect(profile.playbook).toMatch(/immediately/i);
     expect(profile.playbook).toMatch(/soft-undos|soft undo/i);
     expect(profile.playbook).toMatch(/workshop\/sessions/i);

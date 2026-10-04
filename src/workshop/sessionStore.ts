@@ -36,6 +36,7 @@ export type WorkshopSessionSummary = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  activeBuildId?: string;
 };
 
 export type WorkshopSessionAppendMessage = {
@@ -280,6 +281,7 @@ export function listWorkshopSessions(
       title: record.title,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      ...(record.activeBuildId ? { activeBuildId: record.activeBuildId } : {}),
     });
   }
   summaries.sort((a, b) => {

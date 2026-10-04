@@ -6,7 +6,7 @@ import type {
 } from "./types.js";
 
 export const WORKSHOP_AUTHOR_GREETING =
-  "What are we building? Describe the workflow you want and I’ll propose stages and wiring for this draft.";
+  "What are we building? Tell me the workflow in your own words — I’ll ask where it changes the draft.";
 
 export function emptyDraftPackage(id = "untitled"): DraftPackage {
   return {

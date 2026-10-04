@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   maySend,
   mapWorkshopChatParts,
+  interleaveAssistantTextWithTools,
 } from "./workshopChatView";
 
 describe("maySend", () => {
@@ -156,5 +157,95 @@ describe("mapWorkshopChatParts", () => {
         text: "Chat failed: host unavailable",
       },
     ]);
+  });
+});
+
+describe("interleaveAssistantTextWithTools", () => {
+  it("splits assistant text at textOffset and groups shared offsets", () => {
+    expect(
+      interleaveAssistantTextWithTools("Hello world", [
+        {
+          id: "a",
+          name: "create_stage",
+          status: "complete",
+          textOffset: 5,
+        },
+        {
+          id: "b",
+          name: "wire_stage",
+          status: "complete",
+          textOffset: 5,
+        },
+        {
+          id: "c",
+          name: "set_stage_body",
+          status: "running",
+          textOffset: 11,
+        },
+      ]),
+    ).toEqual([
+      { kind: "text", text: "Hello" },
+      {
+        kind: "tools",
+        calls: [
+          {
+            id: "a",
+            name: "create_stage",
+            status: "complete",
+            textOffset: 5,
+          },
+          {
+            id: "b",
+            name: "wire_stage",
+            status: "complete",
+            textOffset: 5,
+          },
+        ],
+      },
+      { kind: "text", text: " world" },
+      {
+        kind: "tools",
+        calls: [
+          {
+            id: "c",
+            name: "set_stage_body",
+            status: "running",
+            textOffset: 11,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("clamps offsets and renders tools-only when text is empty", () => {
+    expect(
+      interleaveAssistantTextWithTools("", [
+        {
+          id: "a",
+          name: "create_stage",
+          status: "running",
+          textOffset: 99,
+        },
+      ]),
+    ).toEqual([
+      {
+        kind: "tools",
+        calls: [
+          {
+            id: "a",
+            name: "create_stage",
+            status: "running",
+            textOffset: 0,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("returns text alone when there are no tools", () => {
+    expect(interleaveAssistantTextWithTools("only text", [])).toEqual([
+      { kind: "text", text: "only text" },
+    ]);
+    expect(interleaveAssistantTextWithTools("", [])).toEqual([]);
   });
 });

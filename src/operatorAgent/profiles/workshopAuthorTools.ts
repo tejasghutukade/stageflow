@@ -1,3 +1,4 @@
+import { parse as parseYaml } from "yaml";
 import {
   createDraftPackage,
   overwriteDraftPackage,
@@ -6,10 +7,18 @@ import {
   type DraftPackageWriteResult,
 } from "../../config/draftPackage.js";
 import {
+  emptyDraftPackage,
   isWorkshopDraftContext,
   readDraftFromContext,
   withDraft,
 } from "../draftContext.js";
+import {
+  focusUnboundWorkshopBuild,
+  getWorkshopBuild,
+  listWorkshopPickerRows,
+  resolvePickerCatalogPipelines,
+  type WorkshopPickerCatalogPipeline,
+} from "../../workshop/buildStore.js";
 import {
   affectedStageIds,
   diffDraftPackages,
@@ -33,6 +42,9 @@ export const WORKSHOP_AUTHOR_MUTATING_TOOLS = [
 ] as const;
 
 export const WORKSHOP_AUTHOR_TOOL_NAMES = [
+  "list_builds",
+  "focus_build",
+  "create_build",
   "read_draft",
   "validate_draft",
   "create_pipeline",
@@ -66,6 +78,22 @@ function nextMutationId(): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function coercePlainObject(value: unknown): Record<string, unknown> | null {
+  if (isPlainObject(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (isPlainObject(parsed)) return parsed;
+  } catch {}
+  try {
+    const parsed = parseYaml(trimmed) as unknown;
+    if (isPlainObject(parsed)) return parsed;
+  } catch {}
+  return null;
 }
 
 function slugifyId(text: string, fallback: string): string {
@@ -150,7 +178,14 @@ export function buildCreateStageDraft(
 
   const usesPath =
     stringArg(args, "uses") ?? `./${stageId}.yaml`;
-  const bodyFromArgs = isPlainObject(args.body) ? args.body : null;
+  const bodyFromArgs = coercePlainObject(args.body);
+  if (
+    typeof args.body === "string" &&
+    args.body.trim() &&
+    !bodyFromArgs
+  ) {
+    return { ok: false, error: "body must be a JSON or YAML object" };
+  }
   const stageBody: Record<string, unknown> = {
     id: stageId,
     system_prompt:
@@ -162,8 +197,9 @@ export function buildCreateStageDraft(
     ...(bodyFromArgs ?? {}),
   };
   stageBody.id = stageId;
-  if (isPlainObject(args.io)) {
-    stageBody.io = args.io;
+  const ioFromArgs = coercePlainObject(args.io);
+  if (ioFromArgs) {
+    stageBody.io = ioFromArgs;
   }
 
   const entry =
@@ -235,7 +271,14 @@ export function buildEditStageDraft(
       s.body.id === stageId,
   );
   const patch = isPlainObject(args.patch) ? args.patch : {};
-  const bodyFromArgs = isPlainObject(args.body) ? args.body : null;
+  const bodyFromArgs = coercePlainObject(args.body);
+  if (
+    typeof args.body === "string" &&
+    args.body.trim() &&
+    !bodyFromArgs
+  ) {
+    return { ok: false, error: "body must be a JSON or YAML object" };
+  }
   const nextBody: Record<string, unknown> = {
     ...(existingArt?.body ?? {
       id: stageId,
@@ -252,7 +295,8 @@ export function buildEditStageDraft(
       stringArg(args, "system_prompt") ?? stringArg(args, "systemPrompt");
   }
   if (stringArg(args, "model")) nextBody.model = stringArg(args, "model");
-  if (isPlainObject(args.io)) nextBody.io = args.io;
+  const ioFromArgs = coercePlainObject(args.io);
+  if (ioFromArgs) nextBody.io = ioFromArgs;
 
   const stages = [...(draft.stages ?? [])];
   const artIndex = stages.findIndex(
@@ -399,6 +443,170 @@ export type WorkshopAuthorToolOptions = {
   projectRoot?: string;
 };
 
+const WORKSHOP_TURN_REQUIRED =
+  "workshop chat session is required";
+
+async function liveWorkshopBinding(ctx: OperatorAgentToolContext) {
+  const { resolveLiveWorkshopBinding } = await import("../../workshop/chatTurn.js");
+  return resolveLiveWorkshopBinding(ctx.getContext());
+}
+
+async function listPickerCatalog(storeRoot: string): Promise<{
+  pipelines: WorkshopPickerCatalogPipeline[];
+  roots: { project_root: string; path: string }[];
+}> {
+  const { createRunStore } = await import("../../runstore/createStore.js");
+  const { listPipelinesMultiProject } = await import(
+    "../../config/multiProjectCatalog.js"
+  );
+  const store = createRunStore({ rootDir: storeRoot });
+  try {
+    const listed = await listPipelinesMultiProject({ store });
+    return {
+      pipelines: resolvePickerCatalogPipelines(listed.items, listed.roots),
+      roots: listed.roots,
+    };
+  } finally {
+    await store.close();
+  }
+}
+
+export function createWorkshopBuildTools(): OperatorAgentTool[] {
+  const listBuildsTool: OperatorAgentTool = {
+    name: "list_builds",
+    description:
+      "List the same workshop rows as the studio picker (open builds and unbound disk pipelines). Does not create a build. Works when no build is focused.",
+    async handler(_args, ctx): Promise<OperatorAgentToolResult> {
+      const live = await liveWorkshopBinding(ctx);
+      if (!live) {
+        return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
+      }
+      try {
+        const catalog = await listPickerCatalog(live.storeRoot);
+        const rows = listWorkshopPickerRows(
+          live.storeRoot,
+          catalog.pipelines,
+          catalog.roots,
+        );
+        return { ok: true, content: { rows } };
+      } catch (err) {
+        return {
+          ok: false,
+          content: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+  };
+
+  const focusBuildTool: OperatorAgentTool = {
+    name: "focus_build",
+    description:
+      "Move this chat onto a build by id, or onto an unbound disk pipeline by projectRoot and relativePath. A failed open returns the error, creates nothing, and leaves the pointer unchanged.",
+    async handler(args, ctx): Promise<OperatorAgentToolResult> {
+      const live = await liveWorkshopBinding(ctx);
+      if (!live) {
+        return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
+      }
+      const buildId = stringArg(args, "buildId") ?? stringArg(args, "id");
+      const projectRoot =
+        stringArg(args, "projectRoot") ?? stringArg(args, "project_root");
+      const relativePath =
+        stringArg(args, "relativePath") ??
+        stringArg(args, "relative_path") ??
+        stringArg(args, "path");
+      const { focusWorkshopBuildPointer } = await import(
+        "../../workshop/chatTurn.js"
+      );
+
+      if (!buildId && projectRoot && relativePath) {
+        let resolvedRoot = projectRoot;
+        const { createRunStore } = await import("../../runstore/createStore.js");
+        const { CatalogPathError, resolveCatalogStartInput } = await import(
+          "../../config/catalogRelativePath.js"
+        );
+        const store = createRunStore({ rootDir: live.storeRoot });
+        try {
+          const { wireRoot } = await resolveCatalogStartInput(
+            { store },
+            projectRoot,
+          );
+          resolvedRoot = wireRoot.path;
+        } catch (err) {
+          if (!(err instanceof CatalogPathError)) throw err;
+        } finally {
+          await store.close();
+        }
+        const focused = await focusUnboundWorkshopBuild(live.storeRoot, {
+          projectRoot: resolvedRoot,
+          relativePath,
+        });
+        if (!focused.ok) {
+          return { ok: false, content: null, error: focused.error };
+        }
+        focusWorkshopBuildPointer({
+          sessionId: live.sessionId,
+          buildId: focused.build.id,
+          registry: live.registry,
+          storeRoot: live.storeRoot,
+        });
+        return { ok: true, content: { build: focused.build } };
+      }
+
+      if (!buildId) {
+        return {
+          ok: false,
+          content: null,
+          error: "build id or project root and path are required",
+        };
+      }
+
+      try {
+        const pointed = focusWorkshopBuildPointer({
+          sessionId: live.sessionId,
+          buildId,
+          registry: live.registry,
+          storeRoot: live.storeRoot,
+        });
+        return {
+          ok: true,
+          content: { build: getWorkshopBuild(live.storeRoot, pointed.activeBuildId) },
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          content: null,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+  };
+
+  const createBuildTool: OperatorAgentTool = {
+    name: "create_build",
+    description:
+      "Persist a new untitled build and focus it, including when another build is already focused. No build id argument.",
+    async handler(_args, ctx): Promise<OperatorAgentToolResult> {
+      const live = await liveWorkshopBinding(ctx);
+      if (!live) {
+        return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
+      }
+      const { pinWorkshopBuildOnCreate } = await import(
+        "../../workshop/chatTurn.js"
+      );
+      const build = pinWorkshopBuildOnCreate({
+        sessionId: live.sessionId,
+        draft: emptyDraftPackage(),
+        registry: live.registry,
+        storeRoot: live.storeRoot,
+      });
+      return { ok: true, content: { build } };
+    },
+  };
+
+  return [listBuildsTool, focusBuildTool, createBuildTool];
+}
+
 export function createWorkshopAuthorMutatingTools(): OperatorAgentTool[] {
   const createPipelineTool: OperatorAgentTool = {
     name: "create_pipeline",
@@ -514,7 +722,10 @@ export function createSaveTool(
     description:
       "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). Requires a destination directory (context.destination or args.directory). Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
-      const destination = resolveDestination(ctx, args);
+      const { resolvePinnedSaveDestination, recordPinnedWorkshopSave } =
+        await import("../../workshop/chatTurn.js");
+      const pinnedDestination = resolvePinnedSaveDestination(ctx.getContext());
+      const destination = pinnedDestination ?? resolveDestination(ctx, args);
       if (!destination) {
         return {
           ok: false,
@@ -576,6 +787,14 @@ export function createSaveTool(
               : {}),
           },
           projectRoot,
+        });
+        recordPinnedWorkshopSave(ctx.getContext(), {
+          directory: destination.directory,
+          ...(destination.pipelineFilename
+            ? { pipelineFilename: destination.pipelineFilename }
+            : {}),
+          projectRoot,
+          draft,
         });
       }
 

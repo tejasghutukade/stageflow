@@ -657,6 +657,7 @@ export type WorkshopChatTurnPayload = {
   pending: WorkshopChatProposalPayload | null;
   autoApply: boolean;
   model: string;
+  buildId?: string | null;
 };
 
 export type WorkshopChatTurnInput = {
@@ -672,8 +673,26 @@ export type WorkshopChatTurnResult =
   | ({ ok: true } & WorkshopChatTurnPayload)
   | { ok: false; status: number; error: string };
 
+export type WorkshopToolCallUpdate = {
+  id: string;
+  name: string;
+  status: "running" | "complete" | "error";
+  target?: string;
+  errorMessage?: string;
+  draft?: DraftPackagePayload;
+  buildId?: string;
+};
+
+export type WorkshopPointerChangeFrame = {
+  type: "pointer-change";
+  buildId: string;
+  draft: DraftPackagePayload;
+};
+
 export type WorkshopChatStreamFrame =
   | { type: "delta"; text: string }
+  | ({ type: "activity" } & WorkshopToolCallUpdate)
+  | WorkshopPointerChangeFrame
   | { type: "event"; event: WorkshopChatWireEvent }
   | ({ type: "done" } & WorkshopChatTurnPayload);
 
@@ -692,6 +711,7 @@ export type WorkshopSessionRecord = {
   updatedAt: string;
   transcript: WorkshopSessionMessage[];
   piSessionId: string | null;
+  activeBuildId?: string;
 };
 
 export type WorkshopSessionSummary = {
@@ -699,7 +719,41 @@ export type WorkshopSessionSummary = {
   title: string;
   createdAt: string;
   updatedAt: string;
+  activeBuildId?: string;
 };
+
+export type WorkshopBuildRecord = {
+  version: 1;
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type WorkshopPickerRow = {
+  id: string | null;
+  name: string;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type ListWorkshopPickerResult =
+  | { ok: true; rows: WorkshopPickerRow[] }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type FocusWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type UpdateWorkshopSessionActiveBuildResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
 
 export type ListWorkshopSessionsResult =
   | { ok: true; sessions: WorkshopSessionSummary[] }

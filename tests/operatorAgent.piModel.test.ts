@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createLiveWorkshopOperatorHost,
+  sessionNeedsExtensionReload,
+  workshopToolActivity,
+  workshopToolLogFields,
   type PiOperatorOpenSessionInput,
   type PiOperatorSessionHandle,
 } from "../src/operatorAgent/piModel.js";
@@ -125,6 +128,32 @@ describe("createPiOperatorAgentModel", () => {
     session.close();
   });
 
+  it("opens Pi on the composer model and switches it before a later turn", async () => {
+    const applied: string[] = [];
+    const mock = createMockPiHandle();
+    mock.handle.applyModel = vi.fn(async (modelId: string) => {
+      applied.push(modelId);
+    });
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession: mock.openPiSession,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    await session.send("first", { modelId: "cursor/auto" });
+    expect(mock.getOpened()?.modelId).toBe("cursor/auto");
+    expect(applied).toEqual([]);
+
+    await session.send("second", { modelId: "cursor/composer-2-5" });
+    expect(applied).toEqual(["cursor/composer-2-5"]);
+
+    session.close();
+  });
+
   it("replay path seeds transcript without throwing", async () => {
     const mock = createMockPiHandle();
     const host = createLiveWorkshopOperatorHost({
@@ -231,6 +260,73 @@ describe("createPiOperatorAgentModel", () => {
     if (msg?.type === "message") {
       expect(msg.text).toBe("Hi there");
     }
+    session.close();
+  });
+
+  it("abort calls the Pi session abort while a prompt is in flight", async () => {
+    let releasePrompt!: () => void;
+    const promptGate = new Promise<void>((resolve) => {
+      releasePrompt = resolve;
+    });
+    let promptStarted!: () => void;
+    const promptEntered = new Promise<void>((resolve) => {
+      promptStarted = resolve;
+    });
+    const listeners = new Set<(event: unknown) => void>();
+    const abort = vi.fn(async () => {
+      releasePrompt();
+    });
+    const handle: PiOperatorSessionHandle = {
+      session: {
+        prompt: vi.fn(async () => {
+          promptStarted();
+          await promptGate;
+          for (const listener of listeners) {
+            listener({
+              type: "message_end",
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: "Stopped." }],
+              },
+            });
+          }
+        }),
+        abort,
+        subscribe: vi.fn((listener: (event: unknown) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        }),
+        dispose: vi.fn(),
+        bindExtensions: vi.fn(async () => undefined),
+        setModel: vi.fn(async () => undefined),
+        setThinkingLevel: vi.fn(),
+        agent: { state: { messages: [] } },
+      },
+      sessionManager: {
+        appendCustomMessageEntry: vi.fn(),
+        buildSessionContext: vi.fn(() => ({ messages: [] })),
+        getSessionId: vi.fn(() => "pi-abort-session"),
+      },
+      piSessionId: "pi-abort-session",
+      shutdown: vi.fn(async () => undefined),
+    };
+    tempHandles.push(handle);
+
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession: async () => handle,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+    const sendPromise = session.send("hello");
+    await promptEntered;
+    await session.abort();
+    const events = await sendPromise;
+    expect(abort).toHaveBeenCalledOnce();
+    expect(events.some((event) => event.type === "message")).toBe(true);
     session.close();
   });
 
@@ -351,5 +447,66 @@ describe("createPiOperatorAgentModel", () => {
 
     sessionA.close();
     sessionB.close();
+  });
+
+  it("appends the cursor pi__ tool hint only for cursor models", async () => {
+    let prompted = "";
+    const mock = createMockPiHandle(async (text) => {
+      prompted = text;
+    });
+    const host = createLiveWorkshopOperatorHost({
+      cwd: process.cwd(),
+      openPiSession: mock.openPiSession,
+      resolveModelId: () => "anthropic/claude-sonnet-4-5",
+    });
+    const session = host.openSession({
+      profileId: WORKSHOP_AUTHOR_PROFILE_ID,
+      context: createWorkshopDraftContext(emptyDraftPackage("demo")),
+    });
+
+    await session.send("make a research stage", { modelId: "cursor/auto" });
+    expect(prompted).toContain("make a research stage");
+    expect(prompted).toContain("pi__create_stage");
+    expect(mock.getOpened()?.modelId).toBe("cursor/auto");
+
+    await session.send("make a research stage", {
+      modelId: "anthropic/claude-sonnet-4-5",
+    });
+    expect(prompted).toBe("make a research stage");
+    session.close();
+  });
+
+  it("logs a string stage body as ignored; successful tools stay complete", () => {
+    const args = { id: "research", body: "system_prompt: hello" };
+    expect(workshopToolLogFields(args).bodyIgnored).toBe(true);
+    expect(workshopToolLogFields(args).bodyType).toBe("string");
+    expect(
+      workshopToolActivity("call-1", "create_stage", "done", args, {
+        ok: true,
+        content: null,
+      }),
+    ).toMatchObject({
+      id: "call-1",
+      name: "create_stage",
+      status: "complete",
+      target: "research",
+    });
+    expect(
+      workshopToolActivity("call-2", "create_stage", "done", { id: "research" }, {
+        ok: false,
+        content: null,
+        error: "id is required",
+      }),
+    ).toMatchObject({
+      status: "error",
+      errorMessage: "id is required",
+    });
+  });
+
+  it("reopens a Pi session when the selected model needs an extension that is not loaded", () => {
+    expect(sessionNeedsExtensionReload(undefined, ["/ext/index.js"])).toBe(false);
+    expect(sessionNeedsExtensionReload([], ["/ext/index.js"])).toBe(true);
+    expect(sessionNeedsExtensionReload(["/ext/index.js"], ["/ext/index.js"])).toBe(false);
+    expect(sessionNeedsExtensionReload(["/ext/index.js"], [])).toBe(false);
   });
 });

@@ -21,8 +21,10 @@ import {
   createSealedResourceLoader,
   resolveWorkshopToolNames,
 } from "../agent/piSessionFactory.js";
+import { cursorBridgePrompt } from "../agent/cursorProvider.js";
 import { findProviderSupport } from "../agent/providerSupport.js";
 import "../agent/cursorProvider.js";
+import { logger as rootLogger } from "../logging/logger.js";
 import { globalStageflowHome } from "../project/globalHome.js";
 import {
   isUsableAuthFile,
@@ -39,6 +41,7 @@ import {
   createWorkshopAuthorProfile,
   type WorkshopAuthorProfileOptions,
 } from "./profiles/workshopAuthor.js";
+import { readDraftFromContext } from "./draftContext.js";
 import type {
   OperatorAgentHost,
   OperatorAgentProfile,
@@ -46,6 +49,7 @@ import type {
   OperatorAgentTool,
   OperatorAgentToolContext,
   OperatorAgentToolResult,
+  WorkshopToolActivityUpdate,
 } from "./types.js";
 
 export type WorkshopTranscriptSeedMessage = {
@@ -90,9 +94,15 @@ export type PiOperatorOpenSessionInput = {
 export type PiOperatorSessionHandle = {
   session: Pick<
     AgentSession,
-    "prompt" | "subscribe" | "dispose" | "bindExtensions" | "setModel" | "setThinkingLevel"
+    | "prompt"
+    | "subscribe"
+    | "dispose"
+    | "bindExtensions"
+    | "setModel"
+    | "setThinkingLevel"
   > & {
     agent?: { state: { messages: unknown } };
+    abort?: AgentSession["abort"];
   };
   sessionManager: {
     appendCustomMessageEntry: SessionManager["appendCustomMessageEntry"];
@@ -102,7 +112,28 @@ export type PiOperatorSessionHandle = {
   restoreProvider?: () => void;
   shutdown: () => Promise<void>;
   piSessionId: string;
+  /** Extension paths loaded when this Pi session was opened. Absent on test doubles. */
+  extensionPaths?: readonly string[];
+  /** Switch the live Pi model before the next prompt. No-op when unchanged. */
+  applyModel?: (modelId: string) => Promise<void>;
 };
+
+export function sessionNeedsExtensionReload(
+  loaded: readonly string[] | undefined,
+  needed: readonly string[],
+): boolean {
+  if (loaded === undefined) return false;
+  const have = new Set(loaded);
+  return needed.some((extensionPath) => !have.has(extensionPath));
+}
+
+function extensionPathsForModel(modelId: string): string[] {
+  const provider = findProviderSupport(modelId);
+  if (!provider) return [];
+  const prepared = provider.prepare(modelId);
+  if (prepared.error) return [];
+  return prepared.extensionPaths;
+}
 
 export type PiOperatorAgentModel = OperatorAgentModel & {
   prepareRestart(input: {
@@ -119,6 +150,71 @@ const FLEX_PARAMS = Type.Object(
   {},
   { additionalProperties: true },
 );
+
+const workshopLog = rootLogger.child({ component: "workshop" });
+
+export function workshopToolLogFields(
+  args: Record<string, unknown>,
+  result?: OperatorAgentToolResult,
+): Record<string, unknown> {
+  const body = args.body;
+  const fields: Record<string, unknown> = {
+    argKeys: Object.keys(args),
+    id: typeof args.id === "string" ? args.id : undefined,
+    bodyType:
+      body === undefined ? "missing" : Array.isArray(body) ? "array" : typeof body,
+  };
+  if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+    fields.bodyKeys = Object.keys(body);
+  }
+  if (typeof body === "string") {
+    fields.bodyChars = body.length;
+    fields.bodyIgnored = true;
+  }
+  if (result) {
+    fields.ok = result.ok;
+    if (result.error) fields.error = result.error;
+    try {
+      fields.resultBytes = JSON.stringify(result).length;
+    } catch {
+      fields.resultBytes = -1;
+    }
+  }
+  return fields;
+}
+
+export function workshopToolActivity(
+  id: string,
+  name: string,
+  phase: "start" | "done",
+  args: Record<string, unknown>,
+  result?: OperatorAgentToolResult,
+): WorkshopToolActivityUpdate {
+  const target = typeof args.id === "string" ? args.id : undefined;
+  const base = { id, name, ...(target ? { target } : {}) };
+  if (phase === "start") return { ...base, status: "running" };
+  if (!result?.ok) {
+    return {
+      ...base,
+      status: "error",
+      errorMessage: result?.error ?? "unknown error",
+    };
+  }
+  return { ...base, status: "complete" };
+}
+
+function workshopContextBuildId(context: unknown): string | undefined {
+  if (
+    context !== null &&
+    typeof context === "object" &&
+    "buildId" in context &&
+    typeof (context as { buildId?: unknown }).buildId === "string"
+  ) {
+    const buildId = (context as { buildId: string }).buildId.trim();
+    return buildId || undefined;
+  }
+  return undefined;
+}
 
 function workshopAgentDir(): string {
   return path.join(globalStageflowHome(), "workshop", "agent");
@@ -142,6 +238,7 @@ function buildWorkshopCustomTools(
   getProfile: () => OperatorAgentProfile,
   getTools: () => OperatorAgentToolContext,
   onToolResult: (name: string, result: OperatorAgentToolResult) => void,
+  reportActivity: (update: WorkshopToolActivityUpdate) => void,
 ): ReturnType<typeof defineTool>[] {
   return profileTools.map((tool) =>
     defineTool({
@@ -154,12 +251,53 @@ function buildWorkshopCustomTools(
           params !== null && typeof params === "object" && !Array.isArray(params)
             ? (params as Record<string, unknown>)
             : {};
+        workshopLog.info(
+          "workshop.tool.start",
+          tool.name,
+          workshopToolLogFields(args),
+        );
+        const callId =
+          typeof _toolCallId === "string" && _toolCallId
+            ? _toolCallId
+            : `${tool.name}-${Date.now()}`;
+        const pinnedBuildId = workshopContextBuildId(getTools().getContext());
+        reportActivity({
+          ...workshopToolActivity(callId, tool.name, "start", args),
+          ...(pinnedBuildId ? { buildId: pinnedBuildId } : {}),
+        });
         const result = await invokeProfileTool(
           getProfile(),
           tool.name,
           args,
           getTools(),
         );
+        const fields = workshopToolLogFields(args, result);
+        if (result.ok) {
+          workshopLog.info("workshop.tool.done", tool.name, fields);
+        } else {
+          workshopLog.warn("workshop.tool.done", tool.name, fields);
+        }
+        const update = workshopToolActivity(
+          callId,
+          tool.name,
+          "done",
+          args,
+          result,
+        );
+        const doneBuildId = workshopContextBuildId(getTools().getContext());
+        if (result.ok) {
+          const draft = readDraftFromContext(getTools().getContext());
+          reportActivity({
+            ...update,
+            draft,
+            ...(doneBuildId ? { buildId: doneBuildId } : {}),
+          });
+        } else {
+          reportActivity({
+            ...update,
+            ...(doneBuildId ? { buildId: doneBuildId } : {}),
+          });
+        }
         onToolResult(tool.name, result);
         return toolResultContent(result);
       },
@@ -299,11 +437,37 @@ async function openDefaultPiSession(
     }
 
     const live = session;
+    let currentModelId = input.modelId;
+    const applyModel = async (modelId: string): Promise<void> => {
+      if (modelId === currentModelId) return;
+      const provider = findProviderSupport(modelId);
+      if (provider) {
+        const prepared = provider.prepare(modelId);
+        if (prepared.error) {
+          throw new Error(prepared.error);
+        }
+      }
+      const next = resolveCliModel({
+        cliModel: modelId,
+        modelRuntime,
+      });
+      if (next.error || !next.model) {
+        throw new Error(next.error ?? `Model not found: ${modelId}`);
+      }
+      await live.setModel(next.model);
+      if (next.thinkingLevel) {
+        live.setThinkingLevel(next.thinkingLevel);
+      }
+      currentModelId = modelId;
+    };
+
     return {
       session: live,
       sessionManager,
       restoreProvider,
       piSessionId: sessionManager.getSessionId(),
+      extensionPaths: additionalExtensionPaths,
+      applyModel,
       shutdown: async () => {
         try {
           live.dispose();
@@ -330,6 +494,7 @@ type BoundPiState = {
   profile: OperatorAgentProfile;
   tools: OperatorAgentToolContext;
   toolEvents: OperatorAgentSessionEvent[];
+  reportActivity?: (update: WorkshopToolActivityUpdate) => void;
   started: boolean;
   replayed: boolean;
 };
@@ -363,12 +528,22 @@ export function createPiOperatorAgentModel(
   async function ensureBound(
     profile: OperatorAgentProfile,
     tools: OperatorAgentToolContext,
+    modelId?: string,
   ): Promise<BoundPiState> {
     const existing = bindings.get(tools);
     if (existing && existing.profileId === profile.id) {
-      existing.profile = profile;
-      existing.tools = tools;
-      return existing;
+      const reload =
+        modelId !== undefined &&
+        sessionNeedsExtensionReload(
+          existing.handle.extensionPaths,
+          extensionPathsForModel(modelId),
+        );
+      if (!reload) {
+        existing.profile = profile;
+        existing.tools = tools;
+        if (modelId) await existing.handle.applyModel?.(modelId);
+        return existing;
+      }
     }
     if (existing) {
       await existing.handle.shutdown();
@@ -402,6 +577,9 @@ export function createPiOperatorAgentModel(
           result,
         });
       },
+      (status) => {
+        bindingHolder.current?.reportActivity?.(status);
+      },
     );
 
     const handle = await openPiSession({
@@ -410,7 +588,7 @@ export function createPiOperatorAgentModel(
       systemPrompt: profile.playbook,
       toolNames,
       customTools,
-      modelId: resolveModelId(),
+      modelId: modelId ?? resolveModelId(),
       authPath: resolveAuthPath(),
       ...(options.piSessionDir ? { piSessionDir: options.piSessionDir } : {}),
     });
@@ -452,10 +630,10 @@ export function createPiOperatorAgentModel(
       state.replayed = true;
     },
 
-    async complete({ profile, message, tools, onDelta }) {
+    async complete({ profile, message, tools, onDelta, onActivity, modelId }) {
       let state: BoundPiState;
       try {
-        state = await ensureBound(profile, tools);
+        state = await ensureBound(profile, tools, modelId);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return {
@@ -466,6 +644,11 @@ export function createPiOperatorAgentModel(
       state.profile = profile;
       state.tools = tools;
       state.toolEvents = [];
+      state.reportActivity = onActivity;
+      workshopLog.info("workshop.turn.start", "prompt", {
+        modelId,
+        chars: message.length,
+      });
 
       const events: OperatorAgentSessionEvent[] = [];
       let assistantText = "";
@@ -493,10 +676,17 @@ export function createPiOperatorAgentModel(
       });
 
       try {
-        await state.handle.session.prompt(message);
+        await state.handle.session.prompt(
+          cursorBridgePrompt(
+            message,
+            modelId,
+            profile.tools.map((tool) => tool.name),
+          ),
+        );
       } catch (err) {
         unsubscribe();
         const msg = err instanceof Error ? err.message : String(err);
+        workshopLog.error("workshop.turn.done", msg, { modelId });
         return {
           events: [
             ...state.toolEvents,
@@ -505,6 +695,11 @@ export function createPiOperatorAgentModel(
         };
       }
       unsubscribe();
+      workshopLog.info("workshop.turn.done", "prompt", {
+        modelId,
+        toolCalls: state.toolEvents.length,
+        textChars: assistantText.length,
+      });
 
       for (const toolEvent of state.toolEvents) {
         events.push(toolEvent);
@@ -533,6 +728,13 @@ export function createPiOperatorAgentModel(
 
     getPiSessionId(tools) {
       return bindings.get(tools)?.handle.piSessionId;
+    },
+
+    async abort(tools) {
+      const session = bindings.get(tools)?.handle.session;
+      if (!session?.abort) return;
+      workshopLog.info("workshop.turn.abort", "abort");
+      await session.abort();
     },
   };
 

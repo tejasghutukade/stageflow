@@ -260,6 +260,17 @@ export type WorkshopPickerCatalogPipeline = {
   id: string;
 };
 
+export function resolvePickerCatalogPipelines(
+  items: readonly WorkshopPickerCatalogPipeline[],
+  roots: readonly { project_root: string; path: string }[],
+): WorkshopPickerCatalogPipeline[] {
+  const byWire = new Map(roots.map((root) => [root.project_root, root.path]));
+  return items.map((item) => {
+    const resolved = byWire.get(item.project_root);
+    return resolved ? { ...item, project_root: resolved } : item;
+  });
+}
+
 export type WorkshopPickerRow = {
   id: string | null;
   name: string;
@@ -325,24 +336,32 @@ function findTiedBuild(
 export function listWorkshopPickerRows(
   storeRoot: string,
   pipelines: ReadonlyArray<WorkshopPickerCatalogPipeline>,
+  roots: readonly { project_root: string; path: string }[] = [],
 ): WorkshopPickerRow[] {
+  const byWire = new Map(roots.map((root) => [root.project_root, root.path]));
+  const canonicalRoot = (value: string | null | undefined): string | null => {
+    const normalized = normalizeProjectRoot(value);
+    if (!normalized) return null;
+    return byWire.get(normalized) ?? normalized;
+  };
   const rows: WorkshopPickerRow[] = [];
   const tied = new Set<string>();
   for (const record of listWorkshopBuildRecords(storeRoot)) {
+    const projectRoot = canonicalRoot(record.projectRoot);
     const key = tieKey(
-      normalizeProjectRoot(record.projectRoot),
+      projectRoot,
       normalizeRelativePath(record.relativePath),
     );
     if (key) tied.add(key);
     rows.push({
       id: record.id,
       name: pickerName(record.draft.pipeline.id),
-      projectRoot: record.projectRoot,
+      projectRoot,
       relativePath: record.relativePath,
     });
   }
   for (const pipeline of pipelines) {
-    const projectRoot = normalizeProjectRoot(pipeline.project_root);
+    const projectRoot = canonicalRoot(pipeline.project_root);
     const relativePath = normalizeRelativePath(pipeline.path);
     if (!projectRoot || !relativePath) continue;
     const key = tieKey(projectRoot, relativePath);

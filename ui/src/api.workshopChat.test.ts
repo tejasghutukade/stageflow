@@ -40,4 +40,63 @@ describe("sendWorkshopChatTurnStreaming", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("delivers pointer-change before a later activity and keeps done buildId", async () => {
+    const created = { pipeline: { id: "created", stages: [{ id: "fresh" }] } };
+    const late = { pipeline: { id: "late", stages: [{ id: "old" }] } };
+    const order: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        ndjsonResponse([
+          JSON.stringify({
+            type: "pointer-change",
+            buildId: "build-new",
+            draft: created,
+          }),
+          JSON.stringify({
+            type: "activity",
+            id: "tool-1",
+            name: "edit_stage",
+            status: "complete",
+            buildId: "build-old",
+            draft: late,
+          }),
+          JSON.stringify({
+            type: "done",
+            sessionId: "sess-1",
+            events: [],
+            draft: late,
+            pending: null,
+            autoApply: false,
+            model: "cursor/auto",
+            buildId: "build-old",
+          }),
+        ]),
+      ),
+    );
+
+    const result = await sendWorkshopChatTurnStreaming(
+      {
+        sessionId: "sess-1",
+        message: "build",
+        draft: { pipeline: { id: "untitled", stages: [] } },
+      },
+      {
+        onPointerChange: (frame) => {
+          order.push(`pointer:${frame.buildId}`);
+        },
+        onActivity: (update) => {
+          order.push(`activity:${update.buildId ?? ""}`);
+        },
+      },
+    );
+
+    expect(order).toEqual(["pointer:build-new", "activity:build-old"]);
+    expect(result).toMatchObject({
+      ok: true,
+      buildId: "build-old",
+      draft: late,
+    });
+  });
 });

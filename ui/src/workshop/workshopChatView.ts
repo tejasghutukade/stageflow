@@ -39,6 +39,19 @@ export type WorkshopChatMessageInput = {
   content: string | readonly WorkshopChatPartInput[];
 };
 
+export type WorkshopToolActivityRow = {
+  id: string;
+  name: string;
+  status: "running" | "complete" | "error";
+  target?: string;
+  errorMessage?: string;
+  textOffset: number;
+};
+
+export type InterleavedAssistantSegment =
+  | { kind: "text"; text: string }
+  | { kind: "tools"; calls: WorkshopToolActivityRow[] };
+
 function normalizeRole(role: string): "user" | "assistant" | "system" {
   if (role === "user" || role === "system" || role === "assistant") return role;
   return "assistant";
@@ -107,4 +120,41 @@ export function mapWorkshopChatParts(
   }
 
   return out;
+}
+
+export function interleaveAssistantTextWithTools(
+  text: string,
+  tools: readonly WorkshopToolActivityRow[],
+): InterleavedAssistantSegment[] {
+  if (tools.length === 0) {
+    return text ? [{ kind: "text", text }] : [];
+  }
+
+  const sorted = [...tools].sort((a, b) => a.textOffset - b.textOffset);
+  const groups: Array<{ offset: number; calls: WorkshopToolActivityRow[] }> = [];
+  for (const call of sorted) {
+    const offset = Math.max(0, Math.min(call.textOffset, text.length));
+    const last = groups[groups.length - 1];
+    if (last && last.offset === offset) {
+      last.calls.push({ ...call, textOffset: offset });
+    } else {
+      groups.push({ offset, calls: [{ ...call, textOffset: offset }] });
+    }
+  }
+
+  const segments: InterleavedAssistantSegment[] = [];
+  let cursor = 0;
+  for (const group of groups) {
+    if (group.offset > cursor) {
+      segments.push({ kind: "text", text: text.slice(cursor, group.offset) });
+    }
+    segments.push({ kind: "tools", calls: group.calls });
+    cursor = group.offset;
+  }
+  if (cursor < text.length) {
+    segments.push({ kind: "text", text: text.slice(cursor) });
+  } else if (segments.length === 0 && text) {
+    segments.push({ kind: "text", text });
+  }
+  return segments;
 }
