@@ -3,9 +3,11 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
+  cursorBridgePrompt,
   cursorExtensionEntryInPackage,
   isCursorModelRef,
   resolveCursorExtensionPath,
+  workshopCursorBridgeHint,
 } from "../src/agent/cursorProvider.js";
 import { findProviderSupport } from "../src/agent/providerSupport.js";
 
@@ -69,5 +71,17 @@ describe("cursor provider support", () => {
   it("is registered as StageProviderSupport only for cursor models", () => {
     expect(findProviderSupport("cursor/composer-2-5")?.id).toBe("cursor");
     expect(findProviderSupport("anthropic/claude-sonnet-4-5")).toBeUndefined();
+  });
+
+  it("names workshop tools as pi__ MCP tools for cursor models", () => {
+    const hint = workshopCursorBridgeHint(["create_stage", "read_draft"]);
+    expect(hint).toContain("pi__create_stage");
+    expect(hint).toContain("pi__read_draft");
+    expect(cursorBridgePrompt("make a research stage", "cursor/auto", ["create_stage"])).toContain(
+      "pi__create_stage",
+    );
+    expect(
+      cursorBridgePrompt("make a research stage", "anthropic/claude-sonnet-4-5", ["create_stage"]),
+    ).toBe("make a research stage");
   });
 });

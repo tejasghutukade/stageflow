@@ -480,6 +480,311 @@ export type CreatePipelineResult =
   | { ok: true; pipeline: PipelineListing }
   | { ok: false; status: number; error: string };
 
+export type ValidationFinding = {
+  severity: "error" | "warning";
+  code: string;
+  path: string;
+  message: string;
+  category: string;
+  pipelineId?: string;
+  stageId?: string;
+};
+
+export type DraftValidationResult = {
+  scope: "full" | "pipeline" | "task";
+  ok: boolean;
+  summary: { errors: number; warnings: number };
+  findings: ValidationFinding[];
+};
+
+export type DraftPackagePayload = {
+  pipeline: {
+    id: string;
+    stages: Array<Record<string, unknown>>;
+    agent?: unknown;
+    model?: unknown;
+    schemas?: unknown;
+    requires?: unknown;
+  };
+  stages?: Array<{ path: string; body: Record<string, unknown> }>;
+  task?: { filename: string; body: Record<string, unknown> };
+};
+
+export type CreateDraftPackageInput = {
+  directory: string;
+  draft: DraftPackagePayload;
+  pipelineFilename?: string;
+  project_root?: string;
+  allowInvalid?: boolean;
+};
+
+export type CreateDraftPackageResult =
+  | {
+      ok: true;
+      pipeline: PipelineListing;
+      pipelinePath: string;
+      stagePaths: string[];
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      findings?: ValidationFinding[];
+    };
+
+export type OverwriteDraftPackageInput = CreateDraftPackageInput;
+export type OverwriteDraftPackageResult = CreateDraftPackageResult;
+
+export type OpenDraftPackageInput = {
+  path: string;
+  task?: string;
+  project_root?: string;
+};
+
+export type OpenDraftPackageResult =
+  | {
+      ok: true;
+      draft: DraftPackagePayload;
+      destination: { directory: string; pipelineFilename: string };
+      pipelinePath: string;
+      taskPath?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
+export type AttachTaskInput = {
+  task: string;
+  project_root?: string;
+};
+
+export type AttachTaskResult =
+  | {
+      ok: true;
+      task: { filename: string; body: Record<string, unknown> };
+      taskPath: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+    };
+
+export type WorkshopAutosavePayload = {
+  version: 1;
+  key: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  messages: Array<{
+    id: string;
+    role: "assistant" | "user" | "system";
+    text: string;
+    artifacts?: unknown;
+  }>;
+  autoApply: boolean;
+  sessionModelOverride?: string | null;
+  destination?: {
+    directory: string;
+    pipelineFilename?: string;
+  } | null;
+  savedPath?: string | null;
+  savedTaskPath?: string | null;
+  diskFingerprints?: Record<string, string>;
+};
+
+export type GetWorkshopAutosaveResult =
+  | { ok: true; key: string; autosave: WorkshopAutosavePayload | null }
+  | { ok: false; status: number; error: string };
+
+export type PutWorkshopAutosaveResult =
+  | { ok: true; autosave: WorkshopAutosavePayload }
+  | { ok: false; status: number; error: string };
+
+export type ClearWorkshopAutosaveResult =
+  | { ok: true; key: string; cleared: boolean }
+  | { ok: false; status: number; error: string };
+
+export type WorkshopDiskChangeInput = {
+  pipelinePath: string;
+  draft: DraftPackagePayload;
+  taskPath?: string | null;
+  baseline?: Record<string, string> | null;
+  project_root?: string;
+};
+
+export type WorkshopDiskChangeResult =
+  | {
+      ok: true;
+      fingerprints: Record<string, string>;
+      changed: boolean;
+      changedPaths: string[];
+    }
+  | { ok: false; status: number; error: string };
+
+export type WorkshopChatProposalPayload = {
+  id: string;
+  summary: string;
+  nextDraft: DraftPackagePayload;
+  baseDraft: DraftPackagePayload;
+  baseFingerprint: string;
+  artifacts: Array<{
+    path: string;
+    kind: "added" | "removed" | "modified";
+    before?: string;
+    after?: string;
+  }>;
+  affectedStageIds: string[];
+};
+
+export type WorkshopChatWireEvent =
+  | { type: "message"; role: "assistant" | "user" | "system"; text: string }
+  /** Mutation receipt for Accept/Reject UX (draft already mutated). */
+  | {
+      type: "proposal";
+      proposal: WorkshopChatProposalPayload;
+    }
+  | { type: "tool_result"; name: string; result: unknown }
+  | { type: "validation"; result: unknown }
+  | { type: "error"; message: string };
+
+export type WorkshopChatTurnPayload = {
+  sessionId: string;
+  events: WorkshopChatWireEvent[];
+  draft: DraftPackagePayload;
+  pending: WorkshopChatProposalPayload | null;
+  autoApply: boolean;
+  model: string;
+  buildId?: string | null;
+};
+
+export type WorkshopChatTurnInput = {
+  sessionId: string;
+  message: string;
+  draft: DraftPackagePayload;
+  autoApply?: boolean;
+  model?: string | null;
+  stream?: boolean;
+};
+
+export type WorkshopChatTurnResult =
+  | ({ ok: true } & WorkshopChatTurnPayload)
+  | { ok: false; status: number; error: string };
+
+export type WorkshopToolCallUpdate = {
+  id: string;
+  name: string;
+  status: "running" | "complete" | "error";
+  target?: string;
+  errorMessage?: string;
+  draft?: DraftPackagePayload;
+  buildId?: string;
+};
+
+export type WorkshopPointerChangeFrame = {
+  type: "pointer-change";
+  buildId: string;
+  draft: DraftPackagePayload;
+};
+
+export type WorkshopChatStreamFrame =
+  | { type: "delta"; text: string }
+  | ({ type: "activity" } & WorkshopToolCallUpdate)
+  | WorkshopPointerChangeFrame
+  | { type: "event"; event: WorkshopChatWireEvent }
+  | ({ type: "done" } & WorkshopChatTurnPayload);
+
+export type WorkshopSessionMessage = {
+  id: string;
+  role: "assistant" | "user" | "system";
+  text: string;
+  createdAt: string;
+};
+
+export type WorkshopSessionRecord = {
+  version: 1;
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  transcript: WorkshopSessionMessage[];
+  piSessionId: string | null;
+  activeBuildId?: string;
+};
+
+export type WorkshopSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  activeBuildId?: string;
+};
+
+export type WorkshopBuildRecord = {
+  version: 1;
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  draft: DraftPackagePayload;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type WorkshopPickerRow = {
+  id: string | null;
+  name: string;
+  projectRoot: string | null;
+  relativePath: string | null;
+};
+
+export type ListWorkshopPickerResult =
+  | { ok: true; rows: WorkshopPickerRow[] }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type FocusWorkshopBuildResult =
+  | { ok: true; build: WorkshopBuildRecord }
+  | { ok: false; status: number; error: string };
+
+export type UpdateWorkshopSessionActiveBuildResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
+
+export type ListWorkshopSessionsResult =
+  | { ok: true; sessions: WorkshopSessionSummary[] }
+  | { ok: false; status: number; error: string };
+
+export type CreateWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string };
+
+export type GetWorkshopSessionResult =
+  | { ok: true; session: WorkshopSessionRecord }
+  | { ok: false; status: number; error: string; code?: string };
+
+export type WorkshopSessionMutationResult =
+  | {
+      ok: true;
+      sessionId: string;
+      draft: DraftPackagePayload;
+      pending: WorkshopChatProposalPayload | null;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      reason?: "none" | "id_mismatch" | "conflict";
+      notice?: string;
+      draft?: DraftPackagePayload;
+      pending?: WorkshopChatProposalPayload | null;
+      sessionId?: string;
+    };
+
 export type CapacityHealth = {
   ok: true;
   activeRunIds: string[];
@@ -537,6 +842,7 @@ export type SettingsSnapshot = {
   maxConcurrent: number;
   credentialSource?: CredentialSource;
   binding: CredentialBindingView;
+  workshopModel?: string;
 };
 
 export type ProviderAuthMutationResult =

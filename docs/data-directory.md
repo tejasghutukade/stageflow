@@ -30,6 +30,21 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `backups/` | disposable | `sf backup` archives (default output) |
 | `restore-pending/` | disposable | Staged API restore archives + marker |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
+| `workshop/sessions/` | **keep** | Workshop Author chat sessions (History / New): per-id directory with `session.json` (title, timestamps, transcript, `piSessionId`) and optional `pi-session.jsonl`. **No draft** in the session blob — draft stays client-/Workshop-owned. Always under `$STAGEFLOW_HOME`. |
+| `workshop/autosave/` | disposable | Workshop WIP autosave slots (draft package + chat messages + destination metadata). Separate contract from sessions — do not merge. For git catalog projects this usually lives under `<git-root>/.stageflow/workshop/autosave/`; otherwise under `$STAGEFLOW_HOME/workshop/autosave/`. |
+
+### Workshop: sessions vs autosave
+
+These are **two stores**, not one (KTD5):
+
+| | `workshop/sessions/` | `workshop/autosave/` |
+|--|----------------------|----------------------|
+| **Purpose** | Durable Author **chat** History / New | Crash/refresh **WIP** for an unsaved draft |
+| **Contents** | Transcript + title/timestamps + `piSessionId` | Draft package + messages (+ destination / fingerprints) |
+| **Draft?** | Never stored here | Yes — draft is the point of the slot |
+| **Root** | Always `$STAGEFLOW_HOME` | Project `.stageflow` when git-bound; else `$STAGEFLOW_HOME` |
+
+Opening a History session restores the **thread**, not a saved draft snapshot. Autosave restores a **WIP draft** (and its local messages) independent of which History session is open. See [Operator console — Workshop](operator-console.md#workshop).
 
 For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
 

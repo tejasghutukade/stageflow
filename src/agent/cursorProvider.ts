@@ -111,6 +111,28 @@ function prepareCursor(modelRef: string): ProviderPrepareResult {
   };
 }
 
+export function workshopCursorBridgeHint(toolNames: readonly string[]): string {
+  const lines = toolNames.map(
+    (name) => `- pi__${name} (playbook name: ${name})`,
+  );
+  return [
+    "Cursor bridge: call the workshop tools by these MCP names. The playbook uses the bare names; they are the same tools.",
+    ...lines,
+    "When the operator asks you to create or edit the draft, do not finish without one of these tool calls.",
+  ].join("\n");
+}
+
+export function cursorBridgePrompt(
+  message: string,
+  modelId: string | undefined,
+  toolNames: readonly string[],
+): string {
+  if (!modelId || !isCursorModelRef(modelId) || toolNames.length === 0) {
+    return message;
+  }
+  return `${message}\n\n${workshopCursorBridgeHint(toolNames)}`;
+}
+
 export const cursorProviderSupport: StageProviderSupport = {
   id: "cursor",
   matches: isCursorModelRef,

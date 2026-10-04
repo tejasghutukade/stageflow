@@ -19,7 +19,7 @@ import {
 import { NewPipelinePanel } from "../components/NewPipelinePanel";
 import { NewStagePanel } from "../components/NewStagePanel";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
-import { newRunPath, pipelinePath, runStreamPath } from "../routes";
+import { newRunPath, pipelinePath, runStreamPath, workshopPath } from "../routes";
 import { StatusDot } from "../StatusLabel";
 import { runDisplayStatus } from "../status/runStatus";
 import { showToast } from "../toast";
@@ -290,19 +290,27 @@ function PipelineDetail({
           <p className="mono">{subtitle}</p>
         </div>
         {pipeline ? (
-          <button
-            className="btn btn--primary"
-            onClick={() =>
-              onNew(
-                newRunPath({
-                  pipeline: pipeline.path,
-                  ...(defaultTask ? { task: defaultTask } : {}),
-                }),
-              )
-            }
-          >
-            Start a run with this
-          </button>
+          <div className="page-head__actions">
+            <a
+              className="btn"
+              href={`#${workshopPath({ pipeline: pipeline.path })}`}
+            >
+              Open in Workshop
+            </a>
+            <button
+              className="btn btn--primary"
+              onClick={() =>
+                onNew(
+                  newRunPath({
+                    pipeline: pipeline.path,
+                    ...(defaultTask ? { task: defaultTask } : {}),
+                  }),
+                )
+              }
+            >
+              Start a run with this
+            </button>
+          </div>
         ) : null}
       </div>
 
