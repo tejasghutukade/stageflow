@@ -7,7 +7,7 @@ title: Yaml Catalog
 
 Stageflow uses a **pipeline-owned catalog**: each pipeline file lists stages as object entries with `uses:` (external YAML) or an inline body. Tasks are separate `*.task.yaml` files. A repo-root **`stageflow.yaml`** manifest declares which directories the operator console browses.
 
-Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/), [`tests/fixtures/stages/`](../tests/fixtures/stages/), [`tests/fixtures/tasks/`](../tests/fixtures/tasks/).
+Canonical fixtures: [`tests/fixtures/pipelines/`](../tests/fixtures/pipelines/), [`tests/fixtures/stages/`](../tests/fixtures/stages/), [`tests/fixtures/tasks/`](../tests/fixtures/tasks/), [`tests/fixtures/triggers/`](../tests/fixtures/triggers/).
 
 ## Layout
 
@@ -34,6 +34,7 @@ Runnable examples live under [`examples/`](../examples/). This repo's manifest i
 |------|---------|---------|
 | Pipeline | `*.pipeline.yaml` | `hello.pipeline.yaml` |
 | Task | `*.task.yaml` | `my-task.task.yaml` |
+| Trigger | `*.trigger.yaml` | `manual-hello-world.trigger.yaml` |
 | Stage (external) | any `*.yaml` beside pipeline or under shared pool | `research.yaml`, `../stages/clarify.yaml` |
 
 CLI **`--pipeline` and `--task` require filesystem paths** — there is no bare-id fallback.
@@ -892,6 +893,177 @@ Prose-only tasks (no `input`) stay valid as files. If an entry stage declares `i
 
 Runnable demo: [`examples/hello-world/`](../examples/hello-world/) — task `input` paired with entry `io.input.schema` (see that README’s “What this demonstrates”). See also [`tests/fixtures/tasks/sample.task.yaml`](../tests/fixtures/tasks/sample.task.yaml).
 
+## Triggers (`*.trigger.yaml`) {#triggers-trigger-yaml}
+
+A trigger is a small catalog file that binds one addressable `id` to an existing `pipeline` + `task`, so something outside the pipeline DAG can start a run without knowing the underlying catalog paths — an operator running `sf trigger fire`, an external system calling the REST route, a `schedule`-kind trigger firing on its own, or an `event`-kind trigger watching GitHub via the poll adapter or a mailbox via the email adapter. See [Architecture](architecture.md) for what backs a trigger today versus what is deferred.
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Trigger identifier (project-scoped, like pipelines and tasks) |
+| `pipeline` | yes | `id` of a catalog pipeline (`*.pipeline.yaml`) this trigger starts |
+| `task` | no | `id` of a catalog task (`*.task.yaml`); presence is the either/or mode switch — see below |
+| `kind` | yes | `manual` \| `schedule` \| `event` |
+| `enabled` | yes | Whether firing this trigger is allowed; a disabled trigger fails fire with a `409` |
+| `schedule` | no | `{ cron: string, timezone?: string }` — read by the `schedule` adapter; see below |
+| `event` | no | `{ source: string, match?: Record<string, unknown>, config?: Record<string, unknown> }` — see below for the GitHub poller's, webhook adapter's, and email adapter's `config` shapes |
+
+### Catalog mode vs. dynamic mode
+
+`task` is optional, and whether it's present is the whole mode switch — there is no separate `mode` field, and the two modes are never merged:
+
+- **`task` set → catalog mode.** The trigger always runs that one catalog task, on every fire. Firing it with a task supplied anyway is rejected: `trigger.task_override_not_allowed` (`422`).
+- **`task` absent → dynamic mode.** The trigger has no fixed task; whoever fires it must supply one — a `TaskFile`, inline — and that exact task is used for the run. Firing it with no task supplied is rejected: `trigger.task_required` (`422`).
+
+See [`sf trigger fire`](cli-reference.md#sf-trigger-fire) for the `--task-inline` flag and the same two rejections over HTTP/MCP.
+
+`kind: manual` only runs when fired explicitly (`sf trigger fire`, `POST /api/triggers/:id/fire`), resolving the `pipeline` ref (and, in catalog mode, the `task` ref) and starting a real run through the same internal path the CLI/MCP/console already use.
+
+`kind: schedule` triggers also fire on their own while the Host is running: `ScheduleSource` ticks on an interval (`STAGEFLOW_TRIGGER_TICK_INTERVAL_MS`, default 30s — see [CLI reference](cli-reference.md)), computing each trigger's next fire time from `cron`/`timezone` via `croner` and persisting it (`next_run_at`) so a Host restart doesn't lose or re-derive it. If the Host was down past a trigger's `next_run_at`, it fires **once** on the next boot for the most recent missed occurrence — a schedule does not queue one run per missed interval — then recomputes `next_run_at` from the current time. Firing a `schedule` trigger manually with `sf trigger fire` still works the same as any other trigger. A `schedule` trigger in dynamic mode is accepted (nothing blocks it at the schema level) but always fails when its timer fires, since nothing supplies a task on an automatic tick — dynamic mode is only useful for triggers fired manually with a task in hand.
+
+`kind: event` triggers whose `event.source` starts with `github.` are picked up by `GithubPollSource` (`src/runtime/githubPollSource.ts`): it ticks on an interval (`STAGEFLOW_GITHUB_POLL_INTERVAL_MS`, default 60s — see [CLI reference](cli-reference.md)), groups matching triggers by distinct `event.config.repo` (one API call per repo per tick, regardless of how many triggers watch it), and uses an `ETag`-conditioned GitHub PR list request so an unchanged repo costs nothing against rate limit. New PR activity since the last persisted cursor is normalized and checked against each trigger's `event.match`; a catalog-mode trigger fires with its own fixed task, a dynamic-mode trigger fires with a `TaskFile` built from the PR (`goal` summarizing it, `input` carrying the normalized event). A never-before-seen repo only seeds the cursor on its first tick — it doesn't fire for pre-existing PR history. A brief Host outage isn't a missed event: the next tick's diff-since-cursor naturally catches up, bounded by GitHub's own event retention, so (unlike `schedule`) no boot catch-up tick is needed.
+
+`event.config` for the GitHub poller:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `repo` | yes | `"owner/repo"` string identifying the watched GitHub repository |
+| `secretRef` | no | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding a GitHub PAT with repo read scope; defaults to `GITHUB_TOKEN` |
+
+The normalized event handed to `match`/`input` has these fields: `action` (`"opened"` \| `"merged"` \| `"closed"` \| `"updated"`), `number`, `title`, `url`, `author`, `repo`, `updatedAt`.
+
+Dynamic mode, filtering to closed PRs only:
+
+```yaml
+id: github-pr-closed
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: github.pulls
+  match:
+    action: closed
+  config:
+    repo: owner/repo
+    secretRef: GITHUB_TOKEN
+```
+
+### Webhook adapter (`event.source: webhook`)
+
+An `event`-kind trigger with `event.source: webhook` gets its own inbound HTTP endpoint: `POST /api/triggers/:id/webhook`. One URL per trigger, not a shared fan-out endpoint — the trigger id in the URL is the routing, matching how GitHub/Stripe/Slack webhooks already work. Unlike every other `/api/*` route, it needs no bearer token: an external sender can't present Stageflow's own control token, so the route authenticates the request itself via per-trigger HMAC signature verification instead (the carve-out lives in `src/server/controlToken.ts`'s `isTriggerWebhookRoute`). It's still gated the same way every other `/api/*` route is — loopback/allowed-hosts — only the bearer requirement is exempted.
+
+`event.config` for the webhook adapter:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `secretRef` | yes | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding the HMAC signing secret |
+| `header` | yes | Request header carrying the signature, e.g. `"x-hub-signature-256"` |
+| `scheme` | no | `"hex"` \| `"base64"` — encoding of the signature value; defaults to `"hex"` |
+
+Request handling, in order:
+
+1. Unknown trigger id → `404`.
+2. `event.config.secretRef`/`header` missing, or the referenced secret isn't set → `400 { error: "this trigger has no webhook signing configured" }` — checked before touching the body.
+3. HMAC verified over the raw request body (`crypto.createHmac("sha256", secret)`, compared with `crypto.timingSafeEqual`) against the value of the configured header → wrong/missing signature is `401 { error: "Invalid webhook signature" }`, and `fireTrigger` is never called.
+4. Body parsed as JSON (only after the signature check, so a tampered-but-still-valid-JSON body fails on signature rather than slipping through because it happened to parse) → malformed JSON, or a non-object body, is `400`.
+5. `event.match` evaluated against the parsed payload, using the same subset-match `matchesEventFilter` the GitHub poller uses (`src/runtime/triggerEventMatch.ts`) → no match is `200 { fired: false }` — accepted but deliberately not fired, since a webhook provider often disables or retry-storms a subscription that doesn't return 2xx.
+6. Match → fires, same either/or rule as every other fire path: a catalog-mode trigger runs its fixed task; a dynamic-mode trigger runs with a `TaskFile` built from the payload (`input` carrying it as-is) → `201 { fired: true, runId }` (plus `queued`/`queuePosition` when the run queues, same shape as `/fire`).
+
+Catalog mode:
+
+```yaml
+id: webhook-catalog
+pipeline: hello
+task: my-task
+kind: event
+enabled: true
+event:
+  source: webhook
+  config:
+    secretRef: WEBHOOK_SECRET
+    header: x-hub-signature-256
+    scheme: hex
+```
+
+See [`tests/fixtures/triggers/webhook-catalog.trigger.yaml`](../tests/fixtures/triggers/webhook-catalog.trigger.yaml) (dynamic-mode variant: [`webhook-dynamic.trigger.yaml`](../tests/fixtures/triggers/webhook-dynamic.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `create_trigger`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
+
+Reachability note, restated from the goal this adapter solves: the Host binds loopback-only by default, so this endpoint is only genuinely reachable by a real external sender behind a tunnel (ngrok/cloudflared) for testing, or in a deployment that deliberately exposes the Host.
+
+### Email adapter (`event.source: email.*`)
+
+An `event`-kind trigger whose `event.source` starts with `email.` is picked up by `EmailSource` (`src/runtime/emailSource.ts`). Unlike the poll-based adapters, this one is push-based: it opens a real IMAP connection to the configured mailbox and holds it in IDLE, so it reacts to the server's own new-message notification instead of ticking on an interval. Triggers are grouped by distinct mailbox (`host`+`port`+`user`) — multiple triggers watching the same mailbox with different `event.match` filters share exactly one IMAP/IDLE connection. On a dropped connection, the adapter reconnects with bounded exponential backoff and resumes from the last persisted UID watermark (the generic `trigger_adapter_state` table — no separate migration needed) rather than re-firing already-seen messages.
+
+**Bring your own mailbox.** Stageflow doesn't own or provide an email account — the operator supplies IMAP credentials for a mailbox they control, same as configuring any mail client. A dedicated mailbox (not a personal inbox) is the sane setup, though that's an operational choice for the operator to make. Credentials are supplied via `secretRef`, resolved with the same `readSecretFromEnvOrFile` secrets pattern used everywhere else in this codebase — never inline in the trigger YAML.
+
+`event.config` for the email adapter:
+
+| Field | Required | Description |
+|-------|----------|--------------|
+| `host` | yes | IMAP server hostname |
+| `port` | yes | IMAP server port (`993`/`465` are treated as implicit TLS) |
+| `user` | yes | Mailbox username |
+| `secretRef` | yes | Name of the secret (resolved via `readSecretFromEnvOrFile`) holding the password or app-password |
+
+The normalized message handed to `match`/`input` has these fields: `from`, `subject`, `date`, `text` (body excerpt, truncated). `match` is a small subset-match filter, the same `matchesEventFilter` every adapter uses (`src/runtime/triggerEventMatch.ts`): every key/value in `match` must equal-match the corresponding field on the normalized message — there is no substring/contains operator, so a `subject` filter matches only a message whose subject is exactly that string, not a partial match.
+
+**v1 limitation: no attachment handling.** Subject, sender, date, and body text map into the constructed `TaskFile`'s `input`; attachments are out of scope for this release — a deliberate limitation, not an oversight.
+
+Dynamic mode, filtering to a specific subject:
+
+```yaml
+id: email-match-invoice
+pipeline: hello
+kind: event
+enabled: true
+event:
+  source: email.message
+  match:
+    subject: Invoice
+  config:
+    host: imap.example.com
+    port: 993
+    user: notifications@example.com
+    secretRef: EMAIL_PASSWORD
+```
+
+See [`tests/fixtures/triggers/email-match-invoice.trigger.yaml`](../tests/fixtures/triggers/email-match-invoice.trigger.yaml) (unfiltered dynamic-mode variant: [`email-dynamic.trigger.yaml`](../tests/fixtures/triggers/email-dynamic.trigger.yaml); catalog-mode variant: [`email-catalog.trigger.yaml`](../tests/fixtures/triggers/email-catalog.trigger.yaml)). `event.config` is authored the same way as any other `event` field — as part of the `event` object passed to `POST /api/triggers`, `create_trigger`, or written directly into the YAML; there is no operator-console builder for it yet (the console only edits `event.source`).
+
+Other `event.source` values (besides `github.*`, `webhook`, and `email.*`) still only load and validate; nothing polls or receives them yet — see [Architecture](architecture.md). The only way to use dynamic mode for one of those right now is a manual fire with a task supplied (`sf trigger fire --task-inline`, `POST .../fire` with a `task` body, or `fire_trigger`'s `task` param).
+
+Catalog mode:
+
+```yaml
+id: manual-hello-world
+pipeline: hello
+task: my-task
+kind: manual
+enabled: true
+```
+
+See [`tests/fixtures/triggers/manual-hello-world.trigger.yaml`](../tests/fixtures/triggers/manual-hello-world.trigger.yaml).
+
+Dynamic mode — no `task` key at all:
+
+```yaml
+id: dynamic-hello
+pipeline: hello
+kind: manual
+enabled: true
+```
+
+See [`tests/fixtures/triggers/dynamic-hello.trigger.yaml`](../tests/fixtures/triggers/dynamic-hello.trigger.yaml).
+
+### Validation
+
+`sf validate` loads every `*.trigger.yaml` under the catalog's trigger roots (`catalog.triggers` in the `stageflow.yaml` manifest, below) and confirms its `pipeline` ref, and its `task` ref when `task` is present, resolve against known catalog ids, the same way stage `uses:` refs are checked. A dangling ref is caught at validate time, not fire time. A dynamic-mode trigger (`task` omitted) produces no `task`-related finding — absence is valid, not an error:
+
+| Code | Meaning |
+|------|---------|
+| `trigger.invalid_shape` | Missing or invalid `id`, `pipeline`, `kind`, or `enabled`, or a `task` present with the wrong type (`task` itself is optional) |
+| `trigger.unknown_pipeline` | `pipeline` does not match any catalog pipeline `id` |
+| `trigger.unknown_task` | `task` does not match any catalog task `id` |
+
+See [`tests/fixtures/triggers/manual-dangling-refs.trigger.yaml`](../tests/fixtures/triggers/manual-dangling-refs.trigger.yaml) — a trigger whose `pipeline`/`task` reference ids that don't exist in the catalog.
+
 ## Manifest (`stageflow.yaml`)
 
 Declares catalog roots for **`sf validate`** (manifest-all) and operator-console browse. Optional top-level `model` is the global default LLM id for stages that omit both stage and pipeline `model` (see [Model defaults and precedence](#model-defaults-and-precedence)). Optional top-level `agent` selects the default execution backend and is independent of `model`.
@@ -907,9 +1079,11 @@ catalog:
   tasks:
     - examples/hello-world
     - examples/plan-review
+  triggers: []
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
+    trigger: "*.trigger.yaml"
   exclude:
     - tests/fixtures
 ```
@@ -918,6 +1092,7 @@ catalog:
 - **`agent`**: optional global default backend; separate from `model`.
 - **`exclude`**: paths omitted from console browse (fixtures may still be loaded by explicit CLI path in tests).
 - **`patterns`**: glob for directory scans (defaults shown above).
+- **`triggers`**: catalog roots scanned for `*.trigger.yaml` — see [Triggers](#triggers-trigger-yaml).
 
 Scaffold a new project: **`sf init`** creates `stageflow.yaml`, `pipelines/` (with an inline stage in `hello.pipeline.yaml`), and `tasks/` — not a global `stages/` pool.
 

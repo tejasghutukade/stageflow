@@ -1,0 +1,4 @@
+id: dynamic-hello
+pipeline: hello
+kind: manual
+enabled: true

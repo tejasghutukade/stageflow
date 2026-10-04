@@ -210,12 +210,25 @@ export class BindRefusedError extends Error {
   }
 }
 
+/**
+ * `POST /api/triggers/:id/webhook` is exempt from bearer auth: an external
+ * webhook sender can't present Stageflow's own control token, and the route
+ * authenticates the request itself via per-trigger HMAC signature
+ * verification instead. It still goes through `assertAllowedHttpAccess`
+ * (loopback/allowed-hosts gating) the same as every other `/api/*` route —
+ * only the bearer-token requirement is carved out here.
+ */
+function isTriggerWebhookRoute(method: string, pathname: string): boolean {
+  return method === "POST" && /^\/api\/triggers\/[^/]+\/webhook$/.test(pathname);
+}
+
 export function requiredScopeFor(
   method: string,
   pathname: string,
 ): ControlScope | null {
   if (pathname === "/mcp") return "drive";
   if (!pathname.startsWith("/api/")) return null;
+  if (isTriggerWebhookRoute(method, pathname)) return null;
   if (pathname === "/api/backup" || pathname.startsWith("/api/backup/")) {
     return "drive";
   }
