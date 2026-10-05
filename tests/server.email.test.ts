@@ -9,8 +9,31 @@ import { EmailAccounts } from "../src/email/accounts.js";
 import { InMemoryEmailAdapter } from "../src/email/adapter.js";
 import { EmailError } from "../src/email/port.js";
 import { handleEmailRoutes } from "../src/server/emailRoutes.js";
+import { emailHostFor } from "../src/email/host.js";
+import { mailServer } from "./fixtures/mailServers.js";
 
 describe("host email account management", () => {
+  it("owns incoming connections for the server lifetime and exposes safe metadata", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-email-http-receive-"));
+    const fixture = await mailServer("imap");
+    process.env.SF_FIXTURE_MAIL_SECRET = "fixture-secret";
+    const connection = { host: "127.0.0.1", port: fixture.port, username: "user", tls: "none", auth: { type: "password", secretRef: "env:SF_FIXTURE_MAIL_SECRET" } };
+    new EmailAccounts(root).create({ displayName: "Inbox", address: "agent@example.com", imap: connection, smtp: connection, allowInsecureLocalDevelopment: true });
+    const host = await startUiServer({ cwd: root, rootDir: root, port: 0, agent: scriptedFakeAgent({}), uiDistDir: path.join(root, "no-ui") });
+    try {
+      expect(fixture.sockets.size).toBe(1);
+      fixture.mailbox.messages.push({ uid: 1, source: Buffer.from("Subject: New mail\r\n\r\nPRIVATE BODY"), flags: new Set(), receivedAt: new Date() }); fixture.signal();
+      await expect.poll(() => emailHostFor(root).mailbox.events.list().length).toBe(1);
+      const watchers = await (await fetch(`${host.url}/api/email/watchers`)).json();
+      expect(watchers.watchers[0]).toMatchObject({ folder: "INBOX", state: "watching" });
+      const events = await (await fetch(`${host.url}/api/email/events`)).text();
+      expect(events).toContain("New mail"); expect(events).not.toContain("PRIVATE BODY"); expect(events).not.toContain("fixture-secret");
+    } finally {
+      await new Promise<void>(resolve => host.server.close(() => resolve()));
+      await expect.poll(() => fixture.sockets.size).toBe(0);
+      await fixture.close(); delete process.env.SF_FIXTURE_MAIL_SECRET; await rm(root, { recursive: true, force: true });
+    }
+  });
   it("preserves named unsupported fields in an HTTP operation error", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-email-http-errors-"));
     const accounts = new EmailAccounts(root);

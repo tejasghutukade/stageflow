@@ -667,11 +667,19 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     }
   });
 
-  server.on("close", () => { void releaseEmailHost(cwd); });
+  let emailShutdown: Promise<void> | undefined;
+  function stopEmail(): Promise<void> { return emailShutdown ??= releaseEmailHost(cwd); }
+  server.on("close", () => { void stopEmail(); });
+  const closeServer = server.close.bind(server);
+  server.close = callback => closeServer(error => {
+    void stopEmail().then(() => callback?.(error), () => callback?.(error ?? new Error("Email host shutdown failed")));
+  });
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => resolve());
     server.on("error", reject);
   });
+
+  await emailMailbox.start(async () => {});
 
   const address = server.address();
   const boundPort =

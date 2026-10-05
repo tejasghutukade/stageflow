@@ -55,7 +55,8 @@ for (const kind of ["memory", "local"] as const) {
       accounts.update(account.accountId, { enabled: false });
       await expect(adapter.testAccount(account.accountId)).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_DISABLED" });
       await expect(adapter.getMessage({ accountId: "unknown", id: "opaque" })).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_NOT_FOUND" });
-      await expect(adapter.start(async () => {})).rejects.toMatchObject({ code: "EMAIL_UNSUPPORTED" });
+      await expect(adapter.start(async () => {})).resolves.toBeUndefined();
+      expect(adapter.events.health()).toEqual([]);
     });
   });
 }

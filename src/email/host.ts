@@ -5,10 +5,11 @@ import { LocalEmailAdapter } from "./adapter.js";
 import { EmailError, type EmailMailbox, type ReplyToEmailInput, type SendEmailInput, type SendEmailResult, type EmailMessageRef, type EmailMessage, type SearchEmailsInput, type SearchEmailsResult, type EmailArtifactContext, type DownloadEmailAttachmentInput, type DownloadEmailAttachmentResult } from "./port.js";
 import type { StageConfig } from "../types/stage.js";
 
-const hosts = new Map<string, { accounts: EmailAccounts; mailbox: LocalEmailAdapter }>();
+const hosts = new Map<string, { accounts: EmailAccounts; mailbox: LocalEmailAdapter; releasing?: Promise<void> }>();
 export function emailHostFor(cwd: string): { accounts: EmailAccounts; mailbox: LocalEmailAdapter } {
   const key = path.resolve(cwd);
   let host = hosts.get(key);
+  if (host?.releasing) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
   if (!host) {
     const accounts = new EmailAccounts(key);
     host = { accounts, mailbox: new LocalEmailAdapter(accounts) };
@@ -19,8 +20,10 @@ export function emailHostFor(cwd: string): { accounts: EmailAccounts; mailbox: L
 export async function releaseEmailHost(cwd: string): Promise<void> {
   const key = path.resolve(cwd);
   const host = hosts.get(key);
-  hosts.delete(key);
-  await host?.mailbox.stop();
+  if (!host) return;
+  host.releasing ??= host.mailbox.stop();
+  await host.releasing;
+  if (hosts.get(key) === host) hosts.delete(key);
 }
 export type StageEmail = Pick<EmailMailbox, "send" | "reply" | "search" | "getMessage" | "downloadAttachment">;
 export function validateStageEmailAccounts(accounts: EmailAccounts, stage: StageConfig): void {

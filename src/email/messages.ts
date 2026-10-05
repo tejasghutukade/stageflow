@@ -133,13 +133,14 @@ export function summarize(message: EmailMessage): EmailMessageSummary {
 }
 export function envelopeSummary(account: EmailAccount, mailbox: string, generation: string, value: FetchMessageObject): EmailMessageSummary {
   function safeAddresses(values: MessageAddressObject[] = []): EmailAddress[] {
+    if (!Array.isArray(values)) return [];
     if (values.length > 100) throw new EmailError("EMAIL_RESOURCE_LIMIT");
-    return values.filter(value => value.address).map(value => ({ address: value.address!.slice(0, 320), ...(value.name ? { name: value.name.slice(0, 200) } : {}) }));
+    return values.filter(value => value && typeof value.address === "string" && value.address).map(value => ({ address: value.address!.slice(0, 320), ...(typeof value.name === "string" && value.name ? { name: value.name.slice(0, 200) } : {}) }));
   }
   return { ref: messageRef(account, mailbox, generation, value.uid), from: safeAddresses(value.envelope?.from), to: safeAddresses(value.envelope?.to),
     ...(value.threadId ? { threadId: value.threadId.slice(0, 998) } : {}),
     ...(value.envelope?.messageId ? { messageId: value.envelope.messageId.slice(0, 998) } : {}),
-    ...(value.envelope?.subject !== undefined ? { subject: value.envelope.subject.slice(0, 4096) } : {}),
-    receivedAt: value.internalDate instanceof Date ? value.internalDate.toISOString() : new Date(0).toISOString(),
+    ...(typeof value.envelope?.subject === "string" ? { subject: value.envelope.subject.slice(0, 4096) } : {}),
+    receivedAt: value.internalDate instanceof Date && Number.isFinite(value.internalDate.getTime()) ? value.internalDate.toISOString() : new Date(0).toISOString(),
     unread: !value.flags?.has("\\Seen"), flagged: value.flags?.has("\\Flagged") ?? false };
 }

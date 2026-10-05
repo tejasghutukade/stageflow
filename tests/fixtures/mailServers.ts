@@ -1,20 +1,24 @@
 import { createServer, type Socket } from "node:net";
 import type { MailRecord } from "../../src/email/messages.js";
 
-export async function mailServer(protocol: "imap" | "smtp", options: { rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean; mailboxMessages?: MailRecord[] } = {}) {
+export async function mailServer(protocol: "imap" | "smtp", options: { stallSelection?: boolean; stallFetch?: boolean; idle?: boolean; rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean; mailboxMessages?: MailRecord[] } = {}) {
   const sockets = new Set<Socket>();
   const commands: string[] = [];
   const messages: { data: string; recipients: string[] }[] = [];
-  const mailbox = { generation: "1", messages: options.mailboxMessages ?? [] };
+  const defaultMailbox = { generation: "1", messages: options.mailboxMessages ?? [] };
+  const mailboxes = new Map([["INBOX", defaultMailbox]]);
+  const selected = new Map<Socket, string>();
   const fetchedSourceBytes: number[] = [];
   const server = createServer(socket => {
+    let mailbox = defaultMailbox;
     sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
+    socket.on("close", () => { sockets.delete(socket); selected.delete(socket); });
     socket.on("error", () => {});
     if (options.stall) return;
     socket.write(protocol === "imap" ? "* OK fixture ready\r\n" : "220 fixture ready\r\n");
     let pending = "";
     let authTag: string | undefined;
+    let idleTag: string | undefined;
     let inData = false;
     let messageData = "";
     let recipients: string[] = [];
@@ -50,6 +54,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
           else if (command === "DATA") { inData = true; socket.write("354 Send data\r\n"); }
           else socket.write("250 OK\r\n");
         } else {
+          if (line === "DONE" && idleTag) { socket.write(`${idleTag} OK idle complete\r\n`); idleTag = undefined; continue; }
           if (authTag) {
             socket.write(`${authTag} ${validAuth(line) ? "OK" : "NO"} authentication\r\n`);
             authTag = undefined;
@@ -57,7 +62,9 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
           }
           const [tag, command] = line.split(" ");
           commands.push(command);
-          if (command === "CAPABILITY") socket.write(`* CAPABILITY IMAP4rev1 AUTH=PLAIN IDLE\r\n${tag} OK capability\r\n`);
+          if (command === "CAPABILITY") socket.write(`* CAPABILITY IMAP4rev1 AUTH=PLAIN${options.idle === false ? "" : " IDLE"}\r\n${tag} OK capability\r\n`);
+          else if (command === "IDLE") { idleTag = tag; socket.write("+ idling\r\n"); }
+          else if (command === "NOOP") socket.write(`* ${mailbox.messages.length} EXISTS\r\n${tag} OK noop\r\n`);
           else if (command === "AUTHENTICATE") {
             if (line.split(" ").length < 4) {
               authTag = tag;
@@ -66,14 +73,20 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
             else socket.write(`${tag} ${validAuth(line.split(" ")[3] ?? "") ? "OK" : "NO"} authentication\r\n`);
           }
           else if (command === "LOGIN") socket.write(`${tag} ${options.rejectAuth ? "NO" : "OK"} authentication\r\n`);
-          else if (command === "LIST") socket.write(`* LIST (\\HasNoChildren) "/" "INBOX"\r\n${tag} OK list\r\n`);
+          else if (command === "LIST") socket.write(`${(line.endsWith('"" ""') ? [""] : [...mailboxes.keys()]).map(folder => `* LIST (\\HasNoChildren) "/" "${folder}"\r\n`).join("")}${tag} OK list\r\n`);
           else if (command === "EXAMINE" || command === "SELECT") {
-            if (!line.includes('"INBOX"') && !line.endsWith(" INBOX")) { socket.write(`${tag} NO mailbox missing\r\n`); continue; }
+            if (options.stallSelection) continue;
+            const folder = line.match(/(?:EXAMINE|SELECT) (?:"([^"]+)"|(\S+))/)?.slice(1).find(Boolean) ?? "";
+            const opened = mailboxes.get(folder);
+            if (!opened) { socket.write(`${tag} NO mailbox missing\r\n`); continue; }
+            mailbox = opened; selected.set(socket, folder);
             socket.write(`* FLAGS (\\Seen \\Flagged)\r\n* ${mailbox.messages.length} EXISTS\r\n* OK [UIDVALIDITY ${mailbox.generation}] mailbox identity\r\n* OK [UIDNEXT ${Math.max(0, ...mailbox.messages.map(value => value.uid)) + 1}] next uid\r\n${tag} OK [READ-ONLY] examined\r\n`);
           }
           else if (command === "FETCH" || (command === "UID" && line.includes(" FETCH "))) {
+            if (options.stallFetch) continue;
             const uid = command === "UID";
-            const requested = Number(line.split(" ")[uid ? 3 : 2]);
+            const token = line.split(" ")[uid ? 3 : 2];
+            const requested = token === "*" ? mailbox.messages.length : Number(token);
             const record = uid ? mailbox.messages.find(value => value.uid === requested) : mailbox.messages[requested - 1];
             if (record) {
               const sequence = mailbox.messages.indexOf(record) + 1;
@@ -117,7 +130,8 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No fixture port");
   return {
-    port: address.port, commands, sockets, messages, mailbox, fetchedSourceBytes,
+    port: address.port, commands, sockets, messages, mailbox: defaultMailbox, mailboxes, fetchedSourceBytes,
+    signal(folder = "INBOX") { for (const socket of sockets) if (selected.get(socket) === folder) socket.write(`* ${mailboxes.get(folder)?.messages.length ?? 0} EXISTS\r\n`); },
     async close() {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));

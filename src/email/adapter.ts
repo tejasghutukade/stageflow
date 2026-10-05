@@ -1,4 +1,5 @@
 import { ImapFlow } from "imapflow";
+import { EmailEvents, type ReceiveMailbox } from "./events.js";
 import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
 import { connect as connectTcp, type Socket } from "node:net";
@@ -36,14 +37,21 @@ function connectionStatus(error?: unknown): EmailConnectionStatus {
 /** Both adapters validate account scope before any operation, including unsupported operations. */
 export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSource {
   readonly submissions: EmailSubmissions;
+  readonly events: EmailEvents;
   protected readonly cursorKey = randomBytes(32);
+  private stopped = false;
   constructor(protected readonly accounts: EmailAccounts) {
     this.submissions = new EmailSubmissions(accounts.scope);
+    this.events = new EmailEvents(accounts, (account, folder, signal) => this.openReceiver(account, folder, signal));
   }
   abstract testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
+  protected account(accountId: string): EmailAccount {
+    if (this.stopped) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+    return this.accounts.get(accountId);
+  }
 
   async send(input: SendEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult> {
-    const account = this.accounts.get(input?.accountId);
+    const account = this.account(input?.accountId);
     const validated = validateSend(input, account);
     return this.sendValidated(account, validated, context);
   }
@@ -56,14 +64,14 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   }
   protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult>;
   async reply(input: ReplyToEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult> {
-    const account = this.accounts.get(input?.ref?.accountId);
+    const account = this.account(input?.ref?.accountId);
     const validated = validateReply(input);
     const original = await this.getMessage(validated.ref);
     const message = validateSend(replyMessage(account, original, validated), account);
     return this.sendValidated(account, message, context, { operation: "reply", ref: original.ref, replyAll: validated.replyAll });
   }
   async downloadAttachment(input: DownloadEmailAttachmentInput, context?: EmailArtifactContext): Promise<DownloadEmailAttachmentResult> {
-    const account = this.accounts.get(input?.ref?.accountId);
+    const account = this.account(input?.ref?.accountId);
     if (!context) throw new EmailError("EMAIL_UNAUTHORIZED");
     if (!input || Object.keys(input).some(key => !["ref", "attachmentId"].includes(key)) || typeof input.attachmentId !== "string" || !/^(0|[1-9]\d{0,2})$/.test(input.attachmentId)) throw new EmailError("EMAIL_INVALID_INPUT");
     const source = await this.attachmentSource(account, input.ref);
@@ -76,10 +84,9 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   protected abstract attachmentSource(account: EmailAccount, ref: EmailMessageRef): Promise<Buffer>;
   abstract getMessage(ref: EmailMessageRef): Promise<EmailMessage>;
   abstract search(input: SearchEmailsInput): Promise<SearchEmailsResult>;
-  async start(_emit: (event: EmailReceivedEvent) => Promise<void>): Promise<void> {
-    throw new EmailError("EMAIL_UNSUPPORTED");
-  }
-  async stop(): Promise<void> {}
+  protected abstract openReceiver(account: EmailAccount, folder: string, signal: () => void): Promise<ReceiveMailbox>;
+  async start(emit: (event: EmailReceivedEvent) => Promise<void>): Promise<void> { this.stopped = false; this.submissions.setAccepting(true); await this.events.start(emit); }
+  async stop(): Promise<void> { this.stopped = true; this.submissions.setAccepting(false); await this.events.stop(); await this.submissions.drain(); }
 
   protected searchPosition(uid: number, high: number, last: number | undefined, query: MailQuery): boolean {
     return uid <= high && (last === undefined || (query.sort === "newest" ? uid < last : uid > last));
@@ -93,14 +100,42 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
 }
 
 export class InMemoryEmailAdapter extends AccountEmailAdapter {
+  private readonly signals = new Map<string, Set<() => void>>();
   private readonly mailboxes = new Map<string, { generation: string; messages: MailRecord[] }>();
   /** Provider fixture data. Content is held only by this test adapter. */
   seedMailbox(accountId: string, messages: MailRecord[], mailbox = "INBOX", generation = "1"): void {
-    this.accounts.get(accountId);
+    this.accounts.get(accountId, false);
     this.mailboxes.set(`${accountId}:${mailbox}`, { generation, messages: messages.map(value => ({ ...value, source: Buffer.from(value.source), flags: new Set(value.flags), receivedAt: new Date(value.receivedAt) })) });
+    for (const signal of this.signals.get(`${accountId}:${mailbox}`) ?? []) signal();
+  }
+  protected async openReceiver(account: EmailAccount, folder: string, signal: () => void): Promise<ReceiveMailbox> {
+    const key = `${account.accountId}:${folder}`;
+    const signals = this.signals.get(key) ?? new Set(); this.signals.set(key, signals); signals.add(signal);
+    return {
+      snapshot: async () => { const stored = this.mailboxes.get(key); return { generation: stored?.generation ?? "1", high: Math.max(0, ...stored?.messages.map(value => value.uid) ?? []) }; },
+      next: async (lower, upper) => {
+        let next: number | undefined;
+        for (const record of this.mailboxes.get(key)?.messages ?? []) if (record.uid >= lower && record.uid <= upper && (next === undefined || record.uid < next)) next = record.uid;
+        return next;
+      },
+      read: async (lower, upper) => {
+        const stored = this.mailboxes.get(key);
+        const messages = [];
+        for (const record of stored?.messages ?? []) {
+          if (record.uid < lower || record.uid > upper) continue;
+          const end = record.source.indexOf("\r\n\r\n");
+          const headers = record.source.subarray(0, Math.min(end < 0 ? record.source.length : end + 4, 65536));
+          const message = summarize(await parseMessage(account, folder, stored!.generation, { ...record, source: headers }));
+          delete message.preview; delete message.hasAttachments;
+          messages.push({ uid: record.uid, message });
+        }
+        return messages;
+      },
+      close: () => { signals.delete(signal); },
+    };
   }
   async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
-    const account = this.accounts.get(input?.accountId);
+    const account = this.account(input?.accountId);
     const query = searchQuery(input);
     const { mailbox } = query;
     const stored = this.mailboxes.get(`${account.accountId}:${mailbox}`);
@@ -127,7 +162,7 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
     return { messages };
   }
   async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
-    const account = this.accounts.get(ref?.accountId);
+    const account = this.account(ref?.accountId);
     const decoded = decodeRef(account, ref);
     const stored = this.mailboxes.get(`${account.accountId}:${decoded.mailbox}`);
     if (!stored || stored.generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
@@ -154,7 +189,7 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
   }
   async testAccount(accountId: string, protocol: "imap" | "smtp" | "both" = "both"): Promise<EmailAccountStatus> {
     if (!["imap", "smtp", "both"].includes(protocol)) throw new EmailError("EMAIL_INVALID_INPUT");
-    this.accounts.get(accountId);
+    this.account(accountId);
     const status = this.status(accountId);
     if (protocol !== "smtp") status.imap = { state: "ok" };
     if (protocol !== "imap") status.smtp = { state: "ok" };
@@ -165,11 +200,50 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
 
 export class LocalEmailAdapter extends AccountEmailAdapter {
   private readonly active = new Map<string, Set<() => void>>();
-  private readonly unsubscribe: () => void;
+  private unsubscribe?: () => void;
 
   constructor(accounts: EmailAccounts, private readonly env: NodeJS.ProcessEnv = process.env) {
     super(accounts);
     this.unsubscribe = accounts.onChange(accountId => this.cancel(accountId));
+  }
+  override async start(emit: (event: EmailReceivedEvent) => Promise<void>): Promise<void> {
+    this.unsubscribe ??= this.accounts.onChange(accountId => this.cancel(accountId));
+    await super.start(emit);
+  }
+  protected async openReceiver(account: EmailAccount, folder: string, signal: () => void): Promise<ReceiveMailbox> {
+    const config = account.imap;
+    const secret = resolveEmailSecret(config, this.env);
+    const client = new ImapFlow({ host: config.host, port: config.port, secure: config.tls === "implicit", doSTARTTLS: config.tls === "starttls", logger: false,
+      auth: { user: config.username, ...(config.auth.type === "oauth2" ? { accessToken: secret } : { pass: secret }) },
+      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs, socketTimeout: account.connectionTimeoutMs,
+      tls: { rejectUnauthorized: true }, maxIdleTime: account.pollingIntervalMs });
+    client.on("error", signal);
+    client.on("close", signal);
+    client.on("exists", signal);
+    try {
+      const command = <T>(work: () => Promise<T>): Promise<T> => this.receiveWork(account, () => client.close(), work);
+      await command(async () => { await client.connect(); await client.mailboxOpen(folder, { readOnly: true }); });
+      return {
+        next: (lower, upper) => command(() => this.nextSearchUid(client, lower, upper, "oldest")),
+        snapshot: () => command(async () => {
+          await client.noop();
+          if (!client.mailbox) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+          const last = client.mailbox.exists ? await client.fetchOne("*", { uid: true }) : undefined;
+          return { generation: String(client.mailbox.uidValidity), high: Math.max(client.mailbox.uidNext - 1, last ? last.uid : 0) };
+        }),
+        read: (lower, upper) => command(async () => {
+          const found = await client.search({ uid: `${lower}:${upper}` }, { uid: true });
+          if (!Array.isArray(found) || found.length > 100 || new Set(found).size !== found.length || found.some(uid => uid < lower || uid > upper)) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+          const messages = [];
+          for (const uid of found) {
+            const result = await client.fetchOne(String(uid), { uid: true, flags: true, internalDate: true, envelope: true }, { uid: true });
+            if (result) messages.push({ uid, message: envelopeSummary(account, folder, String(client.mailbox && client.mailbox.uidValidity), result) });
+          }
+          return messages;
+        }),
+        close: () => { client.off("exists", signal); client.off("error", signal); client.off("close", signal); client.on("error", () => {}); client.close(); },
+      };
+    } catch (error) { client.close(); throw normalizedConnectionError(error); }
   }
 
   private async readMailbox<T>(account: EmailAccount, mailbox: string, read: (client: ImapFlow, generation: string, count: number) => Promise<T>): Promise<T> {
@@ -223,7 +297,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     if (candidate !== undefined && candidate >= lower && candidate <= upper) return candidate;
   }
   async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
-    const account = this.accounts.get(input?.accountId);
+    const account = this.account(input?.accountId);
     const query = searchQuery(input);
     const { mailbox } = query;
     return this.readMailbox(account, mailbox, async (client, generation) => {
@@ -259,7 +333,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     });
   }
   async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
-    const account = this.accounts.get(ref?.accountId);
+    const account = this.account(ref?.accountId);
     const decoded = decodeRef(account, ref);
     return this.readMailbox(account, decoded.mailbox, async (client, generation) => {
       if (generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
@@ -320,7 +394,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
 
   async testAccount(accountId: string, protocol: "imap" | "smtp" | "both" = "both"): Promise<EmailAccountStatus> {
     if (!["imap", "smtp", "both"].includes(protocol)) throw new EmailError("EMAIL_INVALID_INPUT");
-    const account = this.accounts.get(accountId);
+    const account = this.account(accountId);
     const status = this.status(accountId);
     const tests: Promise<void>[] = [];
     if (protocol !== "smtp") tests.push(this.testImap(account).then(result => {
@@ -330,7 +404,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     if (protocol !== "imap") tests.push(this.testSmtp(account).then(result => { status.smtp = result; }));
     await Promise.all(tests);
     // Updates cancel tests. Never publish an old result for a new account configuration.
-    if (JSON.stringify(this.accounts.get(accountId)) !== JSON.stringify(account)) {
+    if (JSON.stringify(this.account(accountId)) !== JSON.stringify(account)) {
       throw new EmailError("EMAIL_CONNECTION_FAILED", true);
     }
     this.accounts.recordHealth(status);
@@ -339,11 +413,26 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
 
   async stop(): Promise<void> {
     for (const accountId of this.active.keys()) this.cancel(accountId);
-    this.unsubscribe();
+    await super.stop();
+    this.unsubscribe?.(); this.unsubscribe = undefined;
+    await this.submissions.drain();
   }
 
   private cancel(accountId: string): void {
     for (const cancel of this.active.get(accountId) ?? []) cancel();
+  }
+
+  private async receiveWork<T>(account: EmailAccount, close: () => void, work: () => Promise<T>): Promise<T> {
+    let cancel!: () => void;
+    let timer!: ReturnType<typeof setTimeout>;
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      cancel = () => { close(); reject(new EmailError("EMAIL_CONNECTION_FAILED", true)); };
+      timer = setTimeout(() => { close(); reject(new EmailError("EMAIL_TIMEOUT", true)); }, account.connectionTimeoutMs);
+    });
+    const active = this.active.get(account.accountId) ?? new Set();
+    this.active.set(account.accountId, active); active.add(cancel);
+    try { return await Promise.race([work(), cancelled]); }
+    finally { clearTimeout(timer); active.delete(cancel); if (!active.size) this.active.delete(account.accountId); }
   }
 
   private async bounded<T>(account: EmailAccount, close: () => void, work: () => Promise<T>): Promise<T> {

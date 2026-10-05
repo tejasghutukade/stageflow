@@ -2,7 +2,7 @@
 
 Stageflow connects existing mailboxes. It does not create addresses or host email domains. Account configuration is stored in the workspace host state. Each account belongs to that workspace. Account identifiers stay fixed when you change settings.
 
-Account management, connection tests, send, reply, retrieval, and bounded search are available. Incoming events and triggers are not yet implemented. Account capabilities report only implemented operations.
+Account management, connection tests, send, reply, retrieval, bounded search, and incoming detection are available. Pipeline triggers are not yet implemented. Account capabilities report only implemented operations.
 
 Start the Stageflow host with your mailbox credentials in its environment. Use separate variables for receiving and sending if needed. Set an app password, or an OAuth access token obtained outside Stageflow. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
@@ -17,6 +17,8 @@ The management interface uses these HTTP requests:
 | DELETE /api/email/accounts/{accountId} | Remove the account |
 | POST /api/email/accounts/{accountId}/test | Test both connections, or one selected protocol |
 | GET /api/email/accounts/{accountId}/health | Read the last connection test result |
+| GET /api/email/watchers | Read incoming watcher health by account and folder |
+| GET /api/email/events | Read recent accepted and unresolved incoming event metadata |
 
 All requests require a loopback Host and, if present, loopback Origin. Changes and tests require an explicit loopback Origin header. The interface is intended for the local host. Do not expose it directly to the internet.
 
@@ -77,7 +79,17 @@ Before SMTP starts, the host records a pending operation. If acceptance cannot b
 
 Inspect operation outcomes with `GET /api/email/submissions` under the same local host access rules. The ledger retains account identifiers, operation keys, content hashes, outcomes, and receipts. It stores no body, MIME, or attachment content. Completed records expire after 30 days when new submissions are recorded. Unresolved operations remain. The ledger admits at most 10,000 records; capacity exhaustion returns `EMAIL_RESOURCE_LIMIT`. Receipt reuse is guaranteed only while its record remains. Keep a single Stageflow host writer per workspace.
 
-Each submission has a bounded connection deadline. Account changes and host shutdown close active connections. A cancellation after possible submission is uncertain and cannot cause an automatic resend. Incoming events and trigger behavior are added by later tickets.
+Each submission has a bounded connection deadline. Account changes and host shutdown close active connections. A cancellation after possible submission is uncertain and cannot cause an automatic resend.
+
+## Incoming detection
+
+Detection requires the long running HTTP host. A stage call or a short CLI command does not start a watcher. The host keeps one connection per enabled account and configured folder. Repeated start does not add connections. Account changes stop the affected connections and start watchers with the new settings. Shutdown closes connections and waits for active event acceptance and operation ledger writes.
+
+The first connection stores a durable folder identity and UID baseline. It emits no historical mail, including mail with deleted UID gaps. IMAP IDLE notifications cause a metadata reconciliation. One notification can identify several new messages. Periodic reconciliation uses `pollingIntervalMs` and also works without IDLE. Reads preserve flags and fetch no bodies or attachments.
+
+Events have version 1, stable workspace/account/folder/message identity, an opaque message reference, bounded header summaries, and receive and detection timestamps. `.stageflow/email-events.json` stores only this metadata and folder progress. An event is pending before consumer delivery. The consumer must resolve only after durable acceptance. Failure keeps the same pending event identity and blocks later folder progress. The current host accepts detection metadata only; ticket 09 adds the durable trigger consumer and pipeline dispatch.
+
+Unresolved events remain available. Accepted events expire after 30 days, and at most the most recent 1000 accepted records are kept. Folder progress protects duplicate detection after completed metadata is removed. At most 10000 unresolved events are admitted; saturation reports `EMAIL_RESOURCE_LIMIT`. A mailbox identity change reports `EMAIL_STALE_REFERENCE` without an implicit historical replay. Ticket 08 adds full outage recovery, connection retry, and mailbox identity recovery. A failed connection does not stop other account watchers.
 
 ## Read from a stage
 

@@ -38,14 +38,18 @@ export class EmailSubmissions {
   private readonly file: string;
   private records: SubmissionRecord[];
   private readonly active = new Map<string, Promise<SendEmailResult>>();
+  private accepting = true;
   constructor(scope: string) {
     this.file = path.join(scope, ".stageflow", "email-submissions.json");
     this.records = existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : [];
     for (const record of this.records) if (record.state === "pending") record.state = "unknown";
   }
   list(): SubmissionRecord[] { return structuredClone(this.records); }
+  async drain(): Promise<void> { await Promise.allSettled(this.active.values()); }
+  setAccepting(accepting: boolean): void { this.accepting = accepting; }
 
   async send(input: SendEmailInput, submit: (operationId: string) => Promise<SendEmailResult>, identity?: unknown): Promise<SendEmailResult> {
+    if (!this.accepting) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
     const hash = createHash("sha256").update(JSON.stringify(identity === undefined ? input : { input, identity })).digest("hex");
     const key = `${input.accountId}\0${input.operationKey}`;
     const found = this.records.find(record => record.accountId === input.accountId && record.operationKey === input.operationKey);
