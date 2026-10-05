@@ -16,7 +16,14 @@ import {
   loginCheckPromptBlock,
   readStageLoginCheck,
 } from "../browser/loginCheck.js";
+import path from "node:path";
+import { gateHandoffFor } from "../browser/gateHandoff.js";
 import { humanLoginPromptBlock, isHumanLoginStage } from "../browser/humanLogin.js";
+import {
+  BROWSER_CAPABILITIES_FILENAME,
+  readPersistedBrowserCapabilities,
+} from "../browser/persistedEnv.js";
+import { stageDir } from "../runstore/paths.js";
 import {
   BROWSER_SKILL_NAME,
   resolveBuiltinSkillFile,
@@ -456,6 +463,18 @@ async function openStageWithOperatorCatalog(
       return { ok: false, reason: "browser login check result is missing" };
     }
   }
+  const humanLoginHandoff = humanLogin
+    ? gateHandoffFor({
+        runId: resolveOptions.runId,
+        stageId: input.stage.id,
+        capabilities: await readPersistedBrowserCapabilities(
+          path.join(
+            stageDir(resolveOptions.workspaceDir, stageIdForManifest),
+            BROWSER_CAPABILITIES_FILENAME,
+          ),
+        ),
+      })
+    : undefined;
   try {
     const handle = agent.openStage({
       ...input,
@@ -464,7 +483,7 @@ async function openStageWithOperatorCatalog(
         system_prompt: `${stampStagePromptArtifactsDir(
           input.stage.system_prompt,
           artifactsDir,
-        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url)}` : ""}`,
+        )}${loginCheck !== undefined ? `\n\n${loginCheckPromptBlock(loginCheck)}` : ""}${humanLogin ? `\n\n${humanLoginPromptBlock(input.stage.browser?.login_url ?? input.stage.browser?.check?.url, humanLoginHandoff?.kind === "live_view" ? "live_view" : "local_window")}` : ""}`,
         ...(loginCheck !== undefined
           ? {
               pre_emit_checks: [

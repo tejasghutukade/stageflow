@@ -190,4 +190,63 @@ describe("loadHostConfig", () => {
     const cfg = loadHostConfig({ homeDir: home, env: {} });
     expect(cfg.trustWorkspaceConfig).toEqual(["/abs/proj"]);
   });
+
+  describe("browser launch options", () => {
+    const load = (yaml: string) => {
+      const home = tempHome();
+      writeFileSync(path.join(home, "config.yaml"), yaml, "utf8");
+      return loadHostConfig({ env: {}, homeDir: home });
+    };
+
+    it("is off by default", () => {
+      const c = loadHostConfig({ env: {}, homeDir: tempHome() });
+      expect(c.browserLaunchArgs).toEqual([]);
+      expect(c.browserExecutablePath).toBeUndefined();
+    });
+
+    it("accepts launch_args and an absolute executable_path", () => {
+      const c = load(
+        "browser:\n  launch_args:\n    - --no-sandbox\n    - --use-angle=swiftshader\n  executable_path: /usr/bin/chromium\n",
+      );
+      expect(c.browserLaunchArgs).toEqual(["--no-sandbox", "--use-angle=swiftshader"]);
+      expect(c.browserExecutablePath).toBe("/usr/bin/chromium");
+    });
+
+    it("defaults dialog_timeout_seconds to 60 and accepts a positive integer", () => {
+      expect(loadHostConfig({ env: {}, homeDir: tempHome() }).browserDialogTimeoutSeconds).toBe(60);
+      expect(load("browser: {}\n").browserDialogTimeoutSeconds).toBe(60);
+      expect(load("browser:\n  dialog_timeout_seconds: 30\n").browserDialogTimeoutSeconds).toBe(30);
+    });
+
+    it.each([
+      ["zero", "0"],
+      ["negative", "-5"],
+      ["fraction", "1.5"],
+      ["string", "'60'"],
+    ])("rejects a %s dialog_timeout_seconds", (_name, value) => {
+      expect(() => load(`browser:\n  dialog_timeout_seconds: ${value}\n`)).toThrow(HostConfigError);
+    });
+
+    it("accepts an empty list and an empty browser block", () => {
+      expect(load("browser:\n  launch_args: []\n").browserLaunchArgs).toEqual([]);
+      expect(load("browser: {}\n").browserExecutablePath).toBeUndefined();
+    });
+
+    it.each([
+      ["string launch_args", "browser:\n  launch_args: --no-sandbox\n"],
+      ["non-string item", "browser:\n  launch_args: [1]\n"],
+      ["empty item", "browser:\n  launch_args: ['']\n"],
+      ["comma in item", "browser:\n  launch_args: ['--a,--b']\n"],
+      ["newline in item", "browser:\n  launch_args: [\"--a\\n--b\"]\n"],
+      ["relative executable", "browser:\n  executable_path: chromium\n"],
+      ["empty executable", "browser:\n  executable_path: ''\n"],
+      ["non-string executable", "browser:\n  executable_path: 3\n"],
+    ])("rejects %s", (_name, yaml) => {
+      expect(() => load(yaml)).toThrow(HostConfigError);
+    });
+
+    it("still rejects unknown browser keys", () => {
+      expect(() => load("browser:\n  display: ':1'\n")).toThrow(/Unknown key "display" under browser/);
+    });
+  });
 });

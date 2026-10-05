@@ -78,8 +78,9 @@ function fakeRunner(calls: Call[]): BrowserRunner {
   };
 }
 
-function support(calls: Call[]): StageBrowserSupport {
+function support(calls: Call[], extra: Partial<StageBrowserSupport> = {}): StageBrowserSupport {
   return {
+    ...extra,
     host: createLocalBrowserHost({ platform: "darwin", hostEnv: {}, socketRoot }),
     profiles: createLocalProfileStore(),
     runner: fakeRunner(calls),
@@ -147,10 +148,11 @@ async function start(
   stages: unknown[],
   behaviors: Record<string, Behavior>,
   children: EventEmitter[] = [],
+  extra: Partial<StageBrowserSupport> = {},
 ) {
   const store = createRunStore({ rootDir: path.join(root, "store") });
   const launcher = launcherFor(store, behaviors, children);
-  const browser = support(calls);
+  const browser = support(calls, extra);
   const started = await startPipeline({
     agent: scriptedFakeAgent([]),
     store,
@@ -339,6 +341,136 @@ describe("browser teardown", () => {
     await started.done;
     expect(calls).toEqual([]);
     expect(lockCalls).toEqual([]);
+  });
+});
+
+const relayCloses = (calls: Call[]) => calls.filter((c) => c.args[0] === "relay-close");
+const recordRelayClose = (calls: Call[]) => async (input: { stageId?: string }) => {
+  calls.push({ args: ["relay-close", input.stageId ?? "*"], env: {} });
+};
+
+describe("live view relay closes before browser teardown", () => {
+  it("closes the stage relay before the tab and session, and the run relay before the anchor", async () => {
+    const calls: Call[] = [];
+    const { started } = await start(calls, [stage("s", { browser: { profile: "acct" } })], {}, [], {
+      beforeTeardown: recordRelayClose(calls),
+    });
+    await started.done;
+    const [stageRelay, runRelay] = relayCloses(calls);
+    expect(stageRelay!.args[1]).toBe("s");
+    expect(runRelay!.args[1]).toBe("*");
+    expect(calls.indexOf(stageRelay!)).toBeLessThan(calls.indexOf(tabCloses(calls)[0]!));
+    expect(calls.indexOf(stageRelay!)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
+    expect(calls.indexOf(tabCloses(calls)[0]!)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
+    expect(calls.indexOf(runRelay!)).toBeLessThan(calls.indexOf(anchorCloses(calls)[0]!));
+    expect(anchorCloses(calls)).toHaveLength(1);
+    expect(tabCloses(calls)).toHaveLength(1);
+  });
+
+  it("closes the relay before teardown after a failed stage", async () => {
+    const calls: Call[] = [];
+    const { started } = await start(calls, [stage("s", { browser: { profile: "acct" } })], { s: "fail" }, [], {
+      beforeTeardown: recordRelayClose(calls),
+    });
+    await started.done;
+    const first = relayCloses(calls)[0]!;
+    expect(first.args[1]).toBe("s");
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(tabCloses(calls)[0]!));
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
+  });
+
+  it("does not close any relay while the stage waits at its gate", async () => {
+    const calls: Call[] = [];
+    const { started } = await start(calls, [stage("s", { browser: { profile: "acct" } })], { s: "wait" }, [], {
+      beforeTeardown: recordRelayClose(calls),
+    });
+    await started.done;
+    expect(calls.filter((c) => c.args[0] === "relay-close")).toEqual([]);
+  });
+
+  it("proceeds with teardown after the bound when the relay close hangs", async () => {
+    const calls: Call[] = [];
+    const { started } = await start(calls, [stage("s", { browser: { profile: "acct" } })], {}, [], {
+      beforeTeardown: () => new Promise<void>(() => undefined),
+      beforeTeardownWaitMs: 30,
+    });
+    await started.done;
+    expect(tabCloses(calls)).toHaveLength(1);
+    expect(stageCloses(calls)).toHaveLength(1);
+    expect(anchorCloses(calls)).toHaveLength(1);
+  });
+
+  it("proceeds with teardown when the relay close throws", async () => {
+    const calls: Call[] = [];
+    const { started } = await start(calls, [stage("s", { browser: { profile: "acct" } })], {}, [], {
+      beforeTeardown: async () => {
+        throw new Error("relay broke");
+      },
+    });
+    await started.done;
+    expect(stageCloses(calls)).toHaveLength(1);
+    expect(anchorCloses(calls)).toHaveLength(1);
+  });
+
+  async function hangingStage(calls: Call[]) {
+    const children: EventEmitter[] = [];
+    const { store, launcher, browser, started } = await start(
+      calls,
+      [stage("s", { browser: { profile: "acct" } })],
+      { s: "hang" },
+      children,
+    );
+    await waitFor(async () => {
+      try {
+        await persistedEnv(store, started.runId, "s");
+        return children.length > 0;
+      } catch {
+        return false;
+      }
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const manager = new RunManager({
+      agent: scriptedFakeAgent([]),
+      store,
+      cwd: root,
+      executionMode: "process",
+      stageProcessLauncher: launcher,
+      browser,
+    });
+    manager.beforeBrowserTeardown(recordRelayClose(calls));
+    return { manager, children, started };
+  }
+
+  it("closes the run relay before browser teardown on cancel", async () => {
+    const calls: Call[] = [];
+    const { manager, children, started } = await hangingStage(calls);
+    const before = children[0]!.listenerCount("exit");
+    const cancelling = manager.cancelRun(started.runId, "stop");
+    await waitFor(() => children[0]!.listenerCount("exit") > before);
+    children[0]!.emit("exit", null, "SIGTERM");
+    expect((await cancelling).ok).toBe(true);
+    await started.done.catch(() => undefined);
+    const first = relayCloses(calls)[0]!;
+    expect(first.args[1]).toBe("*");
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(tabCloses(calls)[0]!));
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(anchorCloses(calls)[0]!));
+  });
+
+  it("closes the stage relay before browser teardown on abandon", async () => {
+    const calls: Call[] = [];
+    const { manager, children, started } = await hangingStage(calls);
+    const before = children[0]!.listenerCount("exit");
+    const abandoning = manager.abandonStage(started.runId, "s");
+    await waitFor(() => children[0]!.listenerCount("exit") > before);
+    children[0]!.emit("exit", null, "SIGTERM");
+    expect((await abandoning).ok).toBe(true);
+    await started.done.catch(() => undefined);
+    const first = relayCloses(calls)[0]!;
+    expect(first.args[1]).toBe("s");
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(tabCloses(calls)[0]!));
+    expect(calls.indexOf(first)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
+    expect(calls.indexOf(tabCloses(calls)[0]!)).toBeLessThan(calls.indexOf(stageCloses(calls)[0]!));
   });
 });
 

@@ -194,6 +194,38 @@ describe("browser env reaches the stage worker environment", () => {
     expect(login.AGENT_BROWSER_CDP).toBe(CDP);
   });
 
+  it("persists Host launch options for launching sessions only, never from ambient env", async () => {
+    process.env.STAGEFLOW_STAGE_ENV_ALLOW = "AGENT_BROWSER_ARGS,AGENT_BROWSER_EXECUTABLE_PATH";
+    process.env.AGENT_BROWSER_ARGS = "--ambient";
+    process.env.AGENT_BROWSER_EXECUTABLE_PATH = "/ambient";
+    const calls: RunnerCall[] = [];
+    try {
+      const { launched, started } = await run(
+        localSupport(
+          { launchArgs: ["--no-sandbox"], executablePath: "/usr/bin/chromium", hostEnv: {} },
+          calls,
+        ),
+        [
+          stage("login", { browser: { profile: "acct" } }),
+          stage("scrape", { browser: { allow_domains: ["example.com"] } }),
+        ],
+      );
+      await started.done;
+      const login = envOf(launched, "login");
+      expect(login).not.toHaveProperty("AGENT_BROWSER_ARGS");
+      expect(login).not.toHaveProperty("AGENT_BROWSER_EXECUTABLE_PATH");
+      const scrape = envOf(launched, "scrape");
+      expect(scrape.AGENT_BROWSER_ARGS).toBe("--deny-permission-prompts,--no-sandbox");
+      expect(scrape.AGENT_BROWSER_EXECUTABLE_PATH).toBe("/usr/bin/chromium");
+      const anchor = calls.find((c) => c.args[0] === "open" && c.env.AGENT_BROWSER_PROFILE)!;
+      expect(anchor.env.AGENT_BROWSER_ARGS).toBe("--deny-permission-prompts,--no-sandbox");
+      expect(anchor.env.AGENT_BROWSER_EXECUTABLE_PATH).toBe("/usr/bin/chromium");
+    } finally {
+      delete process.env.AGENT_BROWSER_ARGS;
+      delete process.env.AGENT_BROWSER_EXECUTABLE_PATH;
+    }
+  });
+
   it("keeps the socket path under the limit with a deeply nested STAGEFLOW_HOME", async () => {
     expect(home.length).toBeGreaterThan(140);
     const { launched, started } = await run(localSupport(), [

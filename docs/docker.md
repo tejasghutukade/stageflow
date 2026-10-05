@@ -143,6 +143,55 @@ USER stageflow:stageflow
 
 Stageflow does not build derived images from `requires:` automatically — `requires` tells operators (and `sf doctor` / preflight) what the image must provide.
 
+## Browser stages in the container {#browser-stages}
+
+The published image has **no browser**: no Chromium, no Xvfb, no `agent-browser`. Stages with a `browser:` field need them, and a human login stage needs a browser the operator can see. Keeping them out keeps the default image small. [`docker/Dockerfile.browser`](../docker/Dockerfile.browser) is a recipe that extends the runtime image with `chromium`, `xvfb`, `xauth`, fonts, and `agent-browser` 0.38.2 (the version the browser feature was verified against). It runs as the same non-root `stageflow` user and bakes in no secrets.
+
+Build the local runtime image:
+
+```bash
+docker build --target runtime -t stageflow:local .
+```
+
+Build the browser image on top of it:
+
+```bash
+docker build -f docker/Dockerfile.browser --build-arg BASE_IMAGE=stageflow:local -t stageflow:browser .
+```
+
+To extend a published release instead, pass `--build-arg BASE_IMAGE=ghcr.io/tejasghutukade/stageflow@sha256:<digest>`. Override `--build-arg AGENT_BROWSER_VERSION=...` only if you have verified another version.
+
+Put the Host launch options in the Host config, not in pipeline YAML and not in env (the Host rejects unknown `STAGEFLOW_*` vars and ignores `AGENT_BROWSER_*`). Copy [`docker/browser.config.example.yaml`](../docker/browser.config.example.yaml) to `/data/config.yaml`:
+
+```yaml
+browser:
+  executable_path: /usr/bin/chromium
+  launch_args:
+    - --no-sandbox
+```
+
+Run it with the config bind-mounted next to the data volume:
+
+```bash
+docker run --rm -e STAGEFLOW_CONTROL_TOKEN -v stageflow-data:/data -v "$PWD/docker/browser.config.example.yaml:/data/config.yaml:ro" -p 3847:3847 stageflow:browser sf ui
+```
+
+Notes:
+
+- **Distribution Chromium.** `executable_path` points at Debian's Chromium. Chrome for Testing, which `agent-browser install` downloads, has no Linux ARM64 build, so on ARM64 (Apple Silicon Docker, Graviton) the distribution Chromium is the only option. Use it on amd64 too.
+- **Permission prompts.** The Host also adds `--deny-permission-prompts` ahead of `launch_args` (see [browser.md](browser.md#permission-requests-are-denied-by-default)); do not list it yourself. A headed browser with no screen would otherwise leave location or notification requests pending.
+- **`--no-sandbox`.** Chromium's own sandbox needs privileges a default non-root container lacks. The container is the sandbox: do not add `--privileged` or capabilities to get Chromium's sandbox back. Keep `--no-sandbox` out of Hosts that run outside a container.
+- **No screen needed.** With Xvfb on `PATH` and no `DISPLAY`, agent-browser starts its own virtual display and runs the browser headed, so a human login stage opens its page and shows it to the operator through the [live view](browser.md#live-view) in the console. Run `sf ui` (or `sf mcp`) so the Host serves the live view; a CLI-only run still fails with the no-screen error.
+- **Never mount a container runtime socket.** The rule [above](#never-mount-the-docker-socket) applies unchanged. The browser runs inside the Stageflow container; nothing needs the daemon.
+- **Resources.** Spikes measured about 230 to 420 MB of memory for an idle browser, more on heavy pages. Budget at least 1 GB per concurrent browser run and set a container memory limit. Chromium also needs shared memory: add `--shm-size=1g` to `docker run` (or `shm_size` in Compose) if pages crash.
+- **Limits.** Passkeys, hardware keys and native OS prompts cannot be driven through the live view. See [Browser sessions](browser.md).
+
+An opt-in smoke test builds this recipe and checks it with real Chromium (`tests/docker.browserRecipe.smoke.test.ts`; needs Docker and several minutes):
+
+```bash
+STAGEFLOW_DOCKER_SMOKE=1 npx vitest run tests/docker.browserRecipe.smoke.test.ts
+```
+
 ## Precious vs disposable
 
 | Path under `$STAGEFLOW_HOME` | Verdict | Why |

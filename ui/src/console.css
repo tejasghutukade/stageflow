@@ -2820,3 +2820,148 @@ a.topbar__back { text-decoration: none; }
   font-size: var(--font-size-sm);
   font-weight: 600;
 }
+
+/* ============================================ live view (pending gate) */
+.liveview {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-3);
+}
+
+.composer:has(.liveview) {
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.liveview__instruction {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.liveview__address {
+  overflow: hidden;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-code);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveview__notice {
+  margin: 0;
+  color: var(--color-text-yellow);
+  font-size: var(--font-size-xs);
+}
+
+.liveview__stage {
+  position: relative;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  overflow: hidden;
+}
+
+.liveview__stage[data-phase="closed"] .liveview__canvas { opacity: 0.4; }
+
+.liveview__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.liveview__canvas--control { cursor: pointer; }
+
+.liveview__status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-background-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  opacity: 0.92;
+}
+
+.liveview__dialog {
+  position: absolute;
+  top: var(--spacing-3);
+  left: 50%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: 90%;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  box-shadow: var(--shadow-low);
+  transform: translateX(-50%);
+}
+
+.liveview__dialog-label {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.liveview__dialog-message {
+  max-height: 40vh;
+  margin: 0;
+  overflow-y: auto;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.liveview__dialog-input {
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-container);
+  background: var(--color-background-surface);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
+.liveview__dialog-actions {
+  display: flex;
+  gap: var(--spacing-2);
+}
+
+.liveview__dialog-hint {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.liveview__kb {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.liveview__help-trigger {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.liveview__help {
+  margin: var(--spacing-1) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}

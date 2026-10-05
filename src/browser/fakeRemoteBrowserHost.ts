@@ -6,9 +6,15 @@ import {
   type ProfileBrowserResult,
   shortHash,
 } from "./browserHost.js";
+import type { BrowserHostCapabilityRecord } from "./hostCapabilities.js";
 
-export function createFakeRemoteBrowserHost(address: string): BrowserHost {
+export function createFakeRemoteBrowserHost(
+  address: string,
+  capabilities: BrowserHostCapabilityRecord = { attach: "cdp" },
+): BrowserHost {
   return {
+    capabilities,
+
     async ensureProfileBrowser(
       request: ProfileBrowserRequest,
     ): Promise<ProfileBrowserResult> {

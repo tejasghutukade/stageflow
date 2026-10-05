@@ -29,7 +29,7 @@ A `browser` field with no `profile` gives a throw-away browser. It takes no leas
 Check, human login, then work. The work can be one stage or several parallel stages.
 
 1. `check` has `browser.check`. The Host opens the check page with the profile and computes `{ logged_in, url }`. The stage reports it.
-2. `login` runs only when `logged_in` is `false`. The Host opens a visible window. The stage asks the operator with a `confirm` gate. After the operator confirms, the Host checks again (`verify: browser_login`). A wrong confirm repeats the stage.
+2. `login` runs only when `logged_in` is `false`. The Host opens a browser the operator can see (a window on the Host's screen, or the [live view](#live-view) in the console). The stage asks the operator with a `confirm` gate. After the operator confirms, the Host checks again (`verify: browser_login`). A wrong confirm repeats the stage.
 3. `work` stages use the saved login. Parallel work stages share it in their own tabs.
 
 Use the join topology. Only the `check` to `login` edge has an `if` on `logged_in`. The edges `check` to `work` and `login` to `work` have no `if` (for every work stage). If `check` to `work` also has an `if`, `work` is silently skipped when the login stage runs. The `work` input schema must fit the output of both parents.
@@ -71,13 +71,60 @@ The shared browser listens on a CDP port bound to `127.0.0.1` with no token. Whi
 
 ## Headed and headless
 
-Headed is the default. The operator can watch, and all stages that share a profile look like one device to the site. Set `headed: false` per stage for CI or background work. Use one mode for all stages that share a profile, because headless Chrome reports a different user agent. A human login stage must be headed.
+Headed is the default. The operator can watch, and all stages that share a profile look like one device to the site. Set `headed: false` per stage for CI or background work. Use one mode for all stages that share a profile, because headless Chrome reports a different user agent. A human login stage always gets a visible browser, whatever `headed` says: a window on a Host with a screen, or the live view on a Host without one.
 
 On Linux the Host needs `DISPLAY` or `WAYLAND_DISPLAY` for a headed browser. Without one, a stage that did not ask for a login window quietly runs headless. macOS and Windows always count as having a screen.
 
+## Live view {#live-view}
+
+Live view lets the operator log in to a browser that runs on a Host with no screen, or on another machine. The console shows the Host's browser as a picture on a canvas in the gate, and sends the operator's clicks and keys back to it. Nothing is installed on the operator's side.
+
+### What each Host shows
+
+The Host decides how a human login gate is handed over. YAML does not choose it, and launch options are not set in YAML.
+
+| Host | What the operator sees at the gate |
+|------|------------------------------------|
+| Desktop (macOS, Windows, Linux with `DISPLAY` or `WAYLAND_DISPLAY`) | A browser window on the Host's screen (`local_window`). Nothing changes: the console only asks to confirm. |
+| Linux with no screen, started with the console (`sf ui` or `sf mcp`) | The live view in the console gate (`live_view`). The browser runs without a window on the Host. |
+| No screen and no live view (for example a run started only from the CLI, or a host that cannot stream) | The login stage fails before the agent starts: "A visible browser is needed for login, but this Host has no screen and no live view." In Docker the message adds a hint to log in on a machine with a screen first. |
+
+The live view needs the process that serves the console routes: `sf ui`, or the MCP service (`sf mcp`) that serves the console API. A CLI run without a console never offers it. The gate carries a stable path (`/api/runs/<run>/stages/<stage>/live-view`), never a token; the console asks the Host for a short-lived ticket when the operator opens the gate.
+
+### Using it during a login gate
+
+1. Open the run in the console. The gate shows a line "Log in in the browser view below, then confirm.", the page address, and the browser picture.
+2. Click in the picture to focus a field, then type. Tab, Enter, Backspace, the mouse wheel and right click work. Paste with the keyboard shortcut. Long text is sent in small batches, so a long paste takes a moment.
+3. If the site opens a popup (for example "Sign in with a provider"), the view follows the popup. When the popup closes, the view returns to the page that opened it. The opener still receives the result.
+4. When the page shows you are logged in, press Accept. The Host then re-checks the login itself (`verify: browser_login`). If it still sees a logged-out page, the stage runs again with a new gate, and the live view works there too.
+5. Accepting, rejecting, cancelling or ending the run closes the live view and revokes its ticket. Input sent after that is refused.
+
+The live view is interactive by default. The Host can also issue a view-only ticket (read access) that shows the page but refuses input. The console gate always asks for the interactive one.
+
+### Page dialogs {#page-dialogs}
+
+JavaScript dialogs are not drawn in the picture, and the page stays blocked until one is answered. The console shows them as an overlay on top of the picture, as plain text (the page's text is never treated as HTML).
+
+- `confirm` and `prompt` show **Accept** and **Dismiss**. A prompt also shows a text box, filled with the page's default text. Accept without editing sends that default. Only an interactive (control) session can answer. A view-only session sees the dialog and who it waits for, with no buttons.
+- `alert` and `beforeunload` are accepted automatically by agent-browser within milliseconds, so there is nothing to answer. The overlay only shows what was said, for a few seconds, without buttons.
+- A dialog nobody answers is dismissed by the Host after a time-out (60 seconds by default, `browser.dialog_timeout_seconds`, see [Host launch options](#host-launch-options)). The overlay then shows "The page dialog was dismissed after waiting too long." The stage is not failed by the time-out. The page sees a dismissed dialog (confirm gives false, prompt gives null).
+- If the agent or the page answers first, your answer is ignored without an error.
+- Popups that open a dialog on load are covered, because the Host attaches to every page before its scripts run.
+- If the Host's live view relay restarts while a dialog is already open, the overlay does not appear and cannot answer it (the browser protocol gives a late client no way to see it). Wait for the time-out, or answer it on the Host's own browser.
+
+### Limits
+
+- Passkeys and hardware security keys do not work. Choose another sign-in method (code, SMS, backup code).
+- Native browser prompts are not drawn in the picture and cannot be used: permission requests (camera, location, notifications), file pickers, HTTP authentication boxes, and the browser's own password or credential bubbles. If the page seems frozen or asks for something you cannot see, cancel or pick another method. The console shows this tip under the picture.
+- Page dialogs are handled as described under [Page dialogs](#page-dialogs).
+- Only the page picture, the address, and your input are carried. Sound is not.
+- The picture is a stream of images, so it can lag on a slow link.
+
+Everything typed in the live view, including passwords, goes to the Host's browser only. The Host never logs, stores or audits input or frames.
+
 ## Docker and hosts with no screen
 
-A human login needs a visible window. A Host with no screen, including the Docker image, fails the login stage before the agent starts with a clear message. Log in on a machine with a screen first, or use a headless check only. A live view handoff is planned. The gate payload already allows `handoff: { kind: "live_view", url }` so the console will not need a schema change.
+A human login needs a browser the operator can see. A Host with no screen shows the [live view](#live-view) when it serves the console. A Host with no screen and no live view, such as a CLI-only run, fails the login stage before the agent starts with a clear message. Log in on a machine with a screen first, or use a headless check only.
 
 ## Host config
 
@@ -90,6 +137,39 @@ browser:
 ```
 
 A stage whose `allow_domains`, `check` URLs or `login_url` touch a blocked site (or a subdomain) fails when the stage starts, before the browser opens. `sf browser check` and `sf browser login` refuse a blocked `--url` the same way (exit code 1, JSON `code: "browser_site_blocked"`). YAML cannot override the list.
+
+### Permission requests are denied by default
+
+Every browser the Host launches (the shared browser of a profile, profile-less stages, `sf browser login`) starts with Chrome's `--deny-permission-prompts` switch. A page that asks for location, notifications, camera, microphone or clipboard read gets "denied" at once instead of a prompt nobody can see (a headed browser on a Host with no screen, or the [live view](#live-view), does not draw native prompts, so the page would wait forever). This applies to every browser stage, not only login stages.
+
+- Pages that need geolocation, notifications, camera or microphone will not get them. A login that requires one of these cannot be completed.
+- It is not configurable: there is no stage YAML key and no Host config key to turn it off. The switch is added by the Host, ahead of your `launch_args`.
+- This is a behavior change for existing pipelines. Browsers already running keep the flags they started with.
+
+Browser sign-in and password-save prompts are not drawn in the live view either. Stageflow does not add a switch for them: Chrome has no launch switch for its password manager (it is a profile preference), and agent-browser already starts Chrome with `--password-store=basic` and `--disable-sync`. See the help text on a live view gate for what operators should do.
+
+### Host launch options
+
+Optional keys tune how the Host starts Chrome and handles live view dialogs. `launch_args` and `executable_path` are off by default.
+
+```yaml
+browser:
+  launch_args:
+    - --no-sandbox
+    - --use-gl=angle
+  executable_path: /usr/bin/chromium
+  dialog_timeout_seconds: 60
+```
+
+- `launch_args`: list of Chrome flags. Each item must be non-empty with no comma or newline (agent-browser splits on both).
+- `executable_path`: absolute path to a Chrome or Chromium binary. Use it where Chrome for Testing has no build, for example Linux ARM64 with a distribution Chromium.
+- `dialog_timeout_seconds`: positive integer, default 60. How long a live view page dialog (`confirm` or `prompt`) may wait before the Host dismisses it. Keep it well under the ~150 seconds after which an unanswered dialog wedges agent-browser's `screenshot` and `get url`. Read when the live view relay is built, so a change needs a Host restart.
+
+`launch_args` come after the Host's own switches (`--deny-permission-prompts`; listing it again has no effect). They apply to every browser the Host launches (the shared browser of a profile, profile-less stages, `sf browser login`) and are computed once per stage, so every command and resume uses the same values. They are never read from the environment and cannot be set in YAML: a stage `browser:` block with `launch_args`, `args`, `executable_path`, `executable` or `display` fails to load.
+
+### Linux hosts with no screen
+
+A Linux Host with no `DISPLAY` or `WAYLAND_DISPLAY` but with `Xvfb` on `PATH` runs browsers headed on a private virtual display that agent-browser starts itself. Nothing is shown on the Host, but the browser behaves like a headed one (same user agent as a desktop). A stage that sets `headed: false` still runs headless. Without Xvfb the Host falls back to headless as before. For Docker, the [browser image recipe](docker.md#browser-stages) installs Xvfb, Chromium and agent-browser.
 
 ## Redaction and audit
 
@@ -107,7 +187,7 @@ The Chrome profile is protected by owner-only folder permissions and by Chrome's
 
 ## Multi-tenant readiness
 
-Hosted use is not built. The seams are in place: the owner scope (set by the Host), the profile store (all path code), the profile lease, the browser host (starts the shared browser and returns the CDP address and session a stage needs; a remote host can supply the address instead), and the handoff kind in the gate payload. Each can be replaced without changing YAML.
+Hosted use is not built. The seams are in place: the owner scope (set by the Host), the profile store (all path code), the profile lease, the browser host (starts the shared browser and returns the CDP address and session a stage needs; a remote host can supply the address instead; it reports what it can do, such as screen and live view), and the handoff kind in the gate payload. Each can be replaced without changing YAML.
 
 ## Sites can forbid automation
 

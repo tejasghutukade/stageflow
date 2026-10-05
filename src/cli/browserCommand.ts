@@ -11,6 +11,7 @@ import type {
 } from "../browser/browserHost.js";
 import { closeBrowserSession, defaultBrowserRunner } from "../browser/browserTeardown.js";
 import { defaultDisplayProbe, noScreenError, type DisplayProbe } from "../browser/humanLogin.js";
+import { hostLaunchOptions } from "../browser/stageBrowserEnv.js";
 import { createLocalBrowserHost } from "../browser/localBrowserHost.js";
 import { createLocalProfileLock } from "../browser/localProfileLock.js";
 import { createLocalProfileStore } from "../browser/localProfileStore.js";
@@ -173,7 +174,7 @@ function defaultDeps(): BrowserCommandDeps {
     log: (line) => console.log(line),
     error: (line) => console.error(line),
     store: createLocalProfileStore(),
-    host: createLocalBrowserHost(),
+    host: createLocalBrowserHost(hostLaunchOptions()),
     locks: createLocalProfileLock({ isRunLive }),
     runner: defaultBrowserRunner,
     display: () => defaultDisplayProbe(),

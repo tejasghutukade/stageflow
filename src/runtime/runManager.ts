@@ -535,6 +535,13 @@ export class RunManager {
   private readonly queuedDone = new Map<string, QueuedDoneDeferred>();
   private admissionDrainInFlight = false;
   private readonly resumeInFlight = new Set<string>();
+  private readonly gateClosedListeners = new Set<
+    (runId: string, stageId?: string) => void
+  >();
+  private readonly beforeBrowserTeardownListeners = new Set<
+    (input: { runId: string; stageId?: string }) => Promise<void> | void
+  >();
+  private readonly shutdownListeners = new Set<() => void>();
   private readonly retryInFlight = new Set<string>();
   private readonly retryStartOwner = new Map<string, string>();
   private readonly retryStartWaiters = new Map<string, Set<() => void>>();
@@ -662,7 +669,17 @@ export class RunManager {
   }
 
   stopAcceptingWork(): void {
+    const wasAccepting = this.acceptingWork;
     this.acceptingWork = false;
+    if (wasAccepting) {
+      for (const listener of [...this.shutdownListeners]) {
+        try {
+          listener();
+        } catch {
+          // listeners must not affect shutdown
+        }
+      }
+    }
     for (const halt of this.schedulingHalts.values()) {
       halt.halted = true;
       halt.hostShutdown = true;
@@ -946,7 +963,7 @@ export class RunManager {
   }
 
   async sweepBrowserSessions(): Promise<{ closed: string[] }> {
-    const support = this.options.browser ?? defaultStageBrowserSupport();
+    const support = this.browserSupport();
     const isRunLive = createRunLiveness(this.options.store);
     await stageProfileLock(support)
       .reclaimStale(isRunLive)
@@ -1252,6 +1269,69 @@ export class RunManager {
     await this.drainAdmissionQueue();
   }
 
+  /** Called when a stage's gate stops accepting operator input (answered, abandoned) or a run is cancelled (no stage id). */
+  onGateClosed(listener: (runId: string, stageId?: string) => void): () => void {
+    this.gateClosedListeners.add(listener);
+    return () => {
+      this.gateClosedListeners.delete(listener);
+    };
+  }
+
+  /** Awaited (bounded by the browser support) before a stage's or run's browser is torn down; stageId absent means the whole run. */
+  beforeBrowserTeardown(
+    listener: (input: { runId: string; stageId?: string }) => Promise<void> | void,
+  ): () => void {
+    this.beforeBrowserTeardownListeners.add(listener);
+    return () => {
+      this.beforeBrowserTeardownListeners.delete(listener);
+    };
+  }
+
+  /** Called once the Host stops accepting work (drain start). */
+  onShutdown(listener: () => void): () => void {
+    this.shutdownListeners.add(listener);
+    return () => {
+      this.shutdownListeners.delete(listener);
+    };
+  }
+
+  private browserSupport(): StageBrowserSupport {
+    const base = this.options.browser ?? defaultStageBrowserSupport();
+    if (this.beforeBrowserTeardownListeners.size === 0) return base;
+    return {
+      ...base,
+      beforeTeardown: async (input) => {
+        await Promise.all([
+          base.beforeTeardown?.(input),
+          ...[...this.beforeBrowserTeardownListeners].map(async (listener) => {
+            try {
+              await listener(input);
+            } catch {
+              // listeners must not block teardown
+            }
+          }),
+        ]);
+      },
+    };
+  }
+
+  private browserOption(): { browser?: StageBrowserSupport } {
+    if (this.options.browser === undefined && this.beforeBrowserTeardownListeners.size === 0) {
+      return {};
+    }
+    return { browser: this.browserSupport() };
+  }
+
+  private notifyGateClosed(runId: string, stageId?: string): void {
+    for (const listener of [...this.gateClosedListeners]) {
+      try {
+        listener(runId, stageId);
+      } catch {
+        // listeners must not affect run control
+      }
+    }
+  }
+
   async abandonStage(
     runId: string,
     stageId: string,
@@ -1288,6 +1368,7 @@ export class RunManager {
       };
     }
 
+    this.notifyGateClosed(runId, stageId);
     if (this.stageProcessLauncher !== undefined) {
       const hasActive = this.stageProcessLauncher
         .getActiveStageProcesses()
@@ -1297,7 +1378,7 @@ export class RunManager {
       }
     }
     await teardownStageBrowser(
-      this.options.browser ?? defaultStageBrowserSupport(),
+      this.browserSupport(),
       {
         runId,
         runDir: this.options.store.getWorkspaceDir(runId),
@@ -1330,7 +1411,7 @@ export class RunManager {
       !(await createRunLiveness(this.options.store)(runId).catch(() => true))
     ) {
       await teardownRunBrowsers(
-        this.options.browser ?? defaultStageBrowserSupport(),
+        this.browserSupport(),
         {
           runId,
           runDir: this.options.store.getWorkspaceDir(runId),
@@ -1375,6 +1456,7 @@ export class RunManager {
     }
 
     await this.options.store.updateRunStatus(runId, "cancelled");
+    this.notifyGateClosed(runId);
     await this.options.store.setCancelReason(runId, trimmedReason);
     await finaliseStoredRunManifest(this.options.store, runId).catch(
       () => undefined,
@@ -1400,7 +1482,7 @@ export class RunManager {
       await this.stageProcessLauncher.cancelRun(runId);
     }
     await teardownRunBrowsers(
-      this.options.browser ?? defaultStageBrowserSupport(),
+      this.browserSupport(),
       {
           runId,
           runDir: this.options.store.getWorkspaceDir(runId),
@@ -2145,9 +2227,7 @@ export class RunManager {
         agent: this.options.agent,
         cwd: meta.project_root ?? this.projectRoot,
         operatorCatalog: this.options.operatorCatalog,
-        ...(this.options.browser !== undefined
-          ? { browser: this.options.browser }
-          : {}),
+        ...this.browserOption(),
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
         stageProcessLauncher: this.stageProcessLauncher,
@@ -2408,6 +2488,7 @@ export class RunManager {
         }
         return prefix;
       }
+      this.notifyGateClosed(runId, stageId);
       return await orchestrateAnswerResume({
         prefixMode: prefix.mode,
         executionMode: this.executionMode,
@@ -2571,9 +2652,7 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
-          ...(this.options.browser !== undefined
-            ? { browser: this.options.browser }
-            : {}),
+          ...this.browserOption(),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,
@@ -2648,7 +2727,7 @@ export class RunManager {
       );
       if (resumedStage?.browser?.profile !== undefined) {
         await acquireStageProfile(
-          this.options.browser ?? defaultStageBrowserSupport(),
+          this.browserSupport(),
           {
             profile: resumedStage.browser.profile,
             owner: { runId, stageId },
@@ -2664,7 +2743,7 @@ export class RunManager {
         });
       }
       const browserEnv = await resolveStageBrowserEnv(
-        this.options.browser ?? defaultStageBrowserSupport(),
+        this.browserSupport(),
         {
           runId,
           stageId,
@@ -2699,7 +2778,7 @@ export class RunManager {
         return { ok: true };
       }
       await teardownStageBrowser(
-        this.options.browser ?? defaultStageBrowserSupport(),
+        this.browserSupport(),
         {
           runId,
           runDir: workspaceDir,
@@ -2728,9 +2807,7 @@ export class RunManager {
               checkoutRoot: meta.checkout_root,
               hitl: this.hitl,
               operatorCatalog: this.options.operatorCatalog,
-              ...(this.options.browser !== undefined
-                ? { browser: this.options.browser }
-                : {}),
+              ...this.browserOption(),
             },
             retryRoots: new Map([[stageId, nextRepairAttempt]]),
             maxActiveStagesPerRun: this.maxActiveStagesPerRun,
@@ -2754,7 +2831,7 @@ export class RunManager {
         );
         await store.updateRunStatus(runId, "failed");
         await teardownRunBrowsers(
-          this.options.browser ?? defaultStageBrowserSupport(),
+          this.browserSupport(),
           {
             runId,
             runDir: workspaceDir,
@@ -2783,9 +2860,7 @@ export class RunManager {
           checkoutRoot: meta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
-          ...(this.options.browser !== undefined
-            ? { browser: this.options.browser }
-            : {}),
+          ...this.browserOption(),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         resumeFromStageId: stageId,
@@ -2815,7 +2890,7 @@ export class RunManager {
         );
         await store.updateRunStatus(runId, "failed");
         await teardownRunBrowsers(
-          this.options.browser ?? defaultStageBrowserSupport(),
+          this.browserSupport(),
           {
             runId,
             runDir: store.getWorkspaceDir(runId),
@@ -3173,9 +3248,7 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(materialized.runId);
       const started = await startPipeline({
         submission,
-        ...(this.options.browser !== undefined
-          ? { browser: this.options.browser }
-          : {}),
+        ...this.browserOption(),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3755,9 +3828,7 @@ export class RunManager {
       const schedulingHalt = this.ensureSchedulingHalt(runId);
       const started = await startPipeline({
         submission,
-        ...(this.options.browser !== undefined
-          ? { browser: this.options.browser }
-          : {}),
+        ...this.browserOption(),
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -3884,9 +3955,7 @@ export class RunManager {
           checkoutRoot: loadedMeta.checkout_root,
           hitl: this.hitl,
           operatorCatalog: this.options.operatorCatalog,
-          ...(this.options.browser !== undefined
-            ? { browser: this.options.browser }
-            : {}),
+          ...this.browserOption(),
         },
         maxActiveStagesPerRun: this.maxActiveStagesPerRun,
         executionMode: this.executionMode,

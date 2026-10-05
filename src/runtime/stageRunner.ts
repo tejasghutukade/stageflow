@@ -11,7 +11,13 @@ import {
   stampGateRequest,
   type HostGateContext,
 } from "../browser/gateHandoff.js";
+import path from "node:path";
 import type { BrowserRunner, StageBrowserSupport } from "../browser/browserHost.js";
+import {
+  BROWSER_CAPABILITIES_FILENAME,
+  readPersistedBrowserCapabilities,
+} from "../browser/persistedEnv.js";
+import { stageDir } from "../runstore/paths.js";
 import type { StageEnvelope } from "../types/envelope.js";
 import type { LoadedStageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
@@ -385,7 +391,19 @@ export async function runStage(
       store: workerMode ? store : undefined,
       attemptCtx,
       skipGates,
-      gateContext: hostGateContextFor(stage.browser),
+      gateContext:
+        stage.browser !== undefined
+          ? hostGateContextFor(stage.browser, {
+              runId,
+              stageId,
+              capabilities: await readPersistedBrowserCapabilities(
+                path.join(
+                  stageDir(workspaceDir ?? store.getWorkspaceDir(runId), stageId),
+                  BROWSER_CAPABILITIES_FILENAME,
+                ),
+              ),
+            })
+          : undefined,
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

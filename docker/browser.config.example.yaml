@@ -1,0 +1,6 @@
+# Host config for the browser image. Place at $STAGEFLOW_HOME/config.yaml
+# (/data/config.yaml in the container). See docs/docker.md.
+browser:
+  executable_path: /usr/bin/chromium
+  launch_args:
+    - --no-sandbox

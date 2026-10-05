@@ -22,6 +22,8 @@ All paths are relative to the repo root. Names were checked against the code at 
 - Teardown: per stage (tab, then session), per run (anchor, then lease), cancel, abandon, fail, and a sweep at Host start.
 - Host-computed login check (`browser.check`) and the human login stage (`verify: browser_login`), with repair loop on a wrong confirm.
 - Host-stamped gate fields `handoff`, `site`, `profile`. The schema accepts `live_view`.
+- Live view page dialogs: `confirm` and `prompt` shown and answerable in the viewer, `alert` and `beforeunload` shown read-only, Host time-out (`browser.dialog_timeout_seconds`).
+- Live view, server side: capability record and ports, agent-browser relay, one-use tickets and credentials, session manager with grace period, console routes (`ticket`, `events`, `input`), revoke on gate close, relay closed before every browser teardown, dispose at Host shutdown. The console viewer (`ui/src/liveView/`). A Host that serves the console (`sf ui`, `sf mcp`) builds its browser support with `consoleStageBrowserSupport()` (local host with `liveView: "relay"`) and hands it to `RunManager`; `defaultStageBrowserSupport()` (CLI-only runs) keeps `none`. Opt-in end-to-end smoke: `tests/browser.liveView.e2e.realChrome.test.ts`.
 - Bundled `browser` skill (`builtin-skills/browser/SKILL.md`) and the stage prompt block.
 - Redaction patterns for browser stages. Audit log. Host `browser.blocked_sites`.
 - `sf browser profiles|status|check|login|clear`.
@@ -31,7 +33,7 @@ All paths are relative to the repo root. Names were checked against the code at 
 
 | Item | State |
 |------|-------|
-| Live view handoff | Only the schema (`GateHandoff` has `live_view`). The Host always stamps `local_window`. |
+| Native prompts in live view | Permission requests (denied by default), file pickers, HTTP auth and passkeys are not shown or handled. JS dialogs are (limitation 17). |
 | Remote browser host | Only the interface and `fakeRemoteBrowserHost.ts` (test double). |
 | Host-side filtering proxy for profile stages | Not built. `allow_domains` is soft for profile stages. |
 | Key wiring | `KeyProvider` exists but nothing in the runtime calls it. agent-browser's key does not protect a Chrome profile. |
@@ -51,7 +53,7 @@ Found during review and real runs. None of the items below is fixed here.
 5. **Local paths in run files.** `<runDir>/browser/<profile>/anchor.json` and the `owner.json` of an anchor hold the profile folder path and the CDP address. They are run workspace files, not envelopes or run state. Do not export or share a run workspace dir.
 6. **No lease wait limit.** A stage queued behind another run waits until that run ends. Only run end, cancel, abandon, or a Host halt stops the wait.
 7. **Resume does not queue.** The resume path (`resumeViaSubprocess`) calls `acquireStageProfile` with `halted: () => true`. If another run took the lease, resume fails with "held by another run".
-8. **Silent headless fallback on Linux.** A non-login stage with no `DISPLAY` or `WAYLAND_DISPLAY` runs headless even if it asked for headed. Mixed modes on one profile change the user agent.
+8. **Silent headless fallback on Linux without Xvfb.** A non-login stage on Linux with no `DISPLAY`, no `WAYLAND_DISPLAY` and no `Xvfb` on `PATH` (`headless_only`) runs headless even if it asked for headed. Hosts with Xvfb report `virtual_display` and run headed (resolved there). Mixed modes on one profile change the user agent.
 9. **Host shutdown leaves browsers up.** On Host shutdown the scheduler skips run teardown (`hostShutdown`). The browsers stay until the next Host start. The sweep leaves live and waiting runs alone.
 10. **Anchor death loses pages.** The Host restarts the anchor on the next stage start. Open pages are lost. Cookies stay (profile).
 11. **Idle timeout is off.** `AGENT_BROWSER_IDLE_TIMEOUT_MS=0` means daemons never exit on their own. If teardown is skipped, the sweep is the only cleanup.
@@ -59,6 +61,8 @@ Found during review and real runs. None of the items below is fixed here.
 13. **Platforms.** The spikes and the smoke test ran on macOS (arm64) with agent-browser 0.38.2 and Chrome for Testing 154. Linux and Windows are not verified in real runs.
 14. **Spec items still open.** Story 11 (profile-less stages) is implemented but the user has not confirmed it. Story 47 holds only for profile-less stages. Story 49 is not met by a key (OS keychain and folder permissions are the protection). Tickets 00-12 checkboxes were not updated after Revision 2.
 15. **`defaultLock` singleton.** `stageProfileLock()` builds one module-level local lock without `isRunLive`. Liveness comes from the callers (`acquireStageProfile`, sweep).
+16. **Permission prompts are denied for every browser stage.** `--deny-permission-prompts` is in `AGENT_BROWSER_ARGS` of every launching session, so it is part of the persisted env (a change of this constant affects only new stages). Chrome 154 (Chrome for Testing and Debian `chromium`) accepts it; verified headed under Xvfb by `tests/docker.browserRecipe.smoke.test.ts` (notification `denied`, geolocation code 1, clipboard read rejected). Without it a headed browser leaves the request pending (geolocation and notification promises never settle). A CDP-attached stage session does not launch Chrome and carries no args, so it relies on the anchor's. Not verifiable through CDP `Browser.getBrowserCommandLine` (needs `--enable-automation`, which agent-browser does not set); the smoke reads the browser process command line instead. Camera and microphone use the same prompt path but were not exercised. There is no switch for Chrome's password-save bubble in Chrome 154 (profile preference `credentials_enable_service`); none is added, and the bubble was not tested.
+17. **Relay restart with a dialog already open.** A relay that attaches while a dialog is open gets no `javascriptDialogOpening` event, `Page.enable` blocks until the dialog closes, and `Page.handleJavaScriptDialog` returns -32602. The relay cannot see or answer such a dialog. It never awaits `Page.enable`, so nothing hangs and the stream keeps working (test: "stays usable when Page.enable never resolves"). Recovery is the Host's own `dialog accept|dismiss` on the stage session, the page closing it, or the stage failing. A dialog the relay does see is dismissed by the time-out. Dialogs raised while no viewer is attached are not tracked either (the relay exists only while a viewer is).
 
 ## 2. Mental model {#mental-model}
 
@@ -122,6 +126,14 @@ Who closes what, and when
 | `sitePolicy.ts` | Host `blocked_sites` check. | `assertBrowserSitesAllowed`, `BlockedSiteError`, `isBlockedHost`, `hostOf`, `normalizeDomain` |
 | `navigationAudit.ts` | Soft allowlist audit from tool activity. Called from `teardownStageBrowser` (limitation 1). | `auditStageNavigations` |
 | `auditSink.ts` | Audit records and sinks. Never breaks a run. | `AuditSink`, `AuditRecord`, `createLocalAuditSink`, `createMemoryAuditSink`, `safeAudit`, `localAuditLogPath` |
+| `hostCapabilities.ts` | Capability record of a browser host (display, live view kind, viewer input, attach style, persistence, dialog and popup handling) and its defaults. | `BrowserHostCapabilities`, `BrowserHostCapabilityRecord`, `DEFAULT_BROWSER_HOST_CAPABILITIES`, `resolveBrowserHostCapabilities` |
+| `liveViewRelay.ts` | Relay port: `open(request)` returns a session that streams `frame`, `status`, `tabs`, `url`, `retarget`, `dialog`, `dialog_closed`, `closed`, takes ordered input batches and answers dialogs (`answerDialog`). | `LiveViewRelay`, `LiveViewSession`, `LiveViewSessionRequest`, `LiveViewMessage`, `LiveViewInputEvent` |
+| `agentBrowserLiveViewRelay.ts` | Relay over the agent-browser stream WebSocket of the stage session. Input batching, rate limit, one-shot first-frame nudge, retarget on popups, browser-level auto-attach, page dialogs and their time-out. | `createAgentBrowserLiveViewRelay`, `LiveViewRelayError` |
+| `fakeLiveViewRelay.ts`, `liveViewSource.ts`, `fakeLiveViewSource.ts` | Fake relay for tests; source port (stream address of a session) and its fake. | `createFakeLiveViewRelay`, `LiveViewSource`, `createFakeLiveViewSource` |
+| `sandboxOrchestrator.ts`, `fakeSandboxOrchestrator.ts` | Provider-neutral sandbox port and a test double. No runtime caller yet. | `BrowserSandboxOrchestrator`, `createFakeSandboxOrchestrator` |
+| `liveViewTickets.ts` | One-use tickets (60 s) and credentials (24 h) bound to scope, run, stage and mode. Revocation per stage, run or all. | `createLiveViewTicketService`, `LiveViewTicketService` |
+| `liveViewSessions.ts` | One refcounted relay session per (run, stage), opened on the first viewer, closed 5 s after the last. `closeStage`, `closeRun` and `dispose` await closes already in flight. | `createLiveViewSessionManager`, `LiveViewSessionManager` |
+| `liveViewPersisted.ts` | Rebuilds a relay request from `browser-env.json` and, for a profile stage, `anchor.json`. | `readLiveViewSessionRequest` |
 | `keyProvider.ts` | Host key file. **Unused by the runtime** (limitation, section 1). | `KeyProvider`, `createLocalKeyProvider`, `localKeyFilePath` |
 
 ### Other touched files
@@ -129,14 +141,16 @@ Who closes what, and when
 | File | Browser responsibility |
 |------|------------------------|
 | `src/types/stage.ts` | `StageBrowserConfig` type and `StageConfig.browser`. |
-| `src/config/stageBrowser.ts` | `parseStageBrowser` (shape checks, rejects `path`, `scope`, `secret`), `withBrowserRequires`, `BROWSER_TOOL_NAME`. |
+| `src/config/stageBrowser.ts` | `parseStageBrowser` (shape checks, rejects `path`, `scope`, `secret` and launch options such as `launch_args`, `executable_path`, `display`), `withBrowserRequires`, `BROWSER_TOOL_NAME`. |
 | `src/config/loadStage.ts`, `loadPipeline.ts`, `normalizePipelineStageEntry.ts`, `pipelineStageKeys.ts`, `resolvePipelineDag.ts` | Carry `browser` from stage file and pipeline entry (entry replaces file value). |
 | `src/config/parseCompletionContract.ts`, `validateCompletionContract.ts`, `src/types/completion.ts` | `browser_login` verify item. Needs `browser.check`, rejects `headed: false`, after-phase only. |
 | `src/config/builtinSkills.ts` | `BROWSER_SKILL_NAME`, `resolveBuiltinSkillFile` (finds `builtin-skills/browser/SKILL.md`). |
 | `builtin-skills/browser/SKILL.md` | What the agent may run and the rules. |
-| `src/config/hostConfig.ts` | `browser.blocked_sites` in `$STAGEFLOW_HOME/config.yaml` (`browserBlockedSites`). |
+| `src/config/hostConfig.ts` | `browser.blocked_sites`, `browser.launch_args` and `browser.executable_path` in `$STAGEFLOW_HOME/config.yaml` (`browserBlockedSites`, `browserLaunchArgs`, `browserExecutablePath`). `launch_args` items: non-empty, no comma or newline (agent-browser splits on both). `executable_path`: non-empty absolute path. Both off by default. `hostLaunchOptions()` in `stageBrowserEnv.ts` reads them once for the default, console and `sf browser` hosts. |
 | `src/runtime/pipelineScheduler.ts` | Lease acquire, env resolve, launch with `browserEnv`, stage-end and run-end teardown. |
-| `src/runtime/runManager.ts` | `sweepBrowserSessions`, `abandonStage`, `cancelRun`, `resumeViaSubprocess`, passes `browser` support down. |
+| `src/runtime/runManager.ts` | `sweepBrowserSessions`, `abandonStage`, `cancelRun`, `resumeViaSubprocess`, passes `browser` support down. `beforeBrowserTeardown`, `onGateClosed` and `onShutdown` listeners (live view hooks). |
+| `src/server/liveViewRoutes.ts` | `POST .../live-view/ticket`, `GET .../events` (SSE), `POST .../input`, `POST .../live-view/dialog`. Builds the session manager from persisted state. `revokeStage`, `revokeRun`, `dispose`. |
+| `src/server/http.ts`, `src/server/mcpHost.ts` | Create the routes, register `onGateClosed`, `beforeBrowserTeardown` and `onShutdown`, dispose on server close. |
 | `src/runtime/stageAttemptBootstrap.ts` | Browser skill resolution, login-check and human-login prompt blocks, `browser_login_check` pre-emit check, redaction hooks for stream log and activity. |
 | `src/runtime/stageRunner.ts` | Stamps Host gate fields, redacts the final envelope, passes `browserLogin` to verification. |
 | `src/runtime/stageProcessLauncher.ts` | Merges `browserEnv` into the worker env, strips ambient `AGENT_BROWSER_*`, sets `STAGEFLOW_PI_HOME_AUTH_PATH`. |
@@ -169,13 +183,35 @@ Hook points, in order. Process mode is the default. Names are in `src/runtime/pi
 3. **Anchor** (`anchor.ts`, `localBrowserHost.ensureProfileBrowser`). An in-process promise map dedupes callers. A `anchor.lock` dir (pid inside, stale when the pid is dead, 120 s wait) serializes processes. No stored anchor: `open about:blank` with the anchor env, then `get cdp-url`. Stored anchor: `get cdp-url` is the liveness probe (any command relaunches a dead daemon). A headless stored anchor is closed and replaced when a human login stage needs it headed. Result goes to `anchor.json` (mode 0600, atomic rename) and the anchor's `owner.json`.
 4. **Launch** (process mode). `launcher.launch({ ..., browserEnv })`. The launcher builds the worker env, removes every ambient `AGENT_BROWSER_*`, adds `browserEnv`, and sets `STAGEFLOW_PI_HOME_AUTH_PATH`. In the worker, `stageAttemptBootstrap` resolves the `browser` skill (run, checkout, Host, then built-in), reads the login check result (error `browser login check result is missing` if absent), appends the login-check or human-login prompt block, adds the `browser_login_check` pre-emit check, and turns on browser redaction. `stageRunner` stamps Host gate fields on every gate and, after verification, redacts the envelope before writing it.
 5. **Verify.** A `browser_login` item calls `runLoginCheck` with the persisted env and `stage.browser.check` (`verifiedStageExecution.ts`). It passes only when the state is `logged_in`.
-6. **Stage end.** `startStage` waits for `launchStage`. If the stage state is `succeeded` or `failed` it calls `teardownStageBrowser`: skip when `browser-closed.json` exists, `tab close` (only when the env has `AGENT_BROWSER_CDP`), `close`, poll until the socket and pid are gone, remove the session's socket files, write `browser-closed.json`. A `waiting` stage is not torn down.
-7. **Run end** (end of the scheduler loop). If no stage is waiting (or scheduling was halted) and it is not a Host shutdown: `teardownRunBrowsers` closes every stage dir's session, then `closeRunAnchors` (graceful `close` with the stored anchor env, then deletes `anchor.json`), then `releaseOwner({ runId })`.
+6. **Stage end.** `startStage` waits for `launchStage`. If the stage state is `succeeded` or `failed` it calls `teardownStageBrowser`: first the live view hook (see "Live view relay" below), then skip when `browser-closed.json` exists, `tab close` (only when the env has `AGENT_BROWSER_CDP`), `close`, poll until the socket and pid are gone, remove the session's socket files, write `browser-closed.json`. A `waiting` stage is not torn down.
+7. **Run end** (end of the scheduler loop). If no stage is waiting (or scheduling was halted) and it is not a Host shutdown: `teardownRunBrowsers` first runs the live view hook for the whole run, then closes every stage dir's session, then `closeRunAnchors` (graceful `close` with the stored anchor env, then deletes `anchor.json`), then `releaseOwner({ runId })`.
 8. **Gate wait and resume.** The worker exits waiting. Everything stays open and leased. On answer, `runManager.resumeViaSubprocess` joins the lease (no waiting), calls `resolveStageBrowserEnv` with `resuming: true` (persisted env, no navigation), and launches mode `resume`. After the worker: not waiting means `teardownStageBrowser`. A failed result goes through `scheduleRepairAfterVerifyFailure`: if a repair attempt exists, `retryRun` runs and the answer returns `{ ok: true, verification: "failed_retrying" }` (this is the wrong-confirm loop). Otherwise the stage fails, the run fails, and `teardownRunBrowsers` runs. Success continues with `resumeRun`.
 9. **Cancel.** `runManager.cancelRun` kills workers (`launcher.cancelRun`), then `teardownRunBrowsers`.
 10. **Abandon.** `runManager.abandonStage` kills workers and calls `teardownStageBrowser`. If no stage waits and the run is no longer live, `teardownRunBrowsers`.
 11. **Host start** (`server/bootstrap.ts`, after `reconcileOrphanedStages`). `sweepBrowserSessions`: `reclaimStale` on locks, then `sweepOrphanBrowserSessions` reads each `<socketRoot>/<hash>/owner.json`, skips live runs (an error counts as live), closes stage sessions first and anchors second, and removes the socket root when empty.
 12. **Retry after the run ended.** A new anchor starts and the stage env gets the new address (covered by `runtime.browserEnv`).
+
+### Live view relay {#live-view-lifecycle}
+
+A relay session exists only while a viewer is attached to a running or waiting stage. Nothing opens one for a stage with no viewers.
+
+- **Open.** A valid ticket on `events` makes `liveViewSessions.acquire` open the (run, stage) session, rebuilt from `browser-env.json` and `anchor.json` (`readLiveViewSessionRequest`). No state from an earlier Host process is needed, so a pending gate works after a Host restart as long as those files exist.
+- **Close, normal.** The last viewer leaves: the session closes after the 5 s grace period (a returning viewer cancels the timer).
+- **Close, gate or run control.** `RunManager.onGateClosed` (answer accepted, abandon, cancel) calls `revokeStage` or `revokeRun`: credentials are revoked (open streams get `closed` with reason `revoked`) and the session is closed.
+- **Close before teardown.** `StageBrowserSupport.beforeTeardown` (set by `RunManager` from its `beforeBrowserTeardown` listeners; the HTTP layer registers `revokeStage` or `revokeRun`) is awaited at the start of `teardownStageBrowser` (`{ runId, stageId }`) and of `teardownRunBrowsers` without `only` (`{ runId }`). The wait is bounded by `beforeTeardownWaitMs` (default 5000 ms): a hung or throwing close never blocks teardown. Only after it do the tab-close, session-close, anchor steps of steps 6 and 7 run. Covered call sites: scheduler stage end and run end, `cancelRun`, `abandonStage` (stage and run), and the three teardown calls in `resumeViaSubprocess`. A close started earlier by `onGateClosed` is awaited, not duplicated.
+- **Host shutdown.** `RunManager.stopAcceptingWork` calls `onShutdown` listeners and the server `close` event runs `dispose`: every stream ends with `closed`, every credential is revoked, every session closes, every grace timer and heartbeat is cleared. Browsers stay up (limitation 9).
+
+### Live view page dialogs {#live-view-dialogs}
+
+Design follows `spikes/live-view/dialogs/FINDINGS.md`. Everything runs on the relay's own browser-level CDP socket (no agent-browser command, no change to the stage env; agent-browser keeps auto-accepting `alert` and `beforeunload`).
+
+- **Attach.** After `Target.setDiscoverTargets` the relay sends `Target.setAutoAttach {autoAttach, waitForDebuggerOnStart, flatten}`. Every existing page and every new popup gets a flat session. For each page session the relay sends `Page.enable` without awaiting it (it blocks while a dialog is already open), then `Runtime.runIfWaitingForDebugger` for any paused target (also non-page ones, so nothing stays paused). Sessions are kept by target id and dropped on `Target.detachedFromTarget` or `Target.targetDestroyed`.
+- **Messages.** `dialog {id, kind, message, defaultPrompt, targetId, answerable}` (`answerable` only for `confirm` and `prompt`; text cut to 2000 characters) and `dialog_closed {id, result}` with `accepted`, `dismissed`, `timeout` or `closed_by_page` (target gone, detached, or CDP socket dropped). Open dialogs are replayed to a late subscriber after `status`, `tabs`, `url` and before the frame. Both are streamed over SSE.
+- **Answer.** `session.answerDialog({id, accept, promptText?})` sends `Page.handleJavaScriptDialog` on that target's session. A prompt accepted without text sends the dialog's `defaultPrompt` (an accept with no text returns an empty string). Results: `no_dialog` (nothing open, id mismatch, already answered, or CDP -32602 "No dialog is showing"), `not_answerable`, `invalid` (shape, `promptText` over 2000), `closed` (relay closed, or another CDP error; a retry is allowed). One answer per dialog. `dialog_closed` always comes from the browser's own closed event.
+- **Time-out.** An open `confirm` or `prompt` is dismissed (`accept:false`) after `dialogTimeoutMs` (relay option, default 60000, from Host config `browser.dialog_timeout_seconds`, read in `liveViewRoutes.ts` when the production relay is built). The relay then emits `dialog_closed {result:"timeout"}` itself. The timer uses the relay's injectable `schedule` and is cancelled on close and on `close()`. The Host does not fail the stage. The viewer shows a notice.
+- **Route.** `POST .../live-view/dialog` body `{id, accept, promptText?}` (max 8 KiB). Same protection as `input`: cookie credential, `x-stageflow-live-view: 1`, Origin check (`isLiveViewDialogPath` in `http.ts`, same `requireOrigin` flag; `controlToken.ts` exempts it from bearer auth like `input`), control mode only. 200 `{ok:true}`; 409 `no_dialog` or `closed`; 400 `not_answerable`, `invalid`, `invalid_json`; 403 `view_only`; 413. Bodies are never logged.
+- **Viewer.** `ui/src/liveView/dialogState.ts` (pure state and request building), `DialogOverlay.tsx`. Plain text with `white-space: pre-wrap`. A read-only dialog stays up for the notice time after its `dialog_closed`. On reconnect the overlay clears and the replay restores it.
+
 
 ## 5. Data and file layout {#data-and-file-layout}
 
@@ -216,7 +252,11 @@ The Host builds these in `localBrowserHost.ts` and persists them per stage. The 
 | `AGENT_BROWSER_CDP` | never | anchor CDP address | never | Attach to the shared Chrome. |
 | `AGENT_BROWSER_PIN_TAB` | never | `1` | never | Own tab, stays on it. |
 | `AGENT_BROWSER_ALLOWED_DOMAINS` | never | never | `allow_domains` joined by comma, if set | Native allowlist, only valid with no profile and no CDP. |
-| `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` | Linux, headed, copied from Host env if set | same | same | The stage env allowlist does not carry them. |
+| `AGENT_BROWSER_ARGS` | Always `--deny-permission-prompts` (Host constant, `DENY_PERMISSION_PROMPTS_ARG`), then Host config `browser.launch_args` (comma-joined, de-duplicated against the constant) | **never** (CDP attach does not launch Chrome) | same as anchor | Launch-affecting, so it is in the persisted env and identical for every command of the session. Never from Host env or YAML. Present even when no `launch_args` are configured. |
+| `AGENT_BROWSER_EXECUTABLE_PATH` | Host config `browser.executable_path`, if set | **never** | same as anchor | Same rule. Needed where Chrome for Testing has no build (Linux ARM64). |
+| `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY` | Linux, headed, `local_window` only, copied from Host env if set | same | same | The stage env allowlist does not carry them. **Never** for `virtual_display`: agent-browser starts its own private Xvfb when headed with no `DISPLAY`, and a copied stale value would break it. |
+
+Display capability (`createLocalBrowserHost`, `xvfbProbe` and `platform`/`hostEnv` are injectable): macOS and Windows `local_window`; Linux with `DISPLAY` or `WAYLAND_DISPLAY` `local_window`; Linux with neither and an executable `Xvfb` on `PATH` (searched, no process spawn) `virtual_display`; otherwise `headless_only`. `local_window` and `virtual_display` are headed unless the stage says `headed: false`; `headless_only` falls back to headless (human login still forces headed).
 
 Other variables:
 
@@ -232,6 +272,8 @@ Other variables:
 - `--restore`, `AGENT_BROWSER_RESTORE`, `agent-browser auth`, `--state`, `AGENT_BROWSER_ENCRYPTION_KEY`. They write under `$HOME/.agent-browser` which cannot be moved.
 - Anything read from the Host's ambient env. `AGENT_BROWSER_*` in the Host env is ignored and stripped from workers.
 - `HTTP_PROXY` / `HTTPS_PROXY` are on the stage env allowlist and agent-browser uses them as a proxy fallback. Do not widen the allowlist.
+- `DISPLAY`, `WAYLAND_DISPLAY` or `XAUTHORITY` for a `virtual_display` Host.
+- `AGENT_BROWSER_ARGS` or `AGENT_BROWSER_EXECUTABLE_PATH` on a CDP-attached stage session, from the ambient Host env, or from YAML (YAML rejects `launch_args`, `args`, `executable_path`, `executable`, `display`, `headless`, `xvfb`, `env`).
 - A different `AGENT_BROWSER_IDLE_TIMEOUT_MS`, `AGENT_BROWSER_USER_AGENT`, or any launch flag in one command of a session. It relaunches the browser. The skill tells the agent to run bare commands.
 
 ## 7. Invariants and gotchas {#invariants-and-gotchas}
@@ -248,7 +290,7 @@ Other variables:
 | 8 | Join topology for check, login, work: only `check -> login` has an `if`. The `check -> work` and `login -> work` edges have none. The work `io.input` must fit both parents' outputs. | A join runs only when every inbound `if` fired. With an `if` on `check -> work`, work is skipped when login runs, and the run still reports success. | `examples.browserSession`, `runtime.browserLoginCheck`, fixtures `browser-login-check` and `browser-human-login` |
 | 9 | Redaction patterns apply to browser stages only. | They are broad and would damage ordinary output elsewhere. | `browser.redaction` ("does not apply browser patterns to the global default"), `runtime.browserPolicy` (non-browser stage unchanged) |
 | 10 | YAML never carries a path or a scope. `path`, `scope`, `secret` fail load. | Scope and location are Host decisions (tenant isolation). | `config.loadStageBrowser`, `browser.profileStore.contract` |
-| 11 | A human login stage forces headed and fails before the agent starts when the Host has no screen. | A hidden window cannot be used by a person. Docker has no live view yet. | `runtime.browserHumanLogin` ("no display"), `browser.host.contract` |
+| 11 | A human login stage forces headed and fails before the agent starts when the Host has no screen and no live view. | A hidden window cannot be used by a person. A live view (the console's) stands in for the screen. | `runtime.browserHumanLogin` ("no display"), `browser.host.contract` |
 | 12 | Session-only cookies carry between stages of one run only because Chrome stays up. Across runs they are not guaranteed. | Chrome and agent-browser version dependent. Persistent cookies are safe. | smoke test log line, `docs/browser.md` |
 | 13 | The CDP port is on `127.0.0.1` with no token. | Any local process can drive the browser while the run is active. A service must sandbox the browser. | Documented only |
 | 14 | `allow_domains` is soft for profile stages. | agent-browser rejects its allowlist with `--profile` and `--cdp`. | `browser.host.contract` ("allowlist omitted on both") |
@@ -267,6 +309,11 @@ Other variables:
 | 26a | A profile stage with `allow_domains` gets its navigations audited at teardown: `navigation_outside_allowlist {host}` once per host (hosts only), or `allowlist_unverified` when the log cannot be read. Stages without `browser-policy.json` write nothing. Callers pass an `events` reader. | Native allowlist is rejected with a profile. | `runtime.browserAllowlistAudit` |
 | 26b | `blocked_sites` covers `allow_domains`, `check` URLs and `login_url` at stage start, and the `--url` of `sf browser check\|login` (exit 1, `browser_site_blocked`). | A blocked site must not be reached through any declared URL. | `browser.auditPolicy`, `cli.browser` |
 | 27 | Profile names are validated in the store (letters, digits, `.`, `_`, `-`, no `..`) and stricter in YAML (no `.`). | Names become folder names. | `browser.profileStore.contract`, `config.loadStageBrowser` |
+| 28 | Never run agent-browser commands on a timer for a session a viewer is attached to. The relay's own bounded one-shot first-frame nudge and popup retarget are the only exceptions. | A periodic command can steal the pinned tab or relaunch the daemon. | `browser.liveViewRelay` |
+| 29 | Live view input is ordered: batches from one session reach the browser in arrival order. | Clicks and keys out of order break forms. | `browser.liveViewRelay`, `server.liveView` ("keeps order across posts") |
+| 30 | Live view input and frames are never logged, audited, stored or echoed in errors. | They carry what the person types, including passwords. | `server.liveView` ("no-logging guarantee") |
+| 31 | The relay of a stage or run closes before its browser teardown starts, bounded by `beforeTeardownWaitMs`. A relay never outlives its stage. | A relay talking to a closing session races the close and can relaunch the daemon. | `runtime.browserTeardown` ("live view relay closes before browser teardown"), `server.liveView` ("live view lifecycle") |
+| 32 | A gate's handoff address is a stable path (`/api/runs/<run>/stages/<stage>/live-view`), never a credential. Tickets and credentials are issued on request and never stored in run state or on the gate. | Pending gates outlive Hosts and are visible to every reader of the run. | `browser.gateHandoff`, `server.liveView` |
 
 ## 8. Seams for a multi-tenant service {#seams}
 
@@ -281,7 +328,7 @@ Hosted use is not built. These are the places a service would replace. Do not ad
 | `BrowserRunner` | `defaultBrowserRunner` (spawns `agent-browser`) | Run agent-browser where the daemon lives. | A direct `execFile` call. |
 | `KeyProvider` (`keyProvider.ts`) | Key file, unused by the runtime | Return a per-tenant key if a feature needs one. | Wiring it to agent-browser. Its key does not protect a Chrome profile. |
 | `AuditSink` (`auditSink.ts`) | JSONL file; memory sink in tests | Write to the tenant's audit store. Never throw into the run. | Writing audit lines directly. Use `safeAudit`. |
-| Handoff kind (`gateHandoff.ts`) | Always `local_window` (`hostGateContextFor`) | Stamp `{ kind: "live_view", url }` from a proxy with its own auth. | Showing a window from a worker. The console reads `handoff` only. |
+| Handoff kind (`gateHandoff.ts`) | `local_window` with a screen, `live_view` (stable path) when the host reports a relay and no screen (`hostGateContextFor`) | Stamp `{ kind: "live_view", url }` from a proxy with its own auth. | Showing a window from a worker. The console reads `handoff` only. |
 | `RunLiveness` (`runLiveness.ts`) | Run status in the local store, plus `cli-<pid>-` ids | Answer from the service's run table. | Reading run meta from files. |
 | `DisplayProbe` (`humanLogin.ts`) | `defaultDisplayProbe` | Say a screen exists only when a live view handoff exists. | `process.platform` checks. |
 
@@ -384,6 +431,8 @@ When you remove a TODO, also update this table and "Known limitations".
 | `cli.browser.test.ts` | `sf browser` subcommands, exit codes, JSON shapes, lock behavior |
 | `examples.browserSession.test.ts` | Example pipeline topology and the fixture server |
 | `runtime.piHomeAuthWorker.test.ts` | Worker gets the Host's Pi auth path |
+| `server.liveView.test.ts` | Tickets, event stream, input, revocation, audit, no-logging, and the lifecycle block (relay closed before teardown, in-flight close awaited, no leaks, shutdown dispose, rebuild after a Host restart) |
+| `browser.liveViewRelay.test.ts`, `browser.liveViewTickets.test.ts` | Relay behavior over a fake WebSocket (including popups, auto-attach and page dialogs), ticket and credential rules |
 
 ### Run the browser tests
 

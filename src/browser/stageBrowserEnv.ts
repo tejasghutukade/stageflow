@@ -20,7 +20,8 @@ import {
 } from "./browserTeardown.js";
 import { defaultDisplayProbe, loginPageUrl, noScreenError } from "./humanLogin.js";
 import { ensureStageLoginCheck, OPEN_COMMAND_TIMEOUT_MS } from "./loginCheck.js";
-import { readPersistedBrowserEnv } from "./persistedEnv.js";
+import { resolveBrowserHostCapabilities } from "./hostCapabilities.js";
+import { BROWSER_CAPABILITIES_FILENAME, readPersistedBrowserEnv } from "./persistedEnv.js";
 import { createLocalBrowserHost } from "./localBrowserHost.js";
 import { createLocalProfileStore } from "./localProfileStore.js";
 import { LOCAL_BROWSER_SCOPE } from "./profileStore.js";
@@ -36,12 +37,33 @@ export async function readStagePersistedBrowserEnv(
 
 let defaultSupport: StageBrowserSupport | undefined;
 
+export function hostLaunchOptions(): { launchArgs: string[]; executablePath?: string } {
+  const config = loadHostConfig();
+  return {
+    launchArgs: config.browserLaunchArgs,
+    ...(config.browserExecutablePath !== undefined
+      ? { executablePath: config.browserExecutablePath }
+      : {}),
+  };
+}
+
 export function defaultStageBrowserSupport(): StageBrowserSupport {
   defaultSupport ??= {
-    host: createLocalBrowserHost(),
+    host: createLocalBrowserHost(hostLaunchOptions()),
     profiles: createLocalProfileStore(),
   };
   return defaultSupport;
+}
+
+let consoleSupport: StageBrowserSupport | undefined;
+
+/** Browser support for a process that serves the live view routes (`sf ui`, `sf mcp`). */
+export function consoleStageBrowserSupport(): StageBrowserSupport {
+  consoleSupport ??= {
+    host: createLocalBrowserHost({ liveView: "relay", ...hostLaunchOptions() }),
+    profiles: createLocalProfileStore(),
+  };
+  return consoleSupport;
 }
 
 /**
@@ -67,9 +89,24 @@ export async function resolveStageBrowserEnv(
   const { browser } = input;
   if (browser === undefined) return undefined;
 
-  if (input.humanLogin === true) {
-    const screen = (support.display ?? defaultDisplayProbe)();
-    if (!screen.hasDisplay) throw noScreenError(screen.docker);
+  const capabilities = resolveBrowserHostCapabilities(support.host.capabilities);
+  if (support.host.capabilities === undefined) {
+    capabilities.display = (support.display ?? defaultDisplayProbe)().hasDisplay
+      ? "local_window"
+      : "headless_only";
+  } else if (
+    capabilities.display === "local_window" &&
+    support.display !== undefined &&
+    !support.display().hasDisplay
+  ) {
+    capabilities.display = "headless_only";
+  }
+  if (
+    input.humanLogin === true &&
+    capabilities.display === "headless_only" &&
+    capabilities.liveView === "none"
+  ) {
+    throw noScreenError((support.display ?? defaultDisplayProbe)().docker);
   }
 
   if (
@@ -86,6 +123,12 @@ export async function resolveStageBrowserEnv(
 
   const dir = stageDir(input.runDir, input.stageId);
   const file = path.join(dir, BROWSER_ENV_FILENAME);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    path.join(dir, BROWSER_CAPABILITIES_FILENAME),
+    `${JSON.stringify({ display: capabilities.display, liveView: capabilities.liveView })}\n`,
+    { mode: 0o600 },
+  );
 
   // TODO(multi-tenant): open the profile in the run owner's scope, not the fixed local scope.
   const profile =

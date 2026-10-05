@@ -99,6 +99,8 @@ export type CallerQuotaConfig = {
   maxConcurrent: number;
 };
 
+export const DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS = 60;
+
 export type HostConfig = {
   maxConcurrentRuns: number;
   maxConcurrentRunsPerProject: number | undefined;
@@ -112,6 +114,12 @@ export type HostConfig = {
   callers: Record<string, CallerQuotaConfig>;
   /** Domains no browser stage may use (`browser.blocked_sites` in config.yaml). */
   browserBlockedSites: string[];
+  /** Chrome launch arguments (`browser.launch_args`); empty when unset. */
+  browserLaunchArgs: string[];
+  /** Explicit Chrome path (`browser.executable_path`); undefined when unset. */
+  browserExecutablePath: string | undefined;
+  /** Seconds an unanswered live view page dialog waits before the Host dismisses it (`browser.dialog_timeout_seconds`). */
+  browserDialogTimeoutSeconds: number;
   /** Absolute path of config.yaml when loaded; undefined if absent. */
   configFilePath: string | undefined;
   warnings: string[];
@@ -490,19 +498,72 @@ export function loadHostConfig(options?: {
   }
 
   let browserBlockedSites: string[] = [];
+  let browserLaunchArgs: string[] = [];
+  let browserExecutablePath: string | undefined;
+  let browserDialogTimeoutSeconds = DEFAULT_BROWSER_DIALOG_TIMEOUT_SECONDS;
   if (file.values.browser !== undefined) {
     const raw = file.values.browser;
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
       throw new HostConfigError(`Invalid value for browser`, "config_invalid", "browser");
     }
     for (const sub of Object.keys(raw)) {
-      if (sub !== "blocked_sites") {
+      if (sub !== "blocked_sites" && sub !== "launch_args" && sub !== "executable_path" && sub !== "dialog_timeout_seconds") {
         throw new HostConfigError(
           `Unknown key "${sub}" under browser`,
           "config_unknown_key",
           `browser.${sub}`,
         );
       }
+    }
+    const args = (raw as Record<string, unknown>).launch_args;
+    if (args !== undefined && args !== null) {
+      if (!Array.isArray(args) || !args.every((a) => typeof a === "string")) {
+        throw new HostConfigError(
+          "Invalid value for browser.launch_args; expected a list of strings",
+          "config_invalid",
+          "browser.launch_args",
+        );
+      }
+      for (const arg of args as string[]) {
+        if (arg.trim() === "" || /[,\r\n]/.test(arg)) {
+          throw new HostConfigError(
+            `Invalid item ${JSON.stringify(arg)} in browser.launch_args; each item must be non-empty with no comma or newline`,
+            "config_invalid",
+            "browser.launch_args",
+          );
+        }
+      }
+      browserLaunchArgs = (args as string[]).map((a) => a.trim());
+    }
+    const exe = (raw as Record<string, unknown>).executable_path;
+    if (exe !== undefined && exe !== null) {
+      if (
+        typeof exe !== "string" ||
+        exe.trim() === "" ||
+        !(path.posix.isAbsolute(exe.trim()) || path.win32.isAbsolute(exe.trim()))
+      ) {
+        throw new HostConfigError(
+          "Invalid value for browser.executable_path; expected a non-empty absolute path",
+          "config_invalid",
+          "browser.executable_path",
+        );
+      }
+      browserExecutablePath = exe.trim();
+    }
+    const dialogTimeout = (raw as Record<string, unknown>).dialog_timeout_seconds;
+    if (dialogTimeout !== undefined && dialogTimeout !== null) {
+      if (
+        typeof dialogTimeout !== "number" ||
+        !Number.isInteger(dialogTimeout) ||
+        dialogTimeout < 1
+      ) {
+        throw new HostConfigError(
+          "Invalid value for browser.dialog_timeout_seconds; expected a positive integer",
+          "config_invalid",
+          "browser.dialog_timeout_seconds",
+        );
+      }
+      browserDialogTimeoutSeconds = dialogTimeout;
     }
     const sites = (raw as Record<string, unknown>).blocked_sites;
     if (sites !== undefined) {
@@ -532,6 +593,9 @@ export function loadHostConfig(options?: {
     readToken,
     callers,
     browserBlockedSites,
+    browserLaunchArgs,
+    browserExecutablePath,
+    browserDialogTimeoutSeconds,
     configFilePath:
       configFilePath !== undefined && existsSync(configFilePath)
         ? configFilePath
