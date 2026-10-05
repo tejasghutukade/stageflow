@@ -7,6 +7,7 @@ import {
   resolveLogMaxLineBytes,
   type Logger,
 } from "../logging/logger.js";
+import { isCursorModelRef } from "../agent/cursorProvider.js";
 import { BROWSER_ENV_PREFIX } from "../browser/browserHost.js";
 import { PACKAGE_VERSION } from "../package-meta.js";
 import { PI_HOME_AUTH_PATH_ENV, piHomeAuthPath } from "./credentialBinding.js";
@@ -49,6 +50,7 @@ export type StageLaunchInput = {
   grants?: ResolvedStageGrants;
   attemptHome?: string;
   browserEnv?: Record<string, string>;
+  model?: string;
 };
 
 export type StageLaunchResult =
@@ -466,10 +468,19 @@ export class StageProcessLauncher {
             ...input.browserEnv,
           }
         : overlaid;
-    const childEnv = {
+    const childEnv: Record<string, string> = {
       ...withBrowser,
       [PI_HOME_AUTH_PATH_ENV]: piHomeAuthPath(),
     };
+    const cursorApiKey = hostEnv.CURSOR_API_KEY;
+    if (
+      isCursorModelRef(input.model ?? "") &&
+      cursorApiKey !== undefined &&
+      cursorApiKey !== "" &&
+      childEnv.CURSOR_API_KEY === undefined
+    ) {
+      childEnv.CURSOR_API_KEY = cursorApiKey;
+    }
 
     const child = this.forkFn(this.cliEntry, args, {
       cwd: input.rootDir,

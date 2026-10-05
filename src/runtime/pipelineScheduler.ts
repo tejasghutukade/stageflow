@@ -1432,6 +1432,7 @@ export async function runPipelineDag(
           attempt,
           env: stageBinding.env,
           bindingKind: stageBinding.kind,
+          model: stage.model,
           grants,
           attemptHome,
           ...(browserEnv !== undefined ? { browserEnv } : {}),

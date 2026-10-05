@@ -275,4 +275,57 @@ describe("StageProcessLauncher", () => {
     });
     expect(after).toEqual({ type: "succeeded" });
   });
+
+  it("gives host CURSOR_API_KEY only to a cursor stage", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-cursor-key-"));
+    const envs: Array<NodeJS.ProcessEnv | undefined> = [];
+    const previous = {
+      key: process.env.CURSOR_API_KEY,
+      allow: process.env.STAGEFLOW_STAGE_ENV_ALLOW,
+      passthrough: process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH,
+    };
+    process.env.CURSOR_API_KEY = "test-cursor-key";
+    delete process.env.STAGEFLOW_STAGE_ENV_ALLOW;
+    delete process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH;
+    const launcher = new StageProcessLauncher({
+      cliEntry: mockWorker,
+      forkFn: ((...args: Parameters<typeof childProcess.fork>) => {
+        envs.push(args[2]?.env);
+        const child = new EventEmitter() as ChildProcess;
+        child.stdout = null;
+        child.stderr = null;
+        child.pid = 42;
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    try {
+      await launcher.launch({
+        runId: "r-cursor",
+        stageId: "draft",
+        rootDir,
+        model: "cursor/composer-2-5",
+      });
+      await launcher.launch({
+        runId: "r-other",
+        stageId: "other",
+        rootDir,
+        model: "anthropic/claude-sonnet-4-5",
+      });
+    } finally {
+      if (previous.key === undefined) delete process.env.CURSOR_API_KEY;
+      else process.env.CURSOR_API_KEY = previous.key;
+      if (previous.allow === undefined) delete process.env.STAGEFLOW_STAGE_ENV_ALLOW;
+      else process.env.STAGEFLOW_STAGE_ENV_ALLOW = previous.allow;
+      if (previous.passthrough === undefined) {
+        delete process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH;
+      } else {
+        process.env.STAGEFLOW_STAGE_ENV_PASSTHROUGH = previous.passthrough;
+      }
+    }
+
+    expect(envs[0]?.CURSOR_API_KEY).toBe("test-cursor-key");
+    expect(envs[1]?.CURSOR_API_KEY).toBeUndefined();
+  });
 });

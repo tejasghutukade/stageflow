@@ -17,6 +17,6 @@ Stages no longer inherit the Host process environment. The child sees an exact-n
 4. **MCP** — declare secrets with `as: env` when servers need `${TOKEN}` in env, or use `${TOKEN:-}` defaults. Helper-only `GITHUB_TOKEN` grants do **not** put the value in the curated env for MCP interpolation; `{ as: env }` does (and still sets askpass for git).
 5. **Verify** — commands run under `bash -c` (not `/bin/sh`). Install `bash` on PATH.
 
-Provider model auth is unchanged: it still travels by `authPath`, not env vars.
+Provider model auth still travels by `authPath`. A stage whose model is `cursor/...` also receives host `CURSOR_API_KEY` when that variable is set. The Cursor extension reads that variable inside the stage process.
 
 In-process execution (`STAGEFLOW_STAGE_EXECUTION=inprocess` / Vitest default) does **not** provide isolation — use `STAGEFLOW_STAGE_EXECUTION=process` for security proofs.
