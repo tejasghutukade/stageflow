@@ -637,8 +637,11 @@ describe("generic fan-in scheduler", () => {
       executionMode: "inprocess",
     });
 
-    await waitFor(() => (agent.openCounts.get("validation") ?? 0) === 1);
-    expect(agent.openCounts.get("research") ?? 0).toBe(1);
+    await waitFor(
+      () =>
+        (agent.openCounts.get("validation") ?? 0) === 1 &&
+        (agent.openCounts.get("research") ?? 0) === 1,
+    );
     expect(agent.openCounts.get("synthesize") ?? 0).toBe(0);
 
     releaseValidation();
