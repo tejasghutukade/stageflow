@@ -60,6 +60,7 @@ import {
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
+import { createGetEmailTool, createSearchEmailTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, type StageActivityEvent } from "./activity.js";
@@ -929,13 +930,17 @@ async function prepareStageSessionWiring(
     const customTools: StageSessionWiring["customTools"] = [emitTool, askTool, artifactTool];
     const emailAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("send"));
     if (emailAllowed) customTools.push(defineTool(createSendEmailTool(input.email!)));
+    const emailSearchAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("search"));
+    const emailGetAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("getMessage"));
+    if (emailSearchAllowed) customTools.push(defineTool(createSearchEmailTool(input.email!)));
+    if (emailGetAllowed) customTools.push(defineTool(createGetEmailTool(input.email!)));
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : [])],
+      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : [])],
       customTools,
       emitDefName: emitDef.name,
       askOperatorDefName: askDef.name,

@@ -9,8 +9,8 @@ import {
   type StageWorkerResult,
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
-import { emailHostFor, emailWorkerEnvironment, stageEmail } from "../email/host.js";
-import { EmailError, type SendEmailInput } from "../email/port.js";
+import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { EmailError, type SendEmailInput, type SearchEmailsInput, type EmailMessageRef } from "../email/port.js";
 import type { StageConfig } from "../types/stage.js";
 
 export type StageLaunchInput = {
@@ -115,6 +115,12 @@ export class StageProcessLauncher {
   }
 
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
+    try {
+      if (input.stage?.email?.length) validateStageEmailAccounts(emailHostFor(input.factoryCwd ?? input.operatorCatalog?.cwd ?? input.rootDir).accounts, input.stage);
+    } catch (error) {
+      if (error instanceof EmailError) return { type: "failed", reason: error.code };
+      throw error;
+    }
     await this.waitForCapacity();
     return this.spawnAndWait({ ...input, stage: input.stage ? structuredClone(input.stage) : undefined });
   }
@@ -254,15 +260,17 @@ export class StageProcessLauncher {
 
       child.on("message", (message: unknown) => {
         const request = message as { type?: string; requestId?: unknown; input?: unknown };
-        if (!settled && request?.type === "email.send") {
+        if (!settled && ["email.send", "email.search", "email.getMessage"].includes(request?.type ?? "")) {
           void (async () => {
             if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
             let response: object;
             try {
               const stage = input.stage;
               if (!stage || settled) throw new EmailError("EMAIL_UNAUTHORIZED");
-              const receipt = await stageEmail(emailHostFor(factoryCwd).mailbox, stage, input.runId).send(request.input as SendEmailInput);
-              response = { receipt };
+              const email = stageEmail(emailHostFor(factoryCwd).mailbox, stage, input.runId);
+              if (request.type === "email.send") response = { receipt: await email.send(request.input as SendEmailInput) };
+              else if (request.type === "email.search") response = { result: await email.search(request.input as SearchEmailsInput) };
+              else response = { result: await email.getMessage(request.input as EmailMessageRef) };
             } catch (error) {
               const fault = error instanceof EmailError ? error : new EmailError("EMAIL_UNAUTHORIZED");
               response = { error: { code: fault.code, retryable: fault.retryable } };

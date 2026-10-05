@@ -1,0 +1,10 @@
+id: name-suggestion
+system_prompt: Suggest names and return boy_names and girl_names in the envelope payload.
+model: test/model
+payload_schema:
+  type: object
+  required: [boy_names, girl_names]
+  properties:
+    boy_names: { type: array, items: { type: string } }
+    girl_names: { type: array, items: { type: string } }
+  additionalProperties: false

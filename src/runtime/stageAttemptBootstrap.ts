@@ -1,5 +1,6 @@
 import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
-import { emailHostFor, stageEmail, workerStageEmail } from "../email/host.js";
+import { emailHostFor, stageEmail, workerStageEmail, validateStageEmailAccounts } from "../email/host.js";
+import { EmailError } from "../email/port.js";
 import { resolveSkillByName } from "../config/listSkills.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -135,6 +136,13 @@ export async function openStageAttempt(
     input.resumeToken ??
     resumeSessionFilePath(input.workspaceDir, input.stage.id, attempt);
 
+  if (process.env.SF_STAGE_WORKER !== "1" && input.stage.email?.length) {
+    try { validateStageEmailAccounts(emailHostFor(input.factoryCwd ?? process.cwd()).accounts, input.stage); }
+    catch (error) {
+      if (error instanceof EmailError) return { ok: false, reason: error.code };
+      throw error;
+    }
+  }
   const opened = await openStageWithOperatorCatalog(
     input.agent,
     {

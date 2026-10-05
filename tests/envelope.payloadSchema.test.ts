@@ -79,7 +79,7 @@ describe("payload_schema", () => {
 
   it("loads naming-ceremony stages with payload_schema", async () => {
     const suggestion = await loadStage(
-      path.join(root, "stages", "name-suggestion.yaml"),
+      path.join(root, "tests", "fixtures", "stages", "name-suggestion.yaml"),
     );
     expect(suggestion.payload_schema).toMatchObject({
       type: "object",
@@ -87,7 +87,7 @@ describe("payload_schema", () => {
     });
 
     const selection = await loadStage(
-      path.join(root, "stages", "name-selection.yaml"),
+      path.join(root, "tests", "fixtures", "stages", "name-selection.yaml"),
     );
     expect(selection.payload_schema).toMatchObject({
       type: "object",

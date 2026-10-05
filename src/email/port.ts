@@ -23,7 +23,7 @@ export type EmailMessageSummary = {
 };
 export type EmailMessage = EmailMessageSummary & {
   cc: EmailAddress[]; replyTo: EmailAddress[]; text: string; html?: string;
-  references: string[]; attachments: EmailAttachment[];
+  inReplyTo?: string; references: string[]; attachments: EmailAttachment[];
 };
 export type SendEmailInput = {
   accountId: string; operationKey: string; from?: string; to: EmailAddress[];

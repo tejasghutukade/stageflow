@@ -17,17 +17,21 @@ const roots: string[] = [];
 afterEach(async () => { captured.calls = []; for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 describe("Pi email tool registration", () => {
   it("registers send only for a permitted operation with host wiring", async () => {
-    for (const permissions of [undefined, [{ accountId: "company", operations: ["search" as const] }], [{ accountId: "company", operations: ["send" as const] }]]) {
+    for (const permissions of [undefined, [{ accountId: "company", operations: ["search" as const] }], [{ accountId: "company", operations: ["getMessage" as const] }], [{ accountId: "company", operations: ["send" as const] }]]) {
       const root = await mkdtemp(path.join(tmpdir(), "sf-email-tools-")); roots.push(root);
       const handle = new PiAgentAdapter().openStage({ roots: buildStageRoots(root, "notify"),
         stage: { id: "notify", model: "anthropic/claude-sonnet-4-5", system_prompt: "notify", email: permissions },
         task: { id: "notice", goal: "notify" }, priorEnvelope: null,
-        email: { async send() { throw new Error("not called"); } } });
+        email: { async send() { throw new Error("not called"); }, async search() { throw new Error("not called"); }, async getMessage() { throw new Error("not called"); } } });
       await handle.next(); await handle.close();
       const latest = captured.calls.at(-1)!;
       const allowed = permissions?.[0].operations[0] === "send";
       expect(latest.tools.includes("send_email")).toBe(allowed);
       expect(latest.customTools.some(tool => tool.name === "send_email")).toBe(allowed);
+      expect(latest.tools.includes("search_email")).toBe(permissions?.[0].operations[0] === "search");
+      expect(latest.customTools.some(tool => tool.name === "search_email")).toBe(permissions?.[0].operations[0] === "search");
+      expect(latest.tools.includes("get_email_message")).toBe(permissions?.[0].operations[0] === "getMessage");
+      expect(latest.customTools.some(tool => tool.name === "get_email_message")).toBe(permissions?.[0].operations[0] === "getMessage");
     }
   });
 });

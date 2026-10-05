@@ -1,9 +1,12 @@
 import { createServer, type Socket } from "node:net";
+import type { MailRecord } from "../../src/email/messages.js";
 
-export async function mailServer(protocol: "imap" | "smtp", options: { rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean } = {}) {
+export async function mailServer(protocol: "imap" | "smtp", options: { rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean; mailboxMessages?: MailRecord[] } = {}) {
   const sockets = new Set<Socket>();
   const commands: string[] = [];
   const messages: { data: string; recipients: string[] }[] = [];
+  const mailbox = { generation: "1", messages: options.mailboxMessages ?? [] };
+  const fetchedSourceBytes: number[] = [];
   const server = createServer(socket => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
@@ -64,6 +67,38 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
           }
           else if (command === "LOGIN") socket.write(`${tag} ${options.rejectAuth ? "NO" : "OK"} authentication\r\n`);
           else if (command === "LIST") socket.write(`* LIST (\\HasNoChildren) "/" "INBOX"\r\n${tag} OK list\r\n`);
+          else if (command === "EXAMINE" || command === "SELECT") {
+            if (!line.includes('"INBOX"') && !line.endsWith(" INBOX")) { socket.write(`${tag} NO mailbox missing\r\n`); continue; }
+            socket.write(`* FLAGS (\\Seen \\Flagged)\r\n* ${mailbox.messages.length} EXISTS\r\n* OK [UIDVALIDITY ${mailbox.generation}] mailbox identity\r\n* OK [UIDNEXT ${Math.max(0, ...mailbox.messages.map(value => value.uid)) + 1}] next uid\r\n${tag} OK [READ-ONLY] examined\r\n`);
+          }
+          else if (command === "FETCH" || (command === "UID" && line.includes(" FETCH "))) {
+            const uid = command === "UID";
+            const requested = Number(line.split(" ")[uid ? 3 : 2]);
+            const record = uid ? mailbox.messages.find(value => value.uid === requested) : mailbox.messages[requested - 1];
+            if (record) {
+              const sequence = mailbox.messages.indexOf(record) + 1;
+              const quote = (value: string | undefined): string => value === undefined ? "NIL" : `"${value.replace(/[\\"]/g, "\\$&").replace(/[\r\n]/g, " ")}"`;
+              const header = (name: string): string | undefined => record.source.toString("utf8", 0, Math.min(record.source.length, 65536)).match(new RegExp(`^${name}: *(.*)$`, "im"))?.[1]?.trim();
+              const address = (value: string | undefined): string => {
+                if (!value) return "NIL";
+                const email = value.match(/<([^>]+)>/)?.[1] ?? value;
+                const [local, domain] = email.split("@");
+                return domain ? `((NIL NIL ${quote(local)} ${quote(domain)}))` : "NIL";
+              };
+              const fields = [`UID ${record.uid}`, `FLAGS (${[...record.flags].join(" ")})`, `RFC822.SIZE ${record.source.length}`, `INTERNALDATE "01-Jan-2026 12:00:00 +0000"`];
+              if (line.includes("ENVELOPE")) fields.push(`ENVELOPE (NIL ${quote(header("Subject"))} ${address(header("From"))} NIL NIL ${address(header("To"))} NIL NIL NIL ${quote(header("Message-ID"))})`);
+              const partial = line.match(/BODY\.PEEK\[\]<([0-9]+)\.([0-9]+)>/i);
+              if (partial) {
+                const start = Number(partial[1]);
+                const source = record.source.subarray(start, start + Number(partial[2]));
+                fetchedSourceBytes.push(source.length);
+                socket.write(`* ${sequence} FETCH (${fields.join(" ")} BODY[]<${start}> {${source.length}}\r\n`);
+                socket.write(source); socket.write(")\r\n");
+              } else socket.write(`* ${sequence} FETCH (${fields.join(" ")})\r\n`);
+            }
+            socket.write(`${tag} OK fetched\r\n`);
+          }
+          else if (command === "SEARCH" || (command === "UID" && line.includes(" SEARCH "))) socket.write(`* SEARCH ${mailbox.messages.map(value => value.uid).join(" ")}\r\n${tag} OK searched\r\n`);
           else if (command === "LOGOUT") socket.end(`* BYE closing\r\n${tag} OK logout\r\n`);
           else socket.write(`${tag} OK complete\r\n`);
         }
@@ -74,7 +109,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No fixture port");
   return {
-    port: address.port, commands, sockets, messages,
+    port: address.port, commands, sockets, messages, mailbox, fetchedSourceBytes,
     async close() {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));

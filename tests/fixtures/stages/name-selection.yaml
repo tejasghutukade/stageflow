@@ -1,0 +1,10 @@
+id: name-selection
+system_prompt: Select names and return boy and girl in the envelope payload.
+model: test/model
+payload_schema:
+  type: object
+  required: [boy, girl]
+  properties:
+    boy: { type: string }
+    girl: { type: string }
+  additionalProperties: false

@@ -4,6 +4,7 @@ import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { EmailSubmissions, validateSend } from "./submissions.js";
+import { decodeRef, EMAIL_SOURCE_LIMIT, envelopeSummary, parseMessage, recentQuery, summarize, type MailRecord } from "./messages.js";
 import { EmailAccounts, resolveEmailSecret, type EmailAccount, type EmailConnection } from "./accounts.js";
 import {
   EmailError, type EmailMailbox, type EmailEventSource, type EmailAccountStatus,
@@ -48,12 +49,8 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   async reply(input: ReplyToEmailInput): Promise<SendEmailResult> {
     return this.unsupported(input.ref.accountId);
   }
-  async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
-    return this.unsupported(ref.accountId);
-  }
-  async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
-    return this.unsupported(input.accountId);
-  }
+  abstract getMessage(ref: EmailMessageRef): Promise<EmailMessage>;
+  abstract search(input: SearchEmailsInput): Promise<SearchEmailsResult>;
   async start(_emit: (event: EmailReceivedEvent) => Promise<void>): Promise<void> {
     throw new EmailError("EMAIL_UNSUPPORTED");
   }
@@ -66,12 +63,41 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   protected status(accountId: string): EmailAccountStatus {
     return {
       accountId, checkedAt: new Date().toISOString(),
-      capabilities: { operations: ["testAccount", "send"], searchFields: [], idle: false },
+      capabilities: { operations: ["testAccount", "send", "search", "getMessage"], searchFields: [], idle: false },
     };
   }
 }
 
 export class InMemoryEmailAdapter extends AccountEmailAdapter {
+  private readonly mailboxes = new Map<string, { generation: string; messages: MailRecord[] }>();
+  /** Provider fixture data. Content is held only by this test adapter. */
+  seedMailbox(accountId: string, messages: MailRecord[], mailbox = "INBOX", generation = "1"): void {
+    this.accounts.get(accountId);
+    this.mailboxes.set(`${accountId}:${mailbox}`, { generation, messages: messages.map(value => ({ ...value, source: Buffer.from(value.source), flags: new Set(value.flags), receivedAt: new Date(value.receivedAt) })) });
+  }
+  async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
+    const account = this.accounts.get(input?.accountId);
+    const { mailbox, limit } = recentQuery(input);
+    const stored = this.mailboxes.get(`${account.accountId}:${mailbox}`);
+    if (!stored && mailbox !== "INBOX") throw new EmailError("EMAIL_INVALID_INPUT");
+    const records = [...stored?.messages ?? []].sort((a, b) => b.uid - a.uid).slice(0, limit);
+    return { messages: await Promise.all(records.map(async record => {
+      const end = record.source.indexOf("\r\n\r\n");
+      const headers = record.source.subarray(0, end < 0 ? Math.min(record.source.length, 65536) : Math.min(end + 4, 65536));
+      const summary = summarize(await parseMessage(account, mailbox, stored!.generation, { ...record, source: headers }));
+      delete summary.hasAttachments; delete summary.preview;
+      return summary;
+    })) };
+  }
+  async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
+    const account = this.accounts.get(ref?.accountId);
+    const decoded = decodeRef(account, ref);
+    const stored = this.mailboxes.get(`${account.accountId}:${decoded.mailbox}`);
+    if (!stored || stored.generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
+    const record = stored.messages.find(value => value.uid === decoded.uid);
+    if (!record) throw new EmailError("EMAIL_MESSAGE_NOT_FOUND");
+    return parseMessage(account, decoded.mailbox, stored.generation, record);
+  }
   readonly sent: SendEmailInput[] = [];
   protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
     this.sent.push(structuredClone(input));
@@ -96,6 +122,55 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
   constructor(accounts: EmailAccounts, private readonly env: NodeJS.ProcessEnv = process.env) {
     super(accounts);
     this.unsubscribe = accounts.onChange(accountId => this.cancel(accountId));
+  }
+
+  private async readMailbox<T>(account: EmailAccount, mailbox: string, read: (client: ImapFlow, generation: string, count: number) => Promise<T>): Promise<T> {
+    const config = account.imap;
+    const secret = resolveEmailSecret(config, this.env);
+    const client = new ImapFlow({ host: config.host, port: config.port, secure: config.tls === "implicit", doSTARTTLS: config.tls === "starttls", logger: false,
+      auth: { user: config.username, ...(config.auth.type === "oauth2" ? { accessToken: secret } : { pass: secret }) },
+      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs, socketTimeout: account.connectionTimeoutMs,
+      tls: { rejectUnauthorized: true }, disableAutoIdle: true });
+    client.on("error", () => {});
+    try {
+      return await this.bounded(account, () => client.close(), async () => {
+        await client.connect();
+        let opened;
+        try { opened = await client.mailboxOpen(mailbox, { readOnly: true }); }
+        catch (error) {
+          if ((error as { responseStatus?: string }).responseStatus === "NO") throw new EmailError("EMAIL_INVALID_INPUT");
+          throw error;
+        }
+        return read(client, String(opened.uidValidity), opened.exists);
+      });
+    } catch (error) { throw normalizedConnectionError(error); }
+  }
+  private async readMessage(client: ImapFlow, account: EmailAccount, mailbox: string, generation: string, id: number, uid: boolean): Promise<EmailMessage> {
+    // BODY.PEEK[]<0.limit> bounds bytes at the provider before a source buffer is allocated.
+    const result = await client.fetchOne(String(id), { uid: true, flags: true, internalDate: true, size: true, source: { start: 0, maxLength: EMAIL_SOURCE_LIMIT + 1 } }, { uid });
+    if (!result) throw new EmailError("EMAIL_MESSAGE_NOT_FOUND");
+    if ((result.size ?? 0) > EMAIL_SOURCE_LIMIT || !result.source || result.source.length > EMAIL_SOURCE_LIMIT) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+    return parseMessage(account, mailbox, generation, { uid: result.uid, source: result.source, flags: result.flags ?? new Set(), receivedAt: result.internalDate instanceof Date ? result.internalDate : new Date(0) });
+  }
+  async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
+    const account = this.accounts.get(input?.accountId);
+    const { mailbox, limit } = recentQuery(input);
+    return this.readMailbox(account, mailbox, async (client, generation, count) => {
+      const messages = [];
+      for (let sequence = count; sequence > Math.max(0, count - limit); sequence--) {
+        const result = await client.fetchOne(String(sequence), { uid: true, flags: true, internalDate: true, envelope: true });
+        if (result) messages.push(envelopeSummary(account, mailbox, generation, result));
+      }
+      return { messages };
+    });
+  }
+  async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
+    const account = this.accounts.get(ref?.accountId);
+    const decoded = decodeRef(account, ref);
+    return this.readMailbox(account, decoded.mailbox, async (client, generation) => {
+      if (generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
+      return this.readMessage(client, account, decoded.mailbox, generation, decoded.uid, true);
+    });
   }
 
   protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
