@@ -94,9 +94,12 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
               const header = (name: string): string | undefined => record.source.toString("utf8", 0, Math.min(record.source.length, 65536)).match(new RegExp(`^${name}: *(.*)$`, "im"))?.[1]?.trim();
               const address = (value: string | undefined): string => {
                 if (!value) return "NIL";
-                const email = value.match(/<([^>]+)>/)?.[1] ?? value;
-                const [local, domain] = email.split("@");
-                return domain ? `((NIL NIL ${quote(local)} ${quote(domain)}))` : "NIL";
+                const entries = value.split(",").map(item => {
+                  const email = item.match(/<([^>]+)>/)?.[1] ?? item.trim();
+                  const [local, domain] = email.split("@");
+                  return domain ? `(NIL NIL ${quote(local)} ${quote(domain)})` : "";
+                }).filter(Boolean);
+                return entries.length ? `(${entries.join(" ")})` : "NIL";
               };
               const date = record.receivedAt;
               const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getUTCMonth()];
@@ -130,7 +133,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No fixture port");
   return {
-    port: address.port, commands, sockets, messages, mailbox: defaultMailbox, mailboxes, fetchedSourceBytes,
+    port: address.port, commands, sockets, messages, mailbox: defaultMailbox, mailboxes, fetchedSourceBytes, faults: options,
     signal(folder = "INBOX") { for (const socket of sockets) if (selected.get(socket) === folder) socket.write(`* ${mailboxes.get(folder)?.messages.length ?? 0} EXISTS\r\n`); },
     async close() {
       for (const socket of sockets) socket.destroy();

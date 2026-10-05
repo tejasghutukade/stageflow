@@ -122,7 +122,7 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} incoming even
     await next.start(async event => { received.push(event); });
     expect(received.map(event => event.eventId)).toEqual([eventId]);
   });
-  it("uses bounded metadata for malformed headers and faults on changed folder identity", async () => {
+  it("uses bounded metadata and baselines changed folder identity", async () => {
     const { adapter, account, server } = await setup(kind);
     const received: EmailReceivedEvent[] = [];
     await adapter.start(async event => { received.push(event); });
@@ -134,9 +134,71 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} incoming even
     server.mailbox.generation = "9";
     if (adapter instanceof InMemoryEmailAdapter) adapter.seedMailbox(account.accountId, server.mailbox.messages, "INBOX", "9");
     else { await adapter.stop(); await adapter.start(async event => { received.push(event); }); }
-    await expect.poll(() => adapter.events.health()[0].error?.code).toBe("EMAIL_STALE_REFERENCE");
+    await expect.poll(() => adapter.events.health()[0].reset?.generation).toBe("9");
+    expect(adapter.events.health()[0].state).toBe("watching");
     expect(received).toHaveLength(1);
   });
+  it("records a bounded message fault and accepts the later valid message", async () => {
+    const { adapter, account, server, root } = await setup(kind);
+    const received: EmailReceivedEvent[] = [];
+    await adapter.start(async event => { received.push(event); });
+    const bad = record(8);
+    bad.source = Buffer.from(`From: ${Array.from({ length: 101 }, (_, i) => `sender${i}@example.com`).join(",")}\r\nSubject: PRIVATE BAD MESSAGE\r\n\r\nPRIVATE BODY`);
+    server.mailbox.messages.push(bad, record(9));
+    if (adapter instanceof InMemoryEmailAdapter) adapter.seedMailbox(account.accountId, server.mailbox.messages); else server.signal();
+    await expect.poll(() => received.length).toBe(1);
+    expect(received[0].message.subject).toBe("Message 9");
+    expect(adapter.events.health()[0].faults).toMatchObject([{ uid: 8, code: "EMAIL_RESOURCE_LIMIT" }]);
+    const saved = await readFile(path.join(root, ".stageflow", "email-events.json"), "utf8");
+    expect(saved).not.toContain("PRIVATE BAD MESSAGE"); expect(saved).not.toContain("PRIVATE BODY");
+  });
+});
+
+it("reconnects a real dropped IMAP connection and finds retained arrivals", async () => {
+  const { adapter, server, arrive } = await setup("local");
+  const received: EmailReceivedEvent[] = [];
+  await adapter.start(async event => { received.push(event); });
+  for (const socket of server.sockets) socket.destroy();
+  await expect.poll(() => adapter.events.health()[0].state).toBe("recovering");
+  arrive(8, 9);
+  await expect.poll(() => received.length, { timeout: 4000 }).toBe(2);
+  expect(server.commands.filter(value => value === "AUTHENTICATE")).toHaveLength(2);
+  expect(adapter.events.health()[0]).toMatchObject({ state: "watching", lastAccepted: { uid: 9 } });
+});
+
+it("pauses an expired local token without making provider requests", async () => {
+  const { adapter, accounts, account, server } = await setup("local");
+  accounts.update(account.accountId, { imap: { ...account.imap, auth: { type: "oauth2", secretRef: "env:MAIL_SECRET", expiresAt: "2020-01-01T00:00:00Z" } } });
+  await adapter.start(async () => {});
+  expect(adapter.events.health()[0]).toMatchObject({ state: "failed", error: { code: "EMAIL_TOKEN_EXPIRED", retryable: false } });
+  vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(60000);
+  expect(server.commands).toEqual([]);
+});
+
+it("pauses local provider authentication rejection until settings change", async () => {
+  const { adapter, accounts, account, server } = await setup("local");
+  server.faults.rejectAuth = true;
+  await adapter.start(async () => {});
+  expect(adapter.events.health()[0]).toMatchObject({ state: "failed", error: { code: "EMAIL_AUTH_FAILED", retryable: false } });
+  await expect.poll(() => server.sockets.size).toBe(0);
+  const attempts = server.commands.filter(value => value === "AUTHENTICATE").length;
+  vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(60000);
+  expect(server.commands.filter(value => value === "AUTHENTICATE")).toHaveLength(attempts);
+  vi.useRealTimers(); server.faults.rejectAuth = false;
+  accounts.update(account.accountId, { displayName: "Credentials changed" });
+  await expect.poll(() => adapter.events.health()[0].state).toBe("watching");
+});
+
+it("closes a new reconnect client while mailbox selection is stalled", async () => {
+  const { adapter, server } = await setup("local");
+  await adapter.start(async () => {});
+  server.faults.stallSelection = true;
+  const selections = server.commands.filter(value => value === "EXAMINE").length;
+  for (const socket of server.sockets) socket.destroy();
+  await expect.poll(() => server.commands.filter(value => value === "EXAMINE").length, { timeout: 4000 }).toBe(selections + 1);
+  await adapter.stop();
+  await expect.poll(() => server.sockets.size).toBe(0);
+  expect(adapter.events.health()).toEqual([]);
 });
 it("keeps recent completed metadata, unresolved work, and durable dedupe after retention", async () => {
   const { adapter, root, accounts, account, server } = await setup("memory");

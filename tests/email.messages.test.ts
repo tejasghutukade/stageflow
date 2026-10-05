@@ -161,7 +161,8 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} message contr
     expect(message.replyTo).toEqual([{ address: "reply@example.com" }]); expect(message.references).toEqual(["<one@example.com>", "<two@example.com>"]);
     expect(message.text).toContain("Body text"); expect(message.html).toContain("<p>Body text</p>");
     expect(message.attachments).toEqual([{ id: "0", filename: "data.bin", contentType: "application/octet-stream", size: 3 }]);
-    expect(JSON.stringify(message)).not.toContain("YWJj");
+    // Opaque references can contain this text by chance. Check only returned message data.
+    expect(JSON.stringify({ ...message, ref: undefined })).not.toContain("YWJj");
   });
   it("lists large messages but enforces source and decoded body limits for retrieval", async () => {
     const { adapter, account, server } = await setup(kind, [record(1, "x".repeat(EMAIL_SOURCE_LIMIT + 1)), record(2, "x".repeat(128 * 1024 + 1))]);

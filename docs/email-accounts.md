@@ -45,7 +45,7 @@ Example create body:
 }
 ```
 
-The default folder is INBOX. Optional settings include `enabled`, `folders`, `senderAliases`, `sentFolder`, `pollingIntervalMs` (default 60000), and `connectionTimeoutMs` (default 10000; range 100–60000). Adapter selection is `local` for this release. PATCH replaces each supplied connection object; send the full connection object when changing its credentials. Do not supply accountId or scope in create or update requests.
+The default folder is INBOX. Optional settings include `enabled`, `folders`, `senderAliases`, `sentFolder`, `pollingIntervalMs` (default 60000), `reconnectMaxDelayMs` (default 60000; range 1000–3600000), and `connectionTimeoutMs` (default 10000; range 100–60000). Adapter selection is `local` for this release. PATCH replaces each supplied connection object; send the full connection object when changing its credentials. Do not supply accountId or scope in create or update requests.
 
 For SMTP port 587, use `tls: "starttls"`. Certificate validation is always enabled. Plain connections require `allowInsecureLocalDevelopment: true` and a loopback server address. This option is only for a local development mail fixture.
 
@@ -89,7 +89,19 @@ The first connection stores a durable folder identity and UID baseline. It emits
 
 Events have version 1, stable workspace/account/folder/message identity, an opaque message reference, bounded header summaries, and receive and detection timestamps. `.stageflow/email-events.json` stores only this metadata and folder progress. An event is pending before consumer delivery. The consumer must resolve only after durable acceptance. Failure keeps the same pending event identity and blocks later folder progress. The current host accepts detection metadata only; ticket 09 adds the durable trigger consumer and pipeline dispatch.
 
-Unresolved events remain available. Accepted events expire after 30 days, and at most the most recent 1000 accepted records are kept. Folder progress protects duplicate detection after completed metadata is removed. At most 10000 unresolved events are admitted; saturation reports `EMAIL_RESOURCE_LIMIT`. A mailbox identity change reports `EMAIL_STALE_REFERENCE` without an implicit historical replay. Ticket 08 adds full outage recovery, connection retry, and mailbox identity recovery. A failed connection does not stop other account watchers.
+Temporary connection failures use a new IMAP client for each retry. The retry ceiling starts at 1000 ms and doubles after each failure, up to `reconnectMaxDelayMs`. Jitter selects a delay between one half of that ceiling and the full ceiling. Successful reconciliation resets this delay. One timer owns each folder retry. Connection signals cannot bypass the delay. Account changes, disable, removal, and host shutdown cancel old timers and connections.
+
+After reconnect or host restart, the watcher reads retained messages after its durable progress point before it returns to IDLE. Periodic reconciliation remains active. Stageflow cannot recover a message that the provider deleted before reconciliation. A failure before the first baseline cannot identify which existing messages arrived during that failure. The first successful connection still creates a baseline without historical events.
+
+`EMAIL_AUTH_FAILED` and `EMAIL_TOKEN_EXPIRED` pause the watcher. They do not start automatic retries. Update the account settings or restart the host after you supply valid credentials. OAuth expiry is checked before receive commands, including periodic reconciliation. Stageflow does not refresh the token. One failed account does not stop other accounts.
+
+A consumer failure reports `EMAIL_EVENT_ACCEPTANCE_FAILED`. The event remains pending and blocks later messages in that folder. Retry uses the same event ID. Acceptance is stored before folder progress advances. If the host stops between those writes, it uses the accepted record to complete progress without another consumer delivery. Delivery remains at least once: a failure before acceptance is stored can cause the consumer to receive the same event again. Consumers must use `eventId` for durable duplicate detection. A storage failure reports `EMAIL_STORAGE_FAILED`, restores the last durable state, and retries with delay. No event is delivered before its pending metadata is stored.
+
+A malformed or resource-limited message has an explicit fault policy. The watcher stores account, folder, generation, UID, safe error code, and detection time. It then advances past that message so later valid messages can proceed. It stores no faulty headers, body, MIME, or attachment content. Fault metadata expires after 30 days, with a maximum of 1000 message fault records. This policy does not mean that the faulty message was accepted.
+
+A UIDVALIDITY change creates a durable reset notice and a new baseline without historical events. Old pending events become `faulted` with `EMAIL_STALE_REFERENCE`; they are not delivered in the new mailbox generation. Old references remain stale. Inspect the reset notice before you decide how to recover older work. Explicit bounded historical and mailbox-reset replay is deferred to ticket 11. Trigger dispatch is deferred to ticket 09.
+
+`GET /api/email/watchers` reports `starting`, `watching`, `recovering`, or `failed`, with safe error codes, the next retry time, the last accepted generation and UID, reset notices, and message fault metadata. No provider response or credential value is included. Accepted and faulted event records expire after 30 days; at most the most recent 1000 completed records are kept. Unresolved pending events remain available. Folder progress protects duplicate detection after completed metadata is removed. At most 10000 pending events are admitted; saturation reports `EMAIL_RESOURCE_LIMIT` and requires operator action. Keep a single Stageflow host writer per workspace.
 
 ## Read from a stage
 

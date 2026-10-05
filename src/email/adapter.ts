@@ -1,5 +1,5 @@
 import { ImapFlow } from "imapflow";
-import { EmailEvents, type ReceiveMailbox } from "./events.js";
+import { EmailEvents, type ReceiveMailbox, type ReceiveOutcome } from "./events.js";
 import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
 import { connect as connectTcp, type Socket } from "node:net";
@@ -14,7 +14,7 @@ import {
   EmailError, type EmailMailbox, type EmailEventSource, type EmailAccountStatus,
   type EmailConnectionStatus, type EmailMessageRef, type EmailMessage, type SendEmailInput,
   type SendEmailResult, type ReplyToEmailInput, type SearchEmailsInput, type SearchEmailsResult,
-  type EmailReceivedEvent,
+  type EmailReceivedEvent, type EmailMessageSummary,
   type EmailArtifactContext, type PreparedEmailAttachment, type DownloadEmailAttachmentInput, type DownloadEmailAttachmentResult,
 } from "./port.js";
 
@@ -32,6 +32,15 @@ function connectionStatus(error?: unknown): EmailConnectionStatus {
   if (!error) return { state: "ok" };
   const normalized = normalizedConnectionError(error);
   return { state: "failed", error: { code: normalized.code, retryable: normalized.retryable } };
+}
+
+async function receiveOutcome(uid: number, normalize: () => Promise<EmailMessageSummary>): Promise<ReceiveOutcome> {
+  try { return { uid, message: await normalize() }; }
+  catch (error) {
+    if (error instanceof EmailError && (error.code === "EMAIL_INVALID_INPUT" || error.code === "EMAIL_RESOURCE_LIMIT")) return { uid, fault: error.code };
+    if (!(error instanceof EmailError)) return { uid, fault: "EMAIL_INVALID_INPUT" };
+    throw error;
+  }
 }
 
 /** Both adapters validate account scope before any operation, including unsupported operations. */
@@ -125,9 +134,11 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
           if (record.uid < lower || record.uid > upper) continue;
           const end = record.source.indexOf("\r\n\r\n");
           const headers = record.source.subarray(0, Math.min(end < 0 ? record.source.length : end + 4, 65536));
-          const message = summarize(await parseMessage(account, folder, stored!.generation, { ...record, source: headers }));
-          delete message.preview; delete message.hasAttachments;
-          messages.push({ uid: record.uid, message });
+          messages.push(await receiveOutcome(record.uid, async () => {
+            const message = summarize(await parseMessage(account, folder, stored!.generation, { ...record, source: headers }));
+            delete message.preview; delete message.hasAttachments;
+            return message;
+          }));
         }
         return messages;
       },
@@ -215,13 +226,17 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     const secret = resolveEmailSecret(config, this.env);
     const client = new ImapFlow({ host: config.host, port: config.port, secure: config.tls === "implicit", doSTARTTLS: config.tls === "starttls", logger: false,
       auth: { user: config.username, ...(config.auth.type === "oauth2" ? { accessToken: secret } : { pass: secret }) },
-      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs, socketTimeout: account.connectionTimeoutMs,
-      tls: { rejectUnauthorized: true }, maxIdleTime: account.pollingIntervalMs });
+      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs, socketTimeout: 0,
+      tls: { rejectUnauthorized: true }, maxIdleTime: account.pollingIntervalMs, disableAutoIdle: true });
     client.on("error", signal);
     client.on("close", signal);
     client.on("exists", signal);
     try {
-      const command = <T>(work: () => Promise<T>): Promise<T> => this.receiveWork(account, () => client.close(), work);
+      const command = async <T>(work: () => Promise<T>): Promise<T> => {
+        resolveEmailSecret(config, this.env);
+        try { return await this.receiveWork(account, () => client.close(), work); }
+        catch (error) { throw normalizedConnectionError(error); }
+      };
       await command(async () => { await client.connect(); await client.mailboxOpen(folder, { readOnly: true }); });
       return {
         next: (lower, upper) => command(() => this.nextSearchUid(client, lower, upper, "oldest")),
@@ -237,10 +252,11 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
           const messages = [];
           for (const uid of found) {
             const result = await client.fetchOne(String(uid), { uid: true, flags: true, internalDate: true, envelope: true }, { uid: true });
-            if (result) messages.push({ uid, message: envelopeSummary(account, folder, String(client.mailbox && client.mailbox.uidValidity), result) });
+            if (result) messages.push(await receiveOutcome(uid, async () => envelopeSummary(account, folder, String(client.mailbox && client.mailbox.uidValidity), result)));
           }
           return messages;
         }),
+        watch: () => { if (client.capabilities.has("IDLE")) void client.idle().catch(signal); },
         close: () => { client.off("exists", signal); client.off("error", signal); client.off("close", signal); client.on("error", () => {}); client.close(); },
       };
     } catch (error) { client.close(); throw normalizedConnectionError(error); }

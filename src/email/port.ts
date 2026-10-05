@@ -4,7 +4,7 @@ export type EmailErrorCode =
   | "EMAIL_CONNECTION_FAILED" | "EMAIL_TIMEOUT" | "EMAIL_RATE_LIMIT"
   | "EMAIL_MESSAGE_NOT_FOUND" | "EMAIL_STALE_REFERENCE" | "EMAIL_UNSUPPORTED"
   | "EMAIL_SEARCH_UNSUPPORTED" | "EMAIL_RESOURCE_LIMIT" | "EMAIL_SEND_OUTCOME_UNKNOWN"
-  | "EMAIL_OPERATION_CONFLICT" | "EMAIL_RECIPIENTS_REJECTED";
+  | "EMAIL_OPERATION_CONFLICT" | "EMAIL_RECIPIENTS_REJECTED" | "EMAIL_EVENT_ACCEPTANCE_FAILED" | "EMAIL_STORAGE_FAILED";
 
 export class EmailError extends Error {
   constructor(public readonly code: EmailErrorCode, public readonly retryable = false, public readonly unsupportedFields?: string[]) {
