@@ -56,7 +56,7 @@ The envelope is the control-plane handoff; artifacts are the data-plane handoff.
 
 ## Persistence and recovery
 
-SQLite is the active `RunStore` adapter. Run state is **global**, not per-project: it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), with per-run and per-attempt workspaces under `runs/`. One `RunStore` instance backs every project on the machine; each run still records the `project_root` it came from, so views can be scoped back to one project. The same store holds a durable **projects registry**: catalog membership is seeded roots ∪ registered absolute folders — Host boot cwd is not a catalog root. Local CLI ensure-then-starts against its resolved cwd; remotes may only target registered or seeded roots (unknown absolute `project_root` is refused). Per-project settings remain at `<git-root>/.stageflow/settings.json`. Pipeline/task files stay project-local under each registered (or seeded) root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
+SQLite is the active `RunStore` adapter. Run state is **global**, not per-project: it lives under the durable root (`$STAGEFLOW_HOME`, default `~/.stageflow/`), with per-run and per-attempt workspaces under `runs/`. One `RunStore` instance backs every project on the machine; each run still records the `project_root` it came from, so views can be scoped back to one project. The same store holds a durable **projects registry**: catalog membership is seeded roots ∪ registered absolute folders. `sf ui` registers the directory it was started in. `sf mcp` does not. Local CLI ensure-then-starts against its resolved cwd; remotes may only target registered or seeded roots (unknown absolute `project_root` is refused). Per-project settings remain at `<git-root>/.stageflow/settings.json`. Pipeline/task files stay project-local under each registered (or seeded) root. See [Data directory](data-directory.md) and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 Stageflow persists:
 
@@ -121,6 +121,10 @@ There is one Stageflow background service per machine, not one per project. Wher
 - Retries create new attempts and recompute affected downstream execution rather than rewriting prior history.
 - The CLI, console, and MCP host drive the same runtime contracts.
 
+## Stage process in development
+
+A published `sf` binary runs each stage as compiled `dist/cli.js`. `npm run dev` runs TypeScript, so the stage worker loads `src/cli.ts` through the tsx loader. If that process exits before it records a failure, the stage is marked failed.
+
 ## Related documentation
 
 - [YAML catalog](yaml-catalog.md) — pipeline, stage, task, route, join, loop, and Clone Chain configuration
@@ -131,3 +135,4 @@ There is one Stageflow background service per machine, not one per project. Wher
 - [MCP](mcp.md) — tools and run resources
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling
+- [Workshop Author](workshop.md) — chat-draft a pipeline and save it into the catalog

@@ -16,10 +16,8 @@ import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
-  createDraftPackage,
   loadDraftPackage,
   loadTaskArtifact,
-  overwriteDraftPackage,
   parseAttachTaskBody,
   parseCreateDraftPackageBody,
   parseDraftPackageBody,
@@ -28,6 +26,7 @@ import {
   validateDraftPackage,
   type DraftPackage,
 } from "../config/draftPackage.js";
+import { publishDraftPackage } from "../config/publishDraftPackage.js";
 import {
   clearWorkshopAutosave,
   detectDiskChange,
@@ -1586,7 +1585,9 @@ export function createOperatorRoutes(
             });
             return true;
           }
-          const result = await createDraftPackage(ctx.projectRoot, parsed);
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "create")
+          ).write;
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,
@@ -1645,7 +1646,9 @@ export function createOperatorRoutes(
             });
             return true;
           }
-          const result = await overwriteDraftPackage(ctx.projectRoot, parsed);
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "overwrite")
+          ).write;
           if (!result.ok) {
             json(res, result.status, {
               error: result.error,

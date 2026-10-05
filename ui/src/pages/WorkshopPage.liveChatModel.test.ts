@@ -16,11 +16,29 @@ import {
   type DraftPackagePayload,
   type WorkshopChatProposalPayload,
 } from "../api";
-import { createLiveChatModel, type LiveChatRefs } from "./WorkshopPage";
+import {
+  composerModelFromSettings,
+  createLiveChatModel,
+  type LiveChatRefs,
+} from "./WorkshopPage";
 
 function refOf<T>(value: T): MutableRefObject<T> {
   return { current: value };
 }
+
+describe("workshop open model", () => {
+  it("uses defaultModel", () => {
+    expect(composerModelFromSettings("openai/gpt-5")).toBe("openai/gpt-5");
+    expect(composerModelFromSettings("  openai/gpt-5  ")).toBe("openai/gpt-5");
+  });
+
+  it("shows cursor/auto when defaultModel is missing or blank", () => {
+    expect(composerModelFromSettings(undefined)).toBe("cursor/auto");
+    expect(composerModelFromSettings(null)).toBe("cursor/auto");
+    expect(composerModelFromSettings("")).toBe("cursor/auto");
+    expect(composerModelFromSettings("   ")).toBe("cursor/auto");
+  });
+});
 
 describe("createLiveChatModel model posting", () => {
   beforeEach(() => {

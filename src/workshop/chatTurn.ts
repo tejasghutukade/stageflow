@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { DraftPackage } from "../config/draftPackage.js";
 import {
   createWorkshopDraftContext,
@@ -11,119 +10,34 @@ import {
   type OperatorAgentProposal,
   type OperatorAgentSession,
   type OperatorAgentSessionEvent,
-  type OperatorAgentToolResult,
   type ProposalArtifactDiff,
   type WorkshopDraftContext,
   type WorkshopToolActivityUpdate,
 } from "../operatorAgent/index.js";
 import { resolveWorkshopModel } from "./modelSettings.js";
-import {
-  createWorkshopBuild,
-  getWorkshopBuild,
-  readWorkshopBuild,
-  updateWorkshopBuild,
-  type WorkshopBuildRecord,
-} from "./buildStore.js";
+import { getWorkshopBuild, updateWorkshopBuild } from "./buildStore.js";
 import {
   appendWorkshopSessionMessages,
   getWorkshopSession,
   resolveWorkshopSessionStoreRoot,
-  updateWorkshopSessionActiveBuildId,
   WorkshopSessionStoreError,
   type WorkshopSessionAppendMessage,
 } from "./sessionStore.js";
+import {
+  bindPinnedBuildContext,
+  enqueueSessionWrite,
+  registerLiveWorkshopSession,
+  resetWorkshopPinStateForTests,
+  unregisterLiveWorkshopSession,
+  type WorkshopPointerChange,
+} from "./workshopPin.js";
 
-export const WORKSHOP_UNLINKED_DRAFT_TOOL_ERROR =
-  "No build is selected — draft tools cannot edit or save until a build is focused.";
-
-const WORKSHOP_DRAFT_TOOL_NAMES = new Set([
-  "read_draft",
-  "validate_draft",
-  "create_pipeline",
-  "edit_pipeline",
-  "create_stage",
-  "edit_stage",
-  "create_task",
-  "edit_task",
-  "save",
-  "propose_draft",
-]);
-
-export type WorkshopPointerChange = {
-  buildId: string;
-  draft: DraftPackage;
-};
+export type { WorkshopPointerChange };
 
 type LiveTurnBinding = {
   storeRoot: string;
   onPointerChange?: (frame: WorkshopPointerChange) => void;
 };
-
-const sessionWriteTails = new Map<string, Promise<void>>();
-const liveBySession = new Map<
-  string,
-  { storeRoot: string; registry: WorkshopChatSessionRegistry }
->();
-
-function enqueueSessionWrite<T>(sessionId: string, fn: () => T): Promise<T> {
-  const prev = sessionWriteTails.get(sessionId) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  sessionWriteTails.set(
-    sessionId,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
-  return run;
-}
-
-function destinationFromRelativePath(relativePath: string): {
-  directory: string;
-  pipelineFilename: string;
-} {
-  const normalized = relativePath.replace(/\\/g, "/");
-  const pipelineFilename = path.posix.basename(normalized);
-  const dir = path.posix.dirname(normalized);
-  return {
-    directory: dir === "." ? "." : dir,
-    pipelineFilename,
-  };
-}
-
-function relativePathFromDestination(
-  directory: string,
-  pipelineFilename: string,
-): string {
-  const dir = directory.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-  const file = path.posix.basename(pipelineFilename.trim().replace(/\\/g, "/"));
-  if (!dir || dir === ".") return file;
-  return `${dir.replace(/\/+$/, "")}/${file}`;
-}
-
-function bindPinnedBuildContext(
-  current: unknown,
-  build: WorkshopBuildRecord,
-  sessionId: string,
-): WorkshopDraftContext {
-  const base: WorkshopDraftContext = isWorkshopDraftContext(current)
-    ? { ...current }
-    : { draft: build.draft };
-  const next: WorkshopDraftContext = {
-    ...base,
-    draft: build.draft,
-    chatSessionId: sessionId,
-    buildId: build.id,
-  };
-  if (build.projectRoot) next.projectRoot = build.projectRoot;
-  else delete next.projectRoot;
-  if (build.projectRoot && build.relativePath) {
-    next.destination = destinationFromRelativePath(build.relativePath);
-  } else {
-    delete next.destination;
-  }
-  return next;
-}
 
 function markUnlinkedChatContext(
   current: unknown,
@@ -137,178 +51,6 @@ function markUnlinkedChatContext(
   base.chatSessionId = sessionId;
   base.draft = draft;
   return base;
-}
-
-function emitPointerChange(
-  registry: WorkshopChatSessionRegistry,
-  sessionId: string,
-  build: WorkshopBuildRecord,
-): void {
-  registry.getLiveTurn(sessionId)?.onPointerChange?.({
-    buildId: build.id,
-    draft: build.draft,
-  });
-}
-
-function movePinOntoBuild(
-  registry: WorkshopChatSessionRegistry,
-  sessionId: string,
-  build: WorkshopBuildRecord,
-  storeRoot: string,
-): void {
-  const session = registry.get(sessionId);
-  if (session) {
-    session.setContext(
-      bindPinnedBuildContext(session.getContext(), build, sessionId),
-    );
-  }
-  registry.setPinnedBuildId(sessionId, build.id);
-  enqueueSessionWrite(sessionId, () => {
-    updateWorkshopSessionActiveBuildId(storeRoot, sessionId, build.id);
-  });
-  emitPointerChange(registry, sessionId, build);
-}
-
-export function resolveLiveWorkshopBinding(context: unknown): {
-  sessionId: string;
-  registry: WorkshopChatSessionRegistry;
-  storeRoot: string;
-} | null {
-  if (!isWorkshopDraftContext(context) || !context.chatSessionId) return null;
-  const live = liveBySession.get(context.chatSessionId);
-  if (!live) return null;
-  return {
-    sessionId: context.chatSessionId,
-    registry: live.registry,
-    storeRoot: live.storeRoot,
-  };
-}
-
-/**
- * Draft tools call this. Outside a workshop chat turn it does nothing.
- * An unlinked chat turn fails the tool and does not create a build.
- */
-export function rejectUnlinkedWorkshopDraftTool(
-  context: unknown,
-  toolName: string,
-): OperatorAgentToolResult | null {
-  if (!WORKSHOP_DRAFT_TOOL_NAMES.has(toolName)) return null;
-  if (!isWorkshopDraftContext(context) || !context.chatSessionId) return null;
-  if (context.buildId) return null;
-  return {
-    ok: false,
-    content: null,
-    error: WORKSHOP_UNLINKED_DRAFT_TOOL_ERROR,
-  };
-}
-
-/** Tied builds save to the stored path. Untitled builds keep the caller's destination. */
-export function resolvePinnedSaveDestination(
-  context: unknown,
-): { directory: string; pipelineFilename: string } | null {
-  if (
-    !isWorkshopDraftContext(context) ||
-    !context.buildId ||
-    !context.chatSessionId
-  ) {
-    return null;
-  }
-  const live = liveBySession.get(context.chatSessionId);
-  if (!live) return null;
-  const build = readWorkshopBuild(live.storeRoot, context.buildId);
-  if (!build?.projectRoot || !build.relativePath) return null;
-  return destinationFromRelativePath(build.relativePath);
-}
-
-/** A successful save of an untitled build records the operator destination on that id. */
-export function recordPinnedWorkshopSave(
-  context: unknown,
-  saved: {
-    directory: string;
-    pipelineFilename?: string;
-    projectRoot: string;
-    draft: DraftPackage;
-  },
-): void {
-  if (
-    !isWorkshopDraftContext(context) ||
-    !context.buildId ||
-    !context.chatSessionId
-  ) {
-    return;
-  }
-  const live = liveBySession.get(context.chatSessionId);
-  if (!live) return;
-  const build = readWorkshopBuild(live.storeRoot, context.buildId);
-  if (!build || (build.projectRoot && build.relativePath)) return;
-  const pipelineFilename =
-    saved.pipelineFilename?.trim() ||
-    `${saved.draft.pipeline.id}.pipeline.yaml`;
-  updateWorkshopBuild(live.storeRoot, build.id, {
-    draft: saved.draft,
-    projectRoot: path.resolve(saved.projectRoot),
-    relativePath: relativePathFromDestination(
-      saved.directory,
-      pipelineFilename,
-    ),
-  });
-}
-
-/**
- * Create an untitled build and move this turn's pin onto it.
- * Later edits in the turn persist on that id.
- */
-export function pinWorkshopBuildOnCreate(input: {
-  sessionId: string;
-  draft: DraftPackage;
-  registry: WorkshopChatSessionRegistry;
-  storeRoot: string;
-}): WorkshopBuildRecord {
-  const build = createWorkshopBuild(input.storeRoot, { draft: input.draft });
-  liveBySession.set(input.sessionId, {
-    storeRoot: input.storeRoot,
-    registry: input.registry,
-  });
-  movePinOntoBuild(input.registry, input.sessionId, build, input.storeRoot);
-  return build;
-}
-
-/**
- * Focus a build. When this turn already has a pin, update the pointer only.
- * When the turn started with none, move the pin and the host onto that build.
- */
-export function focusWorkshopBuildPointer(input: {
-  sessionId: string;
-  buildId: string;
-  registry: WorkshopChatSessionRegistry;
-  storeRoot: string;
-}): { pinMoved: boolean; activeBuildId: string } {
-  const build = getWorkshopBuild(input.storeRoot, input.buildId);
-  liveBySession.set(input.sessionId, {
-    storeRoot: input.storeRoot,
-    registry: input.registry,
-  });
-  const pinned = input.registry.getPinnedBuildId(input.sessionId);
-  const turnLive = input.registry.getLiveTurn(input.sessionId);
-  const pinMoved = Boolean(turnLive) && !pinned;
-  if (pinMoved) {
-    movePinOntoBuild(
-      input.registry,
-      input.sessionId,
-      build,
-      input.storeRoot,
-    );
-  } else {
-    enqueueSessionWrite(input.sessionId, () => {
-      updateWorkshopSessionActiveBuildId(
-        input.storeRoot,
-        input.sessionId,
-        build.id,
-      );
-    });
-    if (turnLive) emitPointerChange(input.registry, input.sessionId, build);
-  }
-  return { pinMoved, activeBuildId: build.id };
 }
 
 /**
@@ -447,7 +189,7 @@ export class WorkshopChatSessionRegistry {
   ): void {
     this.liveTurns.set(sessionId, binding);
     this.pins.set(sessionId, pinnedBuildId);
-    liveBySession.set(sessionId, {
+    registerLiveWorkshopSession(sessionId, {
       storeRoot: binding.storeRoot,
       registry: this,
     });
@@ -467,7 +209,7 @@ export class WorkshopChatSessionRegistry {
 
   clearLive(sessionId: string): void {
     this.liveTurns.delete(sessionId);
-    liveBySession.delete(sessionId);
+    unregisterLiveWorkshopSession(sessionId);
   }
 
   has(sessionId: string): boolean {
@@ -572,8 +314,7 @@ export function resetWorkshopChatSessionsForTests(): void {
   defaultRegistry?.clear();
   defaultRegistry = undefined;
   defaultHost = undefined;
-  sessionWriteTails.clear();
-  liveBySession.clear();
+  resetWorkshopPinStateForTests();
 }
 
 function isDraftPackage(value: unknown): value is DraftPackage {

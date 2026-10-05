@@ -20,7 +20,8 @@ import {
   writeNotifyPreference,
   type NotifyPreference,
 } from "../useWaitingNotifications";
-import { DEFAULT_WORKSHOP_MODEL } from "../workshop/modelSettings";
+
+const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 function formatDiskBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

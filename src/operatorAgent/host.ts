@@ -17,6 +17,7 @@ import type {
   OperatorAgentToolResult,
   WorkshopToolActivityUpdate,
 } from "./types.js";
+import { rejectUnlinkedWorkshopDraftTool } from "../workshop/workshopPin.js";
 
 export type OperatorAgentModelTurn = {
   events: OperatorAgentSessionEvent[];
@@ -248,9 +249,6 @@ export async function invokeProfileTool(
   if (!tool) {
     return { ok: false, content: null, error: `Unknown tool: ${name}` };
   }
-  const { rejectUnlinkedWorkshopDraftTool } = await import(
-    "../workshop/chatTurn.js"
-  );
   const blocked = rejectUnlinkedWorkshopDraftTool(ctx.getContext(), name);
   if (blocked) return blocked;
   return tool.handler(args, ctx);

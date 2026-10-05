@@ -7,7 +7,7 @@ title: Data Directory
 
 Stageflow keeps the SQLite run store, run workspaces, Host Pi agent files, and related state under one **durable root**. Override it with `STAGEFLOW_HOME`. When unset, the default is `~/.stageflow`.
 
-The Host is **machine-global**: where `sf ui` / `sf mcp` was started does not define which projects exist. Catalog roots are **seeded** examples plus **registered** absolute project folders stored in the durable SQLite store (not only past-run history). Local `sf run` registers its resolved project folder before start; remote MCP/HTTP may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [CLI — `sf run`](cli-reference.md#sf-run).
+The Host is **machine-global**. Catalog roots are **seeded** examples plus **registered** absolute project folders stored in the durable SQLite store (not only past-run history). `sf ui` registers the directory it was started in. `sf mcp` does not. Local `sf run` registers its resolved project folder before start. Remote MCP/HTTP may only use already-registered or seeded roots. See [MCP — catalog roots](mcp.md#catalog-roots-and-project_root) and [CLI — `sf run`](cli-reference.md#sf-run).
 
 Per-project settings stay at `<git-root>/.stageflow/settings.json`. They are not the run store.
 
@@ -30,21 +30,20 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | `backups/` | disposable | `sf backup` archives (default output) |
 | `restore-pending/` | disposable | Staged API restore archives + marker |
 | `service.log` | disposable | Detached Host autostart log (stays at the root) |
-| `workshop/sessions/` | **keep** | Workshop Author chat sessions (History / New): per-id directory with `session.json` (title, timestamps, transcript, `piSessionId`) and optional `pi-session.jsonl`. **No draft** in the session blob — draft stays client-/Workshop-owned. Always under `$STAGEFLOW_HOME`. |
-| `workshop/autosave/` | disposable | Workshop WIP autosave slots (draft package + chat messages + destination metadata). Separate contract from sessions — do not merge. For git catalog projects this usually lives under `<git-root>/.stageflow/workshop/autosave/`; otherwise under `$STAGEFLOW_HOME/workshop/autosave/`. |
+| `workshop/builds/` | **keep** | Untitled Workshop drafts. One `{id}.json` per build (the draft package). Always under `$STAGEFLOW_HOME`. |
+| `workshop/sessions/` | **keep** | Workshop Author chat sessions (History / New): per-id directory with `session.json` (title, timestamps, transcript, `piSessionId`, optional `activeBuildId`) and optional `pi-session.jsonl`. The session points at a build; it does not embed the draft. Always under `$STAGEFLOW_HOME`. |
+| `workshop/autosave/` | disposable | Older Workshop WIP slots (draft package + chat messages). The studio uses builds. For git catalog projects this usually lives under `<git-root>/.stageflow/workshop/autosave/`; otherwise under `$STAGEFLOW_HOME/workshop/autosave/`. |
 
-### Workshop: sessions vs autosave
+### Workshop: builds and sessions
 
-These are **two stores**, not one (KTD5):
+| | `workshop/builds/` | `workshop/sessions/` |
+|--|--------------------|----------------------|
+| **Purpose** | The untitled draft | Durable Author chat (History / New) |
+| **Contents** | Draft package JSON | Transcript + title/timestamps + `piSessionId` + optional `activeBuildId` |
+| **Draft?** | Yes | No — `activeBuildId` names the build |
+| **Root** | Always `$STAGEFLOW_HOME` | Always `$STAGEFLOW_HOME` |
 
-| | `workshop/sessions/` | `workshop/autosave/` |
-|--|----------------------|----------------------|
-| **Purpose** | Durable Author **chat** History / New | Crash/refresh **WIP** for an unsaved draft |
-| **Contents** | Transcript + title/timestamps + `piSessionId` | Draft package + messages (+ destination / fingerprints) |
-| **Draft?** | Never stored here | Yes — draft is the point of the slot |
-| **Root** | Always `$STAGEFLOW_HOME` | Project `.stageflow` when git-bound; else `$STAGEFLOW_HOME` |
-
-Opening a History session restores the **thread**, not a saved draft snapshot. Autosave restores a **WIP draft** (and its local messages) independent of which History session is open. See [Operator console — Workshop](operator-console.md#workshop).
+History reopens the session and the build in `activeBuildId`. **New** starts a fresh session. Saved catalog YAML lives in the project (by default `workshop/<pipeline-id>/`), not in this directory. See [Workshop Author](workshop.md).
 
 For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
 

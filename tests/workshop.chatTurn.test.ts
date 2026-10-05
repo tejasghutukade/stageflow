@@ -12,9 +12,7 @@ import {
 } from "../src/operatorAgent/index.js";
 import {
   chunkAssistantText,
-  focusWorkshopBuildPointer,
   iterateWorkshopChatStreamFrames,
-  pinWorkshopBuildOnCreate,
   resetWorkshopChatSessionsForTests,
   runWorkshopChatTurn,
   stopWorkshopChatTurn,
@@ -22,6 +20,10 @@ import {
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
 } from "../src/workshop/chatTurn.js";
+import {
+  focusWorkshopBuildPointer,
+  pinWorkshopBuildOnCreate,
+} from "../src/workshop/workshopPin.js";
 import { DEFAULT_WORKSHOP_MODEL } from "../src/workshop/modelSettings.js";
 import {
   createWorkshopBuild,

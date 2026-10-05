@@ -55,10 +55,6 @@ import {
   mutationCardActionsLocked,
 } from "../workshop/draftMutationTools";
 import {
-  DEFAULT_WORKSHOP_MODEL,
-  resolveWorkshopModel,
-} from "../workshop/modelSettings";
-import {
   applyPointerChange,
   chooseStudioRow,
   draftFrameApplies,
@@ -824,6 +820,15 @@ function MapEmptyState() {
   );
 }
 
+const WORKSHOP_FALLBACK_MODEL = "cursor/auto";
+
+export function composerModelFromSettings(
+  defaultModel: string | null | undefined,
+): string {
+  const trimmed = defaultModel?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : WORKSHOP_FALLBACK_MODEL;
+}
+
 function modelTail(id: string): string {
   const tail = id.split("/").pop() ?? id;
   return tail.endsWith(":free") ? tail.slice(0, -":free".length) : tail;
@@ -856,7 +861,7 @@ function WorkshopModelPicker({
   const options =
     models.length > 0
       ? models
-      : [resolveWorkshopModel({ settingsDefault })];
+      : [composerModelFromSettings(settingsDefault)];
   const ids = options.includes(model) ? options : [model, ...options];
   const shorts = shortModelLabels(ids);
   const current = shorts.get(model) ?? modelTail(model);
@@ -908,13 +913,13 @@ export function WorkshopPage() {
   const [pickerRows, setPickerRows] = useState<StudioPickerRow[]>([]);
   const [selectedBuildId, setSelectedBuildId] = useState<string | null>(null);
   const [studioError, setStudioError] = useState<string | null>(null);
-  const [chatModel, setChatModel] = useState(DEFAULT_WORKSHOP_MODEL);
+  const [chatModel, setChatModel] = useState(WORKSHOP_FALLBACK_MODEL);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [settingsDefault, setSettingsDefault] = useState<string | null>(null);
 
   const sessionIdRef = useRef<string | null>(null);
   const draftRef = useRef<DraftPackagePayload>(EMPTY_DRAFT);
-  const modelRef = useRef<string>(DEFAULT_WORKSHOP_MODEL);
+  const modelRef = useRef<string>(WORKSHOP_FALLBACK_MODEL);
   const stopChatRef = useRef<(() => void) | null>(null);
   const selectedBuildIdRef = useRef<string | null>(null);
   const cardsBuildIdRef = useRef<string | null>(null);
@@ -1041,10 +1046,10 @@ export function WorkshopPage() {
           fetchModels(),
         ]);
         if (cancelled) return;
-        const nextDefault = settings.defaultModel ?? settings.workshopModel ?? null;
+        const nextDefault = composerModelFromSettings(settings.defaultModel);
         setSettingsDefault(nextDefault);
         setAvailableModels(models.models);
-        setChatModel(resolveWorkshopModel({ settingsDefault: nextDefault }));
+        setChatModel(nextDefault);
       } catch {
         if (cancelled) return;
         setAvailableModels([]);

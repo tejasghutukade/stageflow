@@ -1,15 +1,10 @@
 import { parse as parseYaml } from "yaml";
 import {
-  createDraftPackage,
-  overwriteDraftPackage,
   validateDraftPackage,
   type DraftPackage,
-  type DraftPackageWriteResult,
 } from "../../config/draftPackage.js";
-import {
-  defaultWorkshopPackageDirectory,
-  ensureCatalogScanRoot,
-} from "../../config/ensureCatalogScanRoot.js";
+import { defaultWorkshopPackageDirectory } from "../../config/ensureCatalogScanRoot.js";
+import { publishDraftPackage } from "../../config/publishDraftPackage.js";
 import {
   emptyDraftPackage,
   isWorkshopDraftContext,
@@ -23,6 +18,13 @@ import {
   resolvePickerCatalogPipelines,
   type WorkshopPickerCatalogPipeline,
 } from "../../workshop/buildStore.js";
+import {
+  focusWorkshopBuildPointer,
+  pinWorkshopBuildOnCreate,
+  recordPinnedWorkshopSave,
+  resolveLiveWorkshopBinding,
+  resolvePinnedSaveDestination,
+} from "../../workshop/workshopPin.js";
 import {
   affectedStageIds,
   diffDraftPackages,
@@ -452,8 +454,7 @@ export type WorkshopAuthorToolOptions = {
 const WORKSHOP_TURN_REQUIRED =
   "workshop chat session is required";
 
-async function liveWorkshopBinding(ctx: OperatorAgentToolContext) {
-  const { resolveLiveWorkshopBinding } = await import("../../workshop/chatTurn.js");
+function liveWorkshopBinding(ctx: OperatorAgentToolContext) {
   return resolveLiveWorkshopBinding(ctx.getContext());
 }
 
@@ -483,7 +484,7 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
     description:
       "List the same workshop rows as the studio picker (open builds and unbound disk pipelines). Does not create a build. Works when no build is focused.",
     async handler(_args, ctx): Promise<OperatorAgentToolResult> {
-      const live = await liveWorkshopBinding(ctx);
+      const live = liveWorkshopBinding(ctx);
       if (!live) {
         return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
       }
@@ -510,7 +511,7 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
     description:
       "Move this chat onto a build by id, or onto an unbound disk pipeline by projectRoot and relativePath. A failed open returns the error, creates nothing, and leaves the pointer unchanged.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
-      const live = await liveWorkshopBinding(ctx);
+      const live = liveWorkshopBinding(ctx);
       if (!live) {
         return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
       }
@@ -521,9 +522,6 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
         stringArg(args, "relativePath") ??
         stringArg(args, "relative_path") ??
         stringArg(args, "path");
-      const { focusWorkshopBuildPointer } = await import(
-        "../../workshop/chatTurn.js"
-      );
 
       if (!buildId && projectRoot && relativePath) {
         let resolvedRoot = projectRoot;
@@ -593,13 +591,10 @@ export function createWorkshopBuildTools(): OperatorAgentTool[] {
     description:
       "Persist a new untitled build and focus it, including when another build is already focused. No build id argument.",
     async handler(_args, ctx): Promise<OperatorAgentToolResult> {
-      const live = await liveWorkshopBinding(ctx);
+      const live = liveWorkshopBinding(ctx);
       if (!live) {
         return { ok: false, content: null, error: WORKSHOP_TURN_REQUIRED };
       }
-      const { pinWorkshopBuildOnCreate } = await import(
-        "../../workshop/chatTurn.js"
-      );
       const build = pinWorkshopBuildOnCreate({
         sessionId: live.sessionId,
         draft: emptyDraftPackage(),
@@ -728,8 +723,6 @@ export function createSaveTool(
     description:
       "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). When directory is omitted, writes under workshop/<pipeline-id>, which the host adds to the catalog so Run can see the pipeline and task. Pass directory only when the operator names a folder. Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
-      const { resolvePinnedSaveDestination, recordPinnedWorkshopSave } =
-        await import("../../workshop/chatTurn.js");
       const pinnedDestination = resolvePinnedSaveDestination(ctx.getContext());
       const destination = pinnedDestination ?? resolveDestination(ctx, args);
       if (!destination) {
@@ -767,22 +760,10 @@ export function createSaveTool(
         ...(allowInvalid ? { allowInvalid: true } : {}),
       };
 
-      let result: DraftPackageWriteResult;
-      if (mode === "create") {
-        result = await createDraftPackage(projectRoot, input);
-      } else if (mode === "overwrite") {
-        result = await overwriteDraftPackage(projectRoot, input);
-      } else {
-        const created = await createDraftPackage(projectRoot, input);
-        if (created.ok || created.status !== 409) {
-          result = created;
-        } else {
-          result = await overwriteDraftPackage(projectRoot, input);
-        }
-      }
+      const published = await publishDraftPackage(projectRoot, input, mode);
+      const result = published.write;
 
       if (result.ok) {
-        await ensureCatalogScanRoot(projectRoot, destination.directory);
         const current = readWorkshopContext(ctx);
         ctx.setContext({
           ...current,
