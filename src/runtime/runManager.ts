@@ -2690,6 +2690,7 @@ export class RunManager {
         sessionFilePath,
         env: stageBinding.env,
         bindingKind: stageBinding.kind,
+        ...(resumedStage !== undefined ? { model: resumedStage.model } : {}),
         ...(this.options.operatorCatalog !== undefined
           ? { operatorCatalog: this.options.operatorCatalog }
           : {}),
