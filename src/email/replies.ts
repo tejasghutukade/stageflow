@@ -2,11 +2,13 @@ import { z } from "zod";
 import type { EmailAccount } from "./accounts.js";
 import { EmailError, type EmailAddress, type EmailMessage, type ReplyToEmailInput, type SendEmailInput } from "./port.js";
 import { messageIdSchema } from "./submissions.js";
+import { attachmentReferencesSchema } from "./attachments.js";
 
 const replySchema = z.object({
   ref: z.object({ accountId: z.string().min(1), id: z.string().min(1).max(2048), mailbox: z.string().max(200).optional() }).strict(),
   operationKey: z.string().min(1).max(200), from: z.email().optional(),
   text: z.string().max(262144), html: z.string().max(262144).optional(), replyAll: z.boolean().default(false),
+  attachments: attachmentReferencesSchema.optional(),
 }).strict();
 
 export function validateReply(input: unknown): ReplyToEmailInput {
@@ -45,6 +47,6 @@ export function replyMessage(account: EmailAccount, original: EmailMessage, inpu
   if (references.length > 100 || references.join(" ").length > 8192) throw new EmailError("EMAIL_RESOURCE_LIMIT");
   const subject = (original.subject ?? "").replace(/[\x00-\x1f\x7f]/g, " ").replace(/^(?:\s*re\s*:\s*)+/i, "").trim().slice(0, 994);
   return { accountId: account.accountId, operationKey: input.operationKey, from: input.from, to, cc,
-    subject: subject ? `Re: ${subject}` : "Re:", text: input.text, html: input.html,
+    subject: subject ? `Re: ${subject}` : "Re:", text: input.text, html: input.html, attachments: input.attachments,
     ...(messageId ? { inReplyTo: messageId } : {}), ...(references.length ? { references } : {}) };
 }

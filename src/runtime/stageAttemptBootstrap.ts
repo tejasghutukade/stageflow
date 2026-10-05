@@ -153,7 +153,7 @@ export async function openStageAttempt(
       resumeToken,
       onActivity: input.onActivity,
       email: input.stage.email?.length ? (process.env.SF_STAGE_WORKER === "1" ? workerStageEmail()
-        : stageEmail(emailHostFor(input.factoryCwd ?? process.cwd()).mailbox, input.stage, input.runId)) : undefined,
+        : stageEmail(emailHostFor(input.factoryCwd ?? process.cwd()).mailbox, input.stage, input.runId, { workspaceDir: input.workspaceDir, attempt })) : undefined,
     },
     input.operatorCatalog,
   );

@@ -575,6 +575,7 @@ export async function runPipelineDag(
         stageId,
         stage,
         rootDir: cwd,
+        workspaceDir: run.workspaceDir,
         attempt,
         ...(prepared.operatorCatalog !== undefined
           ? { operatorCatalog: prepared.operatorCatalog }

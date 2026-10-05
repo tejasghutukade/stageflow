@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import type { StageEmail } from "../email/host.js";
-import { EmailError, type EmailMessageRef, type SearchEmailsInput } from "../email/port.js";
+import { EmailError, type EmailMessageRef, type SearchEmailsInput, type DownloadEmailAttachmentInput } from "../email/port.js";
 
 function optionalString() { return Type.Optional(Type.String()); }
 function optionalBoolean() { return Type.Optional(Type.Boolean()); }
@@ -24,4 +24,9 @@ export function createSearchEmailTool(email: StageEmail) {
 }
 export function createGetEmailTool(email: StageEmail) {
   return readTool("get_email_message", "Get email message", Type.Object({ accountId: Type.String(), id: Type.String(), mailbox: optionalString() }), input => email.getMessage(input as EmailMessageRef));
+}
+export function createDownloadEmailAttachmentTool(email: StageEmail) {
+  return readTool("download_email_attachment", "Download email attachment", Type.Object({
+    ref: Type.Object({ accountId: Type.String(), id: Type.String(), mailbox: optionalString() }), attachmentId: Type.String(),
+  }), input => email.downloadAttachment(input as DownloadEmailAttachmentInput));
 }

@@ -701,6 +701,7 @@ export class RunManager {
         stageId,
         stage: launchPipeline.stages.find(value => value.id === stageId),
         rootDir: cwd,
+        workspaceDir,
         mode: "resume",
         resumeAnswer: opaqueAnswer,
         attempt,

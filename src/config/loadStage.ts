@@ -79,7 +79,7 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
   };
   if (raw.email !== undefined) {
     const permissions = z.array(z.object({ accountId: z.string().min(1).max(200),
-      operations: z.array(z.enum(["send", "reply", "getMessage", "search"])).min(1).max(4),
+      operations: z.array(z.enum(["send", "reply", "getMessage", "search", "downloadAttachment"])).min(1).max(5),
     }).strict()).max(20).safeParse(raw.email);
     if (!permissions.success || new Set(permissions.data.map(p => p.accountId)).size !== permissions.data.length) {
       return loadFailure([{ code: "stage.invalid_shape", message: `Invalid stage file ${filePath}: invalid email permissions`, category: "stage", stageId: stage.id }]);

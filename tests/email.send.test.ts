@@ -44,9 +44,9 @@ for (const kind of ["local", "memory"] as const) describe(`${kind} send contract
     const saved = await readFile(path.join(root, ".stageflow", "email-submissions.json"), "utf8");
     expect(saved).not.toContain(input.text); expect(saved).not.toContain("fixture-secret");
   });
-  it("validates addresses, sender aliases, recipient counts and unsupported attachments", async () => {
+  it("validates addresses, sender aliases, recipient counts and attachment references", async () => {
     const { adapter, input } = await setup(kind);
-    for (const patch of [{ to: [] }, { from: "stranger@example.com" }, { subject: "header\r\ninjection" }, { attachments: [] }]) {
+    for (const patch of [{ to: [] }, { from: "stranger@example.com" }, { subject: "header\r\ninjection" }, { attachments: [{ artifact: "secret" }] }]) {
       await expect(adapter.send({ ...input, ...patch })).rejects.toBeDefined();
     }
     expect((await adapter.send({ ...input, from: "alias@example.com", cc: [{ address: "cc@example.com" }], bcc: [{ address: "hidden@example.com" }] })).accepted).toHaveLength(3);

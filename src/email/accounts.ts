@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { storeRootFor } from "../runstore/paths.js";
 import { EmailError, type EmailAccountStatus } from "./port.js";
+import { attachmentLimitsSchema } from "./attachments.js";
 
 const authSchema = z.object({
   type: z.enum(["password", "oauth2"]),
@@ -27,6 +28,7 @@ const accountSchema = z.object({
   connectionTimeoutMs: z.number().int().min(100).max(60000).default(10000),
   pollingIntervalMs: z.number().int().min(1000).max(3600000).default(60000),
   searchWorkLimit: z.number().int().min(1).max(10000).default(1000),
+  attachmentLimits: attachmentLimitsSchema.default({ count: 10, perFileBytes: 2097152, totalBytes: 5242880, downloadBytes: 8388608 }),
   sentFolder: z.string().min(1).max(200).optional(),
 }).strict();
 

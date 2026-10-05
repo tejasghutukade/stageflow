@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { attachmentReferencesSchema } from "./attachments.js";
 import type { EmailAccount } from "./accounts.js";
 import { EmailError, type SendEmailInput, type SendEmailResult, type EmailErrorCode } from "./port.js";
 
@@ -13,6 +14,7 @@ const sendSchema = z.object({
   bcc: z.array(address).max(100).default([]), subject: z.string().max(998).regex(/^[^\r\n]*$/),
   text: z.string().max(262144), html: z.string().max(262144).optional(),
   inReplyTo: messageIdSchema.optional(), references: z.array(messageIdSchema).max(100).refine(values => values.join(" ").length <= 8192).optional(),
+  attachments: attachmentReferencesSchema.optional(),
 }).strict().refine(input => input.to.length + input.cc.length + input.bcc.length > 0);
 
 export function validateSend(input: unknown, account: EmailAccount): SendEmailInput {

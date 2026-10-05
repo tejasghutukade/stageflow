@@ -87,6 +87,7 @@ describe("runtime HITL deliverAnswer process mode", () => {
       stageId: "clarify",
       stage: trustedStage,
       rootDir: fixtures,
+      workspaceDir: store.getWorkspaceDir(run.runId),
       mode: "resume",
       resumeAnswer: answer,
       attempt: 1,

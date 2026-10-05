@@ -16,6 +16,11 @@ export class EmailError extends Error {
 export type EmailAddress = { address: string; name?: string };
 export type EmailMessageRef = { accountId: string; id: string; mailbox?: string };
 export type EmailAttachment = { id: string; filename?: string; contentType: string; size: number };
+/** Host authority. Never deserialize this value from a worker request. */
+export type EmailArtifactContext = { workspaceDir: string; stageId: string; attempt: number };
+export type DownloadEmailAttachmentInput = { ref: EmailMessageRef; attachmentId: string };
+export type DownloadEmailAttachmentResult = EmailAttachment & { artifact: string };
+export type PreparedEmailAttachment = { filename: string; content: Buffer };
 export type EmailMessageSummary = {
   ref: EmailMessageRef; messageId?: string; threadId?: string;
   from: EmailAddress[]; to: EmailAddress[]; subject?: string; receivedAt: string;
@@ -32,6 +37,7 @@ export type SendEmailInput = {
 };
 export type ReplyToEmailInput = {
   ref: EmailMessageRef; operationKey: string; from?: string; text: string; html?: string; replyAll?: boolean;
+  attachments?: SendEmailInput["attachments"];
 };
 export type SendEmailResult = {
   operationId: string; messageId?: string; accepted: string[]; rejected: string[];
@@ -57,8 +63,9 @@ export type EmailReceivedEvent = {
 };
 export interface EmailMailbox {
   testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
-  send(input: SendEmailInput): Promise<SendEmailResult>;
-  reply(input: ReplyToEmailInput): Promise<SendEmailResult>;
+  send(input: SendEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult>;
+  reply(input: ReplyToEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult>;
+  downloadAttachment(input: DownloadEmailAttachmentInput, context?: EmailArtifactContext): Promise<DownloadEmailAttachmentResult>;
   getMessage(ref: EmailMessageRef): Promise<EmailMessage>;
   search(input: SearchEmailsInput): Promise<SearchEmailsResult>;
 }

@@ -61,7 +61,7 @@ import {
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
 import { createReplyEmailTool } from "../tools/replyEmail.js";
-import { createGetEmailTool, createSearchEmailTool } from "../tools/readEmail.js";
+import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, type StageActivityEvent } from "./activity.js";
@@ -937,13 +937,15 @@ async function prepareStageSessionWiring(
     const emailGetAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("getMessage"));
     if (emailSearchAllowed) customTools.push(defineTool(createSearchEmailTool(input.email!)));
     if (emailGetAllowed) customTools.push(defineTool(createGetEmailTool(input.email!)));
+    const emailDownloadAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("downloadAttachment"));
+    if (emailDownloadAllowed) customTools.push(defineTool(createDownloadEmailAttachmentTool(input.email!)));
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailReplyAllowed ? ["reply_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : [])],
+      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailReplyAllowed ? ["reply_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : []), ...(emailDownloadAllowed ? ["download_email_attachment"] : [])],
       customTools,
       emitDefName: emitDef.name,
       askOperatorDefName: askDef.name,

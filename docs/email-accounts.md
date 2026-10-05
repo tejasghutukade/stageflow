@@ -65,7 +65,7 @@ email:
     operations: [send]
 ```
 
-The stage prompt receives these account identifiers. Pi registers `send_email` only when sending is permitted. The tool accepts `accountId`, `operationKey`, `to`, `cc`, `bcc`, `subject`, `text`, optional `html`, and optional `from`. Address lists contain objects with `address` and optional `name`. `from` must be the account address or a configured `senderAliases` address. At least one recipient is required. Attachments are not yet supported. The shared send interface accepts safe `inReplyTo` and `references` fields. Use `reply_email` to derive these fields from an existing message.
+The stage prompt receives these account identifiers. Pi registers `send_email` only when sending is permitted. The tool accepts `accountId`, `operationKey`, `to`, `cc`, `bcc`, `subject`, `text`, optional `html`, optional `from`, and optional `attachments`. Address lists contain objects with `address` and optional `name`. `from` must be the account address or a configured `senderAliases` address. At least one recipient is required. The shared send interface accepts safe `inReplyTo` and `references` fields. Use `reply_email` to derive these fields from an existing message.
 
 For a notification stage, instruct the agent to send to the configured recipient after the work succeeds, use an operation key such as `completion-notice`, and report the returned receipt. The receipt lists accepted and rejected recipients. Partial acceptance is a successful submission with explicit rejected recipients. SMTP acceptance does not prove delivery and does not guarantee a Sent folder copy.
 
@@ -111,4 +111,27 @@ The subject has one `Re:` prefix. Missing subjects produce `Re:`. Control charac
 
 Replies use the same submission ledger and outcome rules as send. A repeated key and equivalent reply returns the recorded receipt. A different source reference, body, or reply-all choice with the same key returns `EMAIL_OPERATION_CONFLICT`. Partial recipient rejection is explicit. An uncertain submission returns `EMAIL_SEND_OUTCOME_UNKNOWN` and is never submitted again automatically. Each repeat validates and retrieves the original message before receipt reuse; a stale, deleted, or unavailable source can therefore prevent receipt reuse.
 
-Stage operation keys are limited to 120 characters. The host hashes the run, stage, and key tuple for both send and reply. This prevents ambiguous separator collisions and permits long run or stage identifiers. The account remains part of the ledger scope. Replies support neither attachments nor incoming triggers in this release.
+Stage operation keys are limited to 120 characters. The host hashes the run, stage, and key tuple for both send and reply. This prevents ambiguous separator collisions and permits long run or stage identifiers. The account remains part of the ledger scope. Replies accept the same artifact attachment references as send. Incoming triggers are not implemented in this release.
+
+## Attachments
+
+Send and reply accept `attachments: [{ "artifact": "stages/report/attempts/1/artifacts/report.pdf", "filename": "report.pdf" }]`. Use a run-relative artifact reference returned by `write_stage_artifact`. The optional filename is a display name. It cannot select a file or output path. The host removes path separators and control characters from display names.
+
+The host supplies the current run workspace, stage, and attempt. The model cannot supply this authority. References can select artifact files from stages in that run, including legacy stage artifact directories. Other runs, unrestricted workspace files, traversal, symlinks, hard links, directories, `.pi-agent`, `auth.json`, and `pi-session.jsonl` are rejected. An attachment requires trusted host context; calling the mailbox directly without that context returns `EMAIL_UNAUTHORIZED`.
+
+Each account has an operator-configurable `attachmentLimits` object:
+
+| Setting | Default | Allowed values |
+| --- | --- | --- |
+| `count` | 10 | 1–100 |
+| `perFileBytes` | 2097152 (2 MiB) | 1–16777216 |
+| `totalBytes` | 5242880 (5 MiB) | 1–33554432 |
+| `downloadBytes` | 8388608 (8 MiB) | 1–33554432 |
+
+Set these fields in the account create or PATCH body. Missing fields use defaults. `count`, `perFileBytes`, and `totalBytes` apply to outgoing attachments. Known file sizes are checked before SMTP starts. Descriptor reads stop at the applicable byte limit plus one byte. Files that grow beyond the limit are rejected before SMTP DATA. Bounded immutable buffers supply both the content hash and SMTP bytes. Replacing a referenced file changes its content identity; reusing its previous operation key returns `EMAIL_OPERATION_CONFLICT`. Attachment bytes and names are not stored in the submission ledger.
+
+To retrieve one incoming attachment, grant `downloadAttachment` for its account. Pi then registers `download_email_attachment`. Pass `{ "ref": <returned message reference>, "attachmentId": "0" }`, using an attachment identifier from message metadata. This grant does not add send, search, or ordinary message retrieval permission. The result contains bounded filename, content type, size, attachment identifier, and an authorized run artifact reference. It contains no binary or base64 content. The host writes only the selected attachment into the current stage attempt's artifact directory with a generated `email-<id>.bin` name and restricted file permissions. Failed writes are removed. Attachment content is external task data; it is never executed.
+
+Incoming retrieval uses a bounded full MIME source fetch and parse. It does not stream only the selected MIME part. `downloadBytes` limits the complete encoded source, including headers, body, and every attachment. The host checks a known provider size before a body fetch, then requests at most this limit plus one byte and checks actual bytes. `count` limits parsed incoming attachments. `perFileBytes` and `totalBytes` also limit the selected decoded attachment. Excess data returns `EMAIL_RESOURCE_LIMIT` without a result file. Ordinary `get_email_message` retains its 1 MiB source limit. For a larger message, search can supply its reference; explicit download can use a known attachment identifier within the configured source cap.
+
+The provider remains the mailbox source. Stageflow creates no durable attachment archive. Only an explicit authorized download creates a run artifact. Both reads preserve unread flags. The host rechecks account configuration before it writes the result; an account change cancels or rejects active work.

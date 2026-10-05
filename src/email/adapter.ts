@@ -6,6 +6,7 @@ import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { EmailSubmissions, validateSend } from "./submissions.js";
 import { replyMessage, validateReply } from "./replies.js";
+import { attachmentIdentity, prepareAttachments, saveSelectedAttachment } from "./attachments.js";
 import { decodeRef, decodeCursor, EMAIL_SOURCE_LIMIT, EMAIL_SEARCH_FIELDS, envelopeSummary, matchesSearch, parseMessage, searchCursor, searchQuery, summarize, type MailRecord, type MailQuery } from "./messages.js";
 import { EmailAccounts, resolveEmailSecret, type EmailAccount, type EmailConnection } from "./accounts.js";
 import {
@@ -13,6 +14,7 @@ import {
   type EmailConnectionStatus, type EmailMessageRef, type EmailMessage, type SendEmailInput,
   type SendEmailResult, type ReplyToEmailInput, type SearchEmailsInput, type SearchEmailsResult,
   type EmailReceivedEvent,
+  type EmailArtifactContext, type PreparedEmailAttachment, type DownloadEmailAttachmentInput, type DownloadEmailAttachmentResult,
 } from "./port.js";
 
 function normalizedConnectionError(error: unknown): EmailError {
@@ -40,25 +42,38 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   }
   abstract testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
 
-  async send(input: SendEmailInput): Promise<SendEmailResult> {
+  async send(input: SendEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult> {
     const account = this.accounts.get(input?.accountId);
     const validated = validateSend(input, account);
-    return this.sendValidated(account, validated);
+    return this.sendValidated(account, validated, context);
   }
-  private sendValidated(account: EmailAccount, validated: SendEmailInput, identity?: unknown): Promise<SendEmailResult> {
+  private async sendValidated(account: EmailAccount, validated: SendEmailInput, context?: EmailArtifactContext, identity?: unknown): Promise<SendEmailResult> {
+    const attachments = await prepareAttachments(account, validated.attachments, context);
     return this.submissions.send(validated, operationId => {
       if (JSON.stringify(this.accounts.get(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
-      return this.submit(account, validated, operationId);
-    }, identity);
+      return this.submit(account, validated, operationId, attachments);
+    }, attachments.length ? { operation: identity, attachments: attachmentIdentity(attachments) } : identity);
   }
-  protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult>;
-  async reply(input: ReplyToEmailInput): Promise<SendEmailResult> {
+  protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult>;
+  async reply(input: ReplyToEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult> {
     const account = this.accounts.get(input?.ref?.accountId);
     const validated = validateReply(input);
     const original = await this.getMessage(validated.ref);
     const message = validateSend(replyMessage(account, original, validated), account);
-    return this.sendValidated(account, message, { operation: "reply", ref: original.ref, replyAll: validated.replyAll });
+    return this.sendValidated(account, message, context, { operation: "reply", ref: original.ref, replyAll: validated.replyAll });
   }
+  async downloadAttachment(input: DownloadEmailAttachmentInput, context?: EmailArtifactContext): Promise<DownloadEmailAttachmentResult> {
+    const account = this.accounts.get(input?.ref?.accountId);
+    if (!context) throw new EmailError("EMAIL_UNAUTHORIZED");
+    if (!input || Object.keys(input).some(key => !["ref", "attachmentId"].includes(key)) || typeof input.attachmentId !== "string" || !/^(0|[1-9]\d{0,2})$/.test(input.attachmentId)) throw new EmailError("EMAIL_INVALID_INPUT");
+    const source = await this.attachmentSource(account, input.ref);
+    const validateAccount = (): void => {
+      if (JSON.stringify(this.accounts.get(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+    };
+    validateAccount();
+    return saveSelectedAttachment(account, source, input.attachmentId, context, validateAccount);
+  }
+  protected abstract attachmentSource(account: EmailAccount, ref: EmailMessageRef): Promise<Buffer>;
   abstract getMessage(ref: EmailMessageRef): Promise<EmailMessage>;
   abstract search(input: SearchEmailsInput): Promise<SearchEmailsResult>;
   async start(_emit: (event: EmailReceivedEvent) => Promise<void>): Promise<void> {
@@ -72,7 +87,7 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   protected status(accountId: string): EmailAccountStatus {
     return {
       accountId, checkedAt: new Date().toISOString(),
-      capabilities: { operations: ["testAccount", "send", "reply", "search", "getMessage"], searchFields: [...EMAIL_SEARCH_FIELDS], idle: false },
+      capabilities: { operations: ["testAccount", "send", "reply", "search", "getMessage", "downloadAttachment"], searchFields: [...EMAIL_SEARCH_FIELDS], idle: false },
     };
   }
 }
@@ -121,8 +136,19 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
     return parseMessage(account, decoded.mailbox, stored.generation, record);
   }
   readonly sent: SendEmailInput[] = [];
-  protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
+  readonly sentAttachments: PreparedEmailAttachment[][] = [];
+  protected async attachmentSource(account: EmailAccount, ref: EmailMessageRef): Promise<Buffer> {
+    const decoded = decodeRef(account, ref);
+    const stored = this.mailboxes.get(`${account.accountId}:${decoded.mailbox}`);
+    if (!stored || stored.generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
+    const record = stored.messages.find(value => value.uid === decoded.uid);
+    if (!record) throw new EmailError("EMAIL_MESSAGE_NOT_FOUND");
+    if (record.source.length > account.attachmentLimits.downloadBytes) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+    return Buffer.from(record.source);
+  }
+  protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult> {
     this.sent.push(structuredClone(input));
+    this.sentAttachments.push(attachments.map(value => ({ filename: value.filename, content: Buffer.from(value.content) })));
     return { operationId, messageId: `<${operationId}@stageflow>`, accepted: [...input.to, ...input.cc ?? [], ...input.bcc ?? []].map(value => value.address),
       rejected: [], submittedAt: new Date().toISOString() };
   }
@@ -241,7 +267,22 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     });
   }
 
-  protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
+  protected async attachmentSource(account: EmailAccount, ref: EmailMessageRef): Promise<Buffer> {
+    const decoded = decodeRef(account, ref);
+    return this.readMailbox(account, decoded.mailbox, async (client, generation) => {
+      if (generation !== decoded.generation) throw new EmailError("EMAIL_STALE_REFERENCE");
+      const metadata = await client.fetchOne(String(decoded.uid), { size: true }, { uid: true });
+      if (!metadata) throw new EmailError("EMAIL_MESSAGE_NOT_FOUND");
+      const limit = account.attachmentLimits.downloadBytes;
+      if ((metadata.size ?? 0) > limit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+      const fetched = await client.fetchOne(String(decoded.uid), { size: true, source: { start: 0, maxLength: limit + 1 } }, { uid: true });
+      if (!fetched) throw new EmailError("EMAIL_MESSAGE_NOT_FOUND");
+      if (!fetched.source || (fetched.size ?? 0) > limit || fetched.source.length > limit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+      return fetched.source;
+    });
+  }
+
+  protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult> {
     const config = account.smtp;
     const secret = resolveEmailSecret(config, this.env);
     let socket: Socket | undefined;
@@ -264,7 +305,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     } as SMTPTransport.Options);
     try {
       const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail({ from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
-        subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, messageId: `<${operationId}@stageflow>` }));
+        subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, attachments, messageId: `<${operationId}@stageflow>` }));
       return { operationId, messageId: receipt.messageId, accepted: receipt.accepted, rejected: receipt.rejected,
         submittedAt: new Date().toISOString() };
     } catch (error) {

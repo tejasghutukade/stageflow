@@ -3,6 +3,7 @@ import { simpleParser, type AddressObject } from "mailparser";
 import type { FetchMessageObject, MessageAddressObject } from "imapflow";
 import { EmailError, type EmailAddress, type EmailMessage, type EmailMessageRef, type EmailMessageSummary, type SearchEmailsInput } from "./port.js";
 import type { EmailAccount } from "./accounts.js";
+import { safeAttachmentFilename } from "./attachments.js";
 
 export const EMAIL_SOURCE_LIMIT = 1024 * 1024;
 const BODY_LIMIT = 128 * 1024;
@@ -124,7 +125,7 @@ export async function parseMessage(account: EmailAccount, mailbox: string, gener
     ...(parsed.subject !== undefined ? { subject: parsed.subject.slice(0, 4096) } : {}),
     receivedAt: record.receivedAt.toISOString(), unread: !record.flags.has("\\Seen"), flagged: record.flags.has("\\Flagged"),
     hasAttachments: parsed.attachments.length > 0, preview: text.slice(0, 512), text, ...(html !== undefined ? { html } : {}), references,
-    attachments: parsed.attachments.map((value, index) => ({ id: String(index), ...(value.filename ? { filename: value.filename.slice(0, 200) } : {}), contentType: value.contentType.slice(0, 200), size: value.size })) };
+    attachments: parsed.attachments.map((value, index) => ({ id: String(index), ...(value.filename ? { filename: safeAttachmentFilename(value.filename) } : {}), contentType: value.contentType.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200), size: value.size })) };
 }
 export function summarize(message: EmailMessage): EmailMessageSummary {
   const { cc: _cc, replyTo: _replyTo, text: _text, html: _html, inReplyTo: _inReplyTo, references: _references, attachments: _attachments, ...summary } = message;

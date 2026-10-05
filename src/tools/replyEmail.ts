@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import type { StageEmail } from "../email/host.js";
 import { EmailError, type ReplyToEmailInput } from "../email/port.js";
+import { emailAttachmentParameters } from "./sendEmail.js";
 
 export function createReplyEmailTool(email: StageEmail) {
   return {
@@ -9,6 +10,7 @@ export function createReplyEmailTool(email: StageEmail) {
     parameters: Type.Object({
       ref: Type.Object({ accountId: Type.String(), id: Type.String(), mailbox: Type.Optional(Type.String()) }),
       operationKey: Type.String(), from: Type.Optional(Type.String()), text: Type.String(), html: Type.Optional(Type.String()), replyAll: Type.Optional(Type.Boolean()),
+      attachments: emailAttachmentParameters(),
     }),
     async execute(_toolCallId: string, input: unknown): Promise<{ content: { type: "text"; text: string }[]; details: unknown; isError?: boolean }> {
       try {

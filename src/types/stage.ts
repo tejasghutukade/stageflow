@@ -16,5 +16,5 @@ export type StageConfig = {
   /** Declared ask_operator kinds this stage is expected to stop on. */
   gate_kinds?: StageGateKind[];
   skill?: string;
-  email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search")[] }[];
+  email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
 };
