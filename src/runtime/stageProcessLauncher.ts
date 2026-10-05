@@ -81,6 +81,32 @@ export type StageProcessLauncherOptions = {
   forkFn?: typeof childProcess.fork;
 };
 
+function defaultStageCliEntry(): string {
+  const source = import.meta.url.split("?")[0]?.endsWith(".ts") === true;
+  return fileURLToPath(
+    new URL(source ? "../cli.ts" : "../cli.js", import.meta.url),
+  );
+}
+
+function isTypeScriptEntry(entry: string): boolean {
+  return /\.(?:m|c)?ts$/.test(entry);
+}
+
+/**
+ * A compiled `dist/cli.js` child is plain node. `npm run dev` is TypeScript,
+ * and this launcher sets execArgv explicitly so the parent's tsx loader is
+ * not inherited. Load that entry with the same tsx hooks the dev CLI uses.
+ */
+function tsxLoaderExecArgv(): string[] {
+  try {
+    const preflight = fileURLToPath(import.meta.resolve("tsx/preflight"));
+    const loader = import.meta.resolve("tsx");
+    return ["--require", preflight, "--import", loader];
+  } catch {
+    return [];
+  }
+}
+
 function flushCappedPartial(
   log: Logger,
   event: "stage.stdout" | "stage.stderr",
@@ -201,6 +227,7 @@ export class StageProcessLauncher {
   private readonly env: Record<string, string | undefined>;
   private readonly explicitChildExtras: Record<string, string> | undefined;
   private readonly cliEntry: string;
+  private readonly workerExecArgv: string[];
   private readonly logger: Logger;
   private readonly forkFn: typeof childProcess.fork;
   private readonly active = new Map<string, TrackedChild>();
@@ -227,9 +254,11 @@ export class StageProcessLauncher {
       options.maxActiveStageProcesses,
     );
     this.heapMb = getContainerLimits().maxOldSpaceSizeMb;
-    this.cliEntry =
-      options.cliEntry ??
-      fileURLToPath(new URL("../cli.js", import.meta.url));
+    this.cliEntry = options.cliEntry ?? defaultStageCliEntry();
+    this.workerExecArgv = [
+      `--max-old-space-size=${this.heapMb}`,
+      ...(isTypeScriptEntry(this.cliEntry) ? tsxLoaderExecArgv() : []),
+    ];
     this.logger =
       options.logger ?? rootLogger.child({ component: "runtime" });
     this.forkFn = options.forkFn ?? childProcess.fork;
@@ -448,7 +477,8 @@ export class StageProcessLauncher {
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       detached: true,
       // Explicit: do not inherit Host execArgv; set heap from cgroup budget.
-      execArgv: [`--max-old-space-size=${this.heapMb}`],
+      // TypeScript entries also get the tsx loader, since that inheritance is off.
+      execArgv: this.workerExecArgv,
     });
 
     const key = activeKey(input.runId, input.stageId);

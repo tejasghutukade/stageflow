@@ -35,7 +35,7 @@ Bad: a paragraph of pipeline theory, a numbered plan, and three questions at onc
 - Chat History/New threads persist under workshop/sessions (transcript + session id only); the draft package is client-/Workshop-owned and is not stored in the session blob.
 - Always read_draft before mutating. Prefer uses: ./id.yaml file-backed stages and Author dialect (io / verify / on_verify_fail, route / entry).
 - Validate with validate_draft; fix hard errors. Warnings like pipeline.model_applies or pipeline.route_all_gated may be intentional.
-- save requires a destination (context.destination or operator-provided directory). Call save only when the operator asks to persist; validate-then-write; allowInvalid only if they explicitly request saving invalid YAML.
+- save writes catalog YAML only when the operator asks to persist. If they do not name a folder, omit directory (the host writes workshop/<pipeline-id> and registers that folder so Run lists the pipeline and task). If they name a folder, pass that directory. Do not ask for a path before saving. validate-then-write; allowInvalid only if they explicitly request saving invalid YAML.
 - Stages are domain-agnostic configurable workflows (releases, research, ops, SDLC, …) — not product stage types.
 - Use retrieve_docs when the operator asks for current docs/examples or when refining against public guidance. If retrieval fails, continue with this playbook alone.
 - Core path = first-class Workshop editors. Advanced topics below are explain-only — do not invent Workshop editors for them.

@@ -13,7 +13,12 @@ import {
   validateDraftPackage,
   type DraftPackage,
 } from "../src/config/draftPackage.js";
+import {
+  listPipelinesForContext,
+  listTasksForContext,
+} from "../src/config/browseCatalog.js";
 import { listPipelinesMultiProject } from "../src/config/multiProjectCatalog.js";
+import { resolveStageflowContext } from "../src/project/resolveStageflowContext.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import {
   resetWorkshopChatSessionsForTests,
@@ -172,24 +177,70 @@ describe("Operator Agent Host — Workshop Author", () => {
     }
   });
 
-  it("save without destination fails clearly", async () => {
+  it("save without a folder writes under workshop/ and lists it for Run", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
+      await writeFile(
+        path.join(root, "stageflow.yaml"),
+        [
+          "version: 1",
+          "catalog:",
+          "  pipelines:",
+          "    - examples",
+          "  tasks:",
+          "    - examples",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      const draft: DraftPackage = {
+        pipeline: {
+          id: "demo",
+          stages: [
+            {
+              id: "plan",
+              entry: true,
+              system_prompt: "Plan the work.",
+              model: MODEL,
+              ...REQUIRED_IO,
+            },
+          ],
+        },
+        task: {
+          filename: "demo.task.yaml",
+          body: { id: "demo", goal: "Try the demo." },
+        },
+      };
       const host = createWorkshopOperatorHost([
         { type: "call_tool", name: "save", args: {} },
       ]);
       const session = host.openSession({
         profileId: WORKSHOP_AUTHOR_PROFILE_ID,
-        context: createWorkshopDraftContext(emptyDraftPackage("demo"), {
-          projectRoot: root,
-        }),
+        context: createWorkshopDraftContext(draft, { projectRoot: root }),
       });
       const events = await session.send("save");
       const toolEvent = events.find((e) => e.type === "tool_result");
       expect(toolEvent?.type).toBe("tool_result");
       if (toolEvent?.type !== "tool_result") return;
-      expect(toolEvent.result.ok).toBe(false);
-      expect(toolEvent.result.error).toMatch(/destination is required/i);
+      expect(toolEvent.result.ok).toBe(true);
+      const pipeline = await readFile(
+        path.join(root, "workshop", "demo", "demo.pipeline.yaml"),
+        "utf8",
+      );
+      const task = await readFile(
+        path.join(root, "workshop", "demo", "demo.task.yaml"),
+        "utf8",
+      );
+      expect(pipeline).toContain("id: demo");
+      expect(task).toContain("goal: Try the demo.");
+      const manifest = await readFile(path.join(root, "stageflow.yaml"), "utf8");
+      expect(manifest).toMatch(/pipelines:[\s\S]*- workshop/);
+      expect(manifest).toMatch(/tasks:[\s\S]*- workshop/);
+      const ctx = await resolveStageflowContext(root);
+      const pipelines = await listPipelinesForContext(ctx);
+      const tasks = await listTasksForContext(ctx);
+      expect(pipelines.some((row) => row.id === "demo")).toBe(true);
+      expect(tasks.some((row) => row.id === "demo")).toBe(true);
     } finally {
       await cleanup();
     }

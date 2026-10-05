@@ -3,6 +3,7 @@ node_modules/
 dist/
 ui/dist/
 .stageflow/
+.stageflow-home/
 .stageflow-control-token
 .env
 .software-factory/

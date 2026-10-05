@@ -1,4 +1,4 @@
-export const DEFAULT_WORKSHOP_MODEL = "anthropic/claude-sonnet-4-5";
+export const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 export type ResolveWorkshopModelInput = {
   sessionOverride?: string | null;

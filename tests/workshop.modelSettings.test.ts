@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKSHOP_MODEL,
   parseWorkshopModel,
+  readWorkshopOpenModel,
   resolveWorkshopModel,
 } from "../src/workshop/modelSettings.js";
 import {
@@ -9,7 +10,7 @@ import {
   writeFactorySettings,
 } from "../src/runtime/settingsFile.js";
 import { storeRootFor } from "../src/runstore/paths.js";
-import { mkdir, mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -201,5 +202,23 @@ describe("Save As destination behavior", () => {
     } finally {
       await cleanup();
     }
+  });
+
+  it("opens Workshop on the stageflow.yaml model", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-workshop-open-model-"));
+    await writeFile(
+      path.join(root, "stageflow.yaml"),
+      [
+        "version: 1",
+        "model: cursor/auto",
+        "catalog:",
+        "  pipelines: []",
+        "  tasks: []",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFactorySettings(root, { workshopModel: MODEL });
+    await expect(readWorkshopOpenModel(root)).resolves.toBe("cursor/auto");
   });
 });

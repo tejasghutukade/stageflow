@@ -1,6 +1,8 @@
 version: 1
+model: cursor/auto
 catalog:
   pipelines:
+    - workshop
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp
@@ -23,6 +25,7 @@ catalog:
     - examples/feature-loop
     - examples/ship-feature
   tasks:
+    - workshop
     - examples/generic-fan-in
     - examples/stage-mcp
     - examples/playwright-mcp

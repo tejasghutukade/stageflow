@@ -49,7 +49,10 @@ import {
   WorkshopChatSessionRegistry,
   WorkshopSessionStoreError,
 } from "../workshop/chatTurn.js";
-import { resolveWorkshopModel } from "../workshop/modelSettings.js";
+import {
+  readWorkshopOpenModel,
+  resolveWorkshopModel,
+} from "../workshop/modelSettings.js";
 import {
   createWorkshopSession,
   getWorkshopSession,
@@ -2476,7 +2479,7 @@ export function createOperatorRoutes(
             json(res, draftParsed.status, { error: draftParsed.error });
             return true;
           }
-          const settingsDefault = readFactorySettings(cwd).workshopModel;
+          const settingsDefault = await readWorkshopOpenModel(cwd);
           const accept = String(req.headers.accept ?? "");
           const wantsStream =
             body.stream === true ||
@@ -2797,12 +2800,14 @@ export function createOperatorRoutes(
           const health = manager.getHealth();
           const credential = getCredentialSourceSettings(cwd);
           const factory = readFactorySettings(cwd);
+          const defaultModel = await readWorkshopOpenModel(cwd);
           json(res, 200, {
             maxConcurrent: health.maxConcurrent,
             ...credential,
             ...(factory.workshopModel !== undefined
               ? { workshopModel: factory.workshopModel }
               : {}),
+            defaultModel,
           });
           return true;
         }
@@ -2875,6 +2880,7 @@ export function createOperatorRoutes(
             ...health,
             ...credential,
             ...(workshopModel !== undefined ? { workshopModel } : {}),
+            defaultModel: await readWorkshopOpenModel(cwd),
           });
           return true;
         }
@@ -2910,6 +2916,13 @@ export async function startUiServer(
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
   const { cwd, agentDir, rootDir } = boot;
+  if (boot.store && rootDir) {
+    try {
+      await boot.store.ensureProject(rootDir);
+    } catch {
+      // The console still serves seeded catalogs when this project cannot be registered.
+    }
+  }
   const providerAuthContext = boot.providerAuthContext;
   const allowedHosts = options.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = options.controlTokens ?? loadControlTokens();

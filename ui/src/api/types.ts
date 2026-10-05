@@ -854,6 +854,8 @@ export type SettingsSnapshot = {
   credentialSource?: CredentialSource;
   binding: CredentialBindingView;
   workshopModel?: string;
+  /** Model selected when Workshop opens. From stageflow.yaml `model`. */
+  defaultModel?: string;
 };
 
 export type ProviderAuthMutationResult =

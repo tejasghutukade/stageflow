@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ChildProcess } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { createLogger } from "../src/logging/logger.js";
 import { StageProcessLauncher } from "../src/runtime/stageProcessLauncher.js";
 
@@ -11,6 +14,40 @@ const mockWorker = fileURLToPath(
 );
 
 describe("StageProcessLauncher", () => {
+  it("loads a TypeScript cli entry with the tsx loader", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-tsx-"));
+    const calls: Array<{ modulePath: string; execArgv?: string[] }> = [];
+    const launcher = new StageProcessLauncher({
+      cliEntry: path.join(rootDir, "cli.ts"),
+      forkFn: ((modulePath, _args, options) => {
+        calls.push({ modulePath, execArgv: options?.execArgv });
+        const child = new EventEmitter() as ChildProcess;
+        child.stdout = null;
+        child.stderr = null;
+        child.pid = 42;
+        queueMicrotask(() => child.emit("exit", 0, null));
+        return child;
+      }) as typeof childProcess.fork,
+    });
+
+    await expect(
+      launcher.launch({ runId: "r-tsx", stageId: "s", rootDir }),
+    ).resolves.toEqual({ type: "succeeded" });
+
+    expect(calls).toEqual([
+      {
+        modulePath: path.join(rootDir, "cli.ts"),
+        execArgv: [
+          expect.stringMatching(/^--max-old-space-size=/),
+          "--require",
+          fileURLToPath(import.meta.resolve("tsx/preflight")),
+          "--import",
+          import.meta.resolve("tsx"),
+        ],
+      },
+    ]);
+  });
+
   it("cap of 2 blocks third until one completes", async () => {
     const rootDir = await mkdtemp(path.join(tmpdir(), "sf-stage-launcher-"));
     const launcher = new StageProcessLauncher({

@@ -1,4 +1,8 @@
-export const DEFAULT_WORKSHOP_MODEL = "anthropic/claude-sonnet-4-5";
+import { globalModelFromManifest } from "../config/resolveModel.js";
+import { resolveStageflowContext } from "../project/resolveStageflowContext.js";
+import { readFactorySettings } from "../runtime/settingsFile.js";
+
+export const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 export type ResolveWorkshopModelInput = {
   sessionOverride?: string | null;
@@ -26,6 +30,20 @@ export function parseWorkshopModel(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Model selected when Workshop chat opens.
+ * stageflow.yaml `model` wins; a saved Settings workshop model is used only
+ * when the manifest has none.
+ */
+export async function readWorkshopOpenModel(cwd: string): Promise<string> {
+  const ctx = await resolveStageflowContext(cwd);
+  return resolveWorkshopModel({
+    settingsDefault:
+      globalModelFromManifest(ctx.manifest) ??
+      readFactorySettings(cwd).workshopModel,
+  });
 }
 
 function normalizeModelId(value: string | null | undefined): string | undefined {

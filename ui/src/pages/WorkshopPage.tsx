@@ -1041,14 +1041,10 @@ export function WorkshopPage() {
           fetchModels(),
         ]);
         if (cancelled) return;
-        const nextDefault = settings.workshopModel ?? null;
+        const nextDefault = settings.defaultModel ?? settings.workshopModel ?? null;
         setSettingsDefault(nextDefault);
         setAvailableModels(models.models);
-        setChatModel((current) =>
-          current === DEFAULT_WORKSHOP_MODEL
-            ? resolveWorkshopModel({ settingsDefault: nextDefault })
-            : current,
-        );
+        setChatModel(resolveWorkshopModel({ settingsDefault: nextDefault }));
       } catch {
         if (cancelled) return;
         setAvailableModels([]);

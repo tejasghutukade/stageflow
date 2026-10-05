@@ -2,8 +2,10 @@ export const STAGEFLOW_YAML = `version: 1
 catalog:
   pipelines:
     - pipelines
+    - workshop
   tasks:
     - tasks
+    - workshop
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"

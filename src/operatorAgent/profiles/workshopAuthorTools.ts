@@ -7,6 +7,10 @@ import {
   type DraftPackageWriteResult,
 } from "../../config/draftPackage.js";
 import {
+  defaultWorkshopPackageDirectory,
+  ensureCatalogScanRoot,
+} from "../../config/ensureCatalogScanRoot.js";
+import {
   emptyDraftPackage,
   isWorkshopDraftContext,
   readDraftFromContext,
@@ -144,8 +148,10 @@ function resolveDestination(
 ): { directory: string; pipelineFilename?: string } | null {
   const directory =
     stringArg(args, "directory") ??
-    readWorkshopContext(ctx).destination?.directory;
-  if (!directory) return null;
+    readWorkshopContext(ctx).destination?.directory ??
+    defaultWorkshopPackageDirectory(
+      readDraftFromContext(ctx.getContext()).pipeline.id,
+    );
   const pipelineFilename =
     stringArg(args, "pipelineFilename") ??
     stringArg(args, "pipeline_filename") ??
@@ -720,7 +726,7 @@ export function createSaveTool(
   return {
     name: "save",
     description:
-      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). Requires a destination directory (context.destination or args.directory). Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
+      "Validate-then-write the draft via catalog facades (createDraftPackage / overwriteDraftPackage). When directory is omitted, writes under workshop/<pipeline-id>, which the host adds to the catalog so Run can see the pipeline and task. Pass directory only when the operator names a folder. Soft undo does not reverse disk. Prefer mode auto; set allowInvalid only when the operator explicitly requests saving invalid YAML. Do not pass projectRoot — the host binds it.",
     async handler(args, ctx): Promise<OperatorAgentToolResult> {
       const { resolvePinnedSaveDestination, recordPinnedWorkshopSave } =
         await import("../../workshop/chatTurn.js");
@@ -776,6 +782,7 @@ export function createSaveTool(
       }
 
       if (result.ok) {
+        await ensureCatalogScanRoot(projectRoot, destination.directory);
         const current = readWorkshopContext(ctx);
         ctx.setContext({
           ...current,
