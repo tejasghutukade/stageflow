@@ -477,9 +477,19 @@ export class RunManager {
       pipeline: string;
       task?: string | TaskFile;
       checkoutOverride?: string;
+      dispatchKey?: string;
     },
   ): Promise<StartRunResult> {
     const cwd = this.options.cwd ?? process.cwd();
+
+    if (input.dispatchKey) {
+      if (!this.options.store.findRunByDispatchKey) throw new Error("Run store does not support durable dispatch");
+      const existing = await this.options.store.findRunByDispatchKey(input.dispatchKey);
+      if (existing) {
+        const meta = await this.options.store.readRunMeta(existing.runId);
+        return { ok: true, runId: existing.runId, done: Promise.resolve({ ok: meta.status === "succeeded", runId: existing.runId, runDir: existing.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }) };
+      }
+    }
 
     let resolved;
     try {
@@ -516,6 +526,7 @@ export class RunManager {
       `task file ${label}`,
       cwd,
       input.checkoutOverride,
+      input.dispatchKey,
     );
   }
 
@@ -815,6 +826,7 @@ export class RunManager {
     taskLabel: string,
     cwd: string,
     checkoutOverride?: string,
+    dispatchKey?: string,
   ): Promise<StartRunResult> {
     let checkoutKey: string | undefined;
     try {
@@ -841,6 +853,7 @@ export class RunManager {
 
     try {
       const started = await startPipeline({
+        dispatchKey,
         agent: this.options.agent,
         store: this.options.store,
         taskYaml,
@@ -853,7 +866,8 @@ export class RunManager {
         stageProcessLauncher: this.stageProcessLauncher,
         operatorCatalog: this.options.operatorCatalog,
       });
-      this.track(reserved.provisionalId, started.runId, started.done);
+      if (started.created === false) this.clearReservation(reserved.provisionalId);
+      else this.track(reserved.provisionalId, started.runId, started.done);
       return { ok: true, runId: started.runId, done: started.done };
     } catch (err) {
       this.clearReservation(reserved.provisionalId);

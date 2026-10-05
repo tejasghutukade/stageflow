@@ -31,6 +31,7 @@ export type PipelineRunResult = {
 };
 
 export type StartedPipeline = {
+  created?: boolean;
   runId: string;
   runDir: string;
   done: Promise<PipelineRunResult>;
@@ -39,7 +40,7 @@ export type StartedPipeline = {
 export type PreparedPipeline = {
   task: TaskFile;
   loaded: LoadedPipeline;
-  run: { runId: string; workspaceDir: string };
+  run: { runId: string; workspaceDir: string; created?: boolean };
   agent: AgentPort;
   store: RunStore;
   cwd: string;
@@ -69,6 +70,7 @@ function resolveStageProcessLauncher(
 }
 
 async function preparePipeline(options: {
+  dispatchKey?: string;
   agent: AgentPort;
   store: RunStore;
   taskPath?: string;
@@ -109,6 +111,7 @@ async function preparePipeline(options: {
   );
 
   const run = await options.store.createRun({
+    dispatchKey: options.dispatchKey,
     pipelineId: loaded.pipeline.id,
     taskYaml,
     taskId: task.id,
@@ -212,6 +215,7 @@ export async function runPipeline(options: {
 
 /** Create the run immediately, then execute stages in the returned promise. */
 export async function startPipeline(options: {
+  dispatchKey?: string;
   agent: AgentPort;
   store: RunStore;
   taskPath?: string;
@@ -227,6 +231,7 @@ export async function startPipeline(options: {
 }): Promise<StartedPipeline> {
   const cwd = options.cwd ?? process.cwd();
   const prepared = await preparePipeline({
+    dispatchKey: options.dispatchKey,
     agent: options.agent,
     store: options.store,
     taskPath: options.taskPath,
@@ -239,6 +244,15 @@ export async function startPipeline(options: {
     stageProcessLauncher: options.stageProcessLauncher,
     operatorCatalog: options.operatorCatalog,
   });
+  if (prepared.run.created === false) {
+    const meta = await prepared.store.readRunMeta(prepared.run.runId);
+    return {
+      created: false,
+      runId: prepared.run.runId,
+      runDir: prepared.run.workspaceDir,
+      done: Promise.resolve({ ok: meta.status === "succeeded", runId: prepared.run.runId, runDir: prepared.run.workspaceDir, reason: "Recovered existing dispatch; execution was not restarted" }),
+    };
+  }
   const done = executeStages(prepared, {
     maxActiveStagesPerRun: options.maxActiveStagesPerRun,
     executionMode: prepared.executionMode,

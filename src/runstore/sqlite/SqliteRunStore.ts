@@ -155,6 +155,11 @@ export class SqliteRunStore implements RunStore {
     this.db.exec(SCHEMA_SQL);
     ensureCheckoutRootColumn(this.db);
     ensurePipelineDagColumn(this.db);
+    const runColumns = this.db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[];
+    if (!runColumns.some(column => column.name === "dispatch_key")) {
+      this.db.exec(`ALTER TABLE runs ADD COLUMN dispatch_key TEXT`);
+    }
+    this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_dispatch_key ON runs(dispatch_key)`);
     ensureStageExecutionsTable(this.db);
     ensureStageEventsAttemptColumn(this.db);
     this.migratePromise = importDiskRunsIfEmpty(this.db, storeRoot).then(() => undefined);
@@ -171,20 +176,24 @@ export class SqliteRunStore implements RunStore {
 
   async createRun(input: CreateRunInput): Promise<CreatedRun> {
     await this.ready();
+    const existing = input.dispatchKey ? await this.findRunByDispatchKey(input.dispatchKey) : undefined;
+    if (existing) return existing;
     const runId = newRunId();
     const workspaceDir = this.getWorkspaceDir(runId);
-    await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    if (!input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
 
     const now = new Date().toISOString();
     this.db
       .prepare(
         `INSERT INTO runs
-          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json)
+          (run_id, pipeline_id, task_id, task_yaml, status, created_at, updated_at, checkout_root, pipeline_dag_json, dispatch_key)
          VALUES
-          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json)`,
+          (@run_id, @pipeline_id, @task_id, @task_yaml, @status, @created_at, @updated_at, @checkout_root, @pipeline_dag_json, @dispatch_key)
+         ON CONFLICT(dispatch_key) DO NOTHING`,
       )
       .run({
         run_id: runId,
+        dispatch_key: input.dispatchKey ?? null,
         pipeline_id: input.pipelineId,
         task_id: input.taskId ?? null,
         task_yaml: input.taskYaml,
@@ -197,7 +206,18 @@ export class SqliteRunStore implements RunStore {
           : null,
       });
 
-    return { runId, workspaceDir };
+    if (input.dispatchKey) {
+      const selected = await this.findRunByDispatchKey(input.dispatchKey);
+      if (selected && selected.runId !== runId) return selected;
+    }
+    if (input.dispatchKey) await mkdir(path.join(workspaceDir, "stages"), { recursive: true });
+    return { runId, workspaceDir, created: true };
+  }
+
+  async findRunByDispatchKey(dispatchKey: string): Promise<CreatedRun | undefined> {
+    await this.ready();
+    const row = this.db.prepare(`SELECT run_id FROM runs WHERE dispatch_key = ?`).get(dispatchKey) as { run_id: string } | undefined;
+    return row ? { runId: row.run_id, workspaceDir: this.getWorkspaceDir(row.run_id), created: false } : undefined;
   }
 
   async updateRunStatus(runId: string, status: RunStatus): Promise<void> {

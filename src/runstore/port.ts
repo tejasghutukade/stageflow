@@ -57,6 +57,8 @@ export type RunMeta = {
 
 export type CreatedRun = {
   runId: string;
+  /** False when a durable dispatch key already belongs to this run. */
+  created?: boolean;
   /** Opaque agent workspace path (artifacts live under this tree). */
   workspaceDir: string;
 };
@@ -129,6 +131,7 @@ export type RunDetail = Omit<RunSummary, "stages"> & {
 };
 
 export type CreateRunInput = {
+  dispatchKey?: string;
   pipelineId: string;
   taskYaml: string;
   taskId?: string;
@@ -144,6 +147,7 @@ export type CreateRunInput = {
  */
 export interface RunStore {
   createRun(input: CreateRunInput): Promise<CreatedRun>;
+  findRunByDispatchKey?(dispatchKey: string): Promise<CreatedRun | undefined>;
   updateRunStatus(runId: string, status: RunStatus): Promise<void>;
   readRunMeta(runId: string): Promise<RunMeta>;
   readTaskYaml(runId: string): Promise<string>;

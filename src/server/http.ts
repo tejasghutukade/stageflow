@@ -46,6 +46,7 @@ import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
 import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
+import { EmailTriggers } from "../email/triggers.js";
 
 const DEFAULT_PORT = 3847;
 
@@ -295,6 +296,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
+  const emailTriggers = new EmailTriggers({ cwd, accounts: emailAccounts, mailbox: emailMailbox, manager, store });
   const validateMcpHost = localhostHostValidation();
   const validateMcpOrigin = localhostOriginValidation();
 
@@ -306,7 +308,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     if (pathname.startsWith("/api/email/")) {
       if (!assertLoopbackHttpAccess(req, res)) return;
       if (["POST", "PATCH", "DELETE"].includes(method) && !assertCredentialMutatingOrigin(req, res)) return;
-      await handleEmailRoutes(req, res, pathname, emailAccounts, emailMailbox);
+      await handleEmailRoutes(req, res, pathname, emailAccounts, emailMailbox, emailTriggers);
       return;
     }
 
@@ -668,7 +670,9 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   });
 
   let emailShutdown: Promise<void> | undefined;
-  function stopEmail(): Promise<void> { return emailShutdown ??= releaseEmailHost(cwd); }
+  function stopEmail(): Promise<void> {
+    return emailShutdown ??= releaseEmailHost(cwd).then(() => emailTriggers.stop());
+  }
   server.on("close", () => { void stopEmail(); });
   const closeServer = server.close.bind(server);
   server.close = callback => closeServer(error => {
@@ -679,7 +683,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     server.on("error", reject);
   });
 
-  await emailMailbox.start(async () => {});
+  await emailTriggers.recover();
+  await emailMailbox.start(event => emailTriggers.accept(event));
 
   const address = server.address();
   const boundPort =
