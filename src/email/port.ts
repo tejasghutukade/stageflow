@@ -31,7 +31,7 @@ export type SendEmailInput = {
   inReplyTo?: string; references?: string[]; attachments?: { artifact: string; filename?: string }[];
 };
 export type ReplyToEmailInput = {
-  ref: EmailMessageRef; operationKey: string; text: string; html?: string; replyAll?: boolean;
+  ref: EmailMessageRef; operationKey: string; from?: string; text: string; html?: string; replyAll?: boolean;
 };
 export type SendEmailResult = {
   operationId: string; messageId?: string; accepted: string[]; rejected: string[];

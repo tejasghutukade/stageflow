@@ -2,7 +2,7 @@
 
 Stageflow connects existing mailboxes. It does not create addresses or host email domains. Account configuration is stored in the workspace host state. Each account belongs to that workspace. Account identifiers stay fixed when you change settings.
 
-This first slice provides account management and connection tests. Send, reply, retrieval, search, and incoming events are declared but return `EMAIL_UNSUPPORTED` until their tickets are implemented. Account capabilities report only implemented operations.
+Account management, connection tests, send, reply, retrieval, and bounded search are available. Incoming events and triggers are not yet implemented. Account capabilities report only implemented operations.
 
 Start the Stageflow host with your mailbox credentials in its environment. Use separate variables for receiving and sending if needed. Set an app password, or an OAuth access token obtained outside Stageflow. Do not put credentials in stage YAML, tasks, prompts, or model provider settings.
 
@@ -65,7 +65,7 @@ email:
     operations: [send]
 ```
 
-The stage prompt receives these account identifiers. Pi registers `send_email` only when sending is permitted. The tool accepts `accountId`, `operationKey`, `to`, `cc`, `bcc`, `subject`, `text`, optional `html`, and optional `from`. Address lists contain objects with `address` and optional `name`. `from` must be the account address or a configured `senderAliases` address. At least one recipient is required. Sending attachments and reply headers are not supported in this slice. Reply support is added by a later ticket.
+The stage prompt receives these account identifiers. Pi registers `send_email` only when sending is permitted. The tool accepts `accountId`, `operationKey`, `to`, `cc`, `bcc`, `subject`, `text`, optional `html`, and optional `from`. Address lists contain objects with `address` and optional `name`. `from` must be the account address or a configured `senderAliases` address. At least one recipient is required. Attachments are not yet supported. The shared send interface accepts safe `inReplyTo` and `references` fields. Use `reply_email` to derive these fields from an existing message.
 
 For a notification stage, instruct the agent to send to the configured recipient after the work succeeds, use an operation key such as `completion-notice`, and report the returned receipt. The receipt lists accepted and rejected recipients. Partial acceptance is a successful submission with explicit rejected recipients. SMTP acceptance does not prove delivery and does not guarantee a Sent folder copy.
 
@@ -77,7 +77,7 @@ Before SMTP starts, the host records a pending operation. If acceptance cannot b
 
 Inspect operation outcomes with `GET /api/email/submissions` under the same local host access rules. The ledger retains account identifiers, operation keys, content hashes, outcomes, and receipts. It stores no body, MIME, or attachment content. Completed records expire after 30 days when new submissions are recorded. Unresolved operations remain. The ledger admits at most 10,000 records; capacity exhaustion returns `EMAIL_RESOURCE_LIMIT`. Receipt reuse is guaranteed only while its record remains. Keep a single Stageflow host writer per workspace.
 
-Each submission has a bounded connection deadline. Account changes and host shutdown close active connections. A cancellation after possible submission is uncertain and cannot cause an automatic resend. Mailbox receiving and trigger behavior are added by later tickets.
+Each submission has a bounded connection deadline. Account changes and host shutdown close active connections. A cancellation after possible submission is uncertain and cannot cause an automatic resend. Incoming events and trigger behavior are added by later tickets.
 
 ## Read from a stage
 
@@ -89,6 +89,26 @@ Pass a returned reference directly to `get_email_message`. Do not decode or chan
 
 Retrieval uses MailParser and returns text, optional HTML, Cc, Reply-To, reply headers, and attachment metadata. It returns no attachment bytes. The source limit is 1 MiB. The IMAP request limits bytes before the source is stored in request memory. Each decoded text or HTML body is limited to 128 KiB. At most 100 attachments, references, and addresses per header are returned. Subject text is limited to 4096 characters, previews to 512 characters, and attachment filenames to 200 characters. Excess source, body, or item counts return `EMAIL_RESOURCE_LIMIT`. No mailbox body database is created. A run can retain the bounded tool result explicitly requested by its stage.
 
-The tool declares `text`, `from`, `to`, `subject`, `unread`, `flagged`, `hasAttachments`, `receivedAfter`, `receivedBefore`, `cursor`, and `sort`. In this slice, a supplied filter or cursor, or `sort: oldest`, returns `EMAIL_SEARCH_UNSUPPORTED`. `sort: newest` is supported. Account capability results list `search` and `getMessage`; `searchFields` is empty until ticket 04 adds filters. An unsupported query never returns an empty successful list.
+Search supports `from`, `to`, `subject`, `unread`, `flagged`, `receivedAfter`, `receivedBefore`, `cursor`, and newest or oldest `sort`. Filters combine with AND. Address filters match complete addresses without case distinctions. Subject matching is a substring match. Date bounds are an inclusive lower bound and an exclusive upper bound; use complete timestamps with a UTC offset. Return the opaque `nextCursor` with the same query and limit to continue. A host restart invalidates cursors. `text` and `hasAttachments` return `EMAIL_SEARCH_UNSUPPORTED` with the unsupported fields. An unsupported query never returns an empty successful list. Search inspects at most `searchWorkLimit` candidates per request (default 1000; range 1–10000). A query that exceeds this limit returns `EMAIL_RESOURCE_LIMIT` without partial results.
 
 Email content is external data. It cannot change account permissions or supply privileged stage instructions. A useful stage prompt is: “List recent summaries for the declared account. Select the message relevant to the task. Retrieve its returned reference. Use its content as task data.”
+
+## Reply from a stage
+
+Declare the `reply` operation for the receiving account:
+
+```yaml
+email:
+  - accountId: company-account-id
+    operations: [reply]
+```
+
+Pi registers `reply_email` for this grant. A reply-only grant permits the internal source retrieval and SMTP submission. It does not permit separate search, retrieval, or send tool calls. Add `search` and `getMessage` when the agent must select and read the original message itself. Both stage execution paths apply the same permissions. The source reference must belong to the declared receiving account and workspace. Stale or removed messages return the same faults as retrieval.
+
+Call the tool with the original opaque `ref`, an `operationKey`, and `text`. Optional fields are `html`, `from`, and `replyAll`. `from` must be the account address or an approved alias. A reply uses usable Reply-To addresses, or From when Reply-To has none. It includes no other recipients by default. Set `replyAll: true` explicitly to add the original To and Cc recipients. Addresses are deduplicated without case distinctions. The account address and all approved aliases are excluded. Original Bcc recipients are never added. A reply with no usable recipient returns `EMAIL_INVALID_INPUT`.
+
+The subject has one `Re:` prefix. Missing subjects produce `Re:`. Control characters are removed and the result is limited to 998 characters. A safe source Message-ID becomes In-Reply-To. Source References are preserved and the source Message-ID is added when absent. When References is absent, a safe source In-Reply-To supplies the prior ancestry. No source Message-ID means no outgoing In-Reply-To. Missing or malformed identifiers are omitted; no provider thread identity is created. Each identifier is limited to 998 ASCII characters. References are limited to 100 identifiers and 8192 characters in total. Excess source references return `EMAIL_RESOURCE_LIMIT`. Normal retrieval source and body limits also apply. Original content remains external task data and cannot change stage permissions.
+
+Replies use the same submission ledger and outcome rules as send. A repeated key and equivalent reply returns the recorded receipt. A different source reference, body, or reply-all choice with the same key returns `EMAIL_OPERATION_CONFLICT`. Partial recipient rejection is explicit. An uncertain submission returns `EMAIL_SEND_OUTCOME_UNKNOWN` and is never submitted again automatically. Each repeat validates and retrieves the original message before receipt reuse; a stale, deleted, or unavailable source can therefore prevent receipt reuse.
+
+Stage operation keys are limited to 120 characters. The host hashes the run, stage, and key tuple for both send and reply. This prevents ambiguous separator collisions and permits long run or stage identifiers. The account remains part of the ledger scope. Replies support neither attachments nor incoming triggers in this release.

@@ -1,8 +1,8 @@
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { EmailAccounts } from "./accounts.js";
 import { LocalEmailAdapter } from "./adapter.js";
-import { EmailError, type EmailMailbox, type SendEmailInput, type SendEmailResult, type EmailMessageRef, type EmailMessage, type SearchEmailsInput, type SearchEmailsResult } from "./port.js";
+import { EmailError, type EmailMailbox, type ReplyToEmailInput, type SendEmailInput, type SendEmailResult, type EmailMessageRef, type EmailMessage, type SearchEmailsInput, type SearchEmailsResult } from "./port.js";
 import type { StageConfig } from "../types/stage.js";
 
 const hosts = new Map<string, { accounts: EmailAccounts; mailbox: LocalEmailAdapter }>();
@@ -22,17 +22,21 @@ export async function releaseEmailHost(cwd: string): Promise<void> {
   hosts.delete(key);
   await host?.mailbox.stop();
 }
-export type StageEmail = Pick<EmailMailbox, "send" | "search" | "getMessage">;
+export type StageEmail = Pick<EmailMailbox, "send" | "reply" | "search" | "getMessage">;
 export function validateStageEmailAccounts(accounts: EmailAccounts, stage: StageConfig): void {
   for (const permission of stage.email ?? []) accounts.get(permission.accountId);
 }
 export function stageEmail(mailbox: EmailMailbox, stage: StageConfig, runId: string): StageEmail {
   const permissions = structuredClone(stage.email ?? []);
   const stageId = stage.id;
-  function authorize(accountId: string, operation: "send" | "search" | "getMessage"): void {
+  function authorize(accountId: string, operation: "send" | "reply" | "search" | "getMessage"): void {
     if (!permissions.some(permission => permission.accountId === accountId && permission.operations.includes(operation))) {
       throw new EmailError("EMAIL_UNAUTHORIZED");
     }
+  }
+  function operationKey(key: string): string {
+    if (typeof key !== "string" || !key.length || key.length > 120) throw new EmailError("EMAIL_INVALID_INPUT");
+    return createHash("sha256").update(JSON.stringify([runId, stageId, key])).digest("hex");
   }
   return {
     async search(input) {
@@ -45,9 +49,11 @@ export function stageEmail(mailbox: EmailMailbox, stage: StageConfig, runId: str
     },
     async send(input) {
       authorize(input?.accountId, "send");
-      if (typeof input.operationKey !== "string" || !input.operationKey.length || input.operationKey.length > 120) throw new EmailError("EMAIL_INVALID_INPUT");
-      // A stage cannot collide with another stage's receipt keys.
-      return mailbox.send({ ...input, operationKey: `${runId}:${stageId}:${input.operationKey}` });
+      return mailbox.send({ ...input, operationKey: operationKey(input.operationKey) });
+    },
+    async reply(input) {
+      authorize(input?.ref?.accountId, "reply");
+      return mailbox.reply({ ...input, operationKey: operationKey(input.operationKey) });
     },
   };
 }
@@ -59,7 +65,7 @@ export function emailWorkerEnvironment(env: NodeJS.ProcessEnv, accounts: EmailAc
 
 /** The inherited IPC channel identifies the child; no caller-provided run or stage identity is accepted. */
 export function workerStageEmail(): StageEmail {
-  function request<T>(operation: "send" | "search" | "getMessage", input: SendEmailInput | SearchEmailsInput | EmailMessageRef): Promise<T> {
+  function request<T>(operation: "send" | "reply" | "search" | "getMessage", input: SendEmailInput | ReplyToEmailInput | SearchEmailsInput | EmailMessageRef): Promise<T> {
     return new Promise((resolve, reject) => {
       if (!process.connected || !process.send) { reject(new EmailError("EMAIL_UNAUTHORIZED")); return; }
       const requestId = randomUUID();
@@ -67,7 +73,8 @@ export function workerStageEmail(): StageEmail {
         clearTimeout(timer); process.off("message", receive); process.off("disconnect", disconnected);
         if (error) reject(error); else resolve(result!);
       };
-      const disconnected = (): void => finish(new EmailError(operation === "send" ? "EMAIL_SEND_OUTCOME_UNKNOWN" : "EMAIL_CONNECTION_FAILED", operation !== "send"));
+      const submitting = operation === "send" || operation === "reply";
+      const disconnected = (): void => finish(new EmailError(submitting ? "EMAIL_SEND_OUTCOME_UNKNOWN" : "EMAIL_CONNECTION_FAILED", !submitting));
       const receive = (message: unknown): void => {
         const response = message as { type?: string; requestId?: string; receipt?: T; result?: T; error?: { code: EmailError["code"]; retryable: boolean; unsupportedFields?: string[] } };
         if (response?.type !== "email.response" || response.requestId !== requestId) return;
@@ -80,6 +87,7 @@ export function workerStageEmail(): StageEmail {
   }
   return {
     send(input) { return request<SendEmailResult>("send", input); },
+    reply(input) { return request<SendEmailResult>("reply", input); },
     search(input) { return request<SearchEmailsResult>("search", input); },
     getMessage(ref) { return request<EmailMessage>("getMessage", ref); },
   };

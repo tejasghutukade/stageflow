@@ -10,7 +10,7 @@ import {
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
 import { emailHostFor, emailWorkerEnvironment, stageEmail, validateStageEmailAccounts } from "../email/host.js";
-import { EmailError, type SendEmailInput, type SearchEmailsInput, type EmailMessageRef } from "../email/port.js";
+import { EmailError, type SendEmailInput, type ReplyToEmailInput, type SearchEmailsInput, type EmailMessageRef } from "../email/port.js";
 import type { StageConfig } from "../types/stage.js";
 
 export type StageLaunchInput = {
@@ -260,7 +260,7 @@ export class StageProcessLauncher {
 
       child.on("message", (message: unknown) => {
         const request = message as { type?: string; requestId?: unknown; input?: unknown };
-        if (!settled && ["email.send", "email.search", "email.getMessage"].includes(request?.type ?? "")) {
+        if (!settled && ["email.send", "email.reply", "email.search", "email.getMessage"].includes(request?.type ?? "")) {
           void (async () => {
             if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
             let response: object;
@@ -269,6 +269,7 @@ export class StageProcessLauncher {
               if (!stage || settled) throw new EmailError("EMAIL_UNAUTHORIZED");
               const email = stageEmail(emailHostFor(factoryCwd).mailbox, stage, input.runId);
               if (request.type === "email.send") response = { receipt: await email.send(request.input as SendEmailInput) };
+              else if (request.type === "email.reply") response = { receipt: await email.reply(request.input as ReplyToEmailInput) };
               else if (request.type === "email.search") response = { result: await email.search(request.input as SearchEmailsInput) };
               else response = { result: await email.getMessage(request.input as EmailMessageRef) };
             } catch (error) {

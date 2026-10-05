@@ -5,6 +5,7 @@ import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { EmailSubmissions, validateSend } from "./submissions.js";
+import { replyMessage, validateReply } from "./replies.js";
 import { decodeRef, decodeCursor, EMAIL_SOURCE_LIMIT, EMAIL_SEARCH_FIELDS, envelopeSummary, matchesSearch, parseMessage, searchCursor, searchQuery, summarize, type MailRecord, type MailQuery } from "./messages.js";
 import { EmailAccounts, resolveEmailSecret, type EmailAccount, type EmailConnection } from "./accounts.js";
 import {
@@ -42,14 +43,21 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     const account = this.accounts.get(input?.accountId);
     const validated = validateSend(input, account);
+    return this.sendValidated(account, validated);
+  }
+  private sendValidated(account: EmailAccount, validated: SendEmailInput, identity?: unknown): Promise<SendEmailResult> {
     return this.submissions.send(validated, operationId => {
       if (JSON.stringify(this.accounts.get(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
       return this.submit(account, validated, operationId);
-    });
+    }, identity);
   }
   protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult>;
   async reply(input: ReplyToEmailInput): Promise<SendEmailResult> {
-    return this.unsupported(input.ref.accountId);
+    const account = this.accounts.get(input?.ref?.accountId);
+    const validated = validateReply(input);
+    const original = await this.getMessage(validated.ref);
+    const message = validateSend(replyMessage(account, original, validated), account);
+    return this.sendValidated(account, message, { operation: "reply", ref: original.ref, replyAll: validated.replyAll });
   }
   abstract getMessage(ref: EmailMessageRef): Promise<EmailMessage>;
   abstract search(input: SearchEmailsInput): Promise<SearchEmailsResult>;
@@ -58,17 +66,13 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   }
   async stop(): Promise<void> {}
 
-  protected unsupported(accountId: string): never {
-    this.accounts.get(accountId);
-    throw new EmailError("EMAIL_UNSUPPORTED");
-  }
   protected searchPosition(uid: number, high: number, last: number | undefined, query: MailQuery): boolean {
     return uid <= high && (last === undefined || (query.sort === "newest" ? uid < last : uid > last));
   }
   protected status(accountId: string): EmailAccountStatus {
     return {
       accountId, checkedAt: new Date().toISOString(),
-      capabilities: { operations: ["testAccount", "send", "search", "getMessage"], searchFields: [...EMAIL_SEARCH_FIELDS], idle: false },
+      capabilities: { operations: ["testAccount", "send", "reply", "search", "getMessage"], searchFields: [...EMAIL_SEARCH_FIELDS], idle: false },
     };
   }
 }
@@ -260,7 +264,7 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     } as SMTPTransport.Options);
     try {
       const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail({ from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
-        subject: input.subject, text: input.text, html: input.html, messageId: `<${operationId}@stageflow>` }));
+        subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, messageId: `<${operationId}@stageflow>` }));
       return { operationId, messageId: receipt.messageId, accepted: receipt.accepted, rejected: receipt.rejected,
         submittedAt: new Date().toISOString() };
     } catch (error) {

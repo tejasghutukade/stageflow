@@ -60,6 +60,7 @@ import {
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
 import { createSendEmailTool } from "../tools/sendEmail.js";
+import { createReplyEmailTool } from "../tools/replyEmail.js";
 import { createGetEmailTool, createSearchEmailTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
@@ -930,6 +931,8 @@ async function prepareStageSessionWiring(
     const customTools: StageSessionWiring["customTools"] = [emitTool, askTool, artifactTool];
     const emailAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("send"));
     if (emailAllowed) customTools.push(defineTool(createSendEmailTool(input.email!)));
+    const emailReplyAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("reply"));
+    if (emailReplyAllowed) customTools.push(defineTool(createReplyEmailTool(input.email!)));
     const emailSearchAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("search"));
     const emailGetAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("getMessage"));
     if (emailSearchAllowed) customTools.push(defineTool(createSearchEmailTool(input.email!)));
@@ -940,7 +943,7 @@ async function prepareStageSessionWiring(
       modelRuntime,
       settingsManager,
       loader,
-      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : [])],
+      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : []), ...(emailReplyAllowed ? ["reply_email"] : []), ...(emailSearchAllowed ? ["search_email"] : []), ...(emailGetAllowed ? ["get_email_message"] : [])],
       customTools,
       emitDefName: emitDef.name,
       askOperatorDefName: askDef.name,

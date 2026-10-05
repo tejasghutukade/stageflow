@@ -6,11 +6,13 @@ import type { EmailAccount } from "./accounts.js";
 import { EmailError, type SendEmailInput, type SendEmailResult, type EmailErrorCode } from "./port.js";
 
 const address = z.object({ address: z.email(), name: z.string().max(200).regex(/^[^\r\n]*$/).optional() }).strict();
+export const messageIdSchema = z.string().max(998).regex(/^[\x21-\x7e]+$/).regex(/^<[^<>\s@]+@[^<>\s@]+>$/);
 const sendSchema = z.object({
   accountId: z.string().min(1), operationKey: z.string().min(1).max(200),
   from: z.email().optional(), to: z.array(address).max(100), cc: z.array(address).max(100).default([]),
   bcc: z.array(address).max(100).default([]), subject: z.string().max(998).regex(/^[^\r\n]*$/),
   text: z.string().max(262144), html: z.string().max(262144).optional(),
+  inReplyTo: messageIdSchema.optional(), references: z.array(messageIdSchema).max(100).refine(values => values.join(" ").length <= 8192).optional(),
 }).strict().refine(input => input.to.length + input.cc.length + input.bcc.length > 0);
 
 export function validateSend(input: unknown, account: EmailAccount): SendEmailInput {
@@ -41,8 +43,8 @@ export class EmailSubmissions {
   }
   list(): SubmissionRecord[] { return structuredClone(this.records); }
 
-  async send(input: SendEmailInput, submit: (operationId: string) => Promise<SendEmailResult>): Promise<SendEmailResult> {
-    const hash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  async send(input: SendEmailInput, submit: (operationId: string) => Promise<SendEmailResult>, identity?: unknown): Promise<SendEmailResult> {
+    const hash = createHash("sha256").update(JSON.stringify(identity === undefined ? input : { input, identity })).digest("hex");
     const key = `${input.accountId}\0${input.operationKey}`;
     const found = this.records.find(record => record.accountId === input.accountId && record.operationKey === input.operationKey);
     if (found) {
