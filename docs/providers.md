@@ -117,7 +117,7 @@ Or omit it when a pipeline or manifest default fills the value. The provider mus
 
 Stageflow is a thin orchestration layer on Pi. You do **not** need Pi CLI `/login` as a hard prerequisite if you configure providers via `sf providers` or the console.
 
-Optional: Cursor provider extension via `STAGEFLOW_CURSOR_EXTENSION` env var — see `src/agent/cursorProvider.ts`.
+Cursor models (`cursor/...`, including the Workshop chat default `cursor/auto`) load the `pi-cursor-sdk` extension. Install it with `pi install npm:pi-cursor-sdk`. A stage worker's `HOME` is an empty attempt directory, so the Host passes its Pi auth file in `STAGEFLOW_PI_HOME_AUTH_PATH` and the extension is resolved next to that file (`~/.pi/agent/npm/node_modules/pi-cursor-sdk`). Set `STAGEFLOW_CURSOR_EXTENSION` to the absolute path of `dist/index.js` (or `src/index.ts`) when the package lives somewhere else. That variable is copied into the stage environment. A Cursor API key comes from Pi login or `CURSOR_API_KEY`.
 
 ## Console
 

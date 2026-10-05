@@ -22,12 +22,23 @@ const CURSOR_SETTING_SOURCES_ENV = "PI_CURSOR_SETTING_SOURCES";
  *
  * Resolution order:
  * 1. STAGEFLOW_CURSOR_EXTENSION (absolute path to the extension .ts/.js)
- * 2. Path package from ~/.pi/agent/settings.json (same source interactive pi uses)
- * 3. npm install under ~/.pi/agent/npm/node_modules/pi-cursor-sdk
+ * 2. Path package from the Pi agent settings.json (same source interactive pi uses)
+ * 3. npm install under <pi-agent>/npm/node_modules/pi-cursor-sdk
  *    (`dist/index.js` for 0.3+, `src/index.ts` for older publishes)
  * 4. Sibling checkout at ../pi-cursor-sdk relative to this repo
+ *
+ * A stage worker's HOME is an empty attempt directory, so the Pi agent dir is
+ * the directory of STAGEFLOW_PI_HOME_AUTH_PATH when the Host set it, not
+ * os.homedir().
  */
 const CURSOR_PACKAGE_ENTRIES = ["dist/index.js", "src/index.ts"] as const;
+
+/** Pi agent dir. Stage workers must not use os.homedir(): HOME is the attempt dir. */
+function piAgentDir(): string {
+  const auth = process.env.STAGEFLOW_PI_HOME_AUTH_PATH?.trim();
+  if (auth) return path.dirname(path.resolve(auth));
+  return path.join(os.homedir(), ".pi", "agent");
+}
 
 export function cursorExtensionEntryInPackage(
   packageRoot: string,
@@ -53,14 +64,7 @@ export function resolveCursorExtensionPath(): string | undefined {
   }
 
   const npmEntry = cursorExtensionEntryInPackage(
-    path.join(
-      os.homedir(),
-      ".pi",
-      "agent",
-      "npm",
-      "node_modules",
-      "pi-cursor-sdk",
-    ),
+    path.join(piAgentDir(), "npm", "node_modules", "pi-cursor-sdk"),
   );
   if (npmEntry) {
     return npmEntry;
@@ -111,6 +115,28 @@ function prepareCursor(modelRef: string): ProviderPrepareResult {
   };
 }
 
+export function workshopCursorBridgeHint(toolNames: readonly string[]): string {
+  const lines = toolNames.map(
+    (name) => `- pi__${name} (playbook name: ${name})`,
+  );
+  return [
+    "Cursor bridge: call the workshop tools by these MCP names. The playbook uses the bare names; they are the same tools.",
+    ...lines,
+    "When the operator asks you to create or edit the draft, do not finish without one of these tool calls.",
+  ].join("\n");
+}
+
+export function cursorBridgePrompt(
+  message: string,
+  modelId: string | undefined,
+  toolNames: readonly string[],
+): string {
+  if (!modelId || !isCursorModelRef(modelId) || toolNames.length === 0) {
+    return message;
+  }
+  return `${message}\n\n${workshopCursorBridgeHint(toolNames)}`;
+}
+
 export const cursorProviderSupport: StageProviderSupport = {
   id: "cursor",
   matches: isCursorModelRef,
@@ -128,7 +154,8 @@ export const cursorProviderSupport: StageProviderSupport = {
 registerProviderSupport(cursorProviderSupport);
 
 function resolveFromPiSettings(): string | undefined {
-  const settingsPath = path.join(os.homedir(), ".pi", "agent", "settings.json");
+  const agentDir = piAgentDir();
+  const settingsPath = path.join(agentDir, "settings.json");
   if (!existsSync(settingsPath)) {
     return undefined;
   }
@@ -146,7 +173,6 @@ function resolveFromPiSettings(): string | undefined {
     return undefined;
   }
 
-  const agentDir = path.join(os.homedir(), ".pi", "agent");
   for (const entry of settings.packages) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;

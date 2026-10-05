@@ -1471,6 +1471,15 @@ export async function runPipelineDag(
         states.set(stageId, "waiting");
         return;
       }
+      const recorded = await store.listStageEvents(run.runId, stageId, attempt);
+      if (!recorded.some((event) => event.event === "failed")) {
+        await store.appendStageEvent(
+          run.runId,
+          stageId,
+          { event: "failed", reason: launchResult.reason },
+          { attempt },
+        );
+      }
       await onStageFailure(stageId, launchResult.reason);
       return;
     }

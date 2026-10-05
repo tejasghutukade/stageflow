@@ -595,6 +595,13 @@ async function main(argv: string[]): Promise<number> {
         mcpStateless,
         controlTokens: tokens,
       });
+      if (host.store) {
+        try {
+          await host.store.ensureProject(ctx.projectRoot);
+        } catch {
+          // The console still serves seeded catalogs when this project cannot be registered.
+        }
+      }
       console.log(`Operator console: ${host.url}`);
       console.log(`MCP endpoint: ${host.mcpUrl}`);
       if (!isNoOpenEnabled(parsed.noOpen)) {

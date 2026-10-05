@@ -17,6 +17,7 @@ import { SkillsPage } from "./pages/SkillsPage";
 import { ExtensionsPage } from "./pages/ExtensionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProviderConnectPage } from "./pages/ProviderConnectPage";
+import { WorkshopPage } from "./pages/WorkshopPage";
 import { fetchProvidersDetect } from "./api";
 import { needsFirstRun } from "./providers/helpers";
 import {
@@ -179,6 +180,8 @@ function AppShell() {
         }}
       />
     );
+  } else if (route.name === "workshop") {
+    content = <WorkshopPage />;
   } else {
     content = (
       <TodayPage

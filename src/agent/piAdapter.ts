@@ -35,10 +35,8 @@ import path from "node:path";
 import { BROWSER_SKILL_NAME } from "../config/builtinSkills.js";
 import {
   type AgentSession,
-  type EventBus,
   type ExtensionFactory,
   type InlineExtension,
-  createAgentSession,
   DefaultResourceLoader,
   defineTool,
   ModelRuntime,
@@ -51,6 +49,10 @@ import {
   attachIsolatedMcp,
   STAGEFLOW_PI_MCP_EXTENSION_NAME,
 } from "./piIsolatedMcp.js";
+import {
+  createPiAgentSession,
+  createSealedResourceLoader,
+} from "./piSessionFactory.js";
 import { isAdvancingEnvelope } from "../envelope/check.js";
 import { formatFeedbackLoopContext } from "../prompt/feedbackLoopContext.js";
 import { formatPriorEnvelope } from "../prompt/priorEnvelope.js";
@@ -101,6 +103,7 @@ import {
 } from "../runstore/workspaceLayout.js";
 
 export { STAGEFLOW_PATH_DENIED };
+export { createSealedResourceLoader } from "./piSessionFactory.js";
 
 export const STAGEFLOW_PATH_DENY_EXTENSION_NAME = "stageflow-path-deny";
 
@@ -720,48 +723,6 @@ export function composeFeedbackResumePrompt(input: StageRunInput): string {
   ].join("\n\n");
 }
 
-/**
- * DefaultResourceLoader with host/global discovery turned off.
- *
- * Without these flags the loader walks up from the run folder and would pick
- * up the consumer project's AGENTS.md, `.agents/skills/`, `.pi/extensions`,
- * and APPEND_SYSTEM.md. Stages must not inherit that context.
- *
- * `additionalExtensionPaths` is the Cursor/provider seam. `extensionFactories`
- * is the isolated MCP seam. With `noExtensions: true`, discovered
- * global/project packages stay out; only those allowlists load.
- * `additionalSkillPaths` is the matching allowlist for one named skill.
- */
-export function createSealedResourceLoader(options: {
-  cwd: string;
-  agentDir: string;
-  settingsManager: SettingsManager;
-  systemPrompt: string;
-  additionalExtensionPaths?: string[];
-  additionalSkillPaths?: string[];
-  extensionFactories?: InlineExtension[];
-  eventBus?: EventBus;
-}): DefaultResourceLoader {
-  return new DefaultResourceLoader({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    settingsManager: options.settingsManager,
-    systemPromptOverride: () => options.systemPrompt,
-    appendSystemPromptOverride: () => [],
-    additionalExtensionPaths: options.additionalExtensionPaths,
-    additionalSkillPaths: options.additionalSkillPaths,
-    ...(options.extensionFactories !== undefined
-      ? { extensionFactories: options.extensionFactories }
-      : {}),
-    ...(options.eventBus !== undefined ? { eventBus: options.eventBus } : {}),
-    noContextFiles: true,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-  });
-}
-
 function collectMcpExtensionToolNames(loader: DefaultResourceLoader): string[] {
   const inlinePath = `<inline:${STAGEFLOW_PI_MCP_EXTENSION_NAME}>`;
   const names: string[] = [];
@@ -1331,7 +1292,7 @@ export async function reconstructStageSessionForAnswer(
 
   let session: AgentSession | undefined;
   try {
-    const created = await createAgentSession({
+    const created = await createPiAgentSession({
       cwd: input.roots.cwd,
       agentDir: input.roots.agentDir,
       modelRuntime: wiring.modelRuntime,
@@ -1403,7 +1364,7 @@ async function bindStageSession(
   wiring: StageSessionWiring,
 ): Promise<AgentSession | StageRunResult> {
   const { roots } = input;
-  const created = await createAgentSession({
+  const created = await createPiAgentSession({
     cwd: roots.cwd,
     agentDir: roots.agentDir,
     modelRuntime: wiring.modelRuntime,

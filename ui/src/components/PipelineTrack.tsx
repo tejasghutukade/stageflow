@@ -12,6 +12,8 @@ export type TrackStage = {
   status: StageStatus;
   meta?: string;
   selected?: boolean;
+  /** Workshop pending-proposal highlight (distinct from inspector selection). */
+  proposed?: boolean;
   envelope?: TrackEnvelope | null;
 };
 
@@ -94,8 +96,9 @@ export function PipelineTrack({
               index={i}
               meta={stage.meta}
               selected={stage.selected}
+              proposed={stage.proposed}
               onClick={
-                onSelect && stage.status !== "pending"
+                onSelect && (mode === "definition" || stage.status !== "pending")
                   ? () => onSelect(stage.id)
                   : undefined
               }

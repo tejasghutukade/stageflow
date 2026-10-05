@@ -27,6 +27,7 @@ export const STAGE_ENV_ALLOWLIST: readonly string[] = [
   "https_proxy",
   "no_proxy",
   "STAGEFLOW_HOME",
+  "STAGEFLOW_CURSOR_EXTENSION",
 ];
 
 const PROVIDER_AND_CLOUD_NAMES = [

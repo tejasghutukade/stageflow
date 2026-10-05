@@ -1,5 +1,10 @@
-import { useState } from "react";
-import { postSettings } from "../api";
+import { useEffect, useState } from "react";
+import {
+  fetchModels,
+  fetchSettings,
+  postSettings,
+  postWorkshopModel,
+} from "../api";
 import {
   useRunCatalog,
   useRunCatalogHandle,
@@ -15,6 +20,8 @@ import {
   writeNotifyPreference,
   type NotifyPreference,
 } from "../useWaitingNotifications";
+
+const DEFAULT_WORKSHOP_MODEL = "cursor/auto";
 
 function formatDiskBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -45,6 +52,35 @@ export function SettingsPage({
   const [slotsError, setSlotsError] = useState<string | null>(null);
   const [slotsSaving, setSlotsSaving] = useState(false);
   const [permission, setPermission] = useState(notificationPermission);
+  const [workshopModel, setWorkshopModel] = useState<string>("");
+  const [workshopModels, setWorkshopModels] = useState<string[]>([]);
+  const [workshopModelError, setWorkshopModelError] = useState<string | null>(
+    null,
+  );
+  const [workshopModelSaving, setWorkshopModelSaving] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [settings, models] = await Promise.all([
+          fetchSettings(),
+          fetchModels(),
+        ]);
+        if (cancelled) return;
+        setWorkshopModel(settings.workshopModel ?? "");
+        setWorkshopModels(models.models);
+      } catch (err) {
+        if (cancelled) return;
+        setWorkshopModelError(
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function onNotifySelect(value: string) {
     const next: NotifyPreference = value === "system" ? "system" : "off";
@@ -70,6 +106,20 @@ export function SettingsPage({
     }
   }
 
+  async function onWorkshopModelChange(value: string) {
+    setWorkshopModelSaving(true);
+    setWorkshopModelError(null);
+    try {
+      const next = value.trim() || DEFAULT_WORKSHOP_MODEL;
+      const result = await postWorkshopModel(next);
+      setWorkshopModel(result.workshopModel ?? next);
+    } catch (err) {
+      setWorkshopModelError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setWorkshopModelSaving(false);
+    }
+  }
+
   const SLOT_CHOICES = [1, 2, 3, 4, 6];
   const currentSlots = health?.maxConcurrent;
   const slotOptions =
@@ -89,6 +139,56 @@ export function SettingsPage({
       <SettingsAppearance value={themeMode} onChange={onThemeChange} />
 
       <SettingsProviders />
+
+      <section className="card">
+        <div className="card__head">
+          <h2>Workshop</h2>
+        </div>
+        <div className="setting">
+          <span>
+            <strong>Workshop model</strong>
+            <p>
+              Default model for Workshop Author chat. Uses the same configured
+              providers as stage runs — no separate credentials. Override per
+              session in Workshop chrome.
+            </p>
+          </span>
+          <select
+            className="select"
+            value={workshopModel || DEFAULT_WORKSHOP_MODEL}
+            disabled={workshopModelSaving}
+            onChange={(e) => void onWorkshopModelChange(e.target.value)}
+          >
+            {!workshopModels.includes(workshopModel || DEFAULT_WORKSHOP_MODEL) ? (
+              <option value={workshopModel || DEFAULT_WORKSHOP_MODEL}>
+                {workshopModel || DEFAULT_WORKSHOP_MODEL}
+              </option>
+            ) : null}
+            {workshopModels.length === 0 ? (
+              <option value={DEFAULT_WORKSHOP_MODEL}>
+                {DEFAULT_WORKSHOP_MODEL}
+              </option>
+            ) : (
+              workshopModels.map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))
+            )}
+          </select>
+        </div>
+        {workshopModelError ? (
+          <p
+            style={{
+              color: "var(--color-text-red)",
+              fontSize: "var(--font-size-sm)",
+              marginBottom: "var(--spacing-3)",
+            }}
+          >
+            Could not update Workshop model: {workshopModelError}
+          </p>
+        ) : null}
+      </section>
 
       <SettingsProjectMcp />
 

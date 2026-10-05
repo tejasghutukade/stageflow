@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-04
+
+### Added
+
+- Workshop Author on `#/workshop`: a chat agent that drafts a pipeline, asks when a missing detail would change the stages or the wiring, and shows the draft on the studio stage map. Click a stage for its prompt, IO, verify, and HITL summary.
+- Untitled drafts persist as build records under `$STAGEFLOW_HOME/workshop/builds/{id}.json` (no catalog file until save). Chat history persists separately under `workshop/sessions`, and each session points at the build it was editing.
+- Author tools to list, focus, and create builds; create and edit the pipeline, stages, and an optional task; validate the draft; and save. Save writes catalog YAML only when asked, and refuses an invalid package unless the operator explicitly allows it. A save that does not name a folder lands in `workshop/<pipeline-id>`, and that folder is added to the catalog so Run lists the pipeline and task.
+- Studio picker lists each open build and each on-disk pipeline once. The same chat can switch builds, or History can reopen the session that last edited another pipeline.
+- `sf init` includes `workshop` in the pipeline and task catalog. Host boot registers the project root so that catalog is visible without a manual project add.
+
+### Changed
+
+- Workshop chat opens on the `model` in `stageflow.yaml`. When that is unset, the default is `cursor/auto`.
+
+### Fixed
+
+- `npm run dev` stage workers load the TypeScript CLI through tsx. They no longer exit looking for a missing `src/cli.js`.
+- A stage process that exits before it can record a failure is marked failed, instead of leaving later stages skipped with the entry still pending.
+- Cursor models find `pi-cursor-sdk` from the Host Pi agent directory. The stage worker's attempt `HOME` no longer hides `~/.pi/agent`.
+
 ## [0.29.0] - 2026-10-03
 
 ### Added

@@ -41,12 +41,16 @@ version: 1
 catalog:
   pipelines:
     - pipelines
+    - workshop
   tasks:
     - tasks
+    - workshop
   patterns:
     pipeline: "*.pipeline.yaml"
     task: "*.task.yaml"
 ```
+
+`workshop` is the scan root for pipelines saved from [Workshop Author](workshop.md). The directory is created on the first save.
 
 **`pipelines/hello.pipeline.yaml`**
 
@@ -115,6 +119,7 @@ Start `sf ui` before running any pipeline if you want the console open: `sf run`
 - **Runs** — see active and recent runs
 - **Run detail** — spatial stage map; select a stage for transcripts, envelopes, and HITL
 - **Start a run** — rail button or `#/new` with pipeline and task pre-filled
+- **Workshop** — `#/workshop` drafts a pipeline in chat and saves it into `workshop/<pipeline-id>/`. See [Workshop Author](workshop.md).
 
 If a stage calls `ask_operator`, the run pauses until you reply in the console. See [Human-in-the-loop](hitl.md).
 

@@ -14,6 +14,7 @@
     "astryx": "node ../node_modules/@astryxdesign/cli/clients/cli/bin/astryx.mjs"
   },
   "dependencies": {
+    "@assistant-ui/react": "^0.15.22",
     "@astryxdesign/core": "0.4.0",
     "@astryxdesign/theme-neutral": "0.4.0",
     "@stylexjs/stylex": "^0.19.0",

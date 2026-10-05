@@ -15,6 +15,65 @@ import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
+import {
+  loadDraftPackage,
+  loadTaskArtifact,
+  parseAttachTaskBody,
+  parseCreateDraftPackageBody,
+  parseDraftPackageBody,
+  parseOpenDraftPackageBody,
+  parseOverwriteDraftPackageBody,
+  validateDraftPackage,
+  type DraftPackage,
+} from "../config/draftPackage.js";
+import { publishDraftPackage } from "../config/publishDraftPackage.js";
+import {
+  clearWorkshopAutosave,
+  detectDiskChange,
+  draftPackageDiskRelativePaths,
+  fingerprintPackageFiles,
+  parseWorkshopAutosaveRecord,
+  readWorkshopAutosave,
+  resolveWorkshopAutosaveStoreRoot,
+  workshopAutosaveSlotKey,
+  writeWorkshopAutosave,
+  type WorkshopAutosaveRecord,
+} from "../workshop/autosave.js";
+import {
+  acceptWorkshopSessionMutation,
+  iterateWorkshopChatStreamFrames,
+  runWorkshopChatTurn,
+  stopWorkshopChatTurn,
+  undoWorkshopSessionMutation,
+  WorkshopChatSessionRegistry,
+  WorkshopSessionStoreError,
+} from "../workshop/chatTurn.js";
+import {
+  readWorkshopOpenModel,
+  resolveWorkshopModel,
+} from "../workshop/modelSettings.js";
+import {
+  createWorkshopSession,
+  getWorkshopSession,
+  listWorkshopSessions,
+  resolveWorkshopSessionStoreRoot,
+  updateWorkshopSessionActiveBuildId,
+} from "../workshop/sessionStore.js";
+import {
+  createWorkshopBuild,
+  focusUnboundWorkshopBuild,
+  getWorkshopBuild,
+  listWorkshopBuilds,
+  listWorkshopPickerRows,
+  resolvePickerCatalogPipelines,
+  resolveWorkshopBuildStoreRoot,
+  updateWorkshopBuild,
+  WorkshopBuildStoreError,
+} from "../workshop/buildStore.js";
+import {
+  createLiveWorkshopOperatorHost,
+  type OperatorAgentHost,
+} from "../operatorAgent/index.js";
 import { browseCatalog } from "../config/browseCatalog.js";
 import {
   listModelsMultiProject,
@@ -75,7 +134,11 @@ import type {
 import type { RunChangeBus } from "../runtime/runChangeBus.js";
 import {
   INVALID_SLOT_COUNT_MESSAGE,
+  INVALID_WORKSHOP_MODEL_MESSAGE,
   parseSlotCount,
+  parseWorkshopModelSetting,
+  readFactorySettings,
+  writeFactorySettings,
 } from "../runtime/settingsFile.js";
 import { isTaskFile } from "../runtime/taskInput.js";
 import {
@@ -146,6 +209,8 @@ export type UiServerOptions = {
   runChangeBus?: RunChangeBus;
   allowedHosts?: AllowedHosts;
   controlTokens?: ControlTokens;
+  /** Optional Workshop Operator Agent Host (fake in tests). */
+  workshopOperatorHost?: OperatorAgentHost;
 };
 
 function textPlain(res: ServerResponse, status: number, body: string): void {
@@ -163,6 +228,26 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
   if (chunks.length === 0) return {};
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readBuildTieField(
+  body: Record<string, unknown>,
+  field: "projectRoot" | "relativePath",
+):
+  | { ok: true; present: false }
+  | { ok: true; present: true; value: string | null }
+  | { ok: false; error: string } {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) {
+    return { ok: true, present: false };
+  }
+  const value = body[field];
+  if (value === null) return { ok: true, present: true, value: null };
+  if (typeof value === "string") return { ok: true, present: true, value };
+  return { ok: false, error: `${field} must be a string or null` };
 }
 
 /** Raw bytes, unparsed — for callers (webhook signature verification) that need the exact wire body. */
@@ -257,6 +342,17 @@ export type OperatorRouteDeps = {
   controlTokens?: ControlTokens;
   /** Live shutdown controller; set after listen so restore can beginDrain. */
   getShutdown?: () => import("./shutdown.js").ShutdownController | undefined;
+  /**
+   * Optional Operator Agent Host for Workshop chat (tests inject the fake host).
+   * Distinct from stage-execution AgentPort. Defaults to live Pi Workshop Author
+   * (fake remains available via createWorkshopOperatorHost / test injection).
+   */
+  workshopOperatorHost?: OperatorAgentHost;
+  /**
+   * Optional durable Workshop chat registry (host sessions keyed by session id).
+   * Defaults to a registry owned by this route surface.
+   */
+  workshopChatRegistry?: WorkshopChatSessionRegistry;
 };
 
 /**
@@ -269,7 +365,28 @@ export type OperatorRouteDeps = {
 export function createOperatorRoutes(
   deps: OperatorRouteDeps,
 ): (ctx: HttpHostRouteContext) => Promise<boolean | void> {
-  const { manager, store, cwd, agentDir, rootDir, providerAuthContext, uiDistDir } = deps;
+  const {
+    manager,
+    store,
+    cwd,
+    agentDir,
+    rootDir,
+    providerAuthContext,
+    uiDistDir,
+    workshopOperatorHost,
+  } = deps;
+  const workshopChatRegistry =
+    deps.workshopChatRegistry ??
+    new WorkshopChatSessionRegistry(
+      workshopOperatorHost ??
+        createLiveWorkshopOperatorHost({
+          cwd,
+          projectRoot: cwd,
+        }),
+    );
+  const workshopSessionStoreRoot = (): string =>
+    resolveWorkshopSessionStoreRoot();
+  const workshopBuildStoreRoot = (): string => resolveWorkshopBuildStoreRoot();
   const allowedHosts = deps.allowedHosts ?? resolveAllowedHosts();
   const controlTokens = deps.controlTokens ?? loadControlTokens();
   return async ({ req, res, url, pathname, method, boot }) => {
@@ -1376,6 +1493,1237 @@ export function createOperatorRoutes(
           return true;
         }
 
+        if (method === "POST" && pathname === "/api/drafts/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let validateRoot = cwd;
+          if (writeRoot) {
+            try {
+              const { wireRoot: selected } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              validateRoot = selected.path;
+            } catch (err) {
+              if (err instanceof CatalogPathError) {
+                json(
+                  res,
+                  err.code === "catalog_root_read_only" ? 403 : 400,
+                  catalogPathErrorBody(err),
+                );
+                return true;
+              }
+              throw err;
+            }
+          }
+          const ctx = await resolveStageflowContext(validateRoot);
+          const result = await validateDraftPackage(draftParsed, {
+            cwd: ctx.projectRoot,
+            projectRoot: ctx.projectRoot,
+            strict: true,
+          });
+          json(res, 200, result);
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/create") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseCreateDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "create")
+          ).write;
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 201, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/overwrite") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let draftWriteRoot: string;
+          try {
+            const { wireRoot: selected } = await resolveWritableCatalogRoot(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            draftWriteRoot = selected.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const parsed = parseOverwriteDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const ctx = await resolveStageflowContext(draftWriteRoot);
+          if (!ctx.isGitProject) {
+            json(res, 400, {
+              error:
+                "Project root not found; initialize stageflow.yaml in a git repo",
+            });
+            return true;
+          }
+          const result = (
+            await publishDraftPackage(ctx.projectRoot, parsed, "overwrite")
+          ).write;
+          if (!result.ok) {
+            json(res, result.status, {
+              error: result.error,
+              ...(result.findings ? { findings: result.findings } : {}),
+            });
+            return true;
+          }
+          json(res, 200, {
+            pipeline: result.pipeline,
+            pipelinePath: result.pipelinePath,
+            stagePaths: result.stagePaths,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/open") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseOpenDraftPackageBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let pipelineRel: string;
+          let taskRel: string | undefined;
+          try {
+            pipelineRel = resolveCatalogRelativePath({
+              inputPath: parsed.path,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "path",
+            }).relativePath;
+            if (parsed.taskPath) {
+              taskRel = resolveCatalogRelativePath({
+                inputPath: parsed.taskPath,
+                projectRoot: writeRoot,
+                roots,
+                fieldName: "task",
+              }).relativePath;
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadDraftPackage(ctx.projectRoot, pipelineRel, {
+            ...(taskRel !== undefined ? { taskPath: taskRel } : {}),
+          });
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            draft: result.draft,
+            destination: result.destination,
+            pipelinePath: result.pipelinePath,
+            ...(result.taskPath !== undefined ? { taskPath: result.taskPath } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/drafts/attach-task") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const parsed = parseAttachTaskBody(body);
+          if ("ok" in parsed) {
+            json(res, parsed.status, { error: parsed.error });
+            return true;
+          }
+          const writeRoot =
+            body !== null &&
+            typeof body === "object" &&
+            !Array.isArray(body) &&
+            typeof (body as { project_root?: unknown }).project_root === "string"
+              ? (body as { project_root: string }).project_root
+              : undefined;
+          let wireRoot;
+          let roots;
+          try {
+            ({ wireRoot, roots } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            ));
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, err.code === "catalog_root_read_only" ? 403 : 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          let taskRel: string;
+          try {
+            taskRel = resolveCatalogRelativePath({
+              inputPath: parsed.taskPath,
+              projectRoot: writeRoot,
+              roots,
+              fieldName: "task",
+            }).relativePath;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+          const ctx = await resolveStageflowContext(wireRoot.path);
+          const result = await loadTaskArtifact(ctx.projectRoot, taskRel);
+          if (!result.ok) {
+            json(res, result.status, { error: result.error });
+            return true;
+          }
+          json(res, 200, {
+            task: result.task,
+            taskPath: result.taskPath,
+          });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          const keyParam = url.searchParams.get("key");
+          const key = workshopAutosaveSlotKey(keyParam);
+          const writeRoot =
+            url.searchParams.get("project_root") ?? undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveCatalogStartInput(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const record = readWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, autosave: record });
+          return true;
+        }
+
+        if (
+          method === "PUT" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const candidate: WorkshopAutosaveRecord = {
+            version: 1,
+            key,
+            updatedAt:
+              typeof body.updatedAt === "string" && body.updatedAt
+                ? body.updatedAt
+                : new Date().toISOString(),
+            draft: body.draft as WorkshopAutosaveRecord["draft"],
+            messages:
+              body.messages as WorkshopAutosaveRecord["messages"],
+            autoApply: Boolean(body.autoApply),
+            ...(body.sessionModelOverride === null ||
+            typeof body.sessionModelOverride === "string"
+              ? { sessionModelOverride: body.sessionModelOverride }
+              : {}),
+            ...(body.destination !== undefined
+              ? {
+                  destination:
+                    body.destination as WorkshopAutosaveRecord["destination"],
+                }
+              : {}),
+            ...(body.savedPath === null || typeof body.savedPath === "string"
+              ? { savedPath: body.savedPath }
+              : {}),
+            ...(body.savedTaskPath === null ||
+            typeof body.savedTaskPath === "string"
+              ? { savedTaskPath: body.savedTaskPath }
+              : {}),
+            ...(isPlainObject(body.diskFingerprints)
+              ? {
+                  diskFingerprints:
+                    body.diskFingerprints as Record<string, string>,
+                }
+              : {}),
+          };
+          const parsed = parseWorkshopAutosaveRecord(candidate);
+          if (!parsed) {
+            json(res, 400, { error: "Invalid workshop autosave payload" });
+            return true;
+          }
+          const written = writeWorkshopAutosave(storeRoot, parsed);
+          json(res, 200, { autosave: written });
+          return true;
+        }
+
+        if (
+          method === "DELETE" &&
+          pathname === "/api/workshop/autosave"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const key = workshopAutosaveSlotKey(
+            typeof body.key === "string" ? body.key : undefined,
+          );
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let storeRoot: string;
+          try {
+            if (writeRoot) {
+              const { wireRoot } = await resolveWritableCatalogRoot(
+                { store, bootCwd: cwd },
+                writeRoot,
+              );
+              const ctx = await resolveStageflowContext(wireRoot.path);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.projectRoot,
+                isGitProject: ctx.isGitProject,
+              });
+            } else {
+              const ctx = await resolveStageflowContext(cwd);
+              storeRoot = resolveWorkshopAutosaveStoreRoot({
+                projectRoot: ctx.isGitProject ? ctx.projectRoot : null,
+                isGitProject: ctx.isGitProject,
+              });
+            }
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const cleared = clearWorkshopAutosave(storeRoot, key);
+          json(res, 200, { key, cleared });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/workshop/picker") {
+          const filter = url.searchParams.get("project_root") ?? undefined;
+          const result = await listPipelinesMultiProject({
+            store,
+            bootCwd: cwd,
+            projectRootFilter: filter,
+          });
+          if (
+            result.root_errors.some((e) => e.code === "unknown_project_root") &&
+            result.items.length === 0
+          ) {
+            json(res, 400, {
+              error: result.root_errors[0]!.message,
+              code: "unknown_project_root",
+              root_errors: result.root_errors,
+            });
+            return true;
+          }
+          json(res, 200, {
+            rows: listWorkshopPickerRows(
+              workshopBuildStoreRoot(),
+              resolvePickerCatalogPipelines(result.items, result.roots),
+              result.roots,
+            ),
+            root_errors: result.root_errors,
+            ...(result.tip !== undefined ? { tip: result.tip } : {}),
+          });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/focus") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (
+            typeof body.projectRoot !== "string" ||
+            typeof body.relativePath !== "string"
+          ) {
+            json(res, 400, { error: "project root and path are required" });
+            return true;
+          }
+          let projectRoot = body.projectRoot;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              body.projectRoot,
+            );
+            projectRoot = wireRoot.path;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, { error: err.message });
+              return true;
+            }
+            throw err;
+          }
+          const focused = await focusUnboundWorkshopBuild(
+            workshopBuildStoreRoot(),
+            {
+              projectRoot,
+              relativePath: body.relativePath,
+            },
+          );
+          if (!focused.ok) {
+            json(res, focused.status, { error: focused.error });
+            return true;
+          }
+          json(res, focused.created ? 201 : 200, { build: focused.build });
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          json(res, 200, {
+            builds: listWorkshopBuilds(workshopBuildStoreRoot()),
+          });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/builds"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          const build = createWorkshopBuild(workshopBuildStoreRoot(), {
+            draft: draftParsed,
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+            ...(projectRoot.present ? { projectRoot: projectRoot.value } : {}),
+            ...(relativePath.present
+              ? { relativePath: relativePath.value }
+              : {}),
+          });
+          json(res, 201, { build });
+          return true;
+        }
+
+        const workshopBuildMatch = pathname.match(
+          /^\/api\/workshop\/builds\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          try {
+            const build = getWorkshopBuild(workshopBuildStoreRoot(), buildId);
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (method === "PUT" && workshopBuildMatch) {
+          const buildId = decodeURIComponent(workshopBuildMatch[1] ?? "");
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          let draft: DraftPackage | undefined;
+          if (body.draft !== undefined) {
+            const draftParsed = parseDraftPackageBody({ draft: body.draft });
+            if ("ok" in draftParsed) {
+              json(res, draftParsed.status, { error: draftParsed.error });
+              return true;
+            }
+            draft = draftParsed;
+          }
+          const projectRoot = readBuildTieField(body, "projectRoot");
+          if (!projectRoot.ok) {
+            json(res, 400, { error: projectRoot.error });
+            return true;
+          }
+          const relativePath = readBuildTieField(body, "relativePath");
+          if (!relativePath.ok) {
+            json(res, 400, { error: relativePath.error });
+            return true;
+          }
+          try {
+            const build = updateWorkshopBuild(workshopBuildStoreRoot(), buildId, {
+              ...(draft ? { draft } : {}),
+              ...(projectRoot.present
+                ? { projectRoot: projectRoot.value }
+                : {}),
+              ...(relativePath.present
+                ? { relativePath: relativePath.value }
+                : {}),
+            });
+            json(res, 200, { build });
+          } catch (err) {
+            if (
+              err instanceof WorkshopBuildStoreError &&
+              err.code === "workshop_build_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                buildId: err.buildId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        if (
+          method === "GET" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          const sessions = listWorkshopSessions(workshopSessionStoreRoot());
+          json(res, 200, { sessions });
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/sessions"
+        ) {
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const record = createWorkshopSession(workshopSessionStoreRoot(), {
+            ...(typeof body.id === "string" ? { id: body.id } : {}),
+          });
+          json(res, 201, { session: record });
+          return true;
+        }
+
+        const workshopSessionGetMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "GET" && workshopSessionGetMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionGetMatch[1] ?? "",
+          );
+          try {
+            const session = getWorkshopSession(
+              workshopSessionStoreRoot(),
+              sessionId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionPatchMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)$/,
+        );
+        if (method === "PATCH" && workshopSessionPatchMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionPatchMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!Object.prototype.hasOwnProperty.call(body, "activeBuildId")) {
+            json(res, 400, { error: "activeBuildId is required" });
+            return true;
+          }
+          const activeBuildId = body.activeBuildId;
+          if (activeBuildId !== null && typeof activeBuildId !== "string") {
+            json(res, 400, { error: "activeBuildId must be a string or null" });
+            return true;
+          }
+          try {
+            const session = updateWorkshopSessionActiveBuildId(
+              workshopSessionStoreRoot(),
+              sessionId,
+              activeBuildId,
+            );
+            json(res, 200, { session });
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+          return true;
+        }
+
+        const workshopSessionUndoMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/undo$/,
+        );
+        if (method === "POST" && workshopSessionUndoMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionUndoMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await undoWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return true;
+        }
+
+        const workshopSessionAcceptMatch = pathname.match(
+          /^\/api\/workshop\/sessions\/([^/]+)\/accept$/,
+        );
+        if (method === "POST" && workshopSessionAcceptMatch) {
+          const sessionId = decodeURIComponent(
+            workshopSessionAcceptMatch[1] ?? "",
+          );
+          let body: unknown = {};
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          try {
+            const result = await acceptWorkshopSessionMutation({
+              sessionId,
+              draft: draftParsed,
+              ...(typeof body.mutationId === "string"
+                ? { mutationId: body.mutationId }
+                : {}),
+              registry: workshopChatRegistry,
+              storeRoot: workshopSessionStoreRoot(),
+            });
+            json(res, result.ok ? 200 : 409, result);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/chat/stop") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
+            return true;
+          }
+          const stopped = await stopWorkshopChatTurn(
+            workshopChatRegistry,
+            body.sessionId,
+          );
+          json(res, 200, { ok: true, ...stopped });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/workshop/chat") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.sessionId !== "string" || !body.sessionId.trim()) {
+            json(res, 400, { error: "sessionId is required" });
+            return true;
+          }
+          if (typeof body.message !== "string" || !body.message.trim()) {
+            json(res, 400, { error: "message is required" });
+            return true;
+          }
+          const sessionId = body.sessionId;
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const settingsDefault = await readWorkshopOpenModel(cwd);
+          const accept = String(req.headers.accept ?? "");
+          const wantsStream =
+            body.stream === true ||
+            accept.includes("application/x-ndjson") ||
+            accept.includes("text/event-stream");
+          const chatTurnBase = {
+            sessionId: body.sessionId,
+            draft: draftParsed,
+            message: body.message,
+            autoApply: body.autoApply === true,
+            model:
+              typeof body.model === "string" || body.model === null
+                ? body.model
+                : undefined,
+            settingsDefault: settingsDefault ?? null,
+            registry: workshopChatRegistry,
+            storeRoot: workshopSessionStoreRoot(),
+          };
+
+          // Fail closed on missing sessions before opening an NDJSON body.
+          try {
+            getWorkshopSession(workshopSessionStoreRoot(), body.sessionId);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            throw err;
+          }
+
+          if (wantsStream) {
+            res.writeHead(200, {
+              "Content-Type": "application/x-ndjson; charset=utf-8",
+              "Cache-Control": "no-store",
+            });
+            const resolvedModel = resolveWorkshopModel({
+              sessionOverride:
+                typeof body.model === "string" || body.model === null
+                  ? body.model
+                  : undefined,
+              settingsDefault: settingsDefault ?? null,
+            });
+            const writeFrame = async (frame: unknown): Promise<void> => {
+              if (req.aborted || res.writableEnded || res.destroyed) return;
+              const line = `${JSON.stringify(frame)}\n`;
+              if (!res.write(line)) {
+                await new Promise<void>((resolve) => {
+                  const onDrain = () => {
+                    cleanup();
+                    resolve();
+                  };
+                  const onAbort = () => {
+                    cleanup();
+                    if (!res.writableEnded && !res.destroyed) {
+                      res.destroy();
+                    }
+                    resolve();
+                  };
+                  const cleanup = () => {
+                    res.off("drain", onDrain);
+                    req.off("aborted", onAbort);
+                    req.off("close", onAbort);
+                    res.off("close", onAbort);
+                    res.off("error", onAbort);
+                  };
+                  res.once("drain", onDrain);
+                  req.once("aborted", onAbort);
+                  req.once("close", onAbort);
+                  res.once("close", onAbort);
+                  res.once("error", onAbort);
+                  if (req.aborted || res.writableEnded || res.destroyed) {
+                    onAbort();
+                  }
+                });
+              }
+            };
+            let streamedDelta = false;
+            let writeChain: Promise<void> = Promise.resolve();
+            let turnFinished = false;
+            const enqueueFrame = (frame: unknown): void => {
+              writeChain = writeChain.then(() => writeFrame(frame));
+            };
+            const stopIfClientLeft = () => {
+              if (turnFinished || res.writableEnded) return;
+              void workshopChatRegistry.abortTurn(sessionId);
+            };
+            res.once("close", stopIfClientLeft);
+            try {
+              const turn = await runWorkshopChatTurn({
+                ...chatTurnBase,
+                onDelta: (text) => {
+                  streamedDelta = true;
+                  enqueueFrame({ type: "delta", text });
+                },
+                onActivity: (update) => {
+                  enqueueFrame({ type: "activity", ...update });
+                },
+                onPointerChange: (frame) => {
+                  enqueueFrame({
+                    type: "pointer-change",
+                    buildId: frame.buildId,
+                    draft: frame.draft,
+                  });
+                },
+              });
+              turnFinished = true;
+              await writeChain;
+              for (const frame of iterateWorkshopChatStreamFrames(turn, {
+                chunkAssistantText: !streamedDelta,
+              })) {
+                await writeFrame(frame);
+              }
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            } catch (err) {
+              turnFinished = true;
+              await writeChain.catch(() => undefined);
+              const message = err instanceof Error ? err.message : String(err);
+              const errorEvent = { type: "error" as const, message };
+              await writeFrame({
+                type: "event",
+                event: errorEvent,
+              });
+              await writeFrame({
+                type: "done",
+                sessionId: body.sessionId,
+                events: [errorEvent],
+                draft: draftParsed,
+                pending: null,
+                autoApply: false,
+                model: resolvedModel,
+                buildId: workshopChatRegistry.getPinnedBuildId(body.sessionId),
+              });
+              if (!res.writableEnded && !res.destroyed) {
+                res.end();
+              }
+            }
+            return true;
+          }
+
+          let turn;
+          try {
+            turn = await runWorkshopChatTurn(chatTurnBase);
+          } catch (err) {
+            if (
+              err instanceof WorkshopSessionStoreError &&
+              err.code === "workshop_session_not_found"
+            ) {
+              json(res, 404, {
+                error: err.message,
+                code: err.code,
+                sessionId: err.sessionId,
+              });
+              return true;
+            }
+            json(res, 400, {
+              error: err instanceof Error ? err.message : String(err),
+            });
+            return true;
+          }
+
+          json(res, 200, turn);
+          return true;
+        }
+
+        if (
+          method === "POST" &&
+          pathname === "/api/workshop/disk-change"
+        ) {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (!isPlainObject(body)) {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (typeof body.pipelinePath !== "string" || !body.pipelinePath.trim()) {
+            json(res, 400, { error: "pipelinePath is required" });
+            return true;
+          }
+          const draftParsed = parseDraftPackageBody(body);
+          if ("ok" in draftParsed) {
+            json(res, draftParsed.status, { error: draftParsed.error });
+            return true;
+          }
+          const writeRoot =
+            typeof body.project_root === "string"
+              ? body.project_root
+              : undefined;
+          let projectRoot: string;
+          try {
+            const { wireRoot } = await resolveCatalogStartInput(
+              { store, bootCwd: cwd },
+              writeRoot,
+            );
+            const ctx = await resolveStageflowContext(wireRoot.path);
+            projectRoot = ctx.projectRoot;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(
+                res,
+                err.code === "catalog_root_read_only" ? 403 : 400,
+                catalogPathErrorBody(err),
+              );
+              return true;
+            }
+            throw err;
+          }
+          const relativePaths = draftPackageDiskRelativePaths({
+            pipelinePath: body.pipelinePath,
+            draft: draftParsed,
+            taskPath:
+              typeof body.taskPath === "string" ? body.taskPath : null,
+          });
+          const current = fingerprintPackageFiles(projectRoot, relativePaths);
+          const baseline =
+            isPlainObject(body.baseline) &&
+            Object.values(body.baseline).every((v) => typeof v === "string")
+              ? (body.baseline as Record<string, string>)
+              : null;
+          const detection = detectDiskChange({ baseline, current });
+          json(res, 200, {
+            fingerprints: current,
+            changed: detection.changed,
+            changedPaths: detection.changedPaths,
+          });
+          return true;
+        }
+
         if (method === "GET" && pathname === "/api/models") {
           const filter = url.searchParams.get("project_root") ?? undefined;
           const result = await listModelsMultiProject({
@@ -1454,9 +2802,15 @@ export function createOperatorRoutes(
         if (method === "GET" && pathname === "/api/settings") {
           const health = manager.getHealth();
           const credential = getCredentialSourceSettings(cwd);
+          const factory = readFactorySettings(cwd);
+          const defaultModel = await readWorkshopOpenModel(cwd);
           json(res, 200, {
             maxConcurrent: health.maxConcurrent,
             ...credential,
+            ...(factory.workshopModel !== undefined
+              ? { workshopModel: factory.workshopModel }
+              : {}),
+            defaultModel,
           });
           return true;
         }
@@ -1481,9 +2835,14 @@ export function createOperatorRoutes(
             record,
             "credentialSource",
           );
-          if (!hasMax && !hasCredentialSource) {
+          const hasWorkshopModel = Object.prototype.hasOwnProperty.call(
+            record,
+            "workshopModel",
+          );
+          if (!hasMax && !hasCredentialSource && !hasWorkshopModel) {
             json(res, 400, {
-              error: "maxConcurrent or credentialSource is required",
+              error:
+                "maxConcurrent, credentialSource, or workshopModel is required",
             });
             return true;
           }
@@ -1509,9 +2868,22 @@ export function createOperatorRoutes(
             }
           }
 
+          let workshopModel = readFactorySettings(cwd).workshopModel;
+          if (hasWorkshopModel) {
+            const parsed = parseWorkshopModelSetting(record.workshopModel);
+            if (parsed === undefined) {
+              json(res, 400, { error: INVALID_WORKSHOP_MODEL_MESSAGE });
+              return true;
+            }
+            writeFactorySettings(cwd, { workshopModel: parsed });
+            workshopModel = parsed;
+          }
+
           json(res, 200, {
             ...health,
             ...credential,
+            ...(workshopModel !== undefined ? { workshopModel } : {}),
+            defaultModel: await readWorkshopOpenModel(cwd),
           });
           return true;
         }
@@ -1568,6 +2940,9 @@ export async function startUiServer(
           allowedHosts,
           controlTokens,
           getShutdown: () => shutdown,
+          ...(options.workshopOperatorHost
+            ? { workshopOperatorHost: options.workshopOperatorHost }
+            : {}),
         });
   const envelope = await createHttpHost({
     boot,
