@@ -6,6 +6,7 @@ import {
 import { compilePayloadSchema } from "../envelope/payloadSchema.js";
 import { loadFailure, loadSuccess, type LoadIssue, type LoadOutcome } from "./loadOutcome.js";
 import { readYamlObject } from "./readYamlObject.js";
+import { z } from "zod";
 
 function isGateKind(value: string): value is StageGateKind {
   return (STAGE_GATE_KINDS as readonly string[]).includes(value);
@@ -76,6 +77,15 @@ export async function loadStageOutcome(filePath: string): Promise<LoadOutcome<St
     system_prompt: raw.system_prompt,
     model: raw.model,
   };
+  if (raw.email !== undefined) {
+    const permissions = z.array(z.object({ accountId: z.string().min(1).max(200),
+      operations: z.array(z.enum(["send", "reply", "getMessage", "search"])).min(1).max(4),
+    }).strict()).max(20).safeParse(raw.email);
+    if (!permissions.success || new Set(permissions.data.map(p => p.accountId)).size !== permissions.data.length) {
+      return loadFailure([{ code: "stage.invalid_shape", message: `Invalid stage file ${filePath}: invalid email permissions`, category: "stage", stageId: stage.id }]);
+    }
+    stage.email = permissions.data;
+  }
 
   if (raw.payload_schema !== undefined) {
     if (

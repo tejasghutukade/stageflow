@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendOperatorPrompt } from "../src/hitl/qaTrail.js";
+import { loadPipeline } from "../src/config/loadPipeline.js";
 import { createRunStore } from "../src/runstore/createStore.js";
 import * as pipelineScheduler from "../src/runtime/pipelineScheduler.js";
 import { RunManager } from "../src/runtime/runManager.js";
@@ -80,9 +81,11 @@ describe("runtime HITL deliverAnswer process mode", () => {
 
     const result = await manager.deliverAnswer(run.runId, "clarify", answer);
     expect(result).toEqual({ ok: true });
+    const trustedStage = (await loadPipeline("docs-only", { cwd: fixtures })).stages.find(stage => stage.id === "clarify");
     expect(launch).toHaveBeenCalledWith({
       runId: run.runId,
       stageId: "clarify",
+      stage: trustedStage,
       rootDir: fixtures,
       mode: "resume",
       resumeAnswer: answer,

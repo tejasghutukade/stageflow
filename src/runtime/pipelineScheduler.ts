@@ -573,6 +573,7 @@ export async function runPipelineDag(
       const launchResult = await launcher.launch({
         runId: run.runId,
         stageId,
+        stage,
         rootDir: cwd,
         attempt,
         ...(prepared.operatorCatalog !== undefined

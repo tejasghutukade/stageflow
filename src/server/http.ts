@@ -44,8 +44,7 @@ import {
 import { isTaskFile } from "../runtime/taskInput.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
-import { EmailAccounts } from "../email/accounts.js";
-import { LocalEmailAdapter } from "../email/adapter.js";
+import { emailHostFor, releaseEmailHost } from "../email/host.js";
 import { handleEmailRoutes } from "./emailRoutes.js";
 
 const DEFAULT_PORT = 3847;
@@ -282,8 +281,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const providerAuthContext = options.providerAuthContext;
-  const emailAccounts = new EmailAccounts(cwd);
-  const emailMailbox = new LocalEmailAdapter(emailAccounts);
+  const { accounts: emailAccounts, mailbox: emailMailbox } = emailHostFor(cwd);
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const store =
     options.store ??
@@ -669,7 +667,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     }
   });
 
-  server.on("close", () => { void emailMailbox.stop(); });
+  server.on("close", () => { void releaseEmailHost(cwd); });
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => resolve());
     server.on("error", reject);

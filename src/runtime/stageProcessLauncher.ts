@@ -9,6 +9,9 @@ import {
   type StageWorkerResult,
 } from "./stageWorkerProtocol.js";
 import type { OperatorCatalog } from "./stageAttemptBootstrap.js";
+import { emailHostFor, emailWorkerEnvironment, stageEmail } from "../email/host.js";
+import { EmailError, type SendEmailInput } from "../email/port.js";
+import type { StageConfig } from "../types/stage.js";
 
 export type StageLaunchInput = {
   runId: string;
@@ -19,6 +22,8 @@ export type StageLaunchInput = {
   attempt?: number;
   sessionFilePath?: string;
   operatorCatalog?: OperatorCatalog;
+  factoryCwd?: string;
+  stage?: StageConfig;
 };
 
 export type StageLaunchResult =
@@ -111,7 +116,7 @@ export class StageProcessLauncher {
 
   async launch(input: StageLaunchInput): Promise<StageLaunchResult> {
     await this.waitForCapacity();
-    return this.spawnAndWait(input);
+    return this.spawnAndWait({ ...input, stage: input.stage ? structuredClone(input.stage) : undefined });
   }
 
   async cancelRun(runId: string, killAfterMs = 5000): Promise<void> {
@@ -173,6 +178,7 @@ export class StageProcessLauncher {
   }
 
   private spawnAndWait(input: StageLaunchInput): Promise<StageLaunchResult> {
+    const factoryCwd = input.factoryCwd ?? input.operatorCatalog?.cwd ?? input.rootDir;
     const mode =
       input.mode ?? (input.resumeAnswer !== undefined ? "resume" : "run");
     const args = [
@@ -200,7 +206,7 @@ export class StageProcessLauncher {
 
     const child = fork(this.cliEntry, args, {
       cwd: input.rootDir,
-      env: { ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" },
+      env: emailWorkerEnvironment({ ...process.env, ...this.env, [SF_STAGE_WORKER]: "1" }, emailHostFor(factoryCwd).accounts),
       stdio: ["pipe", "pipe", "pipe", "ipc"],
     });
 
@@ -247,6 +253,24 @@ export class StageProcessLauncher {
       };
 
       child.on("message", (message: unknown) => {
+        const request = message as { type?: string; requestId?: unknown; input?: unknown };
+        if (!settled && request?.type === "email.send") {
+          void (async () => {
+            if (typeof request.requestId !== "string" || request.requestId.length > 100) return;
+            let response: object;
+            try {
+              const stage = input.stage;
+              if (!stage || settled) throw new EmailError("EMAIL_UNAUTHORIZED");
+              const receipt = await stageEmail(emailHostFor(factoryCwd).mailbox, stage, input.runId).send(request.input as SendEmailInput);
+              response = { receipt };
+            } catch (error) {
+              const fault = error instanceof EmailError ? error : new EmailError("EMAIL_UNAUTHORIZED");
+              response = { error: { code: fault.code, retryable: fault.retryable } };
+            }
+            if (child.connected && !settled) child.send({ type: "email.response", requestId: request.requestId, ...response });
+          })();
+          return;
+        }
         if (!isStageWorkerResult(message)) return;
         finish(resultFromWorkerMessage(message));
       });

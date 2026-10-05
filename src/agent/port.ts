@@ -3,6 +3,7 @@ import type { StageConfig } from "../types/stage.js";
 import type { TaskFile } from "../types/task.js";
 import type { StageActivityEvent } from "./activity.js";
 import type { StageRoots } from "../runtime/stageRoots.js";
+import type { StageEmail } from "../email/host.js";
 
 /** Opaque to runtime; adapters interpret. */
 export type StageResumeToken = string;
@@ -17,6 +18,7 @@ export type StageRunInput = {
   /** Optional observe hook; HITL wait/answer uses openStage beside this. */
   onActivity?: (event: StageActivityEvent) => void;
   skillFilePath?: string;
+  email?: StageEmail;
 };
 
 export type StageRunResult =

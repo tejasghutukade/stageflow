@@ -59,6 +59,7 @@ import {
   type AskOperatorWaitBridge,
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
+import { createSendEmailTool } from "../tools/sendEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, type StageActivityEvent } from "./activity.js";
@@ -427,6 +428,9 @@ function buildUserPrompt(
         : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`;
 
   return [
+    ...(input.stage.email?.length ? [
+      `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
+    ] : []),
     `Task id: ${input.task.id}`,
     `Stage id: ${input.stage.id}`,
     `Goal: ${input.task.goal}`,
@@ -922,14 +926,16 @@ async function prepareStageSessionWiring(
       };
     }
 
-    const customTools = [emitTool, askTool, artifactTool];
+    const customTools: StageSessionWiring["customTools"] = [emitTool, askTool, artifactTool];
+    const emailAllowed = input.email && input.stage.email?.some(permission => permission.operations.includes("send"));
+    if (emailAllowed) customTools.push(defineTool(createSendEmailTool(input.email!)));
 
     return {
       sessionManager,
       modelRuntime,
       settingsManager,
       loader,
-      tools: resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name),
+      tools: [...resolveStageToolNames(emitDef.name, artifactDef.name, askDef.name), ...(emailAllowed ? ["send_email"] : [])],
       customTools,
       emitDefName: emitDef.name,
       askOperatorDefName: askDef.name,

@@ -28,6 +28,11 @@ export async function handleEmailRoutes(
 ): Promise<void> {
   try {
     const method = req.method ?? "GET";
+    if (pathname === "/api/email/submissions" && method === "GET") {
+      const adapter = mailbox as EmailMailbox & { submissions?: { list(): unknown[] } };
+      json(res, 200, { submissions: adapter.submissions?.list() ?? [] });
+      return;
+    }
     const match = pathname.match(/^\/api\/email\/accounts\/([^/]+)(?:\/(test|health))?$/);
     if (pathname === "/api/email/accounts" && method === "GET") {
       json(res, 200, { accounts: accounts.list() });

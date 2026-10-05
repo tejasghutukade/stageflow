@@ -1,4 +1,5 @@
 import type { AgentPort, StageHandle, StageRunInput } from "../agent/port.js";
+import { emailHostFor, stageEmail, workerStageEmail } from "../email/host.js";
 import { resolveSkillByName } from "../config/listSkills.js";
 import type { RunStore } from "../runstore/port.js";
 import type { StageEnvelope } from "../types/envelope.js";
@@ -143,6 +144,8 @@ export async function openStageAttempt(
       priorEnvelope: priorResult.prior,
       resumeToken,
       onActivity: input.onActivity,
+      email: input.stage.email?.length ? (process.env.SF_STAGE_WORKER === "1" ? workerStageEmail()
+        : stageEmail(emailHostFor(input.factoryCwd ?? process.cwd()).mailbox, input.stage, input.runId)) : undefined,
     },
     input.operatorCatalog,
   );

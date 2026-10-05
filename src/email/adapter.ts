@@ -3,6 +3,7 @@ import nodemailer from "nodemailer";
 import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
+import { EmailSubmissions, validateSend } from "./submissions.js";
 import { EmailAccounts, resolveEmailSecret, type EmailAccount, type EmailConnection } from "./accounts.js";
 import {
   EmailError, type EmailMailbox, type EmailEventSource, type EmailAccountStatus,
@@ -29,12 +30,21 @@ function connectionStatus(error?: unknown): EmailConnectionStatus {
 
 /** Both adapters validate account scope before any operation, including unsupported operations. */
 export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSource {
-  constructor(protected readonly accounts: EmailAccounts) {}
+  readonly submissions: EmailSubmissions;
+  constructor(protected readonly accounts: EmailAccounts) {
+    this.submissions = new EmailSubmissions(accounts.scope);
+  }
   abstract testAccount(accountId: string, protocol?: "imap" | "smtp" | "both"): Promise<EmailAccountStatus>;
 
   async send(input: SendEmailInput): Promise<SendEmailResult> {
-    return this.unsupported(input.accountId);
+    const account = this.accounts.get(input?.accountId);
+    const validated = validateSend(input, account);
+    return this.submissions.send(validated, operationId => {
+      if (JSON.stringify(this.accounts.get(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+      return this.submit(account, validated, operationId);
+    });
   }
+  protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult>;
   async reply(input: ReplyToEmailInput): Promise<SendEmailResult> {
     return this.unsupported(input.ref.accountId);
   }
@@ -56,12 +66,18 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   protected status(accountId: string): EmailAccountStatus {
     return {
       accountId, checkedAt: new Date().toISOString(),
-      capabilities: { operations: ["testAccount"], searchFields: [], idle: false },
+      capabilities: { operations: ["testAccount", "send"], searchFields: [], idle: false },
     };
   }
 }
 
 export class InMemoryEmailAdapter extends AccountEmailAdapter {
+  readonly sent: SendEmailInput[] = [];
+  protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
+    this.sent.push(structuredClone(input));
+    return { operationId, messageId: `<${operationId}@stageflow>`, accepted: [...input.to, ...input.cc ?? [], ...input.bcc ?? []].map(value => value.address),
+      rejected: [], submittedAt: new Date().toISOString() };
+  }
   async testAccount(accountId: string, protocol: "imap" | "smtp" | "both" = "both"): Promise<EmailAccountStatus> {
     if (!["imap", "smtp", "both"].includes(protocol)) throw new EmailError("EMAIL_INVALID_INPUT");
     this.accounts.get(accountId);
@@ -80,6 +96,42 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
   constructor(accounts: EmailAccounts, private readonly env: NodeJS.ProcessEnv = process.env) {
     super(accounts);
     this.unsubscribe = accounts.onChange(accountId => this.cancel(accountId));
+  }
+
+  protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string): Promise<SendEmailResult> {
+    const config = account.smtp;
+    const secret = resolveEmailSecret(config, this.env);
+    let socket: Socket | undefined;
+    const transport = nodemailer.createTransport({
+      host: config.host, port: config.port, secure: config.tls === "implicit",
+      requireTLS: config.tls === "starttls", ignoreTLS: config.tls === "none",
+      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs,
+      socketTimeout: account.connectionTimeoutMs, logger: false, debug: false,
+      tls: { rejectUnauthorized: true }, disableFileAccess: true, disableUrlAccess: true,
+      getSocket: (_options: unknown, callback: (error: Error | null, result?: { connection: Socket; secured: boolean }) => void) => {
+        let settled = false;
+        const connected = (): void => { if (settled) return; settled = true; callback(null, { connection: socket!, secured: config.tls === "implicit" }); };
+        socket = config.tls === "implicit"
+          ? connectTls({ host: config.host, port: config.port, rejectUnauthorized: true, servername: config.host }, connected)
+          : connectTcp({ host: config.host, port: config.port }, connected);
+        socket.once("error", error => { if (!settled) { settled = true; callback(error); } });
+      },
+      auth: config.auth.type === "oauth2" ? { type: "OAuth2", user: config.username, accessToken: secret }
+        : { user: config.username, pass: secret },
+    } as SMTPTransport.Options);
+    try {
+      const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail({ from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
+        subject: input.subject, text: input.text, html: input.html, messageId: `<${operationId}@stageflow>` }));
+      return { operationId, messageId: receipt.messageId, accepted: receipt.accepted, rejected: receipt.rejected,
+        submittedAt: new Date().toISOString() };
+    } catch (error) {
+      const fault = error as { code?: string; responseCode?: number; command?: string };
+      if (fault.code === "EAUTH") throw new EmailError("EMAIL_AUTH_FAILED");
+      if (fault.code === "EENVELOPE") throw new EmailError("EMAIL_RECIPIENTS_REJECTED");
+      if (fault.responseCode && fault.responseCode >= 400) throw new EmailError("EMAIL_CONNECTION_FAILED", fault.responseCode < 500);
+      if (["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(fault.code ?? "")) throw normalizedConnectionError(error);
+      throw new EmailError("EMAIL_SEND_OUTCOME_UNKNOWN");
+    } finally { socket?.destroy(); transport.close(); }
   }
 
   async testAccount(accountId: string, protocol: "imap" | "smtp" | "both" = "both"): Promise<EmailAccountStatus> {

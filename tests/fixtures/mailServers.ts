@@ -1,8 +1,9 @@
 import { createServer, type Socket } from "node:net";
 
-export async function mailServer(protocol: "imap" | "smtp", options: { rejectAuth?: boolean; stall?: boolean; password?: string } = {}) {
+export async function mailServer(protocol: "imap" | "smtp", options: { rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean } = {}) {
   const sockets = new Set<Socket>();
   const commands: string[] = [];
+  const messages: { data: string; recipients: string[] }[] = [];
   const server = createServer(socket => {
     sockets.add(socket);
     socket.on("close", () => sockets.delete(socket));
@@ -11,6 +12,9 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
     socket.write(protocol === "imap" ? "* OK fixture ready\r\n" : "220 fixture ready\r\n");
     let pending = "";
     let authTag: string | undefined;
+    let inData = false;
+    let messageData = "";
+    let recipients: string[] = [];
     function validAuth(encoded: string): boolean {
       return !options.rejectAuth && Buffer.from(encoded, "base64").toString().split("\0").at(-1) === (options.password ?? "fixture-secret");
     }
@@ -21,11 +25,26 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
         const line = pending.slice(0, index);
         pending = pending.slice(index + 2);
         if (protocol === "smtp") {
+          if (inData) {
+            if (line !== ".") { messageData += `${line.replace(/^\.\./, ".")}\r\n`; continue; }
+            inData = false;
+            messages.push({ data: messageData, recipients: [...recipients] });
+            if (options.dropAfterData) socket.destroy();
+            else if (!options.stallAfterData) socket.write("250 Message accepted\r\n");
+            continue;
+          }
           const command = line.split(" ")[0].toUpperCase();
           commands.push(command);
           if (command === "EHLO") socket.write("250-fixture\r\n250 AUTH PLAIN\r\n");
           else if (command === "AUTH") socket.write(validAuth(line.split(" ")[2] ?? "") ? "235 Authenticated\r\n" : "535 Authentication failed\r\n");
           else if (command === "QUIT") socket.end("221 Bye\r\n");
+          else if (command === "MAIL") { recipients = []; messageData = ""; socket.write("250 Sender accepted\r\n"); }
+          else if (command === "RCPT") {
+            const recipient = line.match(/<([^>]+)>/)?.[1] ?? "";
+            if (recipient === options.rejectRecipient) socket.write("550 Recipient rejected\r\n");
+            else { recipients.push(recipient); socket.write("250 Recipient accepted\r\n"); }
+          }
+          else if (command === "DATA") { inData = true; socket.write("354 Send data\r\n"); }
           else socket.write("250 OK\r\n");
         } else {
           if (authTag) {
@@ -55,7 +74,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No fixture port");
   return {
-    port: address.port, commands, sockets,
+    port: address.port, commands, sockets, messages,
     async close() {
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => server.close(() => resolve()));

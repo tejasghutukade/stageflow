@@ -694,9 +694,12 @@ export class RunManager {
     const eventOptions = { attempt };
 
     try {
+      const launchMeta = await store.readRunMeta(runId);
+      const launchPipeline = await loadPipeline(launchMeta.pipeline_id, { cwd });
       const launchResult = await launcher.launch({
         runId,
         stageId,
+        stage: launchPipeline.stages.find(value => value.id === stageId),
         rootDir: cwd,
         mode: "resume",
         resumeAnswer: opaqueAnswer,
