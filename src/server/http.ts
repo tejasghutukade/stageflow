@@ -44,6 +44,9 @@ import {
 import { isTaskFile } from "../runtime/taskInput.js";
 import { parseAskOperatorAnswer } from "../tools/askOperator.js";
 import type { TaskFile } from "../types/task.js";
+import { EmailAccounts } from "../email/accounts.js";
+import { LocalEmailAdapter } from "../email/adapter.js";
+import { handleEmailRoutes } from "./emailRoutes.js";
 
 const DEFAULT_PORT = 3847;
 
@@ -279,6 +282,8 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_PORT;
   const providerAuthContext = options.providerAuthContext;
+  const emailAccounts = new EmailAccounts(cwd);
+  const emailMailbox = new LocalEmailAdapter(emailAccounts);
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const store =
     options.store ??
@@ -299,6 +304,13 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", `http://${host}:${port}`);
     const pathname = url.pathname;
+
+    if (pathname.startsWith("/api/email/")) {
+      if (!assertLoopbackHttpAccess(req, res)) return;
+      if (["POST", "PATCH", "DELETE"].includes(method) && !assertCredentialMutatingOrigin(req, res)) return;
+      await handleEmailRoutes(req, res, pathname, emailAccounts, emailMailbox);
+      return;
+    }
 
     if (pathname === "/mcp") {
       if (!validateMcpHost(req, res) || !validateMcpOrigin(req, res)) {
@@ -657,6 +669,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     }
   });
 
+  server.on("close", () => { void emailMailbox.stop(); });
   await new Promise<void>((resolve, reject) => {
     server.listen(port, host, () => resolve());
     server.on("error", reject);
