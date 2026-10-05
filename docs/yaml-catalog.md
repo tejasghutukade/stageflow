@@ -27,7 +27,7 @@ Run state (SQLite and workspaces) lives under the global durable root (`$STAGEFL
 
 **Flat layout** — pipeline and task files may also live at the repo root (e.g. `hello.pipeline.yaml`, `my-task.task.yaml`) beside `stageflow.yaml`; validation and CLI accept any filesystem path. This repo uses a flat root for some pipelines under `tests/fixtures/`.
 
-Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml): the examples plus a `workshop` scan root (`tests/fixtures` excluded from browse). Workshop Author writes saved packages under `workshop/<pipeline-id>/` and adds that root when it is missing. See [Operator console — Workshop](operator-console.md#workshop).
+Runnable examples live under [`examples/`](../examples/). This repo's manifest is [`stageflow.yaml`](../stageflow.yaml): the examples plus a `workshop` scan root (`tests/fixtures` excluded from browse). Workshop Author writes saved packages under `workshop/<pipeline-id>/` and adds that root when it is missing. See [Workshop Author](workshop.md).
 
 ## Filename patterns
 

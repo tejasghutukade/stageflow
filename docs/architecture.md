@@ -135,3 +135,4 @@ A published `sf` binary runs each stage as compiled `dist/cli.js`. `npm run dev`
 - [MCP](mcp.md) — tools and run resources
 - [YAML catalog — Stage MCP](yaml-catalog.md#stage-mcp) — stage agents consuming project MCP servers
 - [Operator console](operator-console.md) — runtime inspection and gate handling
+- [Workshop Author](workshop.md) — chat-draft a pipeline and save it into the catalog

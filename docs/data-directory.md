@@ -43,7 +43,7 @@ See also [CLI reference — Storage locations](cli-reference.md#storage-location
 | **Draft?** | Yes | No — `activeBuildId` names the build |
 | **Root** | Always `$STAGEFLOW_HOME` | Always `$STAGEFLOW_HOME` |
 
-History reopens the session and the build in `activeBuildId`. **New** starts a fresh session. Saved catalog YAML lives in the project (by default `workshop/<pipeline-id>/`), not in this directory. See [Operator console — Workshop](operator-console.md#workshop).
+History reopens the session and the build in `activeBuildId`. **New** starts a fresh session. Saved catalog YAML lives in the project (by default `workshop/<pipeline-id>/`), not in this directory. See [Workshop Author](workshop.md).
 
 For the operator keep-table and why `cp state.db` is unsafe, see [Docker and self-hosting](docker.md).
 

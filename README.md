@@ -97,7 +97,7 @@ sf ui                          # operator console at http://127.0.0.1:3847
 sf run --pipeline pipelines/hello.pipeline.yaml --task tasks/hello.task.yaml
 ```
 
-**Workshop** (rail → `#/workshop`) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. See [docs/operator-console.md](docs/operator-console.md#workshop).
+**Workshop** (rail → `#/workshop`) drafts a pipeline in chat and saves it under `workshop/<pipeline-id>/` so it shows up on Run. Guide: [docs/workshop.md](docs/workshop.md).
 
 Expanded walkthrough: [docs/quickstart.md](docs/quickstart.md)
 
@@ -266,6 +266,7 @@ Full docs: **[tejasghutukade.github.io/stageflow](https://tejasghutukade.github.
 | [docs/providers.md](docs/providers.md) | Pi providers, `sf providers` |
 | [docs/docker.md](docs/docker.md) | Docker Compose local try, image pull/run, backup, self-hosting |
 | [docs/operator-console.md](docs/operator-console.md) | Console IA and settings |
+| [docs/workshop.md](docs/workshop.md) | Workshop Author — chat-draft a pipeline, save it, and run it |
 | [docs/skills-suite.md](docs/skills-suite.md) | Harness skills — router + jobs for Cursor, Claude Code, Codex, Pi, OpenCode |
 
 ## Develop from source
