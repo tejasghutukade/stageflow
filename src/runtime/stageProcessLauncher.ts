@@ -273,7 +273,7 @@ export class StageProcessLauncher {
               else response = { result: await email.getMessage(request.input as EmailMessageRef) };
             } catch (error) {
               const fault = error instanceof EmailError ? error : new EmailError("EMAIL_UNAUTHORIZED");
-              response = { error: { code: fault.code, retryable: fault.retryable } };
+              response = { error: { code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) } };
             }
             if (child.connected && !settled) child.send({ type: "email.response", requestId: request.requestId, ...response });
           })();

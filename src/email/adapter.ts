@@ -1,10 +1,11 @@
 import { ImapFlow } from "imapflow";
+import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
 import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import { EmailSubmissions, validateSend } from "./submissions.js";
-import { decodeRef, EMAIL_SOURCE_LIMIT, envelopeSummary, parseMessage, recentQuery, summarize, type MailRecord } from "./messages.js";
+import { decodeRef, decodeCursor, EMAIL_SOURCE_LIMIT, EMAIL_SEARCH_FIELDS, envelopeSummary, matchesSearch, parseMessage, searchCursor, searchQuery, summarize, type MailRecord, type MailQuery } from "./messages.js";
 import { EmailAccounts, resolveEmailSecret, type EmailAccount, type EmailConnection } from "./accounts.js";
 import {
   EmailError, type EmailMailbox, type EmailEventSource, type EmailAccountStatus,
@@ -32,6 +33,7 @@ function connectionStatus(error?: unknown): EmailConnectionStatus {
 /** Both adapters validate account scope before any operation, including unsupported operations. */
 export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSource {
   readonly submissions: EmailSubmissions;
+  protected readonly cursorKey = randomBytes(32);
   constructor(protected readonly accounts: EmailAccounts) {
     this.submissions = new EmailSubmissions(accounts.scope);
   }
@@ -60,10 +62,13 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
     this.accounts.get(accountId);
     throw new EmailError("EMAIL_UNSUPPORTED");
   }
+  protected searchPosition(uid: number, high: number, last: number | undefined, query: MailQuery): boolean {
+    return uid <= high && (last === undefined || (query.sort === "newest" ? uid < last : uid > last));
+  }
   protected status(accountId: string): EmailAccountStatus {
     return {
       accountId, checkedAt: new Date().toISOString(),
-      capabilities: { operations: ["testAccount", "send", "search", "getMessage"], searchFields: [], idle: false },
+      capabilities: { operations: ["testAccount", "send", "search", "getMessage"], searchFields: [...EMAIL_SEARCH_FIELDS], idle: false },
     };
   }
 }
@@ -77,17 +82,30 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
   }
   async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
     const account = this.accounts.get(input?.accountId);
-    const { mailbox, limit } = recentQuery(input);
+    const query = searchQuery(input);
+    const { mailbox } = query;
     const stored = this.mailboxes.get(`${account.accountId}:${mailbox}`);
     if (!stored && mailbox !== "INBOX") throw new EmailError("EMAIL_INVALID_INPUT");
-    const records = [...stored?.messages ?? []].sort((a, b) => b.uid - a.uid).slice(0, limit);
-    return { messages: await Promise.all(records.map(async record => {
+    const generation = stored?.generation ?? "1";
+    const cursor = decodeCursor(account, query, generation, input.cursor, this.cursorKey);
+    const high = cursor?.high ?? Math.max(0, ...stored?.messages.map(value => value.uid) ?? []);
+    const records = [...stored?.messages ?? []].sort((a, b) => query.sort === "newest" ? b.uid - a.uid : a.uid - b.uid);
+    let inspected = 0;
+    const messages = [];
+    let last = 0;
+    for (const record of records) {
+      if (!this.searchPosition(record.uid, high, cursor?.last, query)) continue;
+      if (++inspected > account.searchWorkLimit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
       const end = record.source.indexOf("\r\n\r\n");
       const headers = record.source.subarray(0, end < 0 ? Math.min(record.source.length, 65536) : Math.min(end + 4, 65536));
-      const summary = summarize(await parseMessage(account, mailbox, stored!.generation, { ...record, source: headers }));
+      const summary = summarize(await parseMessage(account, mailbox, generation, { ...record, source: headers }));
       delete summary.hasAttachments; delete summary.preview;
-      return summary;
-    })) };
+      if (!matchesSearch(summary, query)) continue;
+      if (messages.length === query.limit) return { messages, nextCursor: searchCursor(account, query, generation, high, last, this.cursorKey) };
+      messages.push(summary);
+      last = record.uid;
+    }
+    return { messages };
   }
   async getMessage(ref: EmailMessageRef): Promise<EmailMessage> {
     const account = this.accounts.get(ref?.accountId);
@@ -152,14 +170,60 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     if ((result.size ?? 0) > EMAIL_SOURCE_LIMIT || !result.source || result.source.length > EMAIL_SOURCE_LIMIT) throw new EmailError("EMAIL_RESOURCE_LIMIT");
     return parseMessage(account, mailbox, generation, { uid: result.uid, source: result.source, flags: result.flags ?? new Set(), receivedAt: result.internalDate instanceof Date ? result.internalDate : new Date(0) });
   }
+  private async nextSearchUid(client: ImapFlow, lower: number, upper: number, sort: MailQuery["sort"]): Promise<number | undefined> {
+    if (lower > upper) return;
+    let left = 1;
+    let right = client.mailbox ? client.mailbox.exists : 0;
+    let candidate: number | undefined;
+    // Provider UIDs are monotone in sequence order. Binary lookup skips large UID gaps
+    // without an unbounded SEARCH result or a scan of earlier pages.
+    for (let probe = 0; left <= right; probe++) {
+      if (probe >= 32) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+      const middle = Math.floor((left + right) / 2);
+      const result = await client.fetchOne(String(middle), { uid: true });
+      if (!result) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+      if (sort === "oldest") {
+        if (result.uid >= lower) { candidate = result.uid; right = middle - 1; }
+        else left = middle + 1;
+      } else {
+        if (result.uid <= upper) { candidate = result.uid; left = middle + 1; }
+        else right = middle - 1;
+      }
+    }
+    if (candidate !== undefined && candidate >= lower && candidate <= upper) return candidate;
+  }
   async search(input: SearchEmailsInput): Promise<SearchEmailsResult> {
     const account = this.accounts.get(input?.accountId);
-    const { mailbox, limit } = recentQuery(input);
-    return this.readMailbox(account, mailbox, async (client, generation, count) => {
+    const query = searchQuery(input);
+    const { mailbox } = query;
+    return this.readMailbox(account, mailbox, async (client, generation) => {
+      const cursor = decodeCursor(account, query, generation, input.cursor, this.cursorKey);
+      const high = cursor?.high ?? (client.mailbox ? client.mailbox.uidNext - 1 : 0);
       const messages = [];
-      for (let sequence = count; sequence > Math.max(0, count - limit); sequence--) {
-        const result = await client.fetchOne(String(sequence), { uid: true, flags: true, internalDate: true, envelope: true });
-        if (result) messages.push(envelopeSummary(account, mailbox, generation, result));
+      let last = 0;
+      let inspected = 0;
+      let lower = query.sort === "oldest" && cursor ? cursor.last + 1 : 1;
+      let upper = query.sort === "newest" && cursor ? cursor.last - 1 : high;
+      while (lower <= upper) {
+        const first = await this.nextSearchUid(client, lower, upper, query.sort);
+        if (first === undefined) break;
+        const windowLower = query.sort === "oldest" ? first : Math.max(lower, first - 99);
+        const windowUpper = query.sort === "oldest" ? Math.min(upper, first + 99) : first;
+        const found = await client.search({ uid: `${windowLower}:${windowUpper}` }, { uid: true });
+        if (!Array.isArray(found) || found.length > 100 || new Set(found).size !== found.length || found.some(uid => !Number.isSafeInteger(uid) || uid < windowLower || uid > windowUpper)) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+        found.sort((a, b) => query.sort === "newest" ? b - a : a - b);
+        for (const uid of found) {
+          if (++inspected > account.searchWorkLimit) throw new EmailError("EMAIL_RESOURCE_LIMIT");
+          const result = await client.fetchOne(String(uid), { uid: true, flags: true, internalDate: true, envelope: true }, { uid: true });
+          if (!result) continue;
+          const summary = envelopeSummary(account, mailbox, generation, result);
+          if (!matchesSearch(summary, query)) continue;
+          if (messages.length === query.limit) return { messages, nextCursor: searchCursor(account, query, generation, high, last, this.cursorKey) };
+          messages.push(summary);
+          last = result.uid;
+        }
+        if (query.sort === "oldest") lower = windowUpper + 1;
+        else upper = windowLower - 1;
       }
       return { messages };
     });

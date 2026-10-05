@@ -12,7 +12,7 @@ function readTool(name: string, label: string, parameters: ReturnType<typeof Typ
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }], details: result };
       } catch (error) {
         const fault = error instanceof EmailError ? error : new EmailError("EMAIL_CONNECTION_FAILED", true);
-        const details = { code: fault.code, retryable: fault.retryable };
+        const details = { code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) };
         return { content: [{ type: "text" as const, text: JSON.stringify(details) }], details, isError: true };
       }
     } };

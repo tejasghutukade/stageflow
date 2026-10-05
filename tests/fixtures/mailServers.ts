@@ -85,7 +85,11 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
                 const [local, domain] = email.split("@");
                 return domain ? `((NIL NIL ${quote(local)} ${quote(domain)}))` : "NIL";
               };
-              const fields = [`UID ${record.uid}`, `FLAGS (${[...record.flags].join(" ")})`, `RFC822.SIZE ${record.source.length}`, `INTERNALDATE "01-Jan-2026 12:00:00 +0000"`];
+              const date = record.receivedAt;
+              const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][date.getUTCMonth()];
+              const pad = (value: number): string => String(value).padStart(2, "0");
+              const internalDate = `${pad(date.getUTCDate())}-${month}-${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())} +0000`;
+              const fields = [`UID ${record.uid}`, `FLAGS (${[...record.flags].join(" ")})`, `RFC822.SIZE ${record.source.length}`, `INTERNALDATE "${internalDate}"`];
               if (line.includes("ENVELOPE")) fields.push(`ENVELOPE (NIL ${quote(header("Subject"))} ${address(header("From"))} NIL NIL ${address(header("To"))} NIL NIL NIL ${quote(header("Message-ID"))})`);
               const partial = line.match(/BODY\.PEEK\[\]<([0-9]+)\.([0-9]+)>/i);
               if (partial) {
@@ -98,7 +102,11 @@ export async function mailServer(protocol: "imap" | "smtp", options: { rejectAut
             }
             socket.write(`${tag} OK fetched\r\n`);
           }
-          else if (command === "SEARCH" || (command === "UID" && line.includes(" SEARCH "))) socket.write(`* SEARCH ${mailbox.messages.map(value => value.uid).join(" ")}\r\n${tag} OK searched\r\n`);
+          else if (command === "SEARCH" || (command === "UID" && line.includes(" SEARCH "))) {
+            const range = line.match(/\bUID (\d+):(\d+)/)?.slice(1).map(Number);
+            const matches = mailbox.messages.filter(value => !range || (value.uid >= range[0] && value.uid <= range[1]));
+            socket.write(`* SEARCH ${matches.map(value => value.uid).join(" ")}\r\n${tag} OK searched\r\n`);
+          }
           else if (command === "LOGOUT") socket.end(`* BYE closing\r\n${tag} OK logout\r\n`);
           else socket.write(`${tag} OK complete\r\n`);
         }

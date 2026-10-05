@@ -69,9 +69,9 @@ export function workerStageEmail(): StageEmail {
       };
       const disconnected = (): void => finish(new EmailError(operation === "send" ? "EMAIL_SEND_OUTCOME_UNKNOWN" : "EMAIL_CONNECTION_FAILED", operation !== "send"));
       const receive = (message: unknown): void => {
-        const response = message as { type?: string; requestId?: string; receipt?: T; result?: T; error?: { code: EmailError["code"]; retryable: boolean } };
+        const response = message as { type?: string; requestId?: string; receipt?: T; result?: T; error?: { code: EmailError["code"]; retryable: boolean; unsupportedFields?: string[] } };
         if (response?.type !== "email.response" || response.requestId !== requestId) return;
-        finish(response.error ? new EmailError(response.error.code, response.error.retryable) : undefined, response.result ?? response.receipt);
+        finish(response.error ? new EmailError(response.error.code, response.error.retryable, response.error.unsupportedFields) : undefined, response.result ?? response.receipt);
       };
       const timer = setTimeout(disconnected, 65000);
       process.on("message", receive); process.once("disconnect", disconnected);

@@ -58,7 +58,8 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} message contr
     expect((await adapter.search({ accountId: account.accountId })).messages).toHaveLength(20);
     expect((await adapter.search({ accountId: account.accountId, limit: 100 })).messages).toHaveLength(100);
     for (const patch of [{ limit: 0 }, { limit: 101 }, { limit: 1.5 }, { mailbox: "\r\n" }, { mailbox: "Missing" }]) await expect(adapter.search({ accountId: account.accountId, ...patch })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
-    for (const patch of [{ unread: false }, { from: "sender@example.com" }, { cursor: "opaque" }, { sort: "oldest" as const }, { hasAttachments: false }, { text: "test" }]) await expect(adapter.search({ accountId: account.accountId, ...patch })).rejects.toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED" });
+    await expect(adapter.search({ accountId: account.accountId, cursor: "opaque" })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    for (const patch of [{ hasAttachments: false }, { text: "test" }]) await expect(adapter.search({ accountId: account.accountId, ...patch })).rejects.toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED", unsupportedFields: Object.keys(patch) });
   });
   it("rejects invalid, missing, stale, and cross-account references", async () => {
     const { adapter, account, accounts, server } = await setup(kind);
@@ -73,6 +74,84 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} message contr
     await expect(adapter.getMessage(ref)).rejects.toMatchObject({ code: "EMAIL_STALE_REFERENCE" });
     accounts.update(account.accountId, { enabled: false });
     await expect(adapter.getMessage(ref)).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_DISABLED" });
+  });
+  it("combines exact addresses, subject, false flags, and UTC date edges", async () => {
+    const records = [record(1), record(2), record(3), record(4), record(5)];
+    records[0].receivedAt = new Date("2026-01-01T11:59:59Z");
+    records[1].receivedAt = new Date("2026-01-01T12:00:00Z");
+    records[2].receivedAt = new Date("2026-01-01T12:59:59Z");
+    records[3].receivedAt = new Date("2026-01-01T13:00:00Z");
+    records[4].receivedAt = new Date("2026-01-01T12:30:00Z");
+    records[4].source = Buffer.from(records[4].source.toString().replace("sender@example.com", "other-sender@example.com"));
+    const { adapter, account } = await setup(kind, records);
+    const query = { accountId: account.accountId, from: "SENDER@EXAMPLE.COM", to: "AGENT@EXAMPLE.COM", subject: "MESSAGE", unread: true, flagged: false,
+      receivedAfter: "2026-01-01T07:00:00-05:00", receivedBefore: "2026-01-01T13:00:00Z" };
+    expect((await adapter.search(query)).messages.map(value => value.subject)).toEqual(["Message 3", "Message 2"]);
+    expect((await adapter.search({ accountId: account.accountId, unread: false })).messages.map(value => value.subject)).toEqual(["Message 1"]);
+    expect((await adapter.search({ accountId: account.accountId, flagged: true })).messages.map(value => value.subject)).toEqual(["Message 1"]);
+    expect((await adapter.search({ accountId: account.accountId, from: "sender" })).messages).toEqual([]);
+    expect((await adapter.search({ accountId: account.accountId, to: "agent" })).messages).toEqual([]);
+    expect((await adapter.search({ ...query, sort: "oldest" })).messages.map(value => value.subject)).toEqual(["Message 2", "Message 3"]);
+    expect((await adapter.testAccount(account.accountId, "imap")).capabilities.searchFields).toEqual(["from", "to", "subject", "unread", "flagged", "receivedAfter", "receivedBefore"]);
+    for (const patch of [{ receivedAfter: "2026-02-31T12:00:00Z" }, { receivedAfter: "2026-01-01" }, { receivedAfter: "2026-01-01T12:00:00" }, { receivedAfter: "bad" }, { receivedAfter: "2026-01-01T13:00:00Z", receivedBefore: "2026-01-01T12:00:00Z" }, { unread: "false" }, { from: 4 }]) {
+      await expect(adapter.search({ accountId: account.accountId, ...patch } as never)).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    }
+  });
+  for (const sort of ["newest", "oldest"] as const) it(`keeps ${sort} pages stable with UID gaps, new mail, and removed messages`, async () => {
+    const records = [record(2), record(100000), record(200000), record(300000)];
+    const { adapter, account, server } = await setup(kind, records);
+    const query = { accountId: account.accountId, limit: 1, sort };
+    const first = await adapter.search(query);
+    expect(first.nextCursor).toBeTypeOf("string");
+    const removed = sort === "newest" ? 200000 : 100000;
+    server.mailbox.messages = records.filter(value => value.uid !== removed).concat(record(900000));
+    if (adapter instanceof InMemoryEmailAdapter) adapter.seedMailbox(account.accountId, server.mailbox.messages);
+    const subjects = first.messages.map(value => value.subject);
+    let cursor = first.nextCursor;
+    while (cursor) {
+      const next = await adapter.search({ ...query, cursor });
+      subjects.push(...next.messages.map(value => value.subject));
+      cursor = next.nextCursor;
+    }
+    expect(subjects).toEqual(sort === "newest" ? ["Message 300000", "Message 100000", "Message 2"] : ["Message 2", "Message 200000", "Message 300000"]);
+    expect(server.fetchedSourceBytes).toEqual([]);
+  });
+  it("rejects changed, altered, foreign, and stale cursors", async () => {
+    const { adapter, account, accounts, server } = await setup(kind, [record(1), record(2), record(3)]);
+    const query = { accountId: account.accountId, limit: 1 };
+    const cursor = (await adapter.search(query)).nextCursor!;
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+    const changedEncoding = cursor.slice(0, -1) + alphabet[alphabet.indexOf(cursor.at(-1)!) + 1];
+    const { accountId: _id, scope: _scope, ...config } = account;
+    const other = accounts.create(config);
+    for (const patch of [{ cursor: `${cursor.slice(0, -1)}!` }, { cursor: changedEncoding }, { cursor: cursor.replace(/^./, cursor[0] === "A" ? "B" : "A") }, { subject: "Message" }, { sort: "oldest" as const }, { limit: 2 }, { mailbox: "Missing" }, { accountId: other.accountId }]) {
+      await expect(adapter.search({ ...query, cursor, ...patch })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    }
+    const replacement = kind === "local" ? new LocalEmailAdapter(accounts, { MAIL_SECRET: "fixture-secret" }) : new InMemoryEmailAdapter(accounts);
+    cleanups.push(() => replacement.stop());
+    if (replacement instanceof InMemoryEmailAdapter) replacement.seedMailbox(account.accountId, server.mailbox.messages);
+    await expect(replacement.search({ ...query, cursor })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
+    server.mailbox.generation = "2";
+    if (adapter instanceof InMemoryEmailAdapter) adapter.seedMailbox(account.accountId, server.mailbox.messages, "INBOX", "2");
+    await expect(adapter.search({ ...query, cursor })).rejects.toMatchObject({ code: "EMAIL_STALE_REFERENCE" });
+  });
+  it("reports a work limit without partial success and resumes beyond prior pages", async () => {
+    const { adapter, account, accounts, server } = await setup(kind, Array.from({ length: 8 }, (_, index) => record(index + 1)));
+    accounts.update(account.accountId, { searchWorkLimit: 2 });
+    await expect(adapter.search({ accountId: account.accountId, subject: "absent" })).rejects.toMatchObject({ code: "EMAIL_RESOURCE_LIMIT" });
+    await expect(adapter.search({ accountId: account.accountId, limit: 2 })).rejects.toMatchObject({ code: "EMAIL_RESOURCE_LIMIT" });
+    const subjects = [];
+    let cursor: string | undefined;
+    do {
+      const result = await adapter.search({ accountId: account.accountId, limit: 1, cursor });
+      subjects.push(...result.messages.map(value => value.subject));
+      cursor = result.nextCursor;
+    } while (cursor);
+    expect(subjects).toEqual(Array.from({ length: 8 }, (_, index) => `Message ${8 - index}`));
+    accounts.update(account.accountId, { searchWorkLimit: 10 });
+    expect((await adapter.search({ accountId: account.accountId, subject: "absent" })).messages).toEqual([]);
+    expect(server.fetchedSourceBytes).toEqual([]);
+    expect((await adapter.search({ accountId: account.accountId })).messages.filter(value => !value.unread)).toHaveLength(1);
   });
   it("parses MIME reply headers and attachment metadata without attachment bytes", async () => {
     const source = record(1, "--edge\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nBody text\r\n--edge\r\nContent-Type: text/html\r\n\r\n<p>Body text</p>\r\n--edge\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=data.bin\r\nContent-Transfer-Encoding: base64\r\n\r\nYWJj\r\n--edge--\r\n", "Reply-To: reply@example.com\r\nReferences: <one@example.com> <two@example.com>\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=edge\r\n");
@@ -98,19 +177,24 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} message contr
     expect(message.from).toEqual([]); expect(message.to).toEqual([]); expect(message.subject).toBeUndefined(); expect(message.messageId).toBeUndefined(); expect(message.text).toContain("Malformed");
   });
   it("enforces frozen stage permissions through the read tools", async () => {
-    const { adapter, account } = await setup(kind);
+    const { adapter, account } = await setup(kind, [record(1), record(2), record(3)]);
     const stage = { id: "read", model: "test", system_prompt: "read", email: [{ accountId: account.accountId, operations: ["search", "getMessage"] as ("search" | "getMessage")[] }] };
     const email = stageEmail(adapter, stage, "run"); stage.email[0].operations = [];
-    const search = await createSearchEmailTool(email).execute("list", { accountId: account.accountId });
+    const query = { accountId: account.accountId, unread: true, from: "sender@example.com", limit: 1 };
+    const search = await createSearchEmailTool(email).execute("list", query);
     expect(search.isError).toBeUndefined();
-    const ref = (search.details as { messages: { ref: unknown }[] }).messages[0].ref;
+    const page = search.details as { messages: { ref: unknown }[]; nextCursor: string };
+    expect(page.nextCursor).toBeTypeOf("string");
+    const second = await createSearchEmailTool(email).execute("next", { ...query, cursor: page.nextCursor });
+    const ref = (second.details as { messages: { ref: unknown }[] }).messages[0].ref;
     expect((await createGetEmailTool(email).execute("get", ref)).isError).toBeUndefined();
     expect(await createSearchEmailTool(email).execute("other", { accountId: "other" })).toMatchObject({ isError: true, details: { code: "EMAIL_UNAUTHORIZED" } });
+    expect(await createSearchEmailTool(email).execute("unsupported", { accountId: account.accountId, text: "body", hasAttachments: false })).toMatchObject({ isError: true, details: { code: "EMAIL_SEARCH_UNSUPPORTED", unsupportedFields: ["text", "hasAttachments"] } });
     await expect(stageEmail(adapter, stage, "run").getMessage(ref as never)).rejects.toMatchObject({ code: "EMAIL_UNAUTHORIZED" });
   });
 });
 it("lists and reads through the actual private child IPC and rejects undeclared operations", async () => {
-  const { root, account } = await setup("local");
+  const { root, account } = await setup("local", [record(1), record(2), record(3)]);
   cleanups.push(() => releaseEmailHost(root));
   const previous = process.env.MAIL_SECRET; process.env.MAIL_SECRET = "fixture-secret";
   const stage = { id: "read", model: "test", system_prompt: "read", email: [{ accountId: account.accountId, operations: ["search", "getMessage"] as ("search" | "getMessage")[] }] };

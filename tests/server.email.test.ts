@@ -1,11 +1,36 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { startUiServer } from "../src/server/http.js";
 import { scriptedFakeAgent } from "../src/agent/fakeAgent.js";
+import { EmailAccounts } from "../src/email/accounts.js";
+import { InMemoryEmailAdapter } from "../src/email/adapter.js";
+import { EmailError } from "../src/email/port.js";
+import { handleEmailRoutes } from "../src/server/emailRoutes.js";
 
 describe("host email account management", () => {
+  it("preserves named unsupported fields in an HTTP operation error", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sf-email-http-errors-"));
+    const accounts = new EmailAccounts(root);
+    const adapter = new InMemoryEmailAdapter(accounts);
+    // The account-test route uses the same normalized error response as other host operations.
+    vi.spyOn(adapter, "testAccount").mockRejectedValue(new EmailError("EMAIL_SEARCH_UNSUPPORTED", false, ["text", "hasAttachments"]));
+    const server = createServer((req, res) => { void handleEmailRoutes(req, res, "/api/email/accounts/fixture/test", accounts, adapter); });
+    try {
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing HTTP fixture port");
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/email/accounts/fixture/test`, { method: "POST", body: "{}" });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED", retryable: false, unsupportedFields: ["text", "hasAttachments"] });
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      await adapter.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it("manages and tests scoped accounts with loopback access and origin protection", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sf-email-http-"));
     const host = await startUiServer({ cwd: root, rootDir: root, port: 0, agent: scriptedFakeAgent({}), uiDistDir: path.join(root, "no-ui") });

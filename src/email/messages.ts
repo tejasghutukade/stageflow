@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { simpleParser, type AddressObject } from "mailparser";
 import type { FetchMessageObject, MessageAddressObject } from "imapflow";
 import { EmailError, type EmailAddress, type EmailMessage, type EmailMessageRef, type EmailMessageSummary, type SearchEmailsInput } from "./port.js";
@@ -32,15 +32,73 @@ export function decodeRef(account: EmailAccount, ref: EmailMessageRef): Referenc
 export function validateMailbox(mailbox: string): void {
   if (typeof mailbox !== "string" || !mailbox.length || mailbox.length > 200 || /[\x00-\x1f\x7f]/.test(mailbox)) throw new EmailError("EMAIL_INVALID_INPUT");
 }
-export function recentQuery(input: SearchEmailsInput): { mailbox: string; limit: number } {
+export const EMAIL_SEARCH_FIELDS = ["from", "to", "subject", "unread", "flagged", "receivedAfter", "receivedBefore"];
+export type MailQuery = { mailbox: string; limit: number; sort: "newest" | "oldest"; fingerprint: string; filters: SearchEmailsInput };
+type Cursor = { query: string; scope: string; accountId: string; generation: string; high: number; last: number };
+export function searchQuery(input: SearchEmailsInput): MailQuery {
   const mailbox = input.mailbox ?? "INBOX";
   validateMailbox(mailbox);
   const limit = input.limit ?? 20;
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new EmailError("EMAIL_INVALID_INPUT");
   if (input.sort !== undefined && !["newest", "oldest"].includes(input.sort)) throw new EmailError("EMAIL_INVALID_INPUT");
-  const unsupported = ["text", "from", "to", "subject", "unread", "flagged", "hasAttachments", "receivedAfter", "receivedBefore", "cursor"];
-  if (unsupported.some(field => (input as unknown as Record<string, unknown>)[field] !== undefined) || (input.sort !== undefined && input.sort !== "newest")) throw new EmailError("EMAIL_SEARCH_UNSUPPORTED");
-  return { mailbox, limit };
+  for (const field of ["from", "to", "subject", "text"] as const) {
+    if (input[field] !== undefined && (typeof input[field] !== "string" || !input[field]!.length || input[field]!.length > 4096 || /[\x00-\x1f\x7f]/.test(input[field]!))) throw new EmailError("EMAIL_INVALID_INPUT");
+  }
+  for (const field of ["unread", "flagged", "hasAttachments"] as const) {
+    if (input[field] !== undefined && typeof input[field] !== "boolean") throw new EmailError("EMAIL_INVALID_INPUT");
+  }
+  for (const field of ["receivedAfter", "receivedBefore"] as const) {
+    const value = input[field];
+    if (value !== undefined) {
+      if (typeof value !== "string" || !/^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) || !Number.isFinite(Date.parse(value))) throw new EmailError("EMAIL_INVALID_INPUT");
+      const calendar = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+      if (calendar.toISOString().slice(0, 10) !== value.slice(0, 10)) throw new EmailError("EMAIL_INVALID_INPUT");
+    }
+  }
+  if (input.receivedAfter && input.receivedBefore && Date.parse(input.receivedAfter) >= Date.parse(input.receivedBefore)) throw new EmailError("EMAIL_INVALID_INPUT");
+  const unsupported = ["text", "hasAttachments"].filter(field => (input as unknown as Record<string, unknown>)[field] !== undefined);
+  if (unsupported.length) throw new EmailError("EMAIL_SEARCH_UNSUPPORTED", false, unsupported);
+  const sort = input.sort ?? "newest";
+  const filters: SearchEmailsInput = { accountId: input.accountId };
+  for (const field of EMAIL_SEARCH_FIELDS) {
+    const value = (input as unknown as Record<string, unknown>)[field];
+    if (value !== undefined) (filters as unknown as Record<string, unknown>)[field] = value;
+  }
+  const fingerprint = createHash("sha256").update(JSON.stringify({ mailbox, limit, sort, filters })).digest("hex");
+  return { mailbox, limit, sort, fingerprint, filters };
+}
+export function matchesSearch(summary: EmailMessageSummary, query: MailQuery): boolean {
+  const input = query.filters;
+  if (input.from !== undefined && !summary.from.some(value => value.address.toLowerCase() === input.from!.toLowerCase())) return false;
+  if (input.to !== undefined && !summary.to.some(value => value.address.toLowerCase() === input.to!.toLowerCase())) return false;
+  if (input.subject !== undefined && !summary.subject?.toLowerCase().includes(input.subject.toLowerCase())) return false;
+  if (input.unread !== undefined && summary.unread !== input.unread) return false;
+  if (input.flagged !== undefined && summary.flagged !== input.flagged) return false;
+  const received = Date.parse(summary.receivedAt);
+  return !(input.receivedAfter && received < Date.parse(input.receivedAfter)) && !(input.receivedBefore && received >= Date.parse(input.receivedBefore));
+}
+export function searchCursor(account: EmailAccount, query: MailQuery, generation: string, high: number, last: number, key: Buffer): string {
+  const value: Cursor = { query: query.fingerprint, scope: scopeId(account), accountId: account.accountId, generation, high, last };
+  const encoded = Buffer.from(JSON.stringify(value)).toString("base64url");
+  return `${encoded}.${createHmac("sha256", key).update(encoded).digest("base64url")}`;
+}
+export function decodeCursor(account: EmailAccount, query: MailQuery, generation: string, cursor: string | undefined, key: Buffer): Cursor | undefined {
+  if (cursor === undefined) return;
+  try {
+    if (typeof cursor !== "string" || cursor.length > 2048 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(cursor)) throw new Error();
+    const [encoded, signature] = cursor.split(".");
+    const actual = Buffer.from(signature, "base64url");
+    const expected = createHmac("sha256", key).update(encoded).digest();
+    if (actual.toString("base64url") !== signature || actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw new Error();
+    const value = JSON.parse(Buffer.from(encoded, "base64url").toString()) as Cursor;
+    if (value.accountId !== account.accountId || value.scope !== scopeId(account) || value.query !== query.fingerprint) throw new Error();
+    if (!Number.isSafeInteger(value.high) || !Number.isSafeInteger(value.last) || value.last < 1 || value.last > value.high) throw new Error();
+    if (value.generation !== generation) throw new EmailError("EMAIL_STALE_REFERENCE");
+    return value;
+  } catch (error) {
+    if (error instanceof EmailError) throw error;
+    throw new EmailError("EMAIL_INVALID_INPUT");
+  }
 }
 function addresses(value: AddressObject | AddressObject[] | undefined): EmailAddress[] {
   const objects = value ? (Array.isArray(value) ? value : [value]) : [];

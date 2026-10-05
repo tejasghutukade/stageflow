@@ -7,7 +7,7 @@ export type EmailErrorCode =
   | "EMAIL_OPERATION_CONFLICT" | "EMAIL_RECIPIENTS_REJECTED";
 
 export class EmailError extends Error {
-  constructor(public readonly code: EmailErrorCode, public readonly retryable = false) {
+  constructor(public readonly code: EmailErrorCode, public readonly retryable = false, public readonly unsupportedFields?: string[]) {
     super(code);
     this.name = "EmailError";
   }

@@ -78,6 +78,6 @@ export async function handleEmailRoutes(
     const status = fault.code === "EMAIL_ACCOUNT_NOT_FOUND" ? 404 :
       fault.code === "EMAIL_ACCOUNT_DISABLED" ? 409 :
       fault.code === "EMAIL_RESOURCE_LIMIT" ? 413 : 400;
-    json(res, status, { error: fault.code, code: fault.code, retryable: fault.retryable });
+    json(res, status, { error: fault.code, code: fault.code, retryable: fault.retryable, ...(fault.unsupportedFields ? { unsupportedFields: fault.unsupportedFields } : {}) });
   }
 }

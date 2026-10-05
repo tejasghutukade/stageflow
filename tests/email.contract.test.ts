@@ -51,7 +51,7 @@ for (const kind of ["memory", "local"] as const) {
       const account = accounts.create(input());
       const adapter = kind === "memory" ? new InMemoryEmailAdapter(accounts) : new LocalEmailAdapter(accounts);
       cleanup.push(() => adapter.stop());
-      await expect(adapter.search({ accountId: account.accountId, subject: "unsupported" })).rejects.toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED" });
+      await expect(adapter.search({ accountId: account.accountId, text: "unsupported" })).rejects.toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED", unsupportedFields: ["text"] });
       accounts.update(account.accountId, { enabled: false });
       await expect(adapter.testAccount(account.accountId)).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_DISABLED" });
       await expect(adapter.getMessage({ accountId: "unknown", id: "opaque" })).rejects.toMatchObject({ code: "EMAIL_ACCOUNT_NOT_FOUND" });

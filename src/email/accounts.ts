@@ -26,6 +26,7 @@ const accountSchema = z.object({
   allowInsecureLocalDevelopment: z.boolean().default(false),
   connectionTimeoutMs: z.number().int().min(100).max(60000).default(10000),
   pollingIntervalMs: z.number().int().min(1000).max(3600000).default(60000),
+  searchWorkLimit: z.number().int().min(1).max(10000).default(1000),
   sentFolder: z.string().min(1).max(200).optional(),
 }).strict();
 
