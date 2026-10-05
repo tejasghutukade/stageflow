@@ -718,7 +718,7 @@ describe("open → edit → overwrite (draft/catalog seam)", () => {
 });
 
 describe("Workshop Author save tool facade", () => {
-  it("save tool validate-then-writes via createDraftPackage and refuses without destination", async () => {
+  it("save tool validate-then-writes and defaults an omitted directory", async () => {
     const { root, cleanup } = await initTempGitRepo();
     try {
       await mkdir(path.join(root, "pipelines"), { recursive: true });
@@ -743,7 +743,7 @@ describe("Workshop Author save tool facade", () => {
 
       const missing = await save.handler({}, ctx);
       expect(missing.ok).toBe(false);
-      expect(missing.error).toMatch(/destination is required/i);
+      expect(missing.error).toMatch(/stages must be non-empty/i);
 
       const draft: DraftPackage = {
         pipeline: {
