@@ -868,7 +868,7 @@ Prints:
 
 Opens the default browser unless `--no-open` / `STAGEFLOW_NO_OPEN` is set. Prefer **`sf mcp`** as the headless / container entrypoint; `--no-open` only makes `sf ui` usable without a browser.
 
-Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses **seeded ∪ registered** roots under the global durable store (`$STAGEFLOW_HOME`, default `~/.stageflow/`). `sf ui` registers the directory it was started in, so that project's `stageflow.yaml` (including `workshop`) is browsable. `sf mcp` does not register its start directory. See [Data directory](data-directory.md), [Workshop Author](workshop.md), and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
+Process runs until interrupted (SIGTERM/SIGINT). Catalog browse uses **seeded ∪ registered** roots under the global durable store (`$STAGEFLOW_HOME`, default `~/.stageflow/`). `sf ui` registers the directory it was started in, so that project's `stageflow.yaml` (including `workshop`) is browsable. `sf mcp` does not register its start directory. See [Data directory](data-directory.md), [Operator console — Workshop](operator-console.md#workshop), and [MCP — catalog roots](mcp.md#catalog-roots-and-project_root).
 
 On first SIGTERM/SIGINT the Host drains: stop accepting new starts, signal active stage process groups, mark remaining stages `interrupted`, checkpoint and close SQLite, then exit. Default grace is `STAGEFLOW_SHUTDOWN_GRACE_MS=8000` (pair with compose `stop_grace_period`). Host exit codes and related env vars: [CI Host lifecycle](ci.md#host-lifecycle-sf-ui--sf-mcp).
 

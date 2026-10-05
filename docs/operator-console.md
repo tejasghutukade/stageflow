@@ -51,11 +51,11 @@ The Author clarifies intent, then creates and edits. Create and edit tools mutat
 
 Click a stage on the map for a read-only summary: prompt, IO, verify, and HITL.
 
-Untitled drafts are builds under `$STAGEFLOW_HOME/workshop/builds/{id}.json`. Chat sessions (History / New) live under `$STAGEFLOW_HOME/workshop/sessions/` and store `activeBuildId`, the build that session was editing. The session blob does not embed the draft. The studio picker lists open builds and on-disk pipelines. History reopens the session and its pinned build. See [Workshop Author](workshop.md) and [Data directory](data-directory.md).
+Untitled drafts are builds under `$STAGEFLOW_HOME/workshop/builds/{id}.json`. Chat sessions (History / New) live under `$STAGEFLOW_HOME/workshop/sessions/` and store `activeBuildId`, the build that session was editing. The session blob does not embed the draft. The studio picker lists open builds and on-disk pipelines. History reopens the session and its pinned build. See [Data directory](data-directory.md).
 
 The UI prefers an NDJSON stream (`Accept: application/x-ndjson`) for progressive assistant text; otherwise it uses a coherent JSON turn.
 
-A new chat selects its model from the project `stageflow.yaml` `model`, then the Workshop model saved in Settings, then `cursor/auto`. The composer can override that choice for the current session. See [Workshop Author — Model](workshop.md#model).
+A new chat selects its model from the project `stageflow.yaml` `model`, then the Workshop model saved in Settings, then `cursor/auto`. The composer can override that choice for the current session.
 
 ### Manual path
 
