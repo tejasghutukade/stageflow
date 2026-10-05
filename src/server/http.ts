@@ -27,6 +27,7 @@ import {
   type DraftPackage,
 } from "../config/draftPackage.js";
 import { publishDraftPackage } from "../config/publishDraftPackage.js";
+import { findProjectRoot } from "../project/findProjectRoot.js";
 import {
   clearWorkshopAutosave,
   detectDiskChange,
@@ -2919,9 +2920,10 @@ export async function startUiServer(
   const uiDistDir = options.uiDistDir ?? defaultUiDistDir();
   const boot = await bootstrapStageflowHost(options as StageflowHostOptions);
   const { cwd, agentDir, rootDir } = boot;
-  if (boot.store && rootDir) {
+  const catalogProject = findProjectRoot(rootDir);
+  if (boot.store && catalogProject) {
     try {
-      await boot.store.ensureProject(rootDir);
+      await boot.store.ensureProject(catalogProject);
     } catch {
       // The console still serves seeded catalogs when this project cannot be registered.
     }
