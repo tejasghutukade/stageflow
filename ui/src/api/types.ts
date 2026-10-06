@@ -978,6 +978,30 @@ export type TriggerSchedule = {
   timezone?: string;
 };
 
+export type EmailTriggerRule = {
+  triggerId: string;
+  version: number;
+  activeAfter: string;
+  enabled: boolean;
+  accountId: string;
+  folder: string;
+  from?: string;
+  subjectContains?: string;
+  pipeline: string;
+  task: { id: string; goal: string; context?: string; constraints?: string };
+  includeBody: boolean;
+  bodyLimit: number;
+};
+
+export type ConnectionListing = {
+  id: string;
+  channel: "Email";
+  displayName: string;
+  address: string;
+  enabled: boolean;
+  folders: string[];
+};
+
 export type TriggerEvent = {
   source: string;
   match?: Record<string, unknown>;

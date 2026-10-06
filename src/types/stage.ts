@@ -58,6 +58,7 @@ export type StageConfig = {
   /** Optional stage wall-clock timeout in milliseconds (default 60 minutes). */
   timeout_ms?: number;
   skill?: string;
+  email?: { accountId: string; operations: ("send" | "reply" | "getMessage" | "search" | "downloadAttachment")[] }[];
   mcp?: string[];
   /** Declared Host secret names this stage may receive (Slot 6). */
   secrets?: StageSecretDecl[];

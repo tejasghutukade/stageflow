@@ -71,6 +71,9 @@ import {
   type AskOperatorWaitBridge,
 } from "../tools/askOperator.js";
 import { createWriteStageArtifactTool } from "../tools/writeStageArtifact.js";
+import { createSendEmailTool } from "../tools/sendEmail.js";
+import { createReplyEmailTool } from "../tools/replyEmail.js";
+import { createGetEmailTool, createSearchEmailTool, createDownloadEmailAttachmentTool } from "../tools/readEmail.js";
 import "./cursorProvider.js";
 import { findProviderSupport } from "./providerSupport.js";
 import { mapSessionEventToActivity, readActivityVerbose, type StageActivityEvent } from "./activity.js";
@@ -639,6 +642,9 @@ function buildUserPrompt(
         : `Create factory stage artifacts under ${attemptArtifactsPath} relative to the run folder.`;
 
   return [
+    ...(input.stage.email?.length ? [
+      `Stageflow email permissions: ${JSON.stringify(input.stage.email)}. Use only declared accounts and operations. Use a stable operationKey for each intended message. Provider acceptance does not prove delivery. Never resend an unknown submission automatically.`,
+    ] : []),
     `Task id: ${input.task.id}`,
     `Stage id: ${runtimeStageId(input)}`,
     `Goal: ${input.task.goal}`,
@@ -1210,7 +1216,7 @@ async function prepareStageSessionWiring(
       return failAfterAttach(`Skill "${input.stage.skill}" is not installed`);
     }
 
-    const customTools = askTool
+    const customTools: StageSessionWiring["customTools"] = askTool
       ? [emitTool, askTool, artifactTool]
       : [emitTool, artifactTool];
     const tools = resolveStageToolNames(
@@ -1221,6 +1227,20 @@ async function prepareStageSessionWiring(
     );
     if (attached.extensionFactories !== undefined) {
       tools.push(...collectMcpExtensionToolNames(loader));
+    }
+    if (input.email) {
+      const permitted = new Set(input.stage.email?.flatMap(permission => permission.operations));
+      const definitions = [
+        permitted.has("send") ? createSendEmailTool(input.email) : undefined,
+        permitted.has("reply") ? createReplyEmailTool(input.email) : undefined,
+        permitted.has("search") ? createSearchEmailTool(input.email) : undefined,
+        permitted.has("getMessage") ? createGetEmailTool(input.email) : undefined,
+        permitted.has("downloadAttachment") ? createDownloadEmailAttachmentTool(input.email) : undefined,
+      ];
+      for (const definition of definitions) if (definition) {
+        customTools.push(defineTool(definition));
+        tools.push(definition.name);
+      }
     }
 
     return {

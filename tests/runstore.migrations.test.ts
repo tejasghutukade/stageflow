@@ -480,6 +480,7 @@ INSERT INTO verification_check_results VALUES ('r1', 's', 1, 'c', 'command', 'fa
       { version: 8, name: "008_triggers_table" },
       { version: 9, name: "009_trigger_next_run" },
       { version: 10, name: "010_trigger_adapter_state" },
+      { version: 11, name: "011_email_dispatch_key" },
     ]);
     const cols = new Set(
       (db.prepare(`PRAGMA table_info(runs)`).all() as { name: string }[]).map(
