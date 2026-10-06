@@ -35,6 +35,16 @@ export async function handleEmailRoutes(
       if (pathname === "/api/email/triggers" && method === "GET") { json(res, 200, { triggers: triggers.list() }); return; }
       if (pathname === "/api/email/triggers" && method === "POST") { json(res, 201, await triggers.create(await body(req))); return; }
       if (pathname === "/api/email/dispatches" && method === "GET") { json(res, 200, { dispatches: triggers.history() }); return; }
+      if (pathname === "/api/email/dispatches/health" && method === "GET") { json(res, 200, triggers.health()); return; }
+      const dispatchMatch = pathname.match(/^\/api\/email\/dispatches\/([^/]+)\/(resume|cancel)$/);
+      if (dispatchMatch && method === "POST") {
+        const input = await body(req);
+        if (!input || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length) throw new EmailError("EMAIL_INVALID_INPUT");
+        const key = decodeURIComponent(dispatchMatch[1]);
+        if (dispatchMatch[2] === "resume") json(res, 200, triggers.resume(key));
+        else { triggers.cancel(key); json(res, 200, { cancelled: true }); }
+        return;
+      }
       if (triggerMatch) {
         const id = decodeURIComponent(triggerMatch[1]);
         if (method === "GET") { json(res, 200, triggers.get(id)); return; }

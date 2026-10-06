@@ -31,11 +31,22 @@ export type EmailDispatch = {
   dispatchKey: string; eventId: string; triggerId: string; ruleVersion: number;
   accountId: string; status: "pending" | "started" | "failed" | "suspended";
   runId?: string; code?: string;
+  attempts?: number; retryAt?: string; completedAt?: string;
 };
-type StoredDispatch = EmailDispatch & { event: EmailReceivedEvent; rule: EmailTriggerRule };
+type StoredDispatch = EmailDispatch & { event: EmailReceivedEvent; rule: EmailTriggerRule; accountRevision?: string };
+const queueInput = z.object({
+  maxPending: z.number().int().min(1).max(100000).default(10000),
+  workers: z.number().int().min(1).max(32).default(4),
+  batchSize: z.number().int().min(1).max(100).default(16),
+  intervalMs: z.number().int().min(10).max(60000).default(1000),
+  retryMaxMs: z.number().int().min(10).max(3600000).default(60000),
+  retentionMs: z.number().int().min(0).default(30 * 86400000),
+  maxCompleted: z.number().int().min(0).max(100000).default(1000),
+}).strict();
 type Options = {
   cwd: string; accounts: EmailAccounts; mailbox: EmailMailbox; manager: RunManager; store: RunStore;
   now?: () => Date;
+  queue?: z.input<typeof queueInput>;
   /** Fault injection at the durable dispatch seam. */
   checkpoint?: (point: "beforeRun" | "afterRun", dispatch: EmailDispatch) => Promise<void>;
 };
@@ -44,12 +55,22 @@ type Options = {
 export class EmailTriggers {
   private readonly db: Database.Database;
   private readonly now: () => Date;
-  private tail: Promise<void> = Promise.resolve();
+  private readonly queue: z.output<typeof queueInput>;
+  private readonly active = new Map<string, Promise<void>>();
+  private readonly activeFolders = new Set<string>();
+  private timer?: ReturnType<typeof setTimeout>;
+  private nextBatchAt = 0;
+  private lastFolder?: string;
+  private stopPromise?: Promise<void>;
+  private faultCode?: "EMAIL_STORAGE_FAILED";
+  private readonly suspensions = new Set<string>();
   private stopped = false;
   private closed = false;
   private readonly unsubscribe: () => void;
 
   constructor(private readonly options: Options) {
+    this.queue = queueInput.parse(options.queue ?? {});
+    this.now = options.now ?? (() => new Date());
     const root = storeRootFor(options.cwd);
     mkdirSync(root, { recursive: true, mode: 0o700 });
     this.db = new Database(path.join(root, "email-triggers.db"));
@@ -60,14 +81,12 @@ export class EmailTriggers {
       CREATE TABLE IF NOT EXISTS rules (id TEXT PRIMARY KEY, json TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS evaluations (event_id TEXT PRIMARY KEY, detected_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS dispatches (key TEXT PRIMARY KEY, json TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS handled (key TEXT PRIMARY KEY);
     `);
-    this.now = options.now ?? (() => new Date());
     this.unsubscribe = options.accounts.onChange(accountId => {
-      for (const dispatch of this.records()) {
-        if (dispatch.accountId === accountId && dispatch.status === "pending") {
-          this.save({ ...dispatch, status: "suspended", code: "EMAIL_TRIGGER_ACCOUNT_CHANGED" });
-        }
-      }
+      try { this.suspendAccount(accountId); }
+      catch { this.faultCode = "EMAIL_STORAGE_FAILED"; }
+      this.schedule(this.queue.intervalMs);
     });
   }
 
@@ -114,50 +133,173 @@ export class EmailTriggers {
 
   history(): EmailDispatch[] {
     this.assertOpen();
-    return this.records().map(({ event: _event, rule: _rule, ...dispatch }) => dispatch);
+    return this.records().map(({ event: _event, rule: _rule, accountRevision: _revision, ...dispatch }) => dispatch);
+  }
+
+  health(): { pending?: number; suspended?: number; active: number; saturated?: boolean; code?: string } {
+    this.assertOpen();
+    try {
+      const records = this.records();
+      const pending = records.filter(record => record.status === "pending").length;
+      const suspended = records.filter(record => record.status === "suspended").length;
+      return { pending, suspended, active: this.active.size, saturated: pending + suspended >= this.queue.maxPending, code: this.faultCode };
+    } catch { return { active: this.active.size, code: "EMAIL_STORAGE_FAILED" }; }
   }
 
   async accept(event: EmailReceivedEvent): Promise<void> {
     if (this.stopped) throw new EmailError("EMAIL_EVENT_ACCEPTANCE_FAILED", true);
-    return this.serialize(async () => {
-      // Freeze the evaluation, including no-match results, before any run request.
+    // Freeze the evaluation, including no-match results, before any run request.
+    try {
       this.db.transaction(() => {
         if (this.db.prepare("SELECT 1 FROM evaluations WHERE event_id = ?").get(event.eventId)) return;
-        for (const rule of this.list()) {
-          if (!matches(rule, event)) continue;
+        const matching = this.list().filter(rule => matches(rule, event));
+        const unresolved = this.records().filter(record => record.status === "pending" || record.status === "suspended").length;
+        if (unresolved + matching.length > this.queue.maxPending) throw new EmailError("EMAIL_RESOURCE_LIMIT", true);
+        for (const rule of matching) {
           const dispatchKey = createHash("sha256").update(JSON.stringify([this.options.accounts.scope, event.eventId, rule.triggerId, rule.version])).digest("hex");
           this.save({ dispatchKey, eventId: event.eventId, triggerId: rule.triggerId,
-            ruleVersion: rule.version, accountId: event.accountId, status: "pending", event, rule });
+            ruleVersion: rule.version, accountId: event.accountId, status: "pending", attempts: 0,
+            accountRevision: this.accountRevision(event.accountId), event, rule });
         }
         this.db.prepare("INSERT INTO evaluations(event_id, detected_at) VALUES (?, ?)").run(event.eventId, event.detectedAt);
       })();
-      for (const dispatch of this.records().filter(record => record.eventId === event.eventId && record.status === "pending")) {
-        await this.dispatch(dispatch);
-      }
-    });
+    } catch (error) {
+      if (error instanceof EmailError) throw error;
+      this.faultCode = "EMAIL_STORAGE_FAILED";
+      throw new EmailError("EMAIL_STORAGE_FAILED", true);
+    }
+    this.schedule(0);
   }
 
-  /** One recovery pass. Timed capacity retries and queue controls are separate work. */
+  /** Run one due batch. The timer continues recovery without waiting for runs to finish. */
   async recover(): Promise<void> {
     if (this.stopped) return;
-    return this.serialize(async () => {
-      for (const dispatch of this.records().filter(record => record.status === "pending")) await this.dispatch(dispatch);
-    });
+    this.pump();
+    await Promise.all(this.active.values());
   }
 
   async stop(): Promise<void> {
-    if (this.stopped) return this.tail;
+    if (this.stopPromise) return this.stopPromise;
     this.stopped = true;
+    clearTimeout(this.timer);
     this.unsubscribe();
-    await this.tail;
-    this.closed = true;
-    this.db.close();
+    return this.stopPromise = (async () => {
+      try { await Promise.all(this.active.values()); }
+      finally { this.closed = true; this.db.close(); }
+    })();
   }
 
-  private serialize(work: () => Promise<void>): Promise<void> {
-    const pending = this.tail.then(work);
-    this.tail = pending.catch(() => undefined);
-    return pending;
+  resume(dispatchKey: string): EmailDispatch {
+    this.assertAccepting();
+    const dispatch = this.records().find(record => record.dispatchKey === dispatchKey);
+    if (!dispatch || !["suspended", "failed"].includes(dispatch.status) || dispatch.code === "EMAIL_TRIGGER_CANCELLED") throw new EmailError("EMAIL_INVALID_INPUT");
+    if (this.active.has(dispatchKey)) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+    const rule = this.get(dispatch.triggerId);
+    const account = this.options.accounts.get(dispatch.accountId);
+    if (!rule.enabled || rule.version !== dispatch.ruleVersion || !account.folders.includes(rule.folder)) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+    if (this.records().filter(record => record.status === "pending" || record.status === "suspended").length >= this.queue.maxPending && dispatch.status === "failed") throw new EmailError("EMAIL_RESOURCE_LIMIT", true);
+    this.save({ ...dispatch, status: "pending", retryAt: undefined, completedAt: undefined, code: undefined, accountRevision: this.accountRevision(dispatch.accountId) });
+    this.schedule(0);
+    return this.history().find(record => record.dispatchKey === dispatchKey)!;
+  }
+
+  cancel(dispatchKey: string): void {
+    this.assertAccepting();
+    const dispatch = this.records().find(record => record.dispatchKey === dispatchKey);
+    if (!dispatch || !["pending", "suspended", "failed"].includes(dispatch.status) || this.active.has(dispatchKey)) throw new EmailError("EMAIL_OPERATION_CONFLICT");
+    this.save({ ...dispatch, status: "failed", code: "EMAIL_TRIGGER_CANCELLED", completedAt: this.now().toISOString() });
+  }
+
+  cleanup(): void {
+    this.assertOpen();
+    const completed = this.records().filter(record => record.status === "started" || record.status === "failed")
+      .sort((left, right) => Date.parse(left.completedAt ?? "1970-01-01") - Date.parse(right.completedAt ?? "1970-01-01"));
+    const cutoff = this.now().getTime() - this.queue.retentionMs;
+    this.db.transaction(() => {
+      for (const [index, dispatch] of completed.entries()) {
+        if (index >= completed.length - this.queue.maxCompleted && Date.parse(dispatch.completedAt ?? "1970-01-01") >= cutoff) continue;
+        this.db.prepare("INSERT OR IGNORE INTO handled(key) VALUES (?)").run(dispatch.dispatchKey);
+        this.db.prepare("DELETE FROM dispatches WHERE key = ?").run(dispatch.dispatchKey);
+      }
+    })();
+  }
+
+  private schedule(delay: number): void {
+    if (this.stopped || this.timer) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      try { this.pump(); } catch { this.faultCode = "EMAIL_STORAGE_FAILED"; this.schedule(this.queue.intervalMs); }
+    }, delay);
+    this.timer.unref();
+  }
+
+  private pump(): void {
+    if (this.stopped) return;
+    try {
+      const now = this.now().getTime();
+      if (now < this.nextBatchAt) return;
+      for (const dispatch of this.records()) {
+        if (!this.suspensions.has(dispatch.dispatchKey)) continue;
+        if (dispatch.status === "pending") this.save({ ...dispatch, status: "suspended", code: "EMAIL_TRIGGER_ACCOUNT_CHANGED" });
+        this.suspensions.delete(dispatch.dispatchKey);
+      }
+      this.cleanup();
+      this.faultCode = undefined;
+      const folders = new Map<string, StoredDispatch>();
+      for (const dispatch of this.records()) {
+        if (dispatch.status !== "pending") continue;
+        const folder = JSON.stringify([dispatch.accountId, dispatch.rule.folder]);
+        if (!folders.has(folder)) folders.set(folder, dispatch);
+      }
+      const candidates = [...folders.entries()];
+      const previous = candidates.findIndex(([folder]) => folder === this.lastFolder);
+      const ordered = [...candidates.slice(previous + 1), ...candidates.slice(0, previous + 1)];
+      let admitted = 0;
+      for (const [folder, dispatch] of ordered) {
+        if (this.activeFolders.has(folder) || Date.parse(dispatch.retryAt ?? "1970-01-01") > now) continue;
+        if (this.active.size >= this.queue.workers || admitted >= this.queue.batchSize) break;
+        admitted++;
+        this.lastFolder = folder;
+        this.activeFolders.add(folder);
+        const work = this.attempt(dispatch).catch(() => { this.faultCode = "EMAIL_STORAGE_FAILED"; }).finally(() => {
+          this.active.delete(dispatch.dispatchKey);
+          this.activeFolders.delete(folder);
+          this.schedule(this.queue.intervalMs);
+        });
+        this.active.set(dispatch.dispatchKey, work);
+      }
+      if (admitted) this.nextBatchAt = now + this.queue.intervalMs;
+    } finally { this.schedule(this.queue.intervalMs); }
+  }
+
+  private async attempt(dispatch: StoredDispatch): Promise<void> {
+    const attempts = (dispatch.attempts ?? 0) + 1;
+    const retryAt = new Date(this.now().getTime() + Math.min(this.queue.retryMaxMs, this.queue.intervalMs * 2 ** Math.min(attempts - 1, 20))).toISOString();
+    const attempted = { ...dispatch, attempts, retryAt };
+    this.save(attempted);
+    try { await this.dispatch(attempted); }
+    catch { this.faultCode = "EMAIL_STORAGE_FAILED"; this.saveOutcome(attempted, "pending", "EMAIL_STORAGE_FAILED"); }
+  }
+
+  private isPending(dispatch: StoredDispatch): boolean {
+    return !this.suspensions.has(dispatch.dispatchKey) && this.records().find(record => record.dispatchKey === dispatch.dispatchKey)?.status === "pending";
+  }
+
+  private accountRevision(accountId: string): string {
+    return createHash("sha256").update(JSON.stringify(this.options.accounts.get(accountId, false))).digest("hex");
+  }
+
+  private saveOutcome(dispatch: StoredDispatch, status: EmailDispatch["status"], code?: string, runId?: string): void {
+    if (!this.isPending(dispatch)) return;
+    this.save({ ...dispatch, status, code, runId,
+      retryAt: status === "pending" ? dispatch.retryAt : undefined,
+      completedAt: status === "started" || status === "failed" ? this.now().toISOString() : undefined });
+  }
+
+  private saveStarted(dispatch: StoredDispatch, runId: string, code?: string): void {
+    // A durable run claim takes precedence over an operator suspension.
+    this.save({ ...dispatch, status: "started", runId, code, retryAt: undefined, completedAt: this.now().toISOString() });
+    this.suspensions.delete(dispatch.dispatchKey);
   }
 
   private assertOpen(): void {
@@ -182,7 +324,7 @@ export class EmailTriggers {
     this.db.prepare("INSERT OR REPLACE INTO rules(id, json) VALUES (?, ?)").run(rule.triggerId, JSON.stringify(rule));
   }
   private save(dispatch: StoredDispatch): void {
-    this.db.prepare("INSERT OR REPLACE INTO dispatches(key, json) VALUES (?, ?)").run(dispatch.dispatchKey, JSON.stringify(dispatch));
+    this.db.prepare("INSERT INTO dispatches(key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json").run(dispatch.dispatchKey, JSON.stringify(dispatch));
   }
   private records(): StoredDispatch[] {
     return (this.db.prepare("SELECT json FROM dispatches ORDER BY rowid").all() as { json: string }[]).map(row => JSON.parse(row.json) as StoredDispatch);
@@ -193,16 +335,31 @@ export class EmailTriggers {
     }
   }
 
+  private suspendAccount(accountId: string): void {
+    for (const dispatch of this.records()) {
+      if (dispatch.accountId !== accountId || dispatch.status !== "pending") continue;
+      this.suspensions.add(dispatch.dispatchKey);
+      try {
+        this.save({ ...dispatch, status: "suspended", code: "EMAIL_TRIGGER_ACCOUNT_CHANGED" });
+        this.suspensions.delete(dispatch.dispatchKey);
+      } catch { this.faultCode = "EMAIL_STORAGE_FAILED"; }
+    }
+  }
+
   private async dispatch(dispatch: StoredDispatch): Promise<void> {
     const existing = await this.options.store.findRunByDispatchKey?.(dispatch.dispatchKey);
-    if (existing) { this.save({ ...dispatch, status: "started", runId: existing.runId, code: "EMAIL_TRIGGER_EXISTING_RUN" }); return; }
+    if (existing) { this.saveStarted(dispatch, existing.runId, "EMAIL_TRIGGER_EXISTING_RUN"); return; }
+    if (this.stopped || !this.isPending(dispatch)) return;
     const current = this.list().find(rule => rule.triggerId === dispatch.triggerId);
     if (!current?.enabled || current.version !== dispatch.ruleVersion) {
-      this.save({ ...dispatch, status: "suspended", code: "EMAIL_TRIGGER_RULE_CHANGED" }); return;
+      this.saveOutcome(dispatch, "suspended", "EMAIL_TRIGGER_RULE_CHANGED"); return;
     }
     let task: TaskFile;
     try {
       const account = this.options.accounts.get(dispatch.accountId);
+      if (!dispatch.accountRevision || dispatch.accountRevision !== this.accountRevision(dispatch.accountId)) {
+        this.saveOutcome(dispatch, "suspended", "EMAIL_TRIGGER_ACCOUNT_CHANGED"); return;
+      }
       if (!account.folders.includes(dispatch.rule.folder)) throw new EmailError("EMAIL_INVALID_INPUT");
       const text = dispatch.rule.includeBody ? (await this.options.mailbox.getMessage(dispatch.event.message.ref)).text : undefined;
       const latestRule = this.list().find(rule => rule.triggerId === dispatch.triggerId);
@@ -212,27 +369,41 @@ export class EmailTriggers {
       task = buildTask(dispatch, text);
     } catch (error) {
       const fault = error instanceof EmailError ? error : new EmailError("EMAIL_INVALID_INPUT");
-      this.save({ ...dispatch, status: fault.retryable ? "pending" : "failed", code: fault.code }); return;
+      const status = ["EMAIL_ACCOUNT_DISABLED", "EMAIL_ACCOUNT_NOT_FOUND"].includes(fault.code) ? "suspended" : fault.retryable ? "pending" : "failed";
+      this.saveOutcome(dispatch, status, fault.code); return;
     }
     await this.options.checkpoint?.("beforeRun", dispatch);
+    if (this.stopped || !this.isPending(dispatch)) return;
+    const admittedRule = this.list().find(rule => rule.triggerId === dispatch.triggerId);
+    if (!admittedRule?.enabled || admittedRule.version !== dispatch.ruleVersion) {
+      this.saveOutcome(dispatch, "suspended", "EMAIL_TRIGGER_RULE_CHANGED"); return;
+    }
+    try {
+      this.options.accounts.get(dispatch.accountId);
+      if (dispatch.accountRevision && dispatch.accountRevision !== this.accountRevision(dispatch.accountId)) {
+        this.saveOutcome(dispatch, "suspended", "EMAIL_TRIGGER_ACCOUNT_CHANGED"); return;
+      }
+    } catch (error) {
+      this.saveOutcome(dispatch, "suspended", error instanceof EmailError ? error.code : "EMAIL_TRIGGER_ACCOUNT_CHANGED"); return;
+    }
     let result;
     try {
       result = await this.options.manager.startRun({ pipeline: dispatch.rule.pipeline, taskYaml: taskFileToYaml(task), dispatchKey: dispatch.dispatchKey });
     } catch (error) {
-      this.save({ ...dispatch, status: error instanceof PipelineValidationError ? "failed" : "pending",
-        code: error instanceof PipelineValidationError ? "EMAIL_TRIGGER_TARGET_INVALID" : "EMAIL_STORAGE_FAILED" }); return;
+      this.saveOutcome(dispatch, error instanceof PipelineValidationError ? "failed" : "pending",
+        error instanceof PipelineValidationError ? "EMAIL_TRIGGER_TARGET_INVALID" : "EMAIL_STORAGE_FAILED"); return;
     }
     if (!result.ok) {
       const claimed = await this.options.store.findRunByDispatchKey?.(dispatch.dispatchKey);
       if (claimed) {
-        this.save({ ...dispatch, status: "started", runId: claimed.runId, code: "EMAIL_TRIGGER_EXISTING_RUN" }); return;
+        this.saveStarted(dispatch, claimed.runId, "EMAIL_TRIGGER_EXISTING_RUN"); return;
       }
       const temporary = result.code !== undefined || result.status === 500;
-      this.save({ ...dispatch, status: temporary ? "pending" : "failed",
-        code: result.code ?? (temporary ? "EMAIL_STORAGE_FAILED" : "EMAIL_TRIGGER_DISPATCH_FAILED") }); return;
+      this.saveOutcome(dispatch, temporary ? "pending" : "failed",
+        result.code ?? (temporary ? "EMAIL_STORAGE_FAILED" : "EMAIL_TRIGGER_DISPATCH_FAILED")); return;
     }
     await this.options.checkpoint?.("afterRun", { ...dispatch, runId: result.runId });
-    this.save({ ...dispatch, status: "started", runId: result.runId, code: undefined });
+    this.saveStarted(dispatch, result.runId);
   }
 }
 

@@ -61,6 +61,7 @@ export type UiServerOptions = {
   host?: string;
   uiDistDir?: string;
   maxConcurrent?: number;
+  emailTriggerQueue?: ConstructorParameters<typeof EmailTriggers>[0]["queue"];
   providerAuthContext?: ProviderAuthContext;
 };
 
@@ -296,7 +297,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
   });
   await manager.attachWaitingStages();
   await manager.reconcileOrphanedStages();
-  const emailTriggers = new EmailTriggers({ cwd, accounts: emailAccounts, mailbox: emailMailbox, manager, store });
+  const emailTriggers = new EmailTriggers({ cwd, accounts: emailAccounts, mailbox: emailMailbox, manager, store, queue: options.emailTriggerQueue });
   const validateMcpHost = localhostHostValidation();
   const validateMcpOrigin = localhostOriginValidation();
 
@@ -671,7 +672,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
 
   let emailShutdown: Promise<void> | undefined;
   function stopEmail(): Promise<void> {
-    return emailShutdown ??= releaseEmailHost(cwd).then(() => emailTriggers.stop());
+    return emailShutdown ??= Promise.all([emailTriggers.stop(), releaseEmailHost(cwd)]).then(() => undefined);
   }
   server.on("close", () => { void stopEmail(); });
   const closeServer = server.close.bind(server);
@@ -683,7 +684,7 @@ export async function startUiServer(options: UiServerOptions): Promise<{
     server.on("error", reject);
   });
 
-  await emailTriggers.recover();
+  void emailTriggers.recover().catch(() => undefined);
   await emailMailbox.start(event => emailTriggers.accept(event));
 
   const address = server.address();
