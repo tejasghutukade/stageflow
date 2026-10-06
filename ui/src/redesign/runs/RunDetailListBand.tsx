@@ -50,7 +50,7 @@ export function RunDetailListBand({
           <span className="font-sans text-xs text-[var(--sf-needs)]">{listHeader}</span>
         ) : null}
       </div>
-      <div className="flex min-h-0 min-w-0 flex-col overflow-clip rounded-[10px] border border-[#ffffff12] bg-[var(--sf-raised)]">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-clip rounded-[10px] border border-[#ffffff12] bg-[var(--sf-panel)]">
         <TrackDetailList
           variant="redesign"
           rows={detailListRows}

@@ -570,7 +570,11 @@ export function RunDetailPageRedesign({
         now={now}
       />
       {banner ? <div className="banner banner--error">{banner}</div> : null}
-      <div className="flex w-full shrink-0 flex-col border-b border-b-[#ffffff12] pt-3 pb-2">
+      <div
+        className={`flex w-full shrink-0 flex-col border-b border-b-[#ffffff12]${
+          viewMode === "list" || viewMode === "timeline" ? "" : " pt-3 pb-2"
+        }`}
+      >
         {mainView}
       </div>
       <div className="flex min-h-0 w-full flex-1">

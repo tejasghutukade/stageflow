@@ -102,16 +102,19 @@ export function TrackDetailList({
               ? statusSignalFromReadiness("waiting")
               : statusSignalFromStageStatus(row.status);
           const Icon = signalIcon(signal);
-          const iconColor = redesignIconColor(signal);
+          const iconColor = blocked
+            ? "text-[#a7aab2]"
+            : redesignIconColor(signal);
           const muted =
-            row.status === "pending" && !row.isWaitingAttention && !selected;
+            blocked ||
+            (row.status === "pending" && !row.isWaitingAttention && !selected);
           const pillLabel = blocked
             ? "Blocked"
             : row.isWaitingAttention
               ? "Needs you"
               : stageStatusPillLabel(row.status);
           const pillClass = blocked
-            ? "shrink-0 border border-dashed border-[var(--sf-text-2)] bg-[#8b8f981a]"
+            ? "shrink-0 !border !border-[#a7aab2] !bg-[#8b8f981a] !text-[#a7aab2]"
             : undefined;
           const isLast = index === rows.length - 1;
 
@@ -140,7 +143,11 @@ export function TrackDetailList({
               <Icon className={`size-3.5 shrink-0 ${iconColor}`} aria-hidden="true" />
               <span
                 className={`w-[100px] shrink-0 truncate font-sans text-[13px] leading-normal ${
-                  muted ? "text-[var(--sf-text-3)]" : "text-[var(--sf-text-1)]"
+                  blocked
+                    ? "text-[#a7aab2]"
+                    : muted
+                      ? "text-[var(--sf-text-3)]"
+                      : "text-[var(--sf-text-1)]"
                 }${selected ? " font-medium" : ""}`}
               >
                 {row.label ?? row.stageId}
