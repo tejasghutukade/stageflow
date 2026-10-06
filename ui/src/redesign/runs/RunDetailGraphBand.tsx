@@ -1,20 +1,29 @@
-import { Fragment } from "react";
+import { useMemo } from "react";
 import type { RunDetail } from "../../api";
+import type { SpatialTrackLayout } from "../../track/layoutPipelineTrack";
 import type { WorkspaceTrackStage } from "../../workspace/resolveRunWorkspace";
 import { signalIcon } from "../statusSignal";
 import {
   buildRunGraphBandView,
   graphBandSelectedHint,
 } from "./buildRunGraphBandView";
+import {
+  graphBandEdgeSegment,
+  layoutGraphBandTrack,
+  type GraphBandNodeBox,
+} from "./layoutGraphBandTrack";
 
 export type RunDetailGraphBandProps = {
   run: RunDetail;
   trackStages: WorkspaceTrackStage[];
+  spatialLayout: SpatialTrackLayout;
   selectedStageId: string | null;
   onSelectStage: (stageId: string) => void;
 };
 
-function signalIconClass(signal: ReturnType<typeof buildRunGraphBandView>[number]["signal"]): string {
+type GraphBandViewNode = ReturnType<typeof buildRunGraphBandView>[number];
+
+function signalIconClass(signal: GraphBandViewNode["signal"]): string {
   switch (signal) {
     case "ok":
       return "text-[#4cc38a]";
@@ -29,9 +38,7 @@ function signalIconClass(signal: ReturnType<typeof buildRunGraphBandView>[number
   }
 }
 
-function readinessLineClass(
-  node: ReturnType<typeof buildRunGraphBandView>[number],
-): string {
+function readinessLineClass(node: GraphBandViewNode): string {
   if (node.blocked) return "text-[var(--sf-text-2)]";
   if (node.signal === "needs") return "text-[#f5b544]";
   if (node.signal === "ok") return "font-['Geist_Mono',monospace] text-[#4cc38a]";
@@ -40,28 +47,35 @@ function readinessLineClass(
   return "font-['Geist_Mono',monospace] text-[var(--sf-text-2)]";
 }
 
+function nodeCardClass(node: GraphBandViewNode): string {
+  if (node.selected && node.signal === "needs") {
+    return " w-[132px] border-[#f5b5444d] bg-[var(--sf-panel)] shadow-[0px_0px_12px_rgba(245,181,68,0.25)]";
+  }
+  if (node.selected) {
+    return " w-[120px] border-[#ffffff47] bg-[var(--sf-active)]";
+  }
+  if (node.blocked) {
+    return " w-[120px] border-dashed border-[#a7aab28c] bg-[var(--sf-raised)]";
+  }
+  return " w-[120px] border-[#ffffff12] bg-[var(--sf-raised)]";
+}
+
 function GraphBandNodeCard({
   node,
+  box,
   onSelect,
 }: {
-  node: ReturnType<typeof buildRunGraphBandView>[number];
+  node: GraphBandViewNode;
+  box: GraphBandNodeBox;
   onSelect: (stageId: string) => void;
 }) {
   const Icon = signalIcon(node.signal);
-  const selectedNeeds = node.selected && node.signal === "needs";
 
   return (
     <button
       type="button"
-      className={`flex w-[120px] shrink-0 flex-col gap-1 rounded-lg border p-2 text-left${
-        node.selected ?
-          selectedNeeds ?
-            " border-[#f5b5444d] bg-[var(--sf-ground)] shadow-[0px_0px_12px_rgba(245,181,68,0.25)]"
-          : " border-[var(--sf-needs)] bg-[var(--sf-active)]"
-        : node.blocked ?
-          " border-dashed border-[#a7aab28c] bg-[#1a1c21]"
-        : " border-[#ffffff12] bg-[#1a1c21]"
-      }`}
+      className={`absolute flex shrink-0 flex-col gap-1 rounded-lg border p-2 text-left${nodeCardClass(node)}`}
+      style={{ left: box.x, top: box.y, width: box.width }}
       disabled={!node.clickable}
       onClick={node.clickable ? () => onSelect(node.stageId) : undefined}
       aria-current={node.selected ? "true" : undefined}
@@ -108,11 +122,24 @@ function GraphBandNodeCard({
 export function RunDetailGraphBand({
   run,
   trackStages,
+  spatialLayout,
   selectedStageId,
   onSelectStage,
 }: RunDetailGraphBandProps) {
   const nodes = buildRunGraphBandView(run, trackStages, selectedStageId);
   const selectedHint = graphBandSelectedHint(run, selectedStageId);
+  const bandLayout = useMemo(
+    () => layoutGraphBandTrack(spatialLayout),
+    [spatialLayout],
+  );
+  const nodeByStageId = useMemo(
+    () => new Map(nodes.map((node) => [node.stageId, node])),
+    [nodes],
+  );
+  const boxByStageId = useMemo(
+    () => new Map(bandLayout.nodes.map((box) => [box.stageId, box])),
+    [bandLayout.nodes],
+  );
 
   if (nodes.length === 0) {
     return (
@@ -134,19 +161,45 @@ export function RunDetailGraphBand({
           </span>
         : null}
       </div>
-      <div className="min-h-[160px] flex-1 overflow-x-auto rounded-[10px] border border-[#ffffff12] bg-[var(--sf-ground)] p-4">
-        <div className="flex min-w-max items-center">
-          {nodes.map((node, index) => (
-            <Fragment key={node.stageId}>
-              {index > 0 ?
-                <span
-                  className="mx-0 block h-px w-[60px] shrink-0 bg-[#ffffff1f]"
-                  aria-hidden="true"
-                />
-              : null}
-              <GraphBandNodeCard node={node} onSelect={onSelectStage} />
-            </Fragment>
-          ))}
+      <div className="min-h-[160px] flex-1 overflow-x-auto rounded-[10px] border border-[#ffffff12] bg-[var(--sf-panel)] p-4">
+        <div
+          className="relative"
+          style={{
+            minWidth: bandLayout.width,
+            minHeight: bandLayout.height,
+          }}
+        >
+          {bandLayout.edges.map((edge) => {
+            const from = boxByStageId.get(edge.from);
+            const to = boxByStageId.get(edge.to);
+            if (!from || !to) return null;
+            const segment = graphBandEdgeSegment(from, to);
+            if (!segment) return null;
+            return (
+              <span
+                key={`${edge.from}-${edge.to}`}
+                className="pointer-events-none absolute block h-px bg-[#ffffff1f]"
+                style={{
+                  left: segment.left,
+                  top: segment.top,
+                  width: segment.width,
+                }}
+                aria-hidden="true"
+              />
+            );
+          })}
+          {bandLayout.nodes.map((box) => {
+            const node = nodeByStageId.get(box.stageId);
+            if (!node) return null;
+            return (
+              <GraphBandNodeCard
+                key={box.stageId}
+                node={node}
+                box={box}
+                onSelect={onSelectStage}
+              />
+            );
+          })}
         </div>
       </div>
     </div>

@@ -414,6 +414,7 @@ export function RunDetailPageRedesign({
       <RunDetailGraphBand
         run={run}
         trackStages={workspace.trackStages}
+        spatialLayout={workspace.spatialLayout}
         selectedStageId={workspace.selectedStageId}
         onSelectStage={selectStage}
       />
