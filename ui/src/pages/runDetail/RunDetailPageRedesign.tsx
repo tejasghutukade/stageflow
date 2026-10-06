@@ -555,10 +555,10 @@ export function RunDetailPageRedesign({
       />
       {banner ? <div className="banner banner--error">{banner}</div> : null}
       <div
-        className={`flex w-full shrink-0 flex-col border-b border-b-[#ffffff12]${
+        className={`flex w-full shrink-0 flex-col${
           viewMode === "list" || viewMode === "timeline" || viewMode === "graph" ?
             ""
-          : " pt-3 pb-2"
+          : " border-b border-b-[#ffffff12] pt-3 pb-2"
         }`}
       >
         {mainView}
