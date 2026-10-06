@@ -74,9 +74,9 @@ import {
   WORK_ARROW_STEP,
   WORK_DEFAULT_H,
   WORK_MIN_H,
-} from "./runDetail/runDetailWorkSplit";
+} from "./runDetail/runDetailPaneSplit";
 
-export { clampWorkHeight } from "./runDetail/runDetailWorkSplit";
+export { clampWorkHeight } from "./runDetail/runDetailPaneSplit";
 
 function sessionChipEl(kind: SessionChipKind) {
   if (kind === "alive") return <span className="chip">session alive</span>;

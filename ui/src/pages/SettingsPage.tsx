@@ -406,7 +406,7 @@ export function SettingsPage({
               className="select"
               value={health.maxConcurrent}
               disabled={slotsSaving}
-              onChange={(e) => void onSlotsChange(e.target.value)}
+              onChange={(e) => void onSlotsChange(Number(e.target.value))}
             >
               {slotOptions.map((n) => (
                 <option key={n} value={n}>

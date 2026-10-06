@@ -76,8 +76,20 @@ describe("buildRunGraphBandView", () => {
     const nodes = buildRunGraphBandView(
       detail,
       [
-        { id: "a", label: "a", status: "succeeded", selected: false },
-        { id: "b", label: "b", status: "pending", selected: false },
+        {
+          id: "a",
+          label: "a",
+          status: "succeeded",
+          selected: false,
+          envelope: null,
+        },
+        {
+          id: "b",
+          label: "b",
+          status: "pending",
+          selected: false,
+          envelope: null,
+        },
       ],
       null,
     );

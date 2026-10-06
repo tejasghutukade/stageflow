@@ -123,6 +123,8 @@ export type RunWorkspace = {
   inboundEnvelope: StageEnvelopeView | null;
   inboundFromStageId: string | undefined;
   inboundToStageId: string | undefined;
+  outboundEnvelope: StageEnvelopeView | null;
+  outboundToStageId: string | undefined;
   drawer: WorkspaceDrawer | null;
   envelope: WorkspaceEnvelope | null;
   liveStream: boolean;
@@ -909,6 +911,10 @@ export function resolveRunWorkspace(
     inboundEnvelope: inboundStage?.envelope ?? null,
     inboundFromStageId: inboundStage?.stage_id,
     inboundToStageId: selectedStage?.stage_id,
+    outboundEnvelope: selectedStage?.envelope ?? null,
+    outboundToStageId: selectedStageId
+      ? outboundStageId(run, selectedStageId, catalogOverlay)
+      : undefined,
     drawer,
     envelope,
     liveStream:

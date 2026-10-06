@@ -1,7 +1,7 @@
 import type { RefObject } from "react";
-import { WORK_ARROW_STEP, type WorkSplitGesture } from "./runDetailWorkSplit";
+import { WORK_ARROW_STEP, type WorkSplitGesture } from "./runDetailPaneSplit";
 
-export function RunDetailWorkSplit({
+export function RunDetailPaneDivider({
   workHeight,
   splitMin,
   splitMax,

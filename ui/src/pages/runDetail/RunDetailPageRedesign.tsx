@@ -23,7 +23,6 @@ import {
   useStageRetry,
 } from "../../stageAction";
 import {
-  activeWaitKey,
   resolveRunWorkspace,
   runDetailShouldPoll,
 } from "../../workspace/resolveRunWorkspace";
@@ -48,8 +47,8 @@ import { RunTimelineGantt } from "../../redesign/runs/RunTimelineGantt";
 import { RunDetailTranscriptBody } from "../../redesign/runs/RunDetailTranscriptBody";
 import { RunDetailTranscriptTurns } from "../../redesign/runs/RunDetailTranscriptTurns";
 import { buildRunTrackView } from "../../runs/buildRunTrackView";
-import { RunDetailWorkSplit } from "./RunDetailWorkSplit";
-import { useRunDetailWorkSplit } from "./runDetailWorkSplit";
+import { RunDetailPaneDivider } from "./RunDetailPaneDivider";
+import { useRunDetailWorkSplit } from "./runDetailPaneSplit";
 
 export function RunDetailPageRedesign({
   runId,
@@ -323,14 +322,6 @@ export function RunDetailPageRedesign({
     [onOpenStream],
   );
 
-  const hideWorkspace = useCallback(() => {
-    if (run) setDismissedWaitKey(activeWaitKey(run));
-    setUserPickedStageId(null);
-    previousStageIdRef.current = null;
-    setDrawerStageId(null);
-    onOpenStream();
-  }, [onOpenStream, run]);
-
   async function onRerunClick() {
     setRerunning(true);
     setError(null);
@@ -388,7 +379,8 @@ export function RunDetailPageRedesign({
   const artifactInitialPath =
     workspace?.kind === "artifact" ? workspace.selectedPath : null;
   const hasGraphBand =
-    workspace.trackStages.length > 0 || (run.pipeline_track?.nodes?.length ?? 0) > 0;
+    (workspace?.trackStages.length ?? 0) > 0 ||
+    (run?.pipeline_track?.nodes?.length ?? 0) > 0;
 
   const banner =
     retryError ??
@@ -510,8 +502,10 @@ export function RunDetailPageRedesign({
           <RunEnvelopePanel
             run={run}
             stage={stage}
-            envelope={workspace.inboundEnvelope}
-            fromStageId={workspace.inboundFromStageId}
+            inboundEnvelope={workspace.inboundEnvelope}
+            inboundFromStageId={workspace.inboundFromStageId}
+            outboundEnvelope={workspace.outboundEnvelope}
+            outboundToStageId={workspace.outboundToStageId}
             onArtifactClick={(path) => {
               setCenterTab("artifacts");
               onOpenArtifact(path);
@@ -588,7 +582,7 @@ export function RunDetailPageRedesign({
         >
           {mainView}
         </div>
-        <RunDetailWorkSplit
+        <RunDetailPaneDivider
           workHeight={workHeight}
           splitMin={splitMin}
           splitMax={splitMax}

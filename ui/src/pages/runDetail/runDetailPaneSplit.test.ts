@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampWorkHeight, UPPER_MIN_H, WORK_MIN_H } from "./runDetailWorkSplit";
+import { clampWorkHeight, UPPER_MIN_H, WORK_MIN_H } from "./runDetailPaneSplit";
 
 describe("clampWorkHeight", () => {
   it("clamps between work min and pane minus upper min", () => {

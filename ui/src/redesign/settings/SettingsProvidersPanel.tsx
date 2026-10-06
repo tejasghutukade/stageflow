@@ -17,12 +17,12 @@ import {
 } from "../../providers/helpers";
 import { providerSupportsOauthConnect } from "../../providers/oauthSession";
 import { Keycap } from "../Keycap";
+import type { IconType } from "react-icons";
 import {
   LuCheck,
   LuChevronDown,
   LuChevronRight,
   LuEllipsisVertical,
-  LuHouse,
   LuKey,
   LuRefreshCw,
   LuSearch,
@@ -274,19 +274,9 @@ export function SettingsProvidersPanel({
             providers.credential_source
           </span>
         </div>
-        <div className="grid grid-cols-[minmax(0px,_1fr)_minmax(0px,_1fr)] gap-3">
+        <div className="grid grid-cols-1 gap-3">
           <CredentialCard
-            selected={credentialSource === "pi_home"}
-            disabled={showSkeleton || sourceSaving}
-            tag="pi_home"
-            icon={LuHouse}
-            title="Use Pi home credentials"
-            description="Share the logins you already made with the Pi CLI."
-            path="~/.pi/agent/auth.json"
-            onSelect={() => void onSourceChange("pi_home")}
-          />
-          <CredentialCard
-            selected={credentialSource === "sf_owned"}
+            selected={credentialSource === "sf_owned" || credentialSource === undefined}
             disabled={showSkeleton || sourceSaving}
             tag="sf_owned"
             icon={LuKey}
@@ -469,7 +459,7 @@ function CredentialCard({
   selected: boolean;
   disabled?: boolean;
   tag: string;
-  icon: typeof LuHouse;
+  icon: IconType;
   title: string;
   description: string;
   path: string;

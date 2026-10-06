@@ -102,9 +102,7 @@ export function buildRunGraphBandView(
       : statusSignalFromStageStatus(status);
 
     const clickable =
-      status !== "pending" ||
-      status === "waiting_for_input" ||
-      stageHasStarted(run, stageId);
+      status !== "pending" || stageHasStarted(run, stageId);
 
     const attempt = snapshot?.attempt_count ?? trackNode?.attempt_count;
     const showAttempt =

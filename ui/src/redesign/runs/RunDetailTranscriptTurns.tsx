@@ -8,7 +8,6 @@ import {
   LuX,
 } from "react-icons/lu";
 import type {
-  PendingPrompt,
   StageAnswer,
   StageEnvelopeView,
   StageLogEvent,
