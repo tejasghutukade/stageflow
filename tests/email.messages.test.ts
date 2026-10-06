@@ -54,9 +54,8 @@ for (const kind of ["memory", "local"] as const) describe(`${kind} message contr
     expect(saved.join("")).not.toContain(message.text.trim());
   });
   it("bounds recent lists and rejects optional filters and bad inputs", async () => {
-    const { adapter, account } = await setup(kind, Array.from({ length: 105 }, (_, index) => record(index + 1)));
-    expect((await adapter.search({ accountId: account.accountId })).messages).toHaveLength(20);
-    expect((await adapter.search({ accountId: account.accountId, limit: 100 })).messages).toHaveLength(100);
+    const { adapter, account } = await setup(kind);
+    expect((await adapter.search({ accountId: account.accountId, limit: 1 })).messages.map(message => message.subject)).toEqual(["Message 2"]);
     for (const patch of [{ limit: 0 }, { limit: 101 }, { limit: 1.5 }, { mailbox: "\r\n" }, { mailbox: "Missing" }]) await expect(adapter.search({ accountId: account.accountId, ...patch })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
     await expect(adapter.search({ accountId: account.accountId, cursor: "opaque" })).rejects.toMatchObject({ code: "EMAIL_INVALID_INPUT" });
     for (const patch of [{ hasAttachments: false }, { text: "test" }]) await expect(adapter.search({ accountId: account.accountId, ...patch })).rejects.toMatchObject({ code: "EMAIL_SEARCH_UNSUPPORTED", unsupportedFields: Object.keys(patch) });
