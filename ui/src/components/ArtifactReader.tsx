@@ -59,62 +59,11 @@ function artifactUrl(runId: string, path: string): string {
   return `/api/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(path)}`;
 }
 
-function formatByteSize(bytes: number): string {
+export function formatByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const kb = bytes / 1024;
   if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`;
   return `${(kb / 1024).toFixed(1)} MB`;
-}
-
-function RedesignModeSeg({
-  mode,
-  setMode,
-  markdown,
-  image,
-}: {
-  mode: ViewMode;
-  setMode: (mode: ViewMode) => void;
-  markdown: boolean;
-  image: boolean;
-}) {
-  const btn = (active: boolean, disabled: boolean) =>
-    `px-2.5 py-1 text-xs ${
-      disabled ? "cursor-not-allowed opacity-40"
-      : active ? "bg-[#1a1c21] text-[var(--sf-text-1)]"
-      : "text-[#a7aab2] hover:text-[var(--sf-text-1)]"
-    }`;
-
-  return (
-    <div className="flex shrink-0 overflow-hidden rounded-md border border-[#ffffff12]">
-      <button
-        type="button"
-        className={btn(mode === "rendered", !markdown && !image)}
-        disabled={!markdown && !image}
-        onClick={() => {
-          if (markdown || image) setMode("rendered");
-        }}
-      >
-        Rendered
-      </button>
-      <button
-        type="button"
-        className={`border-l border-[#ffffff12] ${btn(mode === "raw", image)}`}
-        disabled={image}
-        onClick={() => {
-          if (!image) setMode("raw");
-        }}
-      >
-        Raw
-      </button>
-      <button
-        type="button"
-        className={`border-l border-[#ffffff12] ${btn(false, true)}`}
-        disabled
-      >
-        Diff
-      </button>
-    </div>
-  );
 }
 
 function ArtifactReaderBody({
@@ -274,8 +223,8 @@ export function ArtifactReader({
   if (variant === "redesign") {
     return (
       <div className="flex h-full min-h-0 flex-1 flex-col gap-2 px-4 py-3">
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <span className="min-w-0 flex-1 truncate font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-1)]">
+        <div className="flex shrink-0 items-center justify-between gap-2">
+          <span className="min-w-0 flex-1 truncate font-['Geist_Mono',monospace] text-xs leading-[1.33] text-[var(--sf-text-1)]">
             {fileName(path)}
           </span>
           {byteSize != null ? (
@@ -283,14 +232,9 @@ export function ArtifactReader({
               {formatByteSize(byteSize)}
             </span>
           ) : null}
-          {readOnly ? (
-            <span className="rounded-md border border-[#ffffff12] px-2 py-0.5 text-[11px] text-[#a7aab2]">
-              read only
-            </span>
-          ) : null}
           <button
             type="button"
-            className="rounded-md border border-[#ffffff12] px-2 py-1 text-xs text-[#a7aab2] hover:text-[var(--sf-text-1)]"
+            className="shrink-0 rounded-md border border-[#ffffff12] px-2 py-1 text-xs text-[#a7aab2] hover:text-[var(--sf-text-1)]"
             onClick={() => {
               void navigator.clipboard.writeText(path).then(() => {
                 setCopyState("copied");
@@ -300,18 +244,7 @@ export function ArtifactReader({
           >
             {copyState === "copied" ? "Copied" : "Copy path"}
           </button>
-          <RedesignModeSeg
-            mode={mode}
-            setMode={setMode}
-            markdown={markdown}
-            image={image}
-          />
         </div>
-        {dirName(path) ? (
-          <p className="truncate font-['Geist_Mono',monospace] text-[11px] text-[var(--sf-text-3)]">
-            {dirName(path)}
-          </p>
-        ) : null}
         <div className="min-h-0 flex-1 overflow-auto rounded-[10px] border border-[#ffffff12] bg-[#131418] p-4">
           <ArtifactReaderBody
             load={load}

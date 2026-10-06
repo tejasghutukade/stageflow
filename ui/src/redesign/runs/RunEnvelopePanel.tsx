@@ -1,4 +1,4 @@
-import type { RunDetail, StageSnapshot } from "../../api";
+import type { RunDetail, StageEnvelopeView, StageSnapshot } from "../../api";
 import { EnvelopeFields } from "../../components/EnvelopeFields";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
 
@@ -16,28 +16,37 @@ function envelopeStatusClass(status: string): string {
 export function RunEnvelopePanel({
   run,
   stage,
+  envelope,
+  fromStageId,
   onArtifactClick,
 }: {
   run: RunDetail;
   stage: StageSnapshot;
+  envelope: StageEnvelopeView | null;
+  fromStageId?: string | null;
   onArtifactClick?: (path: string) => void;
 }) {
-  const envelope = stage.envelope;
+  const label = stageCloneLabel(run, stage.stage_id);
+
   if (!envelope) {
     return (
       <p className="px-4 py-3 text-[13px] text-[var(--sf-text-2)]">
-        No envelope for {stageCloneLabel(run, stage.stage_id)} yet.
+        {fromStageId
+          ? `No handoff from ${stageCloneLabel(run, fromStageId)} for ${label} yet.`
+          : `No inbound handoff for ${label} yet.`}
       </p>
     );
   }
 
-  const label = stageCloneLabel(run, stage.stage_id);
+  const title = fromStageId
+    ? `${label} — handoff from ${stageCloneLabel(run, fromStageId)}`
+    : `${label} — handoff record`;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-[15px] font-semibold text-[var(--sf-text-1)]">
-          {label} — handoff record
+          {title}
         </h3>
         <span
           className={`rounded-full border px-2 py-0.5 text-xs font-medium ${envelopeStatusClass(envelope.status)}`}

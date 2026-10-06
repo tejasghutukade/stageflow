@@ -491,6 +491,8 @@ export function RunDetailPageRedesign({
           <RunEnvelopePanel
             run={run}
             stage={stage}
+            envelope={workspace.inboundEnvelope}
+            fromStageId={workspace.inboundFromStageId}
             onArtifactClick={(path) => {
               setCenterTab("artifacts");
               onOpenArtifact(path);

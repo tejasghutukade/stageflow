@@ -3,7 +3,6 @@ import type { StageLogEvent } from "../../api";
 import {
   type RunEventsKindFilter,
   eventRowDetails,
-  eventRowLabel,
   filterStageEvents,
   formatEventTime,
 } from "./runEventsView";
@@ -15,10 +14,19 @@ const FILTERS: { id: RunEventsKindFilter; label: string }[] = [
   { id: "operator_prompt", label: "operator_prompt" },
 ];
 
-function isHighlightEvent(event: StageLogEvent): boolean {
-  return (
-    event.event === "waiting_for_input" || event.event === "operator_prompt"
-  );
+function eventRowSurfaceClass(event: StageLogEvent): string {
+  if (event.event === "waiting_for_input") return "bg-[#f5b54414]";
+  if (event.event === "operator_prompt") return "bg-[#f5b5440f]";
+  return "";
+}
+
+function eventKindClass(event: StageLogEvent): string {
+  if (event.event === "waiting_for_input" || event.event === "operator_prompt") {
+    return "text-[#f5b544]";
+  }
+  if (event.event === "agent_start") return "text-[#6ca6ff]";
+  if (event.event === "message") return "text-[#ecedee]";
+  return "text-[var(--sf-text-2)]";
 }
 
 function filterChipClass(active: boolean): string {
@@ -51,19 +59,21 @@ export function RunEventsPanel({
   }, [events.length, filter, followTail, live]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-b-[#ffffff12] px-4 py-2">
-        {FILTERS.map((chip) => (
-          <button
-            key={chip.id}
-            type="button"
-            className={filterChipClass(filter === chip.id)}
-            onClick={() => setFilter(chip.id)}
-          >
-            {chip.label}
-          </button>
-        ))}
-        <label className="ml-auto flex items-center gap-2 text-xs text-[#a7aab2]">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 py-3">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 pb-1">
+        <div className="flex flex-wrap items-center gap-2">
+          {FILTERS.map((chip) => (
+            <button
+              key={chip.id}
+              type="button"
+              className={filterChipClass(filter === chip.id)}
+              onClick={() => setFilter(chip.id)}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-xs text-[#a7aab2]">
           Follow tail
           <button
             type="button"
@@ -82,49 +92,49 @@ export function RunEventsPanel({
           </button>
         </label>
       </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div
-          className="sticky top-0 z-[1] flex h-7 shrink-0 items-center gap-3 border-b border-b-[#ffffff12] bg-[var(--sf-ground)] px-2 font-['Geist_Mono',monospace] text-[11px] uppercase tracking-[0.88px] text-[#8b8f98]"
+          className="flex h-7 shrink-0 items-center gap-3 border-b border-b-[#ffffff12] px-2 font-['Geist_Mono',monospace] text-[11px] uppercase tracking-[1.28px] text-[#8b8f98]"
           role="row"
         >
-          <span className="w-[72px]">Time</span>
-          <span className="w-[120px]">Event</span>
-          <span className="w-20">Stage</span>
-          <span className="min-w-0 flex-1">Details</span>
+          <span className="w-[72px] tracking-[0.88px]">Time</span>
+          <span className="w-[120px] tracking-[0.88px]">Event</span>
+          <span className="w-20 tracking-[0.88px]">Stage</span>
+          <span className="min-w-0 flex-1 tracking-[0.88px]">Details</span>
         </div>
         <div className="flex flex-col gap-0.5">
           {filtered.map((ev, i) => {
-            const highlight = isHighlightEvent(ev);
+            const hitl =
+              ev.event === "waiting_for_input" || ev.event === "operator_prompt";
+            const surface = eventRowSurfaceClass(ev);
+            const kindClass = eventKindClass(ev);
             return (
               <div
                 key={`${ev.at ?? i}-${ev.event}-${i}`}
-                className={`flex h-7 items-center gap-3 px-2 font-['Geist_Mono',monospace] text-xs leading-[1.33] ${
-                  highlight ? "text-[var(--sf-needs)]" : ""
-                }`}
+                className={`flex h-7 items-center gap-3 px-2 font-['Geist_Mono',monospace] text-xs leading-[1.33] ${surface}`}
                 role="row"
               >
-                <span className="w-[72px] shrink-0 text-[#8b8f98]">
-                  {formatEventTime(ev.at)}
-                </span>
                 <span
-                  className={`w-[120px] shrink-0 truncate ${
-                    highlight ? "" : "text-[var(--sf-text-2)]"
+                  className={`w-[72px] shrink-0 ${
+                    hitl ? "text-[#f5b544]" : "text-[#8b8f98]"
                   }`}
                 >
+                  {formatEventTime(ev.at)}
+                </span>
+                <span className={`w-[120px] shrink-0 truncate ${kindClass}`}>
                   {ev.event}
                 </span>
-                <span className="w-20 shrink-0 truncate text-[#8b8f98]">
+                <span className="w-20 shrink-0 truncate text-[#ecedee]">
                   {stageId}
                 </span>
-                <span className="min-w-0 flex-1 truncate font-sans text-[12px]">
-                  <span className="text-[var(--sf-text-1)]">
-                    {eventRowLabel(ev)}
-                  </span>
-                  {eventRowDetails(ev) !== eventRowLabel(ev) ? (
-                    <span className="ml-1 text-[var(--sf-text-3)]">
-                      {eventRowDetails(ev)}
-                    </span>
-                  ) : null}
+                <span
+                  className={`min-w-0 flex-1 truncate ${
+                    hitl && ev.event === "waiting_for_input"
+                      ? "text-[#f5b544]"
+                      : "text-[#a7aab2]"
+                  }`}
+                >
+                  {eventRowDetails(ev)}
                 </span>
               </div>
             );
