@@ -13,8 +13,6 @@ import {
 import { useRunCatalog, useRunCatalogHandle } from "../../catalog/useRunCatalog";
 import { EnvelopeDrawer } from "../../components/EnvelopeDrawer";
 import { FeedbackDecidePanel } from "../../components/FeedbackDecidePanel";
-import { FeedbackLoopPanel } from "../../components/FeedbackLoopPanel";
-import { SpatialRunMap } from "../../components/SpatialRunMap";
 import { VerificationHistory } from "../../components/VerificationHistory";
 import type { DetailView } from "../../routes";
 import { useRunCancel, useRunDelete } from "../../runLifecycle/useRunLifecycle";
@@ -44,6 +42,7 @@ import {
 } from "../../redesign/runs/RunDetailHeader";
 import { RunDetailLoadingShell } from "../../redesign/runs/RunDetailLoadingShell";
 import { RunStageInspector } from "../../redesign/runs/RunStageInspector";
+import { RunDetailGraphBand } from "../../redesign/runs/RunDetailGraphBand";
 import { RunDetailListBand } from "../../redesign/runs/RunDetailListBand";
 import { RunTimelineGantt } from "../../redesign/runs/RunTimelineGantt";
 import { RunDetailTranscriptBody } from "../../redesign/runs/RunDetailTranscriptBody";
@@ -376,7 +375,8 @@ export function RunDetailPageRedesign({
   const inboundSummary = workspace?.inboundEnvelope?.summary ?? null;
   const artifactInitialPath =
     workspace?.kind === "artifact" ? workspace.selectedPath : null;
-  const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
+  const hasGraphBand =
+    workspace.trackStages.length > 0 || (run.pipeline_track?.nodes?.length ?? 0) > 0;
 
   const banner =
     retryError ??
@@ -409,33 +409,14 @@ export function RunDetailPageRedesign({
         now={now}
       />
     );
-  } else if (viewMode === "graph" && hasMapNodes) {
+  } else if (viewMode === "graph" && hasGraphBand) {
     mainView = (
-      <div className="min-h-[200px] p-2">
-        {(run.active_feedback_loop || (run.feedback_loops?.length ?? 0) > 0) ? (
-          <FeedbackLoopPanel
-            active={run.active_feedback_loop}
-            history={run.feedback_loops ?? []}
-          />
-        ) : null}
-        <SpatialRunMap
-          layout={workspace.spatialLayout}
-          stages={run.stages}
-          nodeChrome={workspace.nodeChrome}
-          selectedStageId={workspace.selectedStageId}
-          onSelectStage={selectStage}
-          onDeselect={hideWorkspace}
-          retryingStageIds={retryingStageIds}
-          onRetryStage={retryAndSelect}
-          resumingStageIds={resumingStageIds}
-          onResumeStage={resumeAndSelect}
-          abandoningStageId={abandoningStageId}
-          onAbandonStage={abandon}
-          runId={runId}
-          showHint={!workspace.selectedStageId}
-          feedbackOverlays={workspace.feedbackOverlays}
-        />
-      </div>
+      <RunDetailGraphBand
+        run={run}
+        trackStages={workspace.trackStages}
+        selectedStageId={workspace.selectedStageId}
+        onSelectStage={selectStage}
+      />
     );
   } else if (viewMode === "list") {
     const trackView = buildRunTrackView(run, workspace.trackStages, workspace.selectedStageId);
@@ -572,7 +553,9 @@ export function RunDetailPageRedesign({
       {banner ? <div className="banner banner--error">{banner}</div> : null}
       <div
         className={`flex w-full shrink-0 flex-col border-b border-b-[#ffffff12]${
-          viewMode === "list" || viewMode === "timeline" ? "" : " pt-3 pb-2"
+          viewMode === "list" || viewMode === "timeline" || viewMode === "graph" ?
+            ""
+          : " pt-3 pb-2"
         }`}
       >
         {mainView}
