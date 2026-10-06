@@ -2,6 +2,7 @@ import { ImapFlow } from "imapflow";
 import { EmailEvents, receivedEventId, type ReceiveMailbox, type ReceiveOutcome } from "./events.js";
 import { randomBytes } from "node:crypto";
 import nodemailer from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls } from "node:tls";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
@@ -43,6 +44,22 @@ async function receiveOutcome(uid: number, normalize: () => Promise<EmailMessage
   }
 }
 
+async function submittedMime(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<Buffer> {
+  const message = new MailComposer({ from: input.from, to: input.to, cc: input.cc, subject: input.subject,
+    text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references,
+    attachments, messageId: `<${operationId}@stageflow>`, date: new Date(), disableFileAccess: true, disableUrlAccess: true }).compile();
+  const stream = message.createReadStream();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    const bytes = Buffer.from(chunk);
+    size += bytes.length;
+    if (size > account.sentCopyMaxBytes) { stream.destroy(); throw new EmailError("EMAIL_RESOURCE_LIMIT"); }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks, size);
+}
+
 /** Both adapters validate account scope before any operation, including unsupported operations. */
 export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSource {
   readonly submissions: EmailSubmissions;
@@ -77,12 +94,29 @@ export abstract class AccountEmailAdapter implements EmailMailbox, EmailEventSou
   }
   private async sendValidated(account: EmailAccount, validated: SendEmailInput, context?: EmailArtifactContext, identity?: unknown): Promise<SendEmailResult> {
     const attachments = await prepareAttachments(account, validated.attachments, context);
-    return this.submissions.send(validated, operationId => {
+    return this.submissions.send(validated, async (operationId, accepted) => {
       if (JSON.stringify(this.accounts.get(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
-      return this.submit(account, validated, operationId, attachments);
+      const mime = account.sentCopyPolicy === "imap-append" ? await submittedMime(account, validated, operationId, attachments) : undefined;
+      if (JSON.stringify(this.account(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
+      const receipt = await this.submit(account, validated, operationId, attachments, mime);
+      if (!mime) return receipt;
+      receipt.sentCopy = { state: "pending" };
+      accepted(receipt);
+      try {
+        if (JSON.stringify(this.account(account.accountId)) !== JSON.stringify(account)) throw new EmailError("EMAIL_CONNECTION_FAILED");
+        await this.appendSent(account, mime);
+        receipt.sentCopy = { state: "completed" };
+      } catch (error) {
+        const fault = normalizedConnectionError(error);
+        const known = ["EMAIL_INVALID_INPUT", "EMAIL_AUTH_FAILED", "EMAIL_TOKEN_EXPIRED"].includes(fault.code);
+        receipt.sentCopy = { state: known ? "failed" : "unknown", error: fault.code };
+        receipt.warnings = [known ? "EMAIL_SENT_COPY_FAILED" : "EMAIL_SENT_COPY_OUTCOME_UNKNOWN"];
+      }
+      return receipt;
     }, attachments.length ? { operation: identity, attachments: attachmentIdentity(attachments) } : identity);
   }
-  protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult>;
+  protected abstract submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[], mime?: Buffer): Promise<SendEmailResult>;
+  protected abstract appendSent(account: EmailAccount, mime: Buffer): Promise<void>;
   async reply(input: ReplyToEmailInput, context?: EmailArtifactContext): Promise<SendEmailResult> {
     const account = this.account(input?.ref?.accountId);
     const validated = validateReply(input);
@@ -203,7 +237,12 @@ export class InMemoryEmailAdapter extends AccountEmailAdapter {
     if (record.source.length > account.attachmentLimits.downloadBytes) throw new EmailError("EMAIL_RESOURCE_LIMIT");
     return Buffer.from(record.source);
   }
-  protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult> {
+  protected async appendSent(account: EmailAccount, mime: Buffer): Promise<void> {
+    const mailbox = this.mailboxes.get(`${account.accountId}:${account.sentFolder}`);
+    if (!mailbox) throw new EmailError("EMAIL_INVALID_INPUT");
+    mailbox.messages.push({ uid: Math.max(0, ...mailbox.messages.map(value => value.uid)) + 1, source: Buffer.from(mime), flags: new Set(["\\Seen"]), receivedAt: new Date() });
+  }
+  protected async submit(_account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[], _mime?: Buffer): Promise<SendEmailResult> {
     this.sent.push(structuredClone(input));
     this.sentAttachments.push(attachments.map(value => ({ filename: value.filename, content: Buffer.from(value.content) })));
     return { operationId, messageId: `<${operationId}@stageflow>`, accepted: [...input.to, ...input.cc ?? [], ...input.bcc ?? []].map(value => value.address),
@@ -383,7 +422,28 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
     });
   }
 
-  protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[]): Promise<SendEmailResult> {
+  protected async appendSent(account: EmailAccount, mime: Buffer): Promise<void> {
+    const config = account.imap;
+    const secret = resolveEmailSecret(config, this.env);
+    const client = new ImapFlow({ host: config.host, port: config.port, secure: config.tls === "implicit", doSTARTTLS: config.tls === "starttls", logger: false,
+      auth: { user: config.username, ...(config.auth.type === "oauth2" ? { accessToken: secret } : { pass: secret }) },
+      connectionTimeout: account.connectionTimeoutMs, greetingTimeout: account.connectionTimeoutMs, socketTimeout: account.connectionTimeoutMs,
+      tls: { rejectUnauthorized: true }, disableAutoIdle: true });
+    client.on("error", () => {});
+    await this.bounded(account, () => client.close(), async () => {
+      await client.connect();
+      resolveEmailSecret(config, this.env);
+      try {
+        if (!await client.append(account.sentFolder!, mime, ["\\Seen"])) throw new EmailError("EMAIL_CONNECTION_FAILED");
+      }
+      catch (error) {
+        if ((error as { responseStatus?: string }).responseStatus === "NO") throw new EmailError("EMAIL_INVALID_INPUT");
+        throw error;
+      }
+    });
+  }
+
+  protected async submit(account: EmailAccount, input: SendEmailInput, operationId: string, attachments: PreparedEmailAttachment[], mime?: Buffer): Promise<SendEmailResult> {
     const config = account.smtp;
     const secret = resolveEmailSecret(config, this.env);
     let socket: Socket | undefined;
@@ -405,8 +465,10 @@ export class LocalEmailAdapter extends AccountEmailAdapter {
         : { user: config.username, pass: secret },
     } as SMTPTransport.Options);
     try {
-      const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail({ from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
-        subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, attachments, messageId: `<${operationId}@stageflow>` }));
+      const receipt = await this.bounded(account, () => { socket?.destroy(); transport.close(); }, () => transport.sendMail(mime
+        ? { raw: mime, messageId: `<${operationId}@stageflow>`, envelope: { from: input.from!, to: [...input.to, ...input.cc ?? [], ...input.bcc ?? []].map(value => value.address) } }
+        : { from: input.from, to: input.to, cc: input.cc, bcc: input.bcc,
+          subject: input.subject, text: input.text, html: input.html, inReplyTo: input.inReplyTo, references: input.references, attachments, messageId: `<${operationId}@stageflow>` }));
       return { operationId, messageId: receipt.messageId, accepted: receipt.accepted, rejected: receipt.rejected,
         submittedAt: new Date().toISOString() };
     } catch (error) {

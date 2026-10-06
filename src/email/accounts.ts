@@ -31,6 +31,8 @@ const accountSchema = z.object({
   searchWorkLimit: z.number().int().min(1).max(10000).default(1000),
   attachmentLimits: attachmentLimitsSchema.default({ count: 10, perFileBytes: 2097152, totalBytes: 5242880, downloadBytes: 8388608 }),
   sentFolder: z.string().min(1).max(200).optional(),
+  sentCopyPolicy: z.enum(["provider-managed", "imap-append"]).default("provider-managed"),
+  sentCopyMaxBytes: z.number().int().min(1).max(50331648).default(8388608),
 }).strict();
 
 export type EmailAccountInput = z.input<typeof accountSchema>;
@@ -41,6 +43,7 @@ type AccountState = { version: 1; scope: string; accounts: EmailAccount[]; healt
 function parseAccount(input: unknown): z.output<typeof accountSchema> {
   const parsed = accountSchema.safeParse(input);
   if (!parsed.success) throw new EmailError("EMAIL_INVALID_INPUT");
+  if (parsed.data.sentCopyPolicy === "imap-append" && !parsed.data.sentFolder) throw new EmailError("EMAIL_INVALID_INPUT");
   for (const connection of [parsed.data.imap, parsed.data.smtp]) {
     if (connection.tls === "none" && (!parsed.data.allowInsecureLocalDevelopment ||
       !["127.0.0.1", "::1", "localhost"].includes(connection.host.toLowerCase()))) {

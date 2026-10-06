@@ -1,7 +1,7 @@
 import { createServer, type Socket } from "node:net";
 import type { MailRecord } from "../../src/email/messages.js";
 
-export async function mailServer(protocol: "imap" | "smtp", options: { stallSelection?: boolean; stallFetch?: boolean; idle?: boolean; rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean; mailboxMessages?: MailRecord[] } = {}) {
+export async function mailServer(protocol: "imap" | "smtp", options: { stallAppend?: boolean; rejectAppend?: boolean; dropAfterAppend?: boolean; stallSelection?: boolean; stallFetch?: boolean; idle?: boolean; rejectAuth?: boolean; stall?: boolean; password?: string; rejectRecipient?: string; dropAfterData?: boolean; stallAfterData?: boolean; mailboxMessages?: MailRecord[] } = {}) {
   const sockets = new Set<Socket>();
   const commands: string[] = [];
   const messages: { data: string; recipients: string[] }[] = [];
@@ -9,6 +9,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
   const mailboxes = new Map([["INBOX", defaultMailbox]]);
   const selected = new Map<Socket, string>();
   const fetchedSourceBytes: number[] = [];
+  const appendedMime: Buffer[] = [];
   const server = createServer(socket => {
     let mailbox = defaultMailbox;
     sockets.add(socket);
@@ -16,7 +17,8 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
     socket.on("error", () => {});
     if (options.stall) return;
     socket.write(protocol === "imap" ? "* OK fixture ready\r\n" : "220 fixture ready\r\n");
-    let pending = "";
+    let pending = Buffer.alloc(0);
+    let append: { tag: string; folder: string; size: number } | undefined;
     let authTag: string | undefined;
     let idleTag: string | undefined;
     let inData = false;
@@ -26,11 +28,26 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
       return !options.rejectAuth && Buffer.from(encoded, "base64").toString().split("\0").at(-1) === (options.password ?? "fixture-secret");
     }
     socket.on("data", data => {
-      pending += data.toString();
-      while (pending.includes("\r\n")) {
+      pending = Buffer.concat([pending, data]);
+      while (true) {
+        if (append) {
+          if (pending.length < append.size + 2) break;
+          const source = Buffer.from(pending.subarray(0, append.size));
+          pending = pending.subarray(append.size + 2);
+          const target = mailboxes.get(append.folder);
+          if (target && !options.rejectAppend) {
+            appendedMime.push(source);
+            target.messages.push({ uid: Math.max(0, ...target.messages.map(value => value.uid)) + 1, source, flags: new Set(["\\Seen"]), receivedAt: new Date() });
+          }
+          if (options.dropAfterAppend) socket.destroy();
+          else if (!options.stallAppend) socket.write(`${append.tag} ${target && !options.rejectAppend ? "OK" : "NO"} append\r\n`);
+          append = undefined;
+          continue;
+        }
+        if (!pending.includes("\r\n")) break;
         const index = pending.indexOf("\r\n");
-        const line = pending.slice(0, index);
-        pending = pending.slice(index + 2);
+        const line = pending.subarray(0, index).toString();
+        pending = pending.subarray(index + 2);
         if (protocol === "smtp") {
           if (inData) {
             if (line !== ".") { messageData += `${line.replace(/^\.\./, ".")}\r\n`; continue; }
@@ -62,6 +79,12 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
           }
           const [tag, command] = line.split(" ");
           commands.push(command);
+          if (command === "APPEND") {
+            const folder = line.match(/APPEND (?:"([^"]+)"|(\S+))/)?.slice(1).find(Boolean) ?? "";
+            append = { tag, folder, size: Number(line.match(/\{(\d+)\+?\}$/)?.[1]) };
+            if (!line.endsWith("+}")) socket.write("+ send literal\r\n");
+            continue;
+          }
           if (command === "CAPABILITY") socket.write(`* CAPABILITY IMAP4rev1 AUTH=PLAIN${options.idle === false ? "" : " IDLE"}\r\n${tag} OK capability\r\n`);
           else if (command === "IDLE") { idleTag = tag; socket.write("+ idling\r\n"); }
           else if (command === "NOOP") socket.write(`* ${mailbox.messages.length} EXISTS\r\n${tag} OK noop\r\n`);
@@ -133,7 +156,7 @@ export async function mailServer(protocol: "imap" | "smtp", options: { stallSele
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No fixture port");
   return {
-    port: address.port, commands, sockets, messages, mailbox: defaultMailbox, mailboxes, fetchedSourceBytes, faults: options,
+    port: address.port, commands, sockets, messages, mailbox: defaultMailbox, mailboxes, fetchedSourceBytes, appendedMime, faults: options,
     signal(folder = "INBOX") { for (const socket of sockets) if (selected.get(socket) === folder) socket.write(`* ${mailboxes.get(folder)?.messages.length ?? 0} EXISTS\r\n`); },
     async close() {
       for (const socket of sockets) socket.destroy();

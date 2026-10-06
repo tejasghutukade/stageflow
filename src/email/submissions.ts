@@ -43,12 +43,16 @@ export class EmailSubmissions {
     this.file = path.join(scope, ".stageflow", "email-submissions.json");
     this.records = existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : [];
     for (const record of this.records) if (record.state === "pending") record.state = "unknown";
+    for (const record of this.records) if (record.receipt?.sentCopy?.state === "pending") {
+      record.receipt.sentCopy = { state: "unknown" };
+      record.receipt.warnings = ["EMAIL_SENT_COPY_OUTCOME_UNKNOWN"];
+    }
   }
   list(): SubmissionRecord[] { return structuredClone(this.records); }
   async drain(): Promise<void> { await Promise.allSettled(this.active.values()); }
   setAccepting(accepting: boolean): void { this.accepting = accepting; }
 
-  async send(input: SendEmailInput, submit: (operationId: string) => Promise<SendEmailResult>, identity?: unknown): Promise<SendEmailResult> {
+  async send(input: SendEmailInput, submit: (operationId: string, accepted: (receipt: SendEmailResult) => void) => Promise<SendEmailResult>, identity?: unknown): Promise<SendEmailResult> {
     if (!this.accepting) throw new EmailError("EMAIL_CONNECTION_FAILED", true);
     const hash = createHash("sha256").update(JSON.stringify(identity === undefined ? input : { input, identity })).digest("hex");
     const key = `${input.accountId}\0${input.operationKey}`;
@@ -63,18 +67,34 @@ export class EmailSubmissions {
     }
     // Completed records expire after 30 days; unresolved records are never evicted.
     const cutoff = Date.now() - 30 * 86400000;
-    this.records = this.records.filter(record => !["submitted", "failed"].includes(record.state) || Date.parse(record.createdAt) >= cutoff);
+    this.records = this.records.filter(record => !["submitted", "failed"].includes(record.state)
+      || ["pending", "unknown"].includes(record.receipt?.sentCopy?.state ?? "") || Date.parse(record.createdAt) >= cutoff);
     if (this.records.length >= 10000) throw new EmailError("EMAIL_RESOURCE_LIMIT");
     const record: SubmissionRecord = { operationId: randomUUID(), accountId: input.accountId,
       operationKey: input.operationKey, hash, state: "pending", createdAt: new Date().toISOString() };
     this.records.push(record);
     this.persist();
-    const work = Promise.resolve().then(() => submit(record.operationId)).then(receipt => {
+    let checkpointed = false;
+    const work = Promise.resolve().then(() => submit(record.operationId, receipt => {
+      checkpointed = true;
+      record.state = "submitted";
+      record.receipt = structuredClone(receipt);
+      this.persist();
+    })).then(receipt => {
       record.state = "submitted";
       record.receipt = receipt;
       this.persist();
       return structuredClone(receipt);
     }).catch(error => {
+      if (checkpointed && record.receipt) {
+        if (record.receipt.sentCopy?.state === "pending") {
+          record.receipt.sentCopy = { state: "unknown", error: "EMAIL_STORAGE_FAILED" };
+          record.receipt.warnings = ["EMAIL_SENT_COPY_OUTCOME_UNKNOWN"];
+        }
+        record.receipt.warnings = [...record.receipt.warnings ?? [], "EMAIL_STORAGE_FAILED"];
+        try { this.persist(); } catch { /* The durable pending record still forbids resubmission. */ }
+        return structuredClone(record.receipt);
+      }
       const fault = error instanceof EmailError ? error : new EmailError("EMAIL_SEND_OUTCOME_UNKNOWN");
       record.state = fault.code === "EMAIL_SEND_OUTCOME_UNKNOWN" ? "unknown" : "failed";
       record.error = { code: fault.code, retryable: fault.retryable };

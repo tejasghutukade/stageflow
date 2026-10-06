@@ -81,6 +81,20 @@ Inspect operation outcomes with `GET /api/email/submissions` under the same loca
 
 Each submission has a bounded connection deadline. Account changes and host shutdown close active connections. A cancellation after possible submission is uncertain and cannot cause an automatic resend.
 
+## Sent folder copies
+
+`sentCopyPolicy` defaults to `"provider-managed"`. Stageflow submits through SMTP and lets the provider file sent mail. Some providers file SMTP messages automatically. Others do not. Setting `sentFolder` alone does not create a copy.
+
+For a provider that does not file SMTP messages, set `sentCopyPolicy: "imap-append"` and `sentFolder: "Sent"` (or the exact existing provider folder). Stageflow does not create the folder. Do not use this policy if the provider already files submissions, because it can produce two copies. You can use `search_email` with `mailbox: "Sent"`, then retrieve the returned reference, to inspect a successful copy.
+
+Stageflow builds one MIME representation in bounded memory. SMTP and IMAP receive the same bytes, including the Message-ID, Date, reply headers, bodies, and attachments. Bcc addresses are envelope recipients and are absent from these bytes. `sentCopyMaxBytes` limits the complete encoded message before SMTP starts. Its default is 8388608 (8 MiB), with a range of 1–50331648 bytes. Base64 encoding increases attachment size. Existing attachment limits also apply.
+
+The host stores the SMTP receipt before it starts append. The result has `sentCopy.state`: `completed`, `failed`, or `unknown`. Copy faults return SMTP success with `EMAIL_SENT_COPY_FAILED` or `EMAIL_SENT_COPY_OUTCOME_UNKNOWN` in `warnings`. A safe normalized error can accompany the copy state. This does not request another send. Timeout, disconnect, cancellation, or a restart during append can leave a copy at the provider with an unknown outcome. Stageflow never automatically repeats that append or SMTP submission. Inspect the provider before any manual action. Replies and attachments use this same policy.
+
+Concurrent requests with the same key wait for the same operation. Repeated requests and restarts return the retained receipt without contacting either provider. A crash before the SMTP receipt checkpoint remains an unknown send outcome. A crash after that checkpoint returns known SMTP success and an unknown copy warning. No MIME or body is stored in the ledger. Completed and failed copy outcomes use the existing 30-day retention. Pending and unknown copy outcomes remain within the existing 10000-record capacity. If receipt storage fails after known SMTP acceptance, the current request returns success with an `EMAIL_STORAGE_FAILED` warning. The last durable record still prevents an automatic resend; a restart can return an unknown send or copy outcome. Keep one host writer per workspace.
+
+These new defaults are part of the saved account settings. Pending trigger work saved with an older account settings hash can suspend after upgrade. Inspect and explicitly resume that work with the current settings.
+
 ## Incoming detection
 
 Detection requires the long running HTTP host. A stage call or a short CLI command does not start a watcher. The host keeps one connection per enabled account and configured folder. Repeated start does not add connections. Account changes stop the affected connections and start watchers with the new settings. Shutdown closes connections and waits for active event acceptance and operation ledger writes.

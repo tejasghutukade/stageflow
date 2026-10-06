@@ -43,6 +43,7 @@ export type ReplyToEmailInput = {
 export type SendEmailResult = {
   operationId: string; messageId?: string; accepted: string[]; rejected: string[];
   submittedAt: string; warnings?: string[];
+  sentCopy?: { state: "pending" | "completed" | "failed" | "unknown"; error?: EmailErrorCode };
 };
 export type SearchEmailsInput = {
   accountId: string; mailbox?: string; text?: string; from?: string; to?: string;
