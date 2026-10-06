@@ -7,6 +7,10 @@ on:
         description: "stageflow version to install from npm (default: package.json)"
         required: false
         type: string
+      install_from_checkout:
+        description: "Build and link Stageflow from this checkout instead of npm (use when npm lacks runtime fixes)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -66,8 +70,12 @@ jobs:
           node-version: "24"
 
       - name: Install Stageflow from npm
-        if: steps.gate.outputs.release == 'true'
+        if: steps.gate.outputs.release == 'true' && inputs.install_from_checkout != true
         run: bash scripts/wait-install-npm-stageflow.sh "${{ steps.gate.outputs.version }}"
+
+      - name: Build and link Stageflow from checkout
+        if: steps.gate.outputs.release == 'true' && inputs.install_from_checkout == true
+        run: bash scripts/install-stageflow-from-checkout.sh
 
       - name: Install pi-cursor-sdk
         if: steps.gate.outputs.release == 'true'
