@@ -16,6 +16,7 @@ import { canAbandon } from "../../stageAction";
 import { LuChevronRight, LuCircleX, LuCopy, LuRotateCcw } from "react-icons/lu";
 import { RunDetailViewToggle } from "./RunDetailViewToggle";
 import { runsPipelineDisplayId } from "./runsRowHelpers";
+import { runGoalFromTaskYaml } from "./runTaskGoal";
 
 export type RunDetailViewMode = "timeline" | "graph" | "list";
 
@@ -73,6 +74,7 @@ export function RunDetailHeader({
   const pipelineLabel = runsPipelineDisplayId(run as unknown as RunSummary);
   const showPipeline =
     pipelineLabel && pipelineLabel !== "—" ? pipelineLabel : null;
+  const goalSummary = runGoalFromTaskYaml(run.task_yaml);
 
   const copyRunId = () => {
     void navigator.clipboard?.writeText(run.run_id);
@@ -106,13 +108,21 @@ export function RunDetailHeader({
           </button>
         </div>
         <div className="flex min-w-0 items-center gap-2.5">
-          <h1 className="min-w-0 truncate font-sans text-[21px] font-semibold leading-[1.2] tracking-[-0.42px] text-[var(--sf-text-1)]">
+          <h1 className="shrink-0 font-sans text-[21px] font-semibold leading-[1.2] tracking-[-0.42px] text-[var(--sf-text-1)]">
             {runTaskLabel(run)}
           </h1>
           <StatusPill
             signal={statusSignalFromRun(run as unknown as RunSummary)}
             label={runStatusPillLabel(runDisplayStatus(run as unknown as RunSummary))}
           />
+          {goalSummary ? (
+            <span
+              className="min-w-0 truncate font-sans text-[13px] leading-normal text-[var(--sf-text-3)]"
+              title={goalSummary}
+            >
+              {goalSummary}
+            </span>
+          ) : null}
         </div>
         {showPipeline || started || (duration && duration !== "—") || (cost && cost !== "—") ? (
           <div className="flex flex-wrap items-center gap-2 font-['Geist_Mono',monospace] text-xs">
@@ -146,7 +156,7 @@ export function RunDetailHeader({
         {showAbandon && onAbandonStage ? (
           <button
             type="button"
-            className="sf-btn sf-btn--ghost flex h-8 items-center gap-1.5 px-3 text-[13px]"
+            className="sf-btn sf-btn--ghost flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium"
             disabled={abandoning}
             onClick={onAbandonStage}
           >
@@ -156,12 +166,17 @@ export function RunDetailHeader({
         ) : null}
         <button
           type="button"
-          className="sf-btn sf-btn--secondary flex h-8 items-center gap-1.5 px-3 text-[13px]"
+          className="sf-btn sf-btn--secondary flex h-8 items-center gap-1.5 px-3 text-[13px] font-medium"
           disabled={rerunning || cancelling || deleting}
           onClick={onRerun}
         >
           <LuRotateCcw className="size-3.5 shrink-0" aria-hidden="true" />
           {rerunning ? "Starting fresh…" : "Start fresh"}
+          {!rerunning ? (
+            <span className="font-['Geist_Mono',monospace] text-[11px] font-normal text-[var(--sf-text-3)]">
+              F
+            </span>
+          ) : null}
         </button>
         {canCancelRun(run.status) ? (
           <button

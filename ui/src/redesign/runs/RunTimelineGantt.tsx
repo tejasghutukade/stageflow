@@ -92,7 +92,7 @@ export function RunTimelineGantt({
       <div className="flex items-center justify-between px-6 pb-2 pt-0">
         <div className="flex items-center gap-2">
           <span className="font-sans text-[11px] font-medium uppercase tracking-[0.88px] text-[var(--sf-text-3)]">
-            Timeline
+            Stages
           </span>
           <span className="font-['Geist_Mono',monospace] text-xs text-[var(--sf-text-2)]">
             {doneCount} / {stages.length} done
@@ -188,7 +188,7 @@ export function RunTimelineGantt({
                   : signal === "running"
                     ? "text-[var(--sf-running)]"
                     : "text-[var(--sf-text-2)]";
-          const mutedLabel = blocked || (stage.status === "pending" && !blocked);
+          const mutedLabel = blocked;
           const selectionBarClass =
             signal === "fail"
               ? "bg-[var(--sf-fail)]"
