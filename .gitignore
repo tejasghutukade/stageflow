@@ -57,6 +57,7 @@ docs/container-ready-plan.html
 docs/specs/pre-container-work.md
 docs/specs/host-owned-worktrees.md
 docs/specs/run-scoped-skills.md
+docs/specs/agent-email-connector.md
 !docs/tickets/
 docs/tickets/*
 !docs/tickets/**/
