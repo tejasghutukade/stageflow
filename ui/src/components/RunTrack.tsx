@@ -20,6 +20,7 @@ export type TrackLayout =
 export type RunTrackProps = {
   trackLayout: TrackLayout;
   detailListRows: TrackDetailRow[];
+  listHeader?: string;
   selectedStageId?: string | null;
   onSelect?: (stageId: string) => void;
   onEnvelopeClick?: (fromStageId: string) => void;
@@ -33,6 +34,7 @@ export type RunTrackProps = {
 export function RunTrack({
   trackLayout,
   detailListRows,
+  listHeader,
   selectedStageId,
   onSelect,
   onEnvelopeClick,
@@ -70,6 +72,11 @@ export function RunTrack({
           activeEnvelopeId={activeEnvelopeId}
         />
       )}
+      {listHeader ? (
+        <p className="track-band__waiting-header px-3 py-2 font-sans text-[13px] text-[var(--sf-needs)]">
+          {listHeader}
+        </p>
+      ) : null}
       {detailListRows.length > 0 ? (
         <TrackDetailList
           rows={detailListRows}

@@ -555,6 +555,7 @@ function nodeChromeFromTrack(
         readiness: node.readiness,
         blocked_by: node.blocked_by,
         status,
+        blockersLabel: (id) => stageCloneLabel(run, id),
       }),
       gateKinds: node.gate_kinds,
       meta: status === "running" ? snapshot?.last_at : undefined,

@@ -437,6 +437,7 @@ export function RunDetailPageRedesign({
         <RunTrack
           trackLayout={trackView.trackLayout}
           detailListRows={trackView.detailListRows}
+          listHeader={trackView.listHeader}
           selectedStageId={workspace.selectedStageId}
           onSelect={selectStage}
           retryingStageIds={retryingStageIds}

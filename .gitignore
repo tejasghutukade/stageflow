@@ -80,4 +80,4 @@ software-factory-usecases-pitch-targets.md
 .stageflow-backup-test/
 .stageflow-ci-test/
 benchmarks/
-runs/
+/runs/
