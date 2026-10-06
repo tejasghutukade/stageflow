@@ -11,25 +11,13 @@ import {
   type StageVerificationHistory,
 } from "../../api";
 import { useRunCatalog, useRunCatalogHandle } from "../../catalog/useRunCatalog";
-import { ArtifactReader } from "../../components/ArtifactReader";
 import { EnvelopeDrawer } from "../../components/EnvelopeDrawer";
-import { EnvelopeRecord } from "../../components/EnvelopeFields";
 import { FeedbackDecidePanel } from "../../components/FeedbackDecidePanel";
 import { FeedbackLoopPanel } from "../../components/FeedbackLoopPanel";
-import { LogPanel } from "../../components/LogPanel";
-import { RunTrack } from "../../components/RunTrack";
 import { SpatialRunMap } from "../../components/SpatialRunMap";
-import { TranscriptStream } from "../../components/TranscriptStream";
-import { TranscriptTurns } from "../../components/TranscriptTurns";
 import { VerificationHistory } from "../../components/VerificationHistory";
 import type { DetailView } from "../../routes";
 import { useRunCancel, useRunDelete } from "../../runLifecycle/useRunLifecycle";
-import {
-  abandonedDisplayCopy,
-  cssStatusToken,
-  isAbandonedDisplay,
-  statusCopy,
-} from "../../status/runStatus";
 import {
   canAbandon,
   useStageAbandon,
@@ -40,17 +28,26 @@ import {
   activeWaitKey,
   resolveRunWorkspace,
   runDetailShouldPoll,
-  stageCloneLabel,
 } from "../../workspace/resolveRunWorkspace";
 import { resolveStreamRoute } from "../../workspace/resolveStreamRoute";
+import {
+  RunDetailCenterTabs,
+  type RunDetailCenterTab,
+} from "../../redesign/runs/RunDetailCenterTabs";
+import { RunArtifactsPanel } from "../../redesign/runs/RunArtifactsPanel";
 import { RunDetailGateSection } from "../../redesign/runs/RunDetailGateSection";
+import { RunEnvelopePanel } from "../../redesign/runs/RunEnvelopePanel";
+import { RunEventsPanel } from "../../redesign/runs/RunEventsPanel";
 import {
   RunDetailHeader,
   type RunDetailViewMode,
 } from "../../redesign/runs/RunDetailHeader";
 import { RunDetailLoadingShell } from "../../redesign/runs/RunDetailLoadingShell";
 import { RunStageInspector } from "../../redesign/runs/RunStageInspector";
+import { RunDetailListBand } from "../../redesign/runs/RunDetailListBand";
 import { RunTimelineGantt } from "../../redesign/runs/RunTimelineGantt";
+import { RunDetailTranscriptBody } from "../../redesign/runs/RunDetailTranscriptBody";
+import { RunDetailTranscriptTurns } from "../../redesign/runs/RunDetailTranscriptTurns";
 import { buildRunTrackView } from "../../runs/buildRunTrackView";
 
 export function RunDetailPageRedesign({
@@ -77,7 +74,7 @@ export function RunDetailPageRedesign({
   const [pipelines, setPipelines] = useState<PipelineListing[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<RunDetailViewMode>("timeline");
-  const [centerTab, setCenterTab] = useState<"transcript" | "logs">("transcript");
+  const [centerTab, setCenterTab] = useState<RunDetailCenterTab>("transcript");
   const [verification, setVerification] = useState<StageVerificationHistory | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(null);
   const [manualRecoveryBusy, setManualRecoveryBusy] = useState(false);
@@ -244,6 +241,15 @@ export function RunDetailPageRedesign({
 
   if (workspace) previousStageIdRef.current = workspace.selectedStageId;
 
+  useEffect(() => {
+    if (!workspace) return;
+    if (workspace.kind === "artifact" && workspace.selectedPath) {
+      setCenterTab("artifacts");
+    } else if (workspace.kind === "envelope") {
+      setCenterTab("envelope");
+    }
+  }, [workspace?.kind, workspace?.selectedPath]);
+
   const verificationStageId = workspace?.selectedStageId;
   const verificationAttemptCount = workspace?.selectedStage?.attempt_count;
   useEffect(() => {
@@ -368,7 +374,8 @@ export function RunDetailPageRedesign({
   );
 
   const inboundSummary = workspace?.inboundEnvelope?.summary ?? null;
-  const selectedPath = workspace?.selectedPath;
+  const artifactInitialPath =
+    workspace?.kind === "artifact" ? workspace.selectedPath : null;
   const hasMapNodes = Boolean(workspace && workspace.spatialLayout.nodes.length > 0);
 
   const banner =
@@ -433,19 +440,16 @@ export function RunDetailPageRedesign({
   } else if (viewMode === "list") {
     const trackView = buildRunTrackView(run, workspace.trackStages, workspace.selectedStageId);
     mainView = (
-      <div className="px-3 py-2">
-        <RunTrack
-          trackLayout={trackView.trackLayout}
-          detailListRows={trackView.detailListRows}
-          listHeader={trackView.listHeader}
-          selectedStageId={workspace.selectedStageId}
-          onSelect={selectStage}
-          retryingStageIds={retryingStageIds}
-          onRetryStage={retryAndSelect}
-          abandoningStageId={abandoningStageId}
-          onAbandonStage={abandon}
-        />
-      </div>
+      <RunDetailListBand
+        detailListRows={trackView.detailListRows}
+        listHeader={trackView.listHeader}
+        selectedStageId={workspace.selectedStageId}
+        onSelect={selectStage}
+        retryingStageIds={retryingStageIds}
+        onRetryStage={retryAndSelect}
+        abandoningStageId={abandoningStageId}
+        onAbandonStage={abandon}
+      />
     );
   } else {
     mainView = (
@@ -456,82 +460,33 @@ export function RunDetailPageRedesign({
   }
 
   let center;
-  if (workspace.kind === "artifact" && selectedPath) {
-    center = (
-      <ArtifactReader
-        runId={runId}
-        path={selectedPath}
-        readOnly={workspace.artifactReadOnly}
-        onBackToTranscript={() => selectStage(workspace.selectedStageId ?? "")}
-        onHide={hideWorkspace}
-      />
-    );
-  } else if (workspace.kind === "envelope" && workspace.envelope) {
-    center = workspace.envelope.envelope ? (
-      <EnvelopeRecord
-        fromStageId={workspace.envelope.fromStageId}
-        toStageId={workspace.envelope.toStageId}
-        envelope={workspace.envelope.envelope}
-        onBackToTranscript={() =>
-          selectStage(workspace.selectedStageId ?? "")
-        }
-        onHide={hideWorkspace}
-        onArtifactClick={onOpenArtifact}
-        stageLabel={(id) => stageCloneLabel(run, id)}
-      />
-    ) : (
-      <p className="sf-run-detail__empty">No handoff envelope yet.</p>
-    );
-  } else if (workspace.selectedStageId && stage) {
-    const stageToken = cssStatusToken(stage.status);
-    const abandoned = isAbandonedDisplay(stage.events);
+  if (workspace.selectedStageId && stage) {
+    const streamStageLabel =
+      workspace.trackStages.find((s) => s.id === stage.stage_id)?.label ??
+      stage.stage_id;
     center = (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="flex shrink-0 gap-1.5 border-b border-b-[#ffffff12] px-3 py-2">
-          <button
-            type="button"
-            className={`sf-btn sf-btn--sm${centerTab === "transcript" ? " sf-btn--selected" : ""}`}
-            onClick={() => setCenterTab("transcript")}
-          >
-            Transcript
-          </button>
-          <button
-            type="button"
-            className={`sf-btn sf-btn--sm${centerTab === "logs" ? " sf-btn--selected" : ""}`}
-            onClick={() => setCenterTab("logs")}
-          >
-            Logs
-          </button>
-        </div>
+        <RunDetailCenterTabs
+          tab={centerTab}
+          onTabChange={setCenterTab}
+          stage={stage}
+          stageLabel={streamStageLabel}
+          eventCount={stage.events.length}
+          artifactCount={stage.artifacts?.length ?? 0}
+        />
         {centerTab === "transcript" ? (
-          <TranscriptStream
-            stageName={
-              workspace.trackStages.find((s) => s.id === stage.stage_id)?.label ??
-              stage.stage_id
-            }
-            status={
-              abandoned ? (
-                <span className="status status--failed">
-                  {abandonedDisplayCopy()}
-                </span>
-              ) : (
-                <span className={`status${stageToken && stageToken !== "running" ? ` status--${stageToken}` : ""}`}>
-                  {statusCopy(stage.status)}
-                </span>
-              )
-            }
-            trailing={null}
+          <RunDetailTranscriptBody
             autoScroll={workspace.liveStream}
             scrollKey={stage.events.length}
-            composer={undefined}
           >
-            <TranscriptTurns
+            <RunDetailTranscriptTurns
               events={stage.events}
               inboundEnvelope={workspace.inboundEnvelope}
             />
             <RunDetailGateSection
               run={run}
               stage={stage}
+              health={health}
               onAnswered={() => void onStageActionSuccess()}
             />
             <VerificationHistory
@@ -541,10 +496,34 @@ export function RunDetailPageRedesign({
               onRecover={(guidance) => void recoverStage(stage.stage_id, guidance)}
               onStop={() => void stopStageRecovery(stage.stage_id)}
             />
-          </TranscriptStream>
-        ) : (
-          <LogPanel events={stage.events} headerAction={null} />
-        )}
+          </RunDetailTranscriptBody>
+        ) : null}
+        {centerTab === "events" ? (
+          <RunEventsPanel
+            events={stage.events}
+            stageId={stage.stage_id}
+            live={workspace.liveStream}
+          />
+        ) : null}
+        {centerTab === "envelope" ? (
+          <RunEnvelopePanel
+            run={run}
+            stage={stage}
+            onArtifactClick={(path) => {
+              setCenterTab("artifacts");
+              onOpenArtifact(path);
+            }}
+          />
+        ) : null}
+        {centerTab === "artifacts" ? (
+          <RunArtifactsPanel
+            runId={runId}
+            run={run}
+            stage={stage}
+            initialPath={artifactInitialPath}
+            readOnly={workspace.artifactReadOnly}
+          />
+        ) : null}
         {workspace.showFeedbackDecide && workspace.feedbackDecide ? (
           <FeedbackDecidePanel
             runId={runId}
@@ -607,7 +586,11 @@ export function RunDetailPageRedesign({
           onRetry={retryAndSelect}
           onResume={resumeAndSelect}
           onAbandon={abandon}
-          onOpenArtifact={onOpenArtifact}
+          onOpenArtifact={(path) => {
+            setCenterTab("artifacts");
+            onOpenArtifact(path);
+          }}
+          onOpenEnvelope={onOpenEnvelope}
           artifactPath={stage?.artifacts?.[0] ?? null}
         />
       </div>
