@@ -469,28 +469,35 @@ export function RunDetailPageRedesign({
           artifactCount={stage.artifacts?.length ?? 0}
         />
         {centerTab === "transcript" ? (
-          <RunDetailTranscriptBody
-            autoScroll={workspace.liveStream}
-            scrollKey={stage.events.length}
-          >
-            <RunDetailTranscriptTurns
-              events={stage.events}
-              inboundEnvelope={workspace.inboundEnvelope}
-            />
-            <RunDetailGateSection
-              run={run}
-              stage={stage}
-              health={health}
-              onAnswered={() => void onStageActionSuccess()}
-            />
-            <VerificationHistory
-              history={verification}
-              error={verificationError}
-              recovering={manualRecoveryBusy}
-              onRecover={(guidance) => void recoverStage(stage.stage_id, guidance)}
-              onStop={() => void stopStageRecovery(stage.stage_id)}
-            />
-          </RunDetailTranscriptBody>
+          <>
+            <RunDetailTranscriptBody
+              autoScroll={workspace.liveStream}
+              scrollKey={stage.events.length}
+            >
+              <RunDetailTranscriptTurns
+                events={stage.events}
+                inboundEnvelope={workspace.inboundEnvelope}
+                stageLabel={streamStageLabel}
+              />
+              <RunDetailGateSection
+                run={run}
+                stage={stage}
+                health={health}
+                onAnswered={() => void onStageActionSuccess()}
+              />
+            </RunDetailTranscriptBody>
+            {verification || verificationError ? (
+              <div className="shrink-0 border-t border-t-[#ffffff12] px-6 py-2">
+                <VerificationHistory
+                  history={verification}
+                  error={verificationError}
+                  recovering={manualRecoveryBusy}
+                  onRecover={(guidance) => void recoverStage(stage.stage_id, guidance)}
+                  onStop={() => void stopStageRecovery(stage.stage_id)}
+                />
+              </div>
+            ) : null}
+          </>
         ) : null}
         {centerTab === "events" ? (
           <RunEventsPanel

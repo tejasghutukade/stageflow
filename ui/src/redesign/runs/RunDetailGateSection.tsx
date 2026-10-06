@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LuHand } from "react-icons/lu";
 import type {
   CapacityHealth,
   PendingPrompt,
@@ -6,10 +7,21 @@ import type {
   RunSummary,
   StageSnapshot,
 } from "../../api";
+import { relativeTime } from "../../catalogJoin";
 import { stageCloneLabel } from "../../workspace/resolveRunWorkspace";
 import { GateAnswerPanel, type GateAnswerActions } from "../gate/GateAnswerPanel";
 import { GateDecisionBar } from "../inbox/GateDecisionBar";
 import { useHotkeys } from "../keys";
+
+function gatePromptAge(stage: StageSnapshot): string | undefined {
+  for (let i = stage.events.length - 1; i >= 0; i -= 1) {
+    const ev = stage.events[i];
+    if (ev.event === "waiting_for_input" || ev.event === "operator_prompt") {
+      if (ev.at) return relativeTime(ev.at);
+    }
+  }
+  return undefined;
+}
 
 export function RunDetailGateSection({
   run,
@@ -32,6 +44,8 @@ export function RunDetailGateSection({
     run.waiting_kind !== "feedback_loop_decision";
   const holdingSlot = health?.activeRunIds?.includes(run.run_id) ?? false;
   const stageLabel = stageCloneLabel(run, stage.stage_id);
+  const gateAge = gatePromptAge(stage);
+  const kindChip = pendingPrompt?.kind?.replace(/_/g, " ") ?? "gate";
 
   useEffect(() => {
     setNote("");
@@ -80,23 +94,35 @@ export function RunDetailGateSection({
   if (!showGate) return null;
 
   return (
-    <section className="mx-3 mb-4 mt-2 rounded-xl border border-[#f5b54433] bg-[#f5b5440a]">
-      <header className="flex flex-wrap items-center gap-2 border-b border-b-[#ffffff0f] px-4 py-3">
-        <h3 className="text-[13px] font-semibold text-[var(--sf-text-1)]">
-          {stageLabel} is asking you
+    <section className="flex flex-col rounded-xl border border-[#f5b54473] bg-[#f5b5440a] shadow-[0px_0px_0px_1px_rgba(245,181,68,0.08),0px_0px_24px_rgba(245,181,68,0.14)]">
+      <header className="flex h-9 shrink-0 items-center gap-2 border-b border-b-[#f5b5442e] px-3.5">
+        <LuHand className="size-3.5 shrink-0 text-[#f5b544]" aria-hidden="true" />
+        <h3 className="text-[13px] font-medium text-[#f5b544]">
+          {stageLabel.trim().toLowerCase()} is asking you
         </h3>
-        {run.waiting_kind ? (
-          <span className="rounded-full border border-[#f5b5444d] bg-[#f5b5441f] px-2 py-0.5 text-[11px] font-medium text-[var(--sf-needs)]">
-            {run.waiting_kind.replace(/_/g, " ")}
-          </span>
-        ) : null}
+        <span className="text-xs text-[#8b8f98]" aria-hidden="true">
+          ·
+        </span>
+        <span className="rounded-sm border border-[#ffffff1a] bg-[#1a1c21] px-1.5 py-0 font-['Geist_Mono',monospace] text-[11px] text-[#a7aab2]">
+          {kindChip}
+        </span>
+        {gateAge ? (
+          <>
+            <span className="text-xs text-[#8b8f98]" aria-hidden="true">
+              ·
+            </span>
+            <span className="flex-1 font-['Geist_Mono',monospace] text-xs text-[#a7aab2]">
+              {gateAge}
+            </span>
+          </>
+        ) : (
+          <span className="flex-1" />
+        )}
         {holdingSlot ? (
-          <span className="ml-auto text-[11px] text-[var(--sf-text-3)]">
-            Holding 1 agent slot
-          </span>
+          <span className="text-xs text-[#8b8f98]">holding 1 agent slot</span>
         ) : null}
       </header>
-      <div className="px-4 py-3">
+      <div className="flex flex-col gap-2.5 p-3.5">
         <GateAnswerPanel
           run={run as unknown as RunSummary}
           stageId={stage.stage_id}
@@ -104,17 +130,19 @@ export function RunDetailGateSection({
           note={note}
           onAnswered={onAnswered}
           onRegisterActions={setPanelActions}
+          presentation="run-detail-inline"
+        />
+        <GateDecisionBar
+          layout="run-detail-inline"
+          note={note}
+          onNoteChange={setNote}
+          noteRef={noteRef}
+          onAccept={() => void panelActions?.accept()}
+          onReject={() => void panelActions?.reject()}
+          disabled={panelActions?.locked}
+          canReject={panelActions?.canReject ?? false}
         />
       </div>
-      <GateDecisionBar
-        note={note}
-        onNoteChange={setNote}
-        noteRef={noteRef}
-        onAccept={() => void panelActions?.accept()}
-        onReject={() => void panelActions?.reject()}
-        disabled={panelActions?.locked}
-        canReject={panelActions?.canReject ?? false}
-      />
     </section>
   );
 }

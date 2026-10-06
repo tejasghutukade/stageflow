@@ -22,6 +22,7 @@ export type GateAnswerPanelProps = {
   note: string;
   rationale?: string | null;
   onRegisterActions?: (actions: GateAnswerActions | null) => void;
+  presentation?: "default" | "run-detail-inline";
 };
 
 export type GateAnswerActions = {
@@ -41,6 +42,7 @@ export function GateAnswerPanel({
   note,
   rationale,
   onRegisterActions,
+  presentation = "default",
 }: GateAnswerPanelProps) {
   const pending =
     pendingPrompt && !showOpenRunOnly
@@ -182,13 +184,23 @@ export function GateAnswerPanel({
     .filter(Boolean)
     .join(" · ");
 
+  const inline = presentation === "run-detail-inline";
+
   return (
     <>
-      <div className="flex max-w-[680px] flex-col gap-2.5">
-        <div className="text-xs font-medium uppercase tracking-[0.96px] text-[var(--sf-needs)]">
-          {askerLine}
-        </div>
-        <div className="text-xl font-medium leading-[1.4] tracking-[-0.2px] text-[var(--sf-text-1)]">
+      <div className={`flex flex-col gap-2.5${inline ? "" : " max-w-[680px]"}`}>
+        {inline ? null : (
+          <div className="text-xs font-medium uppercase tracking-[0.96px] text-[var(--sf-needs)]">
+            {askerLine}
+          </div>
+        )}
+        <div
+          className={
+            inline
+              ? "text-[15px] font-medium leading-[1.45] text-[var(--sf-text-1)]"
+              : "text-xl font-medium leading-[1.4] tracking-[-0.2px] text-[var(--sf-text-1)]"
+          }
+        >
           {question}
         </div>
       </div>
