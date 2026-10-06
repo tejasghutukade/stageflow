@@ -3754,10 +3754,13 @@ describe("localhost HTTP API", () => {
       try {
         const detect = await jsonFetch(`${base}/api/providers/detect`);
         expect(detect.status).toBe(200);
-        expect(typeof detect.body.piHomeUsable).toBe("boolean");
-        expect(detect.body.source).toMatch(/^(pi_home|sf_owned)$/);
+        expect(typeof detect.body.authConfigured).toBe("boolean");
+        expect(detect.body.source).toBe("sf_owned");
         expect(detect.body.authPath).toBeUndefined();
-        expect(JSON.stringify(detect.body)).not.toMatch(/sk-|apiKey|token/i);
+        const detectJson = JSON.stringify(detect.body);
+        expect(detectJson).not.toMatch(/sk-[a-zA-Z0-9]{8,}/);
+        expect(detectJson).not.toMatch(/"apiKey"\s*:/);
+        expect(detectJson).not.toMatch(/"(access_|refresh_)?token"\s*:\s*"/i);
 
         const setCs = await jsonFetch(`${base}/api/settings`, {
           method: "POST",

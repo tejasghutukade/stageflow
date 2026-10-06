@@ -226,7 +226,7 @@ describe("CLI providers", () => {
       const cap = captureIo();
       const code = await runProvidersCommand(["detect"], home, cap.io);
       expect(code).toBe(0);
-      expect(cap.combined()).toMatch(/piHomeUsable=/);
+      expect(cap.combined()).toMatch(/authConfigured=/);
       expect(cap.combined()).toMatch(/provisional=/);
       expect(cap.combined()).toMatch(/credentialSource=sf_owned|bindingSource=/);
       expect(cap.combined()).not.toContain("SECRET-DETECT-MARKER");
@@ -239,18 +239,18 @@ describe("CLI providers", () => {
       expect(await runProvidersCommand(["source", "get"], home, unset.io)).toBe(
         0,
       );
-      expect(unset.combined()).toMatch(/unset|pi_home|sf_owned/);
+      expect(unset.combined()).toMatch(/unset|sf_owned/);
 
-      writeCredentialSourceToFile(home, "pi_home");
+      writeCredentialSourceToFile(home, "sf_owned");
       const set = captureIo();
       expect(await runProvidersCommand(["source"], home, set.io)).toBe(0);
-      expect(set.stdout.join("\n").trim()).toBe("pi_home");
+      expect(set.stdout.join("\n").trim()).toBe("sf_owned");
     });
   });
 
   it("source set round-trips and rejects invalid values", async () => {
     await withIsolatedHome(async (home) => {
-      writeCredentialSourceToFile(home, "pi_home");
+      writeCredentialSourceToFile(home, "sf_owned");
 
       const ok = captureIo();
       expect(
@@ -264,7 +264,7 @@ describe("CLI providers", () => {
         await runProvidersCommand(["source", "set", "bogus"], home, bad.io),
       ).toBe(1);
       expect(readCredentialSourceFromFile(home)).toBe("sf_owned");
-      expect(bad.combined()).toMatch(/pi_home or sf_owned/);
+      expect(bad.combined()).toMatch(/sf_owned/);
     });
   });
 

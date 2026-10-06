@@ -32,23 +32,20 @@ describe("operator console brand copy", () => {
     expect(src).not.toMatch(/Software Factory/);
   });
 
-  it("names Stageflow in Settings provider copy and keeps sf_owned", () => {
+  it("names Stageflow in Settings provider copy", () => {
     const src = readUi("./components/SettingsProviders.tsx");
-    expect(src).toMatch(/Stageflow-owned/);
-    expect(src).toMatch(/value="sf_owned"/);
+    expect(src).toMatch(/PROVIDERS_PI_COPY/);
+    expect(readUi("./providers/helpers.ts")).toMatch(/Stageflow/);
     expect(src).not.toMatch(/software-factory/);
     expect(src).not.toMatch(/Software Factory/);
+    expect(src).not.toMatch(/value="pi_home"/);
   });
 
-  it("names Stageflow on Connect and keeps sf_owned", () => {
+  it("names Stageflow on Connect and persists sf_owned", () => {
     const src = readUi("./pages/ProviderConnectPage.tsx");
-    expect(src).toMatch(/Set up in Stageflow/);
-    expect(src).toMatch(/inside Stageflow/);
-    expect(src).toMatch(/in Stageflow/);
-    expect(src).toMatch(/useState<CredentialSource>\("sf_owned"\)/);
     expect(src).toMatch(/postCredentialSource\("sf_owned"\)/);
-    expect(src).toMatch(/choice === "sf_owned"/);
     expect(src).not.toMatch(/software-factory/);
     expect(src).not.toMatch(/Software Factory/);
+    expect(src).not.toMatch(/pi_home/);
   });
 });

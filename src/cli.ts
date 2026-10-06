@@ -94,7 +94,7 @@ const USAGE = `Usage:
   sf providers list
   sf providers status [--provider <id>]
   sf providers detect
-  sf providers source [get | set <pi_home|sf_owned>]
+  sf providers source [get | set sf_owned]
   sf providers login <providerId> [--type api_key|oauth] [--api-key-env <VAR>]
   sf providers logout <providerId>
   sf skills list

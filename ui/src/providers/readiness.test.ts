@@ -13,9 +13,15 @@ describe("loadProviderAuthReadiness", () => {
       vi.fn(async (url: string) => {
         if (String(url).endsWith("/detect")) {
           return Response.json({
-            piHomeUsable: false,
             provisional: true,
             source: "sf_owned",
+          });
+        }
+        if (String(url) === "/api/providers") {
+          return Response.json({
+            authShell: "pi",
+            via: "pi",
+            providers: [],
           });
         }
         throw new Error(`unexpected ${url}`);
@@ -29,16 +35,38 @@ describe("loadProviderAuthReadiness", () => {
     expect(result.message).not.toMatch(/software-factory/);
   });
 
-  it("allows pi_home once persisted", async () => {
+  it("allows sf_owned once a provider is configured", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
         if (String(url).endsWith("/detect")) {
           return Response.json({
-            piHomeUsable: true,
-            credentialSource: "pi_home",
+            credentialSource: "sf_owned",
             provisional: false,
-            source: "pi_home",
+            source: "sf_owned",
+          });
+        }
+        if (String(url) === "/api/providers") {
+          return Response.json({
+            authShell: "pi",
+            via: "pi",
+            providers: [
+              {
+                id: "openai",
+                name: "OpenAI",
+                supportsApiKey: true,
+                supportsOauth: false,
+              },
+            ],
+          });
+        }
+        if (String(url).endsWith("/auth")) {
+          return Response.json({
+            provider: {
+              providerId: "openai",
+              configured: true,
+              authKind: "api_key",
+            },
           });
         }
         throw new Error(`unexpected ${url}`);
@@ -46,7 +74,48 @@ describe("loadProviderAuthReadiness", () => {
     );
     await expect(loadProviderAuthReadiness()).resolves.toEqual({
       ready: true,
-      credentialSource: "pi_home",
+      credentialSource: "sf_owned",
+    });
+  });
+
+  it("allows Cursor SDK when no Pi provider keys are stored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/detect")) {
+          return Response.json({
+            credentialSource: "sf_owned",
+            provisional: false,
+            source: "sf_owned",
+            cursorSdkReady: true,
+            cursorApiKeyConfigured: true,
+          });
+        }
+        if (String(url) === "/api/providers") {
+          return Response.json({
+            authShell: "pi",
+            via: "pi",
+            providers: [
+              {
+                id: "openai",
+                name: "OpenAI",
+                supportsApiKey: true,
+                supportsOauth: false,
+              },
+            ],
+          });
+        }
+        if (String(url).endsWith("/auth")) {
+          return Response.json({
+            provider: { providerId: "openai", configured: false },
+          });
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    await expect(loadProviderAuthReadiness()).resolves.toEqual({
+      ready: true,
+      credentialSource: "sf_owned",
     });
   });
 
@@ -56,7 +125,6 @@ describe("loadProviderAuthReadiness", () => {
       vi.fn(async (url: string) => {
         if (String(url).endsWith("/detect")) {
           return Response.json({
-            piHomeUsable: false,
             credentialSource: "sf_owned",
             provisional: false,
             source: "sf_owned",

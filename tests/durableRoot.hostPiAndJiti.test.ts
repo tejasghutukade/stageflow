@@ -132,7 +132,7 @@ describe("durable root Host Pi and jiti", () => {
     });
   });
 
-  it("usable ~/.pi auth with no saved setting still selects pi_home", async () => {
+  it("usable ~/.pi auth with no saved setting still selects sf_owned store", async () => {
     await withIsolatedHome(async (home) => {
       const piHome = path.join(home, ".pi", "agent", "auth.json");
       await mkdir(path.dirname(piHome), { recursive: true });
@@ -143,18 +143,16 @@ describe("durable root Host Pi and jiti", () => {
 
       const binding = resolveCredentialBinding(home);
       expect(binding).toEqual({
-        source: "pi_home",
-        authPath: piHome,
+        source: "sf_owned",
+        authPath: sfOwnedAuthPath(),
         provisional: true,
       });
     });
   });
 
-  it("no usable Pi auth selects agent/auth.json under the durable root", async () => {
+  it("no usable auth still uses agent/auth.json under the durable root", async () => {
     await withStageflowHome(async (stageflowHome) => {
-      const binding = resolveCredentialBinding(stageflowHome, {
-        piHomeAuthPath: path.join(stageflowHome, "missing-pi", "auth.json"),
-      });
+      const binding = resolveCredentialBinding(stageflowHome);
       expect(binding.source).toBe("sf_owned");
       expect(binding.provisional).toBe(true);
       expect(binding.authPath).toBe(sfOwnedAuthPath());

@@ -835,7 +835,7 @@ export type CapacityHealth = {
   };
 };
 
-export type CredentialSource = "pi_home" | "sf_owned";
+export type CredentialSource = "sf_owned";
 
 export type ProviderSummary = {
   id: string;
@@ -858,11 +858,13 @@ export type ProvidersListResult = {
   providers: ProviderSummary[];
 };
 
-export type PiHomeDetectResult = {
-  piHomeUsable: boolean;
+export type ProvidersDetectResult = {
   credentialSource?: CredentialSource;
   provisional: boolean;
   source: CredentialSource;
+  authConfigured?: boolean;
+  cursorSdkReady?: boolean;
+  cursorApiKeyConfigured?: boolean;
 };
 
 export type CredentialBindingView = {

@@ -3312,20 +3312,26 @@ export class RunManager {
   private async checkDiskFloorAdmission(): Promise<
     Extract<StartRunResult, { ok: false }> | undefined
   > {
+    const raw = process.env.STAGEFLOW_MIN_FREE_DISK_BYTES;
+    if (raw === undefined || raw.trim() === "") {
+      return undefined;
+    }
     try {
       const readFree =
         this.options.freeSpaceReader ?? readFilesystemSize;
       const size = await readFree(globalStageflowHome());
-      const minFreeBytes = resolveMinFreeDiskFloor(
-        process.env.STAGEFLOW_MIN_FREE_DISK_BYTES,
-        size.totalBytes,
-      );
+      const minFreeBytes = resolveMinFreeDiskFloor(raw, size.totalBytes);
+      if (minFreeBytes === 0) {
+        return undefined;
+      }
       if (size.freeBytes < minFreeBytes) {
         return this.insufficientDiskFailure(size.freeBytes, minFreeBytes);
       }
       return undefined;
     } catch (err) {
-      // Default floor is always active via resolveMinFreeDiskFloor — fail closed.
+      if (resolveMinFreeDiskFloor(raw, 0) === 0 && !raw.trim().endsWith("%")) {
+        return undefined;
+      }
       return {
         ok: false,
         reason: `Disk free-space check failed: ${

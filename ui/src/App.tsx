@@ -24,8 +24,7 @@ import { CatalogPage } from "./pages/CatalogPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { ProviderConnectPage } from "./pages/ProviderConnectPage";
 import { WorkshopPage } from "./pages/WorkshopPage";
-import { fetchProvidersDetect } from "./api";
-import { needsFirstRun } from "./providers/helpers";
+import { loadProviderAuthReadiness } from "./providers/readiness";
 import {
   navigate,
   parseHash,
@@ -112,10 +111,10 @@ function ConsoleRoot() {
 
   useEffect(() => {
     let cancelled = false;
-    void fetchProvidersDetect()
-      .then((detect) => {
+    void loadProviderAuthReadiness()
+      .then((readiness) => {
         if (cancelled) return;
-        setAuthBoot(needsFirstRun(detect) ? "needs_connect" : "ready");
+        setAuthBoot(readiness.ready ? "ready" : "needs_connect");
       })
       .catch(() => {
         if (!cancelled) setAuthBoot("ready");
