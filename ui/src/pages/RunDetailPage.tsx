@@ -66,6 +66,8 @@ import {
   type SessionChipKind,
 } from "../workspace/resolveRunWorkspace";
 import { resolveStreamRoute } from "../workspace/resolveStreamRoute";
+import { useRedesign } from "../redesign/flag";
+import { RunDetailPageRedesign } from "./runDetail/RunDetailPageRedesign";
 
 const WORK_DEFAULT_H = 300;
 const WORK_MIN_H = 200;
@@ -117,6 +119,50 @@ function composerEl(
 }
 
 export function RunDetailPage({
+  runId,
+  view,
+  onBack,
+  onReran,
+  onOpenStream,
+  onOpenArtifact,
+  onOpenEnvelope,
+}: {
+  runId: string;
+  view: DetailView;
+  onBack: () => void;
+  onReran: (runId: string) => void;
+  onOpenStream: (stageId?: string) => void;
+  onOpenArtifact: (path: string) => void;
+  onOpenEnvelope: (stageId: string) => void;
+}) {
+  const redesign = useRedesign();
+  if (redesign) {
+    return (
+      <RunDetailPageRedesign
+        runId={runId}
+        view={view}
+        onBack={onBack}
+        onReran={onReran}
+        onOpenStream={onOpenStream}
+        onOpenArtifact={onOpenArtifact}
+        onOpenEnvelope={onOpenEnvelope}
+      />
+    );
+  }
+  return (
+    <RunDetailPageLegacy
+      runId={runId}
+      view={view}
+      onBack={onBack}
+      onReran={onReran}
+      onOpenStream={onOpenStream}
+      onOpenArtifact={onOpenArtifact}
+      onOpenEnvelope={onOpenEnvelope}
+    />
+  );
+}
+
+function RunDetailPageLegacy({
   runId,
   view,
   onBack,

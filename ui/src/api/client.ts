@@ -26,6 +26,8 @@ import type {
   StageAnswer,
   StartRunResult,
   TaskListing,
+  TaskDetailFile,
+  SkillUsageIndex,
   TriggerListItem,
   CreatedStageListing,
   PackageListing,
@@ -48,6 +50,8 @@ import type {
   OverwriteDraftPackageInput,
   OverwriteDraftPackageResult,
   PutWorkshopAutosaveResult,
+  CatalogFileResult,
+  CatalogValidationResult,
   ValidationFinding,
   WorkshopAutosavePayload,
   WorkshopChatProposalPayload,
@@ -107,6 +111,10 @@ export function fetchTasks(): Promise<{ tasks: TaskListing[] }> {
   return api("/api/tasks");
 }
 
+export function fetchTask(id: string): Promise<{ task: TaskDetailFile }> {
+  return api(`/api/tasks/${encodeURIComponent(id)}`);
+}
+
 export function fetchPipelines(): Promise<{ pipelines: PipelineListing[] }> {
   return api("/api/pipelines");
 }
@@ -117,6 +125,16 @@ export function fetchTriggers(): Promise<{ triggers: TriggerListItem[] }> {
 
 export function fetchTrigger(id: string): Promise<TriggerListItem> {
   return api(`/api/triggers/${encodeURIComponent(id)}`);
+}
+
+export function patchTrigger(
+  id: string,
+  body: { enabled: boolean },
+): Promise<TriggerListItem> {
+  return api(`/api/triggers/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }
 
 export function fireTrigger(
@@ -228,6 +246,10 @@ export function fetchSkills(): Promise<{
   diagnostics: SkillDiagnostic[];
 }> {
   return api("/api/skills");
+}
+
+export function fetchSkillUsage(): Promise<SkillUsageIndex> {
+  return api("/api/skills/usage");
 }
 
 export function fetchExtensions(): Promise<{
@@ -467,22 +489,35 @@ export function postWorkshopModel(
   });
 }
 
-export function startRun(task: string, pipeline: string): Promise<{ runId: string }> {
+export function startRun(
+  task: string,
+  pipeline: string,
+  projectRoot?: string,
+): Promise<{ runId: string }> {
   return api("/api/runs", {
     method: "POST",
-    body: JSON.stringify({ task, pipeline }),
+    body: JSON.stringify({
+      task,
+      pipeline,
+      ...(projectRoot ? { project_root: projectRoot } : {}),
+    }),
   });
 }
 
 export async function startRunWithDetails(
   task: string,
   pipeline: string,
+  projectRoot?: string,
 ): Promise<StartRunResult> {
   try {
     const res = await fetch("/api/runs", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authorizationHeaders() },
-      body: JSON.stringify({ task, pipeline }),
+      body: JSON.stringify({
+        task,
+        pipeline,
+        ...(projectRoot ? { project_root: projectRoot } : {}),
+      }),
     });
     const body = (await res.json().catch(() => ({}))) as {
       runId?: string;
@@ -1662,4 +1697,30 @@ export async function sendWorkshopChatTurnStreaming(
     }
     return sendWorkshopChatTurn(input);
   }
+}
+
+export async function fetchCatalogValidate(input: {
+  pipeline?: string;
+  task?: string;
+  strict?: boolean;
+  project_root?: string;
+}): Promise<CatalogValidationResult> {
+  return api("/api/catalog/validate", {
+    method: "POST",
+    body: JSON.stringify({
+      ...(input.pipeline ? { pipeline: input.pipeline } : {}),
+      ...(input.task ? { task: input.task } : {}),
+      ...(input.strict === true ? { strict: true } : {}),
+      ...(input.project_root ? { project_root: input.project_root } : {}),
+    }),
+  });
+}
+
+export async function fetchCatalogFile(input: {
+  path: string;
+  project_root?: string;
+}): Promise<CatalogFileResult> {
+  const params = new URLSearchParams({ path: input.path });
+  if (input.project_root) params.set("project_root", input.project_root);
+  return api(`/api/catalog/file?${params}`);
 }

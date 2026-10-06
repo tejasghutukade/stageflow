@@ -13,6 +13,7 @@ import { mapProviderAuthError } from "../agent/providerInspect.js";
 import { handleProviderRoutes } from "./providerRoutes.js";
 import { handleProjectMcpRoutes } from "./projectMcpRoutes.js";
 import { handleTriggerRoutes } from "./triggerRoutes.js";
+import { readCatalogFileForHttp } from "./readCatalogFile.js";
 import { createPipeline, parseCreatePipelineBody } from "../config/createPipeline.js";
 import { createStage, parseCreateStageBody } from "../config/createStage.js";
 import {
@@ -89,6 +90,9 @@ import {
 } from "../config/catalogRelativePath.js";
 import { listExtensions } from "../config/listExtensions.js";
 import { listSkills } from "../config/listSkills.js";
+import { findTaskInCatalog } from "../config/findTaskInCatalog.js";
+import { buildSkillUsageIndex } from "../config/skillUsageIndex.js";
+import { validateCatalog } from "../config/validateCatalog.js";
 import {
   artifactMediaType,
   classifyArtifactContent,
@@ -1331,6 +1335,83 @@ export function createOperatorRoutes(
             ok: true,
             runId: result.runId,
           });
+          return true;
+        }
+
+        if (method === "POST" && pathname === "/api/catalog/validate") {
+          let body: unknown;
+          try {
+            body = await readJsonBody(req);
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return true;
+          }
+          if (body !== null && typeof body === "object" && !Array.isArray(body)) {
+            const record = body as Record<string, unknown>;
+            const pipeline =
+              typeof record.pipeline === "string" ? record.pipeline : undefined;
+            const task = typeof record.task === "string" ? record.task : undefined;
+            const strict = record.strict === true;
+            if (pipeline !== undefined && task !== undefined) {
+              json(res, 400, {
+                error: "Use at most one of pipeline or task",
+              });
+              return true;
+            }
+            const scope = pipeline ? "pipeline" : task ? "task" : "full";
+            const result = await validateCatalog({
+              scope,
+              cwd,
+              pipeline,
+              task,
+              strict,
+            });
+            json(res, 200, result);
+            return true;
+          }
+          json(res, 400, { error: "Request body must be an object" });
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/catalog/file") {
+          const relPath = url.searchParams.get("path");
+          if (relPath === null || relPath.length === 0) {
+            json(res, 400, { error: "path query parameter is required" });
+            return true;
+          }
+          const projectRoot = url.searchParams.get("project_root") ?? undefined;
+          try {
+            const { roots } = await resolveCatalogStartInput({ store, bootCwd: cwd }, projectRoot);
+            const result = await readCatalogFileForHttp({
+              inputPath: relPath,
+              projectRoot,
+              roots,
+              fieldName: "path",
+            });
+            if (!result.ok) {
+              json(res, result.status, { error: result.error, code: result.code });
+              return true;
+            }
+            json(res, 200, { path: result.path, content: result.content });
+            return true;
+          } catch (err) {
+            if (err instanceof CatalogPathError) {
+              json(res, 400, catalogPathErrorBody(err));
+              return true;
+            }
+            throw err;
+          }
+        }
+
+        const taskDetailMatch = pathname.match(/^\/api\/tasks\/([^/]+)$/);
+        if (method === "GET" && taskDetailMatch) {
+          const taskId = decodeURIComponent(taskDetailMatch[1] ?? "");
+          const task = await findTaskInCatalog(cwd, taskId);
+          if (task === null) {
+            json(res, 404, { error: `Task not found: ${taskId}` });
+            return true;
+          }
+          json(res, 200, { task });
           return true;
         }
 
@@ -2781,6 +2862,16 @@ export function createOperatorRoutes(
             auditLog,
           })
         ) {
+          return true;
+        }
+
+        if (method === "GET" && pathname === "/api/skills/usage") {
+          const usages = await buildSkillUsageIndex(cwd);
+          if (usages === null) {
+            json(res, 404, { error: "No Stageflow catalog found" });
+            return true;
+          }
+          json(res, 200, { usages });
           return true;
         }
 

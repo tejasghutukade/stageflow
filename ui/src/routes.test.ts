@@ -1,13 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  catalogPath,
   extensionFilePath,
   extensionPackagePath,
   newRunPath,
   parseHash,
+  pipelinePath,
   runStagePath,
 } from "./routes";
 
 describe("parseHash", () => {
+  it("parses the catalog route with default stages tab", () => {
+    expect(parseHash("#/catalog")).toEqual({ name: "catalog", tab: "stages" });
+  });
+
+  it("parses catalog skills tab and skill query", () => {
+    expect(parseHash(`#${catalogPath({ tab: "skills", skill: "code-review" })}`)).toEqual({
+      name: "catalog",
+      tab: "skills",
+      skillName: "code-review",
+    });
+  });
+
   it("parses the skills list", () => {
     expect(parseHash("#/skills")).toEqual({ name: "skills" });
   });
@@ -42,6 +56,24 @@ describe("parseHash", () => {
 
   it("parses the provider connect route", () => {
     expect(parseHash("#/connect")).toEqual({ name: "connect" });
+  });
+
+  it("parses the inbox route", () => {
+    expect(parseHash("#/inbox")).toEqual({ name: "inbox" });
+  });
+
+  it("parses pipeline detail with optional project_root query", () => {
+    const root = "/Users/me/project-a";
+    const hash = `#${pipelinePath("hello", { project_root: root })}`;
+    expect(parseHash(hash)).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+      projectRoot: root,
+    });
+    expect(parseHash("#/pipelines/hello")).toEqual({
+      name: "pipeline",
+      pipelineId: "hello",
+    });
   });
 
   it("parses the workshop route", () => {

@@ -3,13 +3,13 @@ stages:
   - id: clarify
     entry: true
     route:
-      - to: research
+      - to: fan-in-research
       - to: validation
     uses: ./clarify.yaml
-  - id: research
+  - id: fan-in-research
     route:
       - to: synthesize
-    uses: ./research.yaml
+    uses: ./fan-in-research.yaml
   - id: validation
     route:
       - to: synthesize

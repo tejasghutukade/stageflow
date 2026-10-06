@@ -21,19 +21,29 @@ import {
 } from "react";
 import {
   acceptWorkshopSessionMutation,
+  clearWorkshopAutosave,
+  createDraftPackageWithDetails,
   createWorkshopSession,
   fetchModels,
   fetchSettings,
   focusWorkshopBuild,
+  getWorkshopAutosave,
   getWorkshopBuild,
   getWorkshopSession,
   listWorkshopPicker,
   listWorkshopSessions,
+  overwriteDraftPackageWithDetails,
+  putWorkshopAutosave,
   sendWorkshopChatTurnStreaming,
   stopWorkshopChat,
   undoWorkshopSessionMutation,
   updateWorkshopSessionActiveBuild,
+  validateDraftPackage,
+  checkWorkshopDiskChange,
   type DraftPackagePayload,
+  type DraftValidationResult,
+  type ValidationFinding,
+  type WorkshopAutosavePayload,
   type PipelineTrackProjection,
   type StageSnapshot,
   type WorkshopChatProposalPayload,
@@ -68,6 +78,15 @@ import {
   type StudioPickerRow,
   type StudioSelection,
 } from "./workshopStudio";
+import { useRedesign } from "../redesign/flag";
+import { DiskChangeBanner } from "../redesign/workshop/DiskChangeBanner";
+import { ResumeAutosaveBanner } from "../redesign/workshop/ResumeAutosaveBanner";
+import { SaveToCatalogDialog } from "../redesign/workshop/SaveToCatalogDialog";
+import { WorkshopChangeCard } from "../redesign/workshop/WorkshopChangeCard";
+import { WorkshopInspector } from "../redesign/workshop/WorkshopInspector";
+import { WorkshopToolbar } from "../redesign/workshop/WorkshopToolbar";
+import { WorkshopWorkspace } from "../redesign/workshop/WorkshopWorkspace";
+import { workshopAutosaveKey } from "../redesign/workshop/workshopAutosaveKey";
 
 const CHAT_DEFAULT_W = 420;
 const CHAT_MIN_W = 280;
@@ -515,6 +534,7 @@ export function createLiveChatModel(refs: LiveChatRefs): ChatModelAdapter {
 
 function MutationCardToolUI({ args }: WorkshopMutationCardProps) {
   const api = useWorkshopMutation();
+  const redesignOn = useRedesign();
   const threadRunning = useAuiState((s) => s.thread.isRunning);
   const mutationId =
     typeof args?.mutationId === "string" ? args.mutationId : "";
@@ -541,6 +561,21 @@ function MutationCardToolUI({ args }: WorkshopMutationCardProps) {
       setBusy(false);
     }
   };
+
+  if (redesignOn) {
+    return (
+      <WorkshopChangeCard
+        summary={summary}
+        proposal={card?.proposal}
+        stageIds={stageIds}
+        status={status}
+        notice={card?.notice}
+        locked={locked}
+        onAccept={() => void decide("accepted")}
+        onReject={() => void decide("rejected")}
+      />
+    );
+  }
 
   return (
     <div
@@ -916,6 +951,28 @@ export function WorkshopPage() {
   const [chatModel, setChatModel] = useState(WORKSHOP_FALLBACK_MODEL);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [settingsDefault, setSettingsDefault] = useState<string | null>(null);
+  const redesignOn = useRedesign();
+  const [autoApply, setAutoApply] = useState(false);
+  const [draftValidation, setDraftValidation] =
+    useState<DraftValidationResult | null>(null);
+  const [validateBusy, setValidateBusy] = useState(false);
+  const [validateError, setValidateError] = useState<string | null>(null);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saveAsMode, setSaveAsMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [autosaveOffer, setAutosaveOffer] = useState<WorkshopAutosavePayload | null>(
+    null,
+  );
+  const [showAutosaveBanner, setShowAutosaveBanner] = useState(false);
+  const [diskChangedPaths, setDiskChangedPaths] = useState<string[]>([]);
+  const [showDiskBanner, setShowDiskBanner] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<"stage" | "pipeline">("stage");
+  const [saveDestination, setSaveDestination] = useState<{
+    directory: string;
+    pipelineFilename?: string;
+  } | null>(null);
+  const [savedPipelinePath, setSavedPipelinePath] = useState<string | null>(null);
+  const diskFingerprintsRef = useRef<Record<string, string>>({});
 
   const sessionIdRef = useRef<string | null>(null);
   const draftRef = useRef<DraftPackagePayload>(EMPTY_DRAFT);
@@ -1385,7 +1442,372 @@ export function WorkshopPage() {
   const closePopup = useCallback(() => setSelectedStageId(null), []);
   const onSelectStage = useCallback((stageId: string) => {
     setSelectedStageId(stageId);
+    setInspectorTab("stage");
   }, []);
+
+  const autosaveSlotKey = workshopAutosaveKey(savedPipelinePath);
+
+  const persistAutosave = useCallback(async () => {
+    if (!redesignOn || !sessionId) return;
+    const messages = seedMessages
+      .filter((msg) => msg.role === "user" || msg.role === "assistant" || msg.role === "system")
+      .map((msg, index) => ({
+        id: `m-${index}`,
+        role: msg.role as "user" | "assistant" | "system",
+        text:
+          typeof msg.content === "string"
+            ? msg.content
+            : msg.content
+                .filter((part) => part.type === "text")
+                .map((part) => part.text)
+                .join("\n"),
+      }));
+    await putWorkshopAutosave({
+      version: 1,
+      key: autosaveSlotKey,
+      updatedAt: new Date().toISOString(),
+      draft: draftRef.current,
+      messages,
+      autoApply,
+      sessionModelOverride: chatModel,
+      destination: saveDestination,
+      savedPath: savedPipelinePath,
+      diskFingerprints: diskFingerprintsRef.current,
+    });
+  }, [
+    autoApply,
+    autosaveSlotKey,
+    chatModel,
+    redesignOn,
+    saveDestination,
+    savedPipelinePath,
+    seedMessages,
+    sessionId,
+  ]);
+
+  useEffect(() => {
+    if (!redesignOn) return;
+    const timer = setTimeout(() => {
+      void persistAutosave();
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [draft, seedMessages, autoApply, chatModel, persistAutosave, redesignOn]);
+
+  useEffect(() => {
+    if (!redesignOn) return;
+    let cancelled = false;
+    void getWorkshopAutosave({ key: workshopAutosaveKey(null) }).then((got) => {
+      if (cancelled || !got.ok || !got.autosave) return;
+      setAutosaveOffer(got.autosave);
+      setShowAutosaveBanner(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [redesignOn]);
+
+  const runDraftValidate = useCallback(async () => {
+    setValidateBusy(true);
+    setValidateError(null);
+    try {
+      const result = await validateDraftPackage(draftRef.current);
+      setDraftValidation(result);
+    } catch (err) {
+      setValidateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setValidateBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!redesignOn) return;
+    void runDraftValidate();
+  }, [draft, redesignOn, runDraftValidate]);
+
+  useEffect(() => {
+    if (!redesignOn || !savedPipelinePath) return;
+    let cancelled = false;
+    void checkWorkshopDiskChange({
+      pipelinePath: savedPipelinePath,
+      draft: draftRef.current,
+      baseline: diskFingerprintsRef.current,
+    }).then((result) => {
+      if (cancelled || !result.ok) return;
+      diskFingerprintsRef.current = result.fingerprints;
+      if (result.changed) {
+        setDiskChangedPaths(result.changedPaths);
+        setShowDiskBanner(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft, redesignOn, savedPipelinePath]);
+
+  const saveFilePaths = useMemo(() => {
+    const paths: string[] = [];
+    if (savedPipelinePath) paths.push(savedPipelinePath);
+    for (const stage of draft.stages ?? []) paths.push(stage.path);
+    if (draft.task && saveDestination?.directory) {
+      paths.push(`${saveDestination.directory}/${draft.task.filename}`);
+    }
+    return paths;
+  }, [draft, saveDestination?.directory, savedPipelinePath]);
+
+  const performSave = useCallback(
+    async (allowInvalid: boolean) => {
+      setSaving(true);
+      const directory = saveDestination?.directory ?? "pipelines";
+      const pipelineFilename =
+        saveDestination?.pipelineFilename ?? `${draft.pipeline.id}.yaml`;
+      const result =
+        saveAsMode || !savedPipelinePath
+          ? await createDraftPackageWithDetails({
+              directory,
+              pipelineFilename,
+              draft: draftRef.current,
+              allowInvalid,
+            })
+          : await overwriteDraftPackageWithDetails({
+              directory,
+              pipelineFilename,
+              draft: draftRef.current,
+              allowInvalid,
+            });
+      setSaving(false);
+      if (!result.ok) {
+        if (result.findings) {
+          setDraftValidation({
+            scope: "full",
+            ok: false,
+            summary: {
+              errors: result.findings.filter((f) => f.severity === "error").length,
+              warnings: result.findings.filter((f) => f.severity === "warning")
+                .length,
+            },
+            findings: result.findings,
+          });
+        }
+        return;
+      }
+      setSavedPipelinePath(result.pipelinePath);
+      setSaveDestination({
+        directory,
+        pipelineFilename,
+      });
+      setSaveOpen(false);
+      await clearWorkshopAutosave({ key: autosaveSlotKey });
+      setShowAutosaveBanner(false);
+      void runDraftValidate();
+    },
+    [
+      autosaveSlotKey,
+      draft.pipeline.id,
+      runDraftValidate,
+      saveAsMode,
+      saveDestination?.directory,
+      saveDestination?.pipelineFilename,
+      savedPipelinePath,
+    ],
+  );
+
+  const validationFindings: ValidationFinding[] =
+    draftValidation?.findings ?? [];
+  const validationErrors = draftValidation?.summary.errors ?? 0;
+
+  if (redesignOn) {
+    return (
+      <div className="relative flex min-h-screen flex-col">
+        {showAutosaveBanner && autosaveOffer ? (
+          <ResumeAutosaveBanner
+            updatedAt={autosaveOffer.updatedAt}
+            onResume={() => {
+              applyDraft(autosaveOffer.draft);
+              setAutoApply(autosaveOffer.autoApply);
+              if (autosaveOffer.sessionModelOverride) {
+                setChatModel(autosaveOffer.sessionModelOverride);
+              }
+              setSeedMessages(
+                autosaveOffer.messages.map((msg) => ({
+                  role: msg.role,
+                  content: msg.text,
+                })),
+              );
+              setThreadEpoch((n) => n + 1);
+              setShowAutosaveBanner(false);
+            }}
+            onDismiss={() => setShowAutosaveBanner(false)}
+          />
+        ) : null}
+        {showDiskBanner ? (
+          <DiskChangeBanner
+            changedPaths={diskChangedPaths}
+            onReload={() => {
+              setShowDiskBanner(false);
+              const row =
+                pickerRows.find((item) => item.relativePath === savedPipelinePath) ??
+                pickerRows[0];
+              if (row) void pickStudioRow(row);
+            }}
+            onKeep={() => setShowDiskBanner(false)}
+          />
+        ) : null}
+        <WorkshopToolbar
+          title={draft.pipeline.id || "Untitled draft"}
+          dirtyLine={validationErrors > 0 ? `${validationErrors} validation errors` : undefined}
+          errorCount={validationErrors}
+          validating={validateBusy}
+          onValidate={() => void runDraftValidate()}
+          onSave={() => {
+            setSaveAsMode(false);
+            setSaveOpen(true);
+          }}
+          onSaveAs={() => {
+            setSaveAsMode(true);
+            setSaveOpen(true);
+          }}
+        />
+        <div
+          ref={bodyRef}
+          className="flex min-h-0 flex-1 overflow-hidden"
+          style={{ ["--chat-w" as string]: `${chatWidth}px` }}
+        >
+          <section
+            className="flex w-[var(--chat-w)] min-w-[280px] shrink-0 flex-col border-r border-r-[#ffffff12]"
+            aria-label="Workshop chat"
+          >
+            <LabChatHeader
+              historyOpen={historyOpen}
+              onHistory={() => {
+                if (historyOpen) setHistoryOpen(false);
+                else void openHistory();
+              }}
+              onNew={() => void startNewSession()}
+            />
+            {bootError ? (
+              <p className="workshop-lab__boot-error muted">{bootError}</p>
+            ) : null}
+            {historyOpen ? (
+              <HistoryPanel
+                sessions={historySessions}
+                pickerRows={pickerRows}
+                activeSessionId={sessionId}
+                loading={historyLoading}
+                error={historyError}
+                onClose={() => setHistoryOpen(false)}
+                onSelect={(id) => void openSession(id)}
+              />
+            ) : null}
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <WorkshopMutationContext.Provider value={mutationApi}>
+                {sessionId ? (
+                  <WorkshopChatIsland
+                    key={`${sessionId}:${threadEpoch}`}
+                    seedMessages={seedMessages}
+                    adapter={chatAdapter}
+                    greeting={GREETING}
+                    toolActivity={toolActivity}
+                    MutationCard={MutationCardToolUI}
+                    onStop={() => stopChatRef.current?.()}
+                    composerActions={
+                      <WorkshopModelPicker
+                        model={chatModel}
+                        models={availableModels}
+                        settingsDefault={settingsDefault}
+                        onChange={setChatModel}
+                      />
+                    }
+                  />
+                ) : (
+                  <div className="workshop-lab__welcome">
+                    <div className="eyebrow">Workshop</div>
+                    <p>Starting session…</p>
+                  </div>
+                )}
+              </WorkshopMutationContext.Provider>
+            </div>
+          </section>
+          <WorkshopWorkspace
+            mapHead={
+              <>
+                <div className="workshop-lab__map-switch">
+                  <div className="eyebrow">Studio · draft</div>
+                  <select
+                    className="select workshop-lab__pipeline-select"
+                    aria-label="Studio pipeline"
+                    value={selectedBuildId ? `build:${selectedBuildId}` : ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      if (!value) return;
+                      const row = pickerRows.find(
+                        (item) => pickerRowValue(item) === value,
+                      );
+                      if (row) void pickStudioRow(row);
+                    }}
+                  >
+                    <option value="">No pipeline</option>
+                    {pickerRows.map((row) => (
+                      <option key={pickerRowValue(row)} value={pickerRowValue(row)}>
+                        {pickerRowLabel(row)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {studioError ? (
+                  <p className="workshop-lab__boot-error muted">{studioError}</p>
+                ) : null}
+              </>
+            }
+            mapBody={
+              <div
+                className={`workspace workshop-lab__workspace${highlightActive ? " has-highlight" : ""}`}
+              >
+                {draftStages.length === 0 ? (
+                  <MapEmptyState />
+                ) : (
+                  <SpatialRunMap
+                    layout={layout}
+                    stages={snapshots}
+                    nodeChrome={nodeChrome}
+                    selectedStageId={selectedStageId}
+                    onSelectStage={onSelectStage}
+                    onDeselect={closePopup}
+                    runId="workshop-lab-draft"
+                    showHint={false}
+                  />
+                )}
+              </div>
+            }
+            inspector={
+              <WorkshopInspector
+                tab={inspectorTab}
+                onTabChange={setInspectorTab}
+                draft={draft}
+                selectedStage={selectedStage}
+                onDraftChange={applyDraft}
+              />
+            }
+            bottomTab="problems"
+            findings={validationFindings}
+            validating={validateBusy}
+            validateError={validateError}
+            onValidate={() => void runDraftValidate()}
+          />
+        </div>
+        <SaveToCatalogDialog
+          open={saveOpen}
+          title={saveAsMode ? "Save as new package" : "Save to catalog"}
+          directory={saveDestination?.directory ?? "pipelines"}
+          pipelineId={draft.pipeline.id}
+          filePaths={saveFilePaths}
+          findings={validationFindings}
+          saving={saving}
+          onClose={() => setSaveOpen(false)}
+          onSave={(allowInvalid) => void performSave(allowInvalid)}
+        />
+      </div>
+    );
+  }
 
   return (
     <div

@@ -43,11 +43,12 @@ export function useOperatorAnswer(
   }, [identity, session]);
 
   const submitIntent = useCallback(
-    async (intent: OperatorIntent, prompt?: PendingPrompt) => {
+    async (intent: OperatorIntent, prompt?: PendingPrompt): Promise<boolean> => {
       const done = session.submitIntent(intent, prompt);
       setState(session.getState());
-      await done;
+      const ok = await done;
       setState(session.getState());
+      return ok;
     },
     [session],
   );

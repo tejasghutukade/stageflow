@@ -344,15 +344,43 @@ function pickStageId(run: RunDetail, selection: OperatorSelection): string | nul
     return selection.previousStageId;
   }
   const waitKey = activeWaitKey(run);
+  const waitOpen = Boolean(waitKey && waitKey !== selection.dismissedWaitKey);
   if (
-    waitKey &&
-    waitKey !== selection.dismissedWaitKey &&
+    waitOpen &&
     run.waiting_stage_id &&
     stageExists(run, run.waiting_stage_id)
   ) {
     return run.waiting_stage_id;
   }
-  return null;
+  if (
+    selection.dismissedWaitKey &&
+    waitKey &&
+    waitKey === selection.dismissedWaitKey
+  ) {
+    return null;
+  }
+  const order = orderedStageIds(run);
+  const snapshotMap = snapshotById(run);
+  if (waitOpen) {
+    for (const stageId of order) {
+      if (snapshotMap.get(stageId)?.status === "waiting_for_input") {
+        return stageId;
+      }
+    }
+  }
+  for (const stageId of order) {
+    if (snapshotMap.get(stageId)?.status === "failed") return stageId;
+  }
+  for (const stageId of order) {
+    if (snapshotMap.get(stageId)?.status === "running") return stageId;
+  }
+  if (
+    selection.previousStageId &&
+    stageExists(run, selection.previousStageId)
+  ) {
+    return selection.previousStageId;
+  }
+  return order[order.length - 1] ?? run.stages[run.stages.length - 1]?.stage_id ?? null;
 }
 
 function stageOwnsArtifactPath(stage: StageSnapshot, path: string): boolean {

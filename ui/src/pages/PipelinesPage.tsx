@@ -9,7 +9,11 @@ import {
   type CreatedStageListing,
 } from "../api";
 import { useRunCatalog } from "../catalog/useRunCatalog";
-import { displayCatalogPath, runTaskLabel } from "../catalog/displayCatalogPath";
+import {
+  displayCatalogPath,
+  matchPipelineRun,
+  runTaskLabel,
+} from "../catalog/displayCatalogPath";
 import { runsForPipelineView } from "../catalog/views";
 import {
   gateCount,
@@ -19,10 +23,19 @@ import {
 import { NewPipelinePanel } from "../components/NewPipelinePanel";
 import { NewStagePanel } from "../components/NewStagePanel";
 import { PipelineTrack, type TrackStage } from "../components/PipelineTrack";
-import { newRunPath, pipelinePath, runStreamPath, workshopPath } from "../routes";
+import {
+  newRunPath,
+  pipelinePath,
+  resolvePipelineListing,
+  runStreamPath,
+  workshopPath,
+} from "../routes";
 import { StatusDot } from "../StatusLabel";
 import { runDisplayStatus } from "../status/runStatus";
 import { showToast } from "../toast";
+import { useRedesign } from "../redesign/flag";
+import { PipelineEditorPage } from "../redesign/editor/PipelineEditorPage";
+import { PipelinesRedesign } from "../redesign/editor/PipelinesRedesign";
 
 function definitionTrack(stages: PipelineStageListing[]): TrackStage[] {
   return stages.map((stage) => {
@@ -91,9 +104,11 @@ function PipelineMiniTrack({ stages }: { stages: PipelineStageListing[] }) {
 
 export function PipelinesPage({
   pipelineId,
+  projectRoot,
   onNew,
 }: {
   pipelineId?: string;
+  projectRoot?: string;
   onNew: (path: string) => void;
 }) {
   const { snapshot, error: catalogError, loading: catalogLoading } = useRunCatalog();
@@ -124,9 +139,14 @@ export function PipelinesPage({
   const loading = pipelinesLoading || catalogLoading;
   const displayError = error ?? catalogError;
   const selected = pipelineId
-    ? (pipelines.find((p) => p.id === pipelineId) ?? null)
+    ? resolvePipelineListing(pipelines, pipelineId, projectRoot)
     : null;
-  const history = selected ? runsForPipelineView(snapshot, selected) : [];
+  const history = selected
+    ? runsForPipelineView(snapshot, selected.id).filter((run) =>
+        matchPipelineRun(run, selected),
+      )
+    : [];
+  const redesignOn = useRedesign();
 
   async function onPipelineCreated(pipeline: PipelineListing) {
     setPipelinePanelOpen(false);
@@ -138,7 +158,42 @@ export function PipelinesPage({
       setError(err instanceof Error ? err.message : String(err));
     }
     showToast(`Pipeline created · ${pipeline.id}`);
-    onNew(pipelinePath(pipeline.id));
+    onNew(
+      pipelinePath(pipeline.id, {
+        ...(pipeline.project_root ? { project_root: pipeline.project_root } : {}),
+      }),
+    );
+  }
+
+  if (redesignOn && !pipelineId) {
+    return <PipelinesRedesign onNew={onNew} />;
+  }
+
+  if (pipelineId && redesignOn) {
+    if (pipelinesLoading) {
+      return (
+        <p className="px-5 py-4 text-[13px] text-[var(--sf-text-3)]">
+          Loading pipeline…
+        </p>
+      );
+    }
+    if (!selected) {
+      return (
+        <div className="px-5 py-8">
+          <p className="text-[13px] text-[var(--sf-text-2)]">
+            {pipelineId} is not in the current manifest catalog.
+          </p>
+        </div>
+      );
+    }
+    return (
+      <PipelineEditorPage
+        pipelineId={pipelineId}
+        pipeline={selected}
+        tasks={tasks}
+        onNew={onNew}
+      />
+    );
   }
 
   if (pipelineId) {
@@ -334,7 +389,7 @@ function PipelineDetail({
                 Add stage file
               </button>
             </div>
-            <table className="table">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Stage</th>
@@ -366,7 +421,7 @@ function PipelineDetail({
                 No runs of this pipeline yet.
               </p>
             ) : (
-              <table className="table">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>Task</th>

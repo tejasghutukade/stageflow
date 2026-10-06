@@ -5,17 +5,23 @@ export type DetailView =
 
 export type Route =
   | { name: "today" }
+  | { name: "inbox" }
   | { name: "runs" }
   | { name: "new"; pipelineId?: string; taskPath?: string }
   | { name: "detail"; runId: string; view: DetailView }
   | { name: "pipelines" }
-  | { name: "pipeline"; pipelineId: string }
+  | { name: "pipeline"; pipelineId: string; projectRoot?: string }
   | { name: "tasks" }
   | { name: "task"; taskId: string }
   | { name: "triggers" }
   | { name: "trigger"; triggerId: string }
   | { name: "skills" }
   | { name: "skill"; skillName: string }
+  | {
+      name: "catalog";
+      tab?: "stages" | "skills" | "extensions";
+      skillName?: string;
+    }
   | { name: "extensions" }
   | {
       name: "extensionPackage";
@@ -47,8 +53,27 @@ export function runEnvelopePath(runId: string, stageId: string): string {
   return `/runs/${encodeURIComponent(runId)}/stages/${encodeURIComponent(stageId)}/envelope`;
 }
 
-export function pipelinePath(pipelineId: string): string {
-  return `/pipelines/${encodeURIComponent(pipelineId)}`;
+export function pipelinePath(
+  pipelineId: string,
+  opts?: { project_root?: string },
+): string {
+  const base = `/pipelines/${encodeURIComponent(pipelineId)}`;
+  if (!opts?.project_root) return base;
+  const params = new URLSearchParams();
+  params.set("project_root", opts.project_root);
+  return `${base}?${params.toString()}`;
+}
+
+export function resolvePipelineListing<
+  T extends { id: string; project_root?: string },
+>(pipelines: T[], pipelineId: string, projectRoot?: string): T | null {
+  if (projectRoot) {
+    const exact = pipelines.find(
+      (p) => p.id === pipelineId && p.project_root === projectRoot,
+    );
+    if (exact) return exact;
+  }
+  return pipelines.find((p) => p.id === pipelineId) ?? null;
 }
 
 export function taskPath(taskId: string): string {
@@ -61,6 +86,17 @@ export function triggerPath(triggerId: string): string {
 
 export function skillPath(name: string): string {
   return `/skills/${encodeURIComponent(name)}`;
+}
+
+export function catalogPath(opts?: {
+  tab?: "stages" | "skills" | "extensions";
+  skill?: string;
+}): string {
+  const params = new URLSearchParams();
+  if (opts?.tab) params.set("tab", opts.tab);
+  if (opts?.skill) params.set("skill", opts.skill);
+  const query = params.toString();
+  return query ? `/catalog?${query}` : "/catalog";
 }
 
 export function extensionPackagePath(
@@ -87,6 +123,10 @@ export function workshopPath(opts?: {
 
 export function connectPath(): string {
   return "/connect";
+}
+
+export function inboxPath(): string {
+  return "/inbox";
 }
 
 export function newRunPath(opts?: {
@@ -119,6 +159,7 @@ function firstSegment(rest: string): string {
 export function parseHash(hash = window.location.hash): Route {
   const { path, params } = splitHash(hash);
   if (!path || path === "today") return { name: "today" };
+  if (path === "inbox") return { name: "inbox" };
   if (path === "runs") return { name: "runs" };
   if (path === "new") {
     const pipelineId = params.get("pipeline") ?? undefined;
@@ -132,7 +173,14 @@ export function parseHash(hash = window.location.hash): Route {
   if (path === "pipelines") return { name: "pipelines" };
   if (path.startsWith("pipelines/")) {
     const pipelineId = firstSegment(path.slice("pipelines/".length));
-    if (pipelineId) return { name: "pipeline", pipelineId };
+    if (pipelineId) {
+      const projectRoot = params.get("project_root") ?? undefined;
+      return {
+        name: "pipeline",
+        pipelineId,
+        ...(projectRoot ? { projectRoot } : {}),
+      };
+    }
   }
   if (path === "tasks") return { name: "tasks" };
   if (path.startsWith("tasks/")) {
@@ -143,6 +191,19 @@ export function parseHash(hash = window.location.hash): Route {
   if (path.startsWith("triggers/")) {
     const triggerId = firstSegment(path.slice("triggers/".length));
     if (triggerId) return { name: "trigger", triggerId };
+  }
+  if (path === "catalog") {
+    const tabRaw = params.get("tab");
+    const tab =
+      tabRaw === "skills" || tabRaw === "extensions" || tabRaw === "stages"
+        ? tabRaw
+        : "stages";
+    const skillName = params.get("skill") ?? undefined;
+    return {
+      name: "catalog",
+      tab,
+      ...(skillName ? { skillName } : {}),
+    };
   }
   if (path === "skills") return { name: "skills" };
   if (path.startsWith("skills/")) {

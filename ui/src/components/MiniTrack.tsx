@@ -1,5 +1,7 @@
 import { Fragment } from "react";
 import type { StageSnapshot } from "../api";
+import { useRedesign } from "../redesign/flag";
+import { statusSignalFromStageStatus } from "../redesign/statusSignal";
 import { ringGlyph, ringStatus } from "../status/runStatus";
 
 export type MiniStage = { id: string; status: StageSnapshot["status"] };
@@ -7,10 +9,36 @@ export type MiniStage = { id: string; status: StageSnapshot["status"] };
 export type MiniTrackProps = {
   stages: MiniStage[];
   label?: string;
+  variant?: "rings" | "bar";
 };
 
-export function MiniTrack({ stages, label }: MiniTrackProps) {
+function barSegmentClass(status: MiniStage["status"]): string {
+  if (status === "pending") return "sf-track__seg--empty";
+  const signal = statusSignalFromStageStatus(status);
+  return `sf-track__seg--${signal}`;
+}
+
+export function MiniTrack({ stages, label, variant }: MiniTrackProps) {
+  const redesign = useRedesign();
+  const mode = variant ?? (redesign ? "bar" : "rings");
+
   if (stages.length === 0) return null;
+
+  if (mode === "bar") {
+    return (
+      <span>
+        <span className="sf-track" aria-hidden="true">
+          {stages.map((stage) => (
+            <i
+              key={stage.id}
+              className={`sf-track__seg ${barSegmentClass(stage.status)}`}
+            />
+          ))}
+        </span>
+        {label ? <span className="sf-track__label">{label}</span> : null}
+      </span>
+    );
+  }
 
   return (
     <span>

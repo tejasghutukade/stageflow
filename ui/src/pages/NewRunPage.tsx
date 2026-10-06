@@ -110,7 +110,12 @@ export function NewRunPage({
       setStarting(false);
       return;
     }
-    const result = await startRunWithDetails(task, pipeline);
+    const selectedTask = tasks.find((t) => t.path === task) ?? null;
+    const result = await startRunWithDetails(
+      task,
+      pipeline,
+      selectedPipeline?.project_root ?? selectedTask?.project_root,
+    );
     setStarting(false);
     if (result.ok) {
       onStarted(result.runId);

@@ -17,9 +17,15 @@
     "@assistant-ui/react": "^0.15.22",
     "@astryxdesign/core": "0.4.0",
     "@astryxdesign/theme-neutral": "0.4.0",
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@stylexjs/stylex": "^0.19.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "croner": "^10.0.1",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.7.0",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@astryxdesign/cli": "0.4.0",

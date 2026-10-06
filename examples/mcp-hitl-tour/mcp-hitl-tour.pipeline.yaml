@@ -39,9 +39,9 @@ stages:
   - id: polish
     uses: ./polish.yaml
     route:
-      - to: review
-  - id: review
-    uses: ./review.yaml
+      - to: mcp-hitl-review
+  - id: mcp-hitl-review
+    uses: ./mcp-hitl-review.yaml
     route:
       - to: ship
       - type: loop

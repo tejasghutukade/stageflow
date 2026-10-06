@@ -29,6 +29,29 @@ export type { EnvelopeFieldsProps } from "./EnvelopeFields";
 export { MiniTrack } from "./MiniTrack";
 export type { MiniTrackProps, MiniStage } from "./MiniTrack";
 
+export {
+  applyRedesignAttribute,
+  Keycap,
+  readRedesignPreference,
+  StatusPill,
+  runStatusPillLabel,
+  signalIcon,
+  signalLabel,
+  stageStatusPillLabel,
+  statusSignalFromReadiness,
+  statusSignalFromRun,
+  statusSignalFromRunStatus,
+  statusSignalFromStageStatus,
+  useRedesign,
+  writeRedesignPreference,
+} from "../redesign";
+export type {
+  KeycapProps,
+  StageStatusForSignal,
+  StatusPillProps,
+  StatusSignal,
+} from "../redesign";
+
 export { PipelineTrack, TrackWire } from "./PipelineTrack";
 export type {
   PipelineTrackMode,

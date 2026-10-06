@@ -634,6 +634,10 @@ export interface RunStore {
   setTriggerNextRun(id: string, nextRunAt: string): Promise<void>;
   /** Read a single adapter-owned state value for a trigger, or null if unset. */
   getTriggerAdapterState(triggerId: string, key: string): Promise<string | null>;
+  getTriggerAdapterStateMeta(
+    triggerId: string,
+    key: string,
+  ): Promise<{ value: string; updated_at: string } | null>;
   /** Upsert a single adapter-owned state value for a trigger. */
   setTriggerAdapterState(triggerId: string, key: string, value: string): Promise<void>;
   readRun(runId: string): Promise<RunDetail>;

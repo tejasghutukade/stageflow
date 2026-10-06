@@ -382,6 +382,20 @@ export type TaskListing = {
   project_root?: string;
 };
 
+export type TaskDetailFile = {
+  path: string;
+  id: string;
+  goal: string;
+  context?: string;
+  constraints?: string;
+  checkout?: string;
+  repository?: string;
+  ref?: string;
+  run_branch_template?: string;
+  git_identity?: { name?: string; email?: string };
+  input?: Record<string, unknown>;
+};
+
 export type PipelineStageListing = {
   id: string;
   gate_kinds?: StageGateKind[];
@@ -506,6 +520,13 @@ export type DraftValidationResult = {
   ok: boolean;
   summary: { errors: number; warnings: number };
   findings: ValidationFinding[];
+};
+
+export type CatalogValidationResult = DraftValidationResult;
+
+export type CatalogFileResult = {
+  path: string;
+  content: string;
 };
 
 export type DraftPackagePayload = {
@@ -979,6 +1000,16 @@ export type TriggerSchedule = {
 export type TriggerEvent = {
   source: string;
   match?: Record<string, unknown>;
+  config?: Record<string, unknown>;
+};
+
+export type TriggerAdapterStatus = {
+  adapter: string;
+  state: string;
+  detail?: string;
+  last_poll_at?: string;
+  last_seen_at?: string;
+  last_error?: string;
 };
 
 export type TriggerListItem = {
@@ -993,6 +1024,16 @@ export type TriggerListItem = {
   last_fired_at?: string;
   last_run_id?: string;
   next_run_at?: string;
+  adapter_status?: TriggerAdapterStatus;
+};
+
+export type SkillUsageEntry = {
+  stage_ids: string[];
+  pipeline_ids: string[];
+};
+
+export type SkillUsageIndex = {
+  usages: Record<string, SkillUsageEntry>;
 };
 
 export type CreateTriggerInput = {

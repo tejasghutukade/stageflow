@@ -9,6 +9,8 @@ import {
 import { miniTrackLabel, relativeTime } from "../catalogJoin";
 import { MiniTrack } from "../components/MiniTrack";
 import { CostBadge } from "../components/CostBadge";
+import { useRedesign } from "../redesign/flag";
+import { RunsPageRedesign } from "./runs/RunsPageRedesign";
 import { cssStatusToken, runDisplayStatus } from "../status/runStatus";
 
 type StatusFilter = "all" | "waiting" | "running" | "failed" | "finished";
@@ -31,7 +33,7 @@ function formatDiskBytes(bytes: number | undefined): string | null {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
-export function RunsPage({
+function RunsPageLegacy({
   onOpen,
   onNew,
 }: {
@@ -84,7 +86,8 @@ export function RunsPage({
       ) : null}
 
       {visible.map(run => {
-        const token = cssStatusToken(runDisplayStatus(run));
+        const displayStatus = runDisplayStatus(run);
+        const token = cssStatusToken(displayStatus);
         const diskLabel = formatDiskBytes(run.disk_bytes);
         return (
           <a
@@ -120,4 +123,18 @@ export function RunsPage({
       {loading ? <p className="muted" style={{ padding: "var(--spacing-4)" }}>Loading runs…</p> : null}
     </div>
   );
+}
+
+export function RunsPage({
+  onOpen,
+  onNew,
+}: {
+  onOpen: (runId: string) => void;
+  onNew: () => void;
+}) {
+  const redesign = useRedesign();
+  if (redesign) {
+    return <RunsPageRedesign onOpen={onOpen} onNew={onNew} />;
+  }
+  return <RunsPageLegacy onOpen={onOpen} onNew={onNew} />;
 }
